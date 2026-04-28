@@ -36,6 +36,28 @@ Keep the repo small and reproducible. Runtime state belongs in `var/`; source, c
 - Do not rename `Qwen3.6Turbo-*` model slugs casually; `qz-codex` relies on the proven catalog names.
 - If changing proxy behavior, update or add docs under `docs/` that explain the runtime contract.
 
+## Host Sudo Workflow
+
+This host may use `QZ_DOCKER_CMD="sudo docker"`. Codex sessions often cannot answer interactive sudo prompts, so simple Docker/sudo checks can fail even when the local setup is healthy.
+
+When blocked by sudo for straightforward host checks, do not over-debug inside Codex. Give the user a small pasteable command block, ask them to run it in their terminal, and continue from the pasted output.
+
+Typical block:
+
+```bash
+cd /home/harri/turboquant/quantzhai
+sudo -v
+./scripts/qz-doctor
+```
+
+For Docker inspection, prefer similarly pasteable, narrowly scoped commands such as:
+
+```bash
+cd /home/harri/turboquant/quantzhai
+sudo docker images
+sudo docker ps -a
+```
+
 ## Validation
 
 For script or proxy changes, run:
