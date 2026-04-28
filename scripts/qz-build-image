@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qz-env"
+
+repo_dir="$QZ_BUILD_DIR/llama-cpp-turboquant"
+
+mkdir -p "$QZ_BUILD_DIR"
+
+if [[ ! -d "$repo_dir/.git" ]]; then
+  git clone --branch "$QZ_TQ_BRANCH" "$QZ_TQ_REPO" "$repo_dir"
+else
+  git -C "$repo_dir" fetch origin
+  git -C "$repo_dir" checkout "$QZ_TQ_BRANCH"
+  git -C "$repo_dir" pull --ff-only
+fi
+
+export DOCKER_BUILDKIT=1
+
+qz_docker build \
+  --build-arg "CUDA_DOCKER_ARCH=$QZ_CUDA_ARCH" \
+  --target server \
+  -f "$repo_dir/.devops/cuda.Dockerfile" \
+  -t "$QZ_IMAGE" \
+  "$repo_dir"
+
+qz_docker run --rm "$QZ_IMAGE" --help 2>&1 | grep -Ei 'ctk|ctv|cache-type|turbo|kv' >/dev/null
+
+printf 'ok   docker image built: %s\n' "$QZ_IMAGE"

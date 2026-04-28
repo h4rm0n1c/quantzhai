@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qz-env"
+
+fail=0
+check() {
+  local name="$1"
+  shift
+  if "$@" >/dev/null 2>&1; then
+    printf 'ok   %s\n' "$name"
+  else
+    printf 'fail %s\n' "$name"
+    fail=1
+  fi
+}
+
+check docker qz_docker --version
+check codex codex --version
+check python3 python3 --version
+check nvidia-smi nvidia-smi
+
+if [[ -n "$QZ_MODEL_SRC" && -f "$QZ_MODEL_SRC" ]]; then
+  printf 'ok   model: %s\n' "$QZ_MODEL_SRC"
+else
+  printf 'fail model: set QZ_MODEL_SRC in .env\n'
+  fail=1
+fi
+
+if qz_docker image inspect "$QZ_IMAGE" >/dev/null 2>&1; then
+  printf 'ok   docker image: %s\n' "$QZ_IMAGE"
+else
+  printf 'fail docker image missing: %s\n' "$QZ_IMAGE"
+  printf 'hint build it with: scripts/qz-build-image\n'
+  fail=1
+fi
+
+exit "$fail"

@@ -1,0 +1,23 @@
+.env
+var/
+logs/
+captures/
+run/
+*.log
+*.pid
+*.sqlite
+*.sqlite-*
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Local model blobs.
+models/
+*.gguf
+*.safetensors
+
+# Probe/runtime captures.
+latest-*.json
+latest-*.log
+latest-*.txt
+*.bak*

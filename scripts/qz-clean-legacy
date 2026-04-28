@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qz-env"
+
+legacy_proxy="$QZ_ROOT/../proxy/qwen36turbo_proxy.py"
+
+if pgrep -f "[q]wen36turbo_proxy.py" >/dev/null 2>&1; then
+  pkill -f "[q]wen36turbo_proxy.py"
+  echo "Stopped legacy source proxy: $legacy_proxy"
+else
+  echo "No legacy source proxy found."
+fi
+
+if qz_docker ps -a --format '{{.Names}}' | grep -qx "$QZ_CONTAINER"; then
+  qz_docker rm -f "$QZ_CONTAINER" >/dev/null
+  echo "Removed legacy/shared container: $QZ_CONTAINER"
+else
+  echo "No legacy/shared container found: $QZ_CONTAINER"
+fi

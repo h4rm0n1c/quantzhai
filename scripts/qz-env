@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+QZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export QZ_ROOT
+export QZ_VAR_DIR="$QZ_ROOT/var"
+
+if [[ -f "$QZ_ROOT/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$QZ_ROOT/.env"
+  set +a
+fi
+
+export QZ_IMAGE="${QZ_IMAGE:-thetom-llama-cpp-turboquant:cuda-server}"
+export QZ_DOCKER_CMD="${QZ_DOCKER_CMD:-docker}"
+export QZ_CONTAINER="${QZ_CONTAINER:-qwen36turbo}"
+export QZ_BUILD_DIR="${QZ_BUILD_DIR:-$HOME/turboquant-work}"
+export QZ_TQ_REPO="${QZ_TQ_REPO:-https://github.com/TheTom/llama-cpp-turboquant.git}"
+export QZ_TQ_BRANCH="${QZ_TQ_BRANCH:-feature/turboquant-kv-cache}"
+export QZ_CUDA_ARCH="${QZ_CUDA_ARCH:-70;86}"
+export QZ_MODEL_SRC="${QZ_MODEL_SRC:-}"
+export QZ_MODEL_NAME="${QZ_MODEL_NAME:-model.gguf}"
+export QZ_MODEL_ALIAS="${QZ_MODEL_ALIAS:-QwenZhai}"
+export QZ_SERVER_HOST="${QZ_SERVER_HOST:-127.0.0.1}"
+export QZ_SERVER_PORT="${QZ_SERVER_PORT:-18084}"
+export QZ_PROXY_HOST="${QZ_PROXY_HOST:-127.0.0.1}"
+export QZ_PROXY_PORT="${QZ_PROXY_PORT:-18180}"
+export QZ_CONTEXT="${QZ_CONTEXT:-131072}"
+export QZ_PARALLEL="${QZ_PARALLEL:-2}"
+export QZ_BATCH="${QZ_BATCH:-2048}"
+export QZ_UBATCH="${QZ_UBATCH:-512}"
+export QZ_THREADS="${QZ_THREADS:-12}"
+export QZ_THREAD_BATCH="${QZ_THREAD_BATCH:-12}"
+export QZ_TENSOR_SPLIT="${QZ_TENSOR_SPLIT:-10,16}"
+export QZ_MAIN_GPU="${QZ_MAIN_GPU:-0}"
+export QZ_CACHE_RAM="${QZ_CACHE_RAM:-12288}"
+export QZ_CACHE_REUSE="${QZ_CACHE_REUSE:-256}"
+export QZ_KV_KEY="${QZ_KV_KEY:-q8_0}"
+export QZ_KV_VALUE="${QZ_KV_VALUE:-turbo3}"
+
+qz_docker() {
+  $QZ_DOCKER_CMD "$@"
+}

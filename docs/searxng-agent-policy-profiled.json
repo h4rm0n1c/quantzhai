@@ -1,0 +1,645 @@
+{
+  "version": "profiled-web-search-v1",
+  "purpose": "Policy for profile-aware SearXNG-backed web_search in the Qwen3.6Turbo local Codex proxy.",
+  "searxng_base": "http://10.0.42.222:8085",
+  "compatibility": {
+    "keeps_legacy_keys": true,
+    "current_proxy_can_still_read": [
+      "searxng_base",
+      "agent_default",
+      "agent_coding",
+      "agent_ai_model_search",
+      "agent_research",
+      "agent_news",
+      "disabled_even_if_configured",
+      "never_for_coding_agent"
+    ],
+    "new_proxy_should_prefer": [
+      "web_search_profiles",
+      "targeted_engines",
+      "quarantine_until_fixed",
+      "routing"
+    ]
+  },
+  "agent_default": {
+    "categories": [
+      "general",
+      "web"
+    ],
+    "engines": [
+      "duckduckgo",
+      "bing",
+      "mojeek",
+      "startpage",
+      "presearch",
+      "wiby",
+      "searchmysite"
+    ]
+  },
+  "agent_coding": {
+    "categories": [
+      "it",
+      "repos",
+      "q&a",
+      "packages",
+      "software wikis"
+    ],
+    "engines": [
+      "github",
+      "gitlab",
+      "gitea.com",
+      "stackoverflow",
+      "superuser",
+      "askubuntu",
+      "discuss.python",
+      "mdn",
+      "microsoft learn",
+      "docker hub",
+      "npm",
+      "crates.io",
+      "lib.rs",
+      "pkg.go.dev",
+      "pub.dev",
+      "rubygems",
+      "packagist",
+      "hex",
+      "hackernews",
+      "lobste.rs"
+    ]
+  },
+  "agent_ai_model_search": {
+    "categories": [
+      "it",
+      "repos"
+    ],
+    "engines": [
+      "huggingface",
+      "huggingface datasets",
+      "ollama"
+    ],
+    "max_results_per_engine": 10
+  },
+  "agent_research": {
+    "categories": [
+      "science",
+      "scientific publications"
+    ],
+    "engines": [
+      "arxiv",
+      "crossref",
+      "google scholar",
+      "semantic scholar",
+      "pubmed",
+      "openairepublications",
+      "openairedatasets",
+      "pdbe"
+    ]
+  },
+  "agent_news": {
+    "categories": [
+      "news"
+    ],
+    "engines": [
+      "reuters",
+      "ansa",
+      "bing news",
+      "duckduckgo news",
+      "mojeek news",
+      "presearch news",
+      "startpage news",
+      "wikinews",
+      "il post",
+      "naver news"
+    ]
+  },
+  "targeted_engines": {
+    "manuals": {
+      "categories": [
+        "it"
+      ],
+      "engines": [
+        "mankier"
+      ],
+      "when_query_matches": [
+        "manpage",
+        "man page",
+        "manual",
+        "posix",
+        "linux command",
+        "usage",
+        "flags",
+        "options"
+      ]
+    },
+    "nix_nixos": {
+      "categories": [
+        "software wikis",
+        "it"
+      ],
+      "engines": [
+        "nixos wiki"
+      ],
+      "when_query_matches": [
+        "nix",
+        "nixos",
+        "flake",
+        "flakes",
+        "nixpkgs",
+        "home-manager"
+      ]
+    },
+    "gentoo": {
+      "categories": [
+        "software wikis",
+        "it"
+      ],
+      "engines": [
+        "gentoo"
+      ],
+      "when_query_matches": [
+        "gentoo",
+        "ebuild",
+        "emerge",
+        "portage",
+        "use flag",
+        "openrc"
+      ]
+    },
+    "alpine": {
+      "categories": [
+        "packages",
+        "it"
+      ],
+      "engines": [
+        "alpine linux packages"
+      ],
+      "when_query_matches": [
+        "alpine",
+        "apk add",
+        "musl",
+        "busybox"
+      ]
+    },
+    "voidlinux": {
+      "categories": [
+        "packages",
+        "it"
+      ],
+      "engines": [
+        "voidlinux"
+      ],
+      "when_query_matches": [
+        "void linux",
+        "xbps",
+        "runit"
+      ]
+    },
+    "haskell": {
+      "categories": [
+        "packages",
+        "it"
+      ],
+      "engines": [
+        "hoogle"
+      ],
+      "when_query_matches": [
+        "haskell",
+        "ghc",
+        "cabal",
+        "stack",
+        "monad",
+        "map maybe"
+      ]
+    },
+    "caddy": {
+      "categories": [
+        "it",
+        "q&a"
+      ],
+      "engines": [
+        "caddy.community"
+      ],
+      "when_query_matches": [
+        "caddy",
+        "caddyfile",
+        "reverse proxy",
+        "tls",
+        "acme",
+        "cloudflare dns"
+      ]
+    },
+    "pihole": {
+      "categories": [
+        "it",
+        "q&a"
+      ],
+      "engines": [
+        "pi-hole.community"
+      ],
+      "when_query_matches": [
+        "pi-hole",
+        "pihole",
+        "dnsmasq",
+        "dns sinkhole",
+        "adlist"
+      ]
+    },
+    "dictionary_japanese": {
+      "categories": [
+        "dictionaries"
+      ],
+      "engines": [
+        "jisho"
+      ],
+      "when_query_matches": [
+        "japanese",
+        "kanji",
+        "hiragana",
+        "katakana",
+        "meaning in japanese"
+      ]
+    },
+    "dictionary_general": {
+      "categories": [
+        "dictionaries"
+      ],
+      "engines": [
+        "wiktionary"
+      ],
+      "when_query_matches": [
+        "define",
+        "definition",
+        "meaning",
+        "etymology",
+        "word origin"
+      ]
+    }
+  },
+  "web_search_profiles": {
+    "auto": {
+      "description": "Infer a primary profile from query keywords. Fall back to broad when uncertain or low result count.",
+      "primary": "auto",
+      "fallback_profiles": [
+        "broad"
+      ]
+    },
+    "broad": {
+      "description": "General web search across broad but currently healthy text engines.",
+      "categories": [
+        "general",
+        "web"
+      ],
+      "engines": [
+        "duckduckgo",
+        "bing",
+        "mojeek",
+        "startpage",
+        "presearch",
+        "wiby",
+        "searchmysite",
+        "crowdview",
+        "yacy"
+      ],
+      "fallback_profiles": [
+        "reference",
+        "news",
+        "coding"
+      ]
+    },
+    "coding": {
+      "description": "Repos, package registries, programming Q&A and official-ish technical docs.",
+      "categories": [
+        "it",
+        "repos",
+        "q&a",
+        "packages",
+        "software wikis"
+      ],
+      "engines_from": "agent_coding.engines",
+      "fallback_profiles": [
+        "broad"
+      ]
+    },
+    "sysadmin": {
+      "description": "Linux, networking, services, manpages, distro docs, homelab and reverse proxy problems.",
+      "categories": [
+        "it",
+        "q&a",
+        "packages",
+        "software wikis"
+      ],
+      "engines": [
+        "superuser",
+        "askubuntu",
+        "mankier",
+        "nixos wiki",
+        "gentoo",
+        "alpine linux packages",
+        "voidlinux",
+        "caddy.community",
+        "pi-hole.community",
+        "mdn",
+        "microsoft learn"
+      ],
+      "fallback_profiles": [
+        "coding",
+        "broad"
+      ]
+    },
+    "research": {
+      "description": "Papers, DOI-style searches, scientific publications and academic discovery.",
+      "categories": [
+        "science",
+        "scientific publications"
+      ],
+      "engines_from": "agent_research.engines",
+      "fallback_profiles": [
+        "broad"
+      ]
+    },
+    "news": {
+      "description": "Current-events and release/news style queries.",
+      "categories": [
+        "news"
+      ],
+      "engines_from": "agent_news.engines",
+      "fallback_profiles": [
+        "broad"
+      ]
+    },
+    "ai_models": {
+      "description": "Model, dataset and Ollama/Hugging Face discovery.",
+      "categories": [
+        "it",
+        "repos"
+      ],
+      "engines_from": "agent_ai_model_search.engines",
+      "fallback_profiles": [
+        "coding",
+        "broad"
+      ]
+    },
+    "reference": {
+      "description": "Definitions, dictionaries, reference texts and lightweight calculation/lookup sources.",
+      "categories": [
+        "dictionaries",
+        "wikimedia",
+        "general"
+      ],
+      "engines": [
+        "wiktionary",
+        "wikibooks",
+        "wikisource",
+        "wikiquote",
+        "wolframalpha",
+        "jisho"
+      ],
+      "fallback_profiles": [
+        "broad"
+      ]
+    }
+  },
+  "routing": {
+    "default_profile": "broad",
+    "allow_explicit_profile_override": true,
+    "auto_keywords": {
+      "coding": [
+        "github",
+        "gitlab",
+        "repo",
+        "repository",
+        "package",
+        "api",
+        "docs",
+        "compile",
+        "build error",
+        "traceback",
+        "exception",
+        "npm",
+        "crate",
+        "docker",
+        "python",
+        "javascript",
+        "rust",
+        "go",
+        "php",
+        "ruby",
+        "stackoverflow",
+        "function",
+        "library"
+      ],
+      "sysadmin": [
+        "linux",
+        "devuan",
+        "debian",
+        "ubuntu",
+        "pipewire",
+        "pulseaudio",
+        "alsa",
+        "jack",
+        "ffmpeg",
+        "nginx",
+        "caddy",
+        "tls",
+        "dns",
+        "pihole",
+        "pi-hole",
+        "systemctl",
+        "service",
+        "init.d",
+        "sysv",
+        "openrc",
+        "udev",
+        "kernel",
+        "driver",
+        "manpage",
+        "man page",
+        "nixos",
+        "gentoo",
+        "alpine",
+        "voidlinux"
+      ],
+      "research": [
+        "paper",
+        "study",
+        "doi",
+        "citation",
+        "arxiv",
+        "pubmed",
+        "scholar",
+        "benchmark",
+        "literature",
+        "scientific",
+        "publication",
+        "dataset paper"
+      ],
+      "news": [
+        "latest",
+        "today",
+        "yesterday",
+        "current",
+        "breaking",
+        "announced",
+        "release",
+        "released",
+        "news",
+        "2026",
+        "price",
+        "schedule"
+      ],
+      "ai_models": [
+        "huggingface",
+        "hf",
+        "gguf",
+        "ollama",
+        "model",
+        "lora",
+        "embedding",
+        "dataset",
+        "qwen",
+        "llama",
+        "mistral",
+        "stable diffusion",
+        "checkpoint"
+      ],
+      "reference": [
+        "define",
+        "definition",
+        "meaning",
+        "etymology",
+        "synonym",
+        "translate",
+        "kanji",
+        "formula",
+        "what does",
+        "what is"
+      ]
+    },
+    "auto_precedence": [
+      "ai_models",
+      "sysadmin",
+      "coding",
+      "research",
+      "news",
+      "reference",
+      "broad"
+    ],
+    "low_result_fallback_threshold": 2,
+    "max_searches_per_turn": 3,
+    "max_page_opens_per_turn": 3,
+    "max_results": 8
+  },
+  "quality_rules": {
+    "dedupe_by_url": true,
+    "prefer_exact_domain_sources": true,
+    "prefer_official_docs_for_technical_queries": true,
+    "prefer_recent_sources_for_news": true,
+    "drop_empty_url_results": true,
+    "return_unresponsive_engines_in_debug": true,
+    "log_profile_decision": true
+  },
+  "quarantine_until_fixed": [
+    "360search",
+    "alexandria",
+    "baidu kaifa",
+    "brave",
+    "brave.news",
+    "cloudflareai",
+    "codeberg",
+    "goo",
+    "metacpan",
+    "mwmbl",
+    "qwant",
+    "qwant news",
+    "right dao",
+    "sourcehut",
+    "wikiversity",
+    "wikivoyage",
+    "wiktionary",
+    "yahoo",
+    "yahoo news",
+    "yep",
+    "yep news"
+  ],
+  "disabled_even_if_configured": [
+    "pypi",
+    "wikipedia",
+    "wikidata",
+    "arch linux wiki",
+    "google",
+    "google news",
+    "google images",
+    "qwant",
+    "yahoo",
+    "yep",
+    "brave",
+    "brave.news",
+    "codeberg",
+    "sourcehut",
+    "metacpan",
+    "mwmbl"
+  ],
+  "never_for_coding_agent": [
+    "z-library",
+    "library genesis",
+    "piratebay",
+    "kickass",
+    "1337x",
+    "nyaa",
+    "btdigg",
+    "bt4g",
+    "solidtorrents",
+    "tokyotoshokan",
+    "bing images",
+    "bing videos",
+    "duckduckgo images",
+    "duckduckgo videos",
+    "huggingface spaces",
+    "brave.images",
+    "brave.videos",
+    "google images",
+    "google videos",
+    "mojeek images",
+    "presearch images",
+    "presearch videos",
+    "qwant images",
+    "qwant videos",
+    "startpage images"
+  ],
+  "non_text_engines_disabled_for_current_web_search_tool": [
+    "bing images",
+    "bing videos",
+    "brave.images",
+    "brave.videos",
+    "duckduckgo images",
+    "duckduckgo videos",
+    "google images",
+    "google videos",
+    "mojeek images",
+    "presearch images",
+    "presearch videos",
+    "qwant images",
+    "qwant videos",
+    "startpage images"
+  ],
+  "empty_but_not_broken": [
+    "anaconda",
+    "arch linux wiki",
+    "bitbucket",
+    "currency",
+    "etymonline",
+    "free software directory",
+    "google",
+    "google news",
+    "habrahabr",
+    "minecraft wiki",
+    "naver",
+    "pypi",
+    "tagesschau",
+    "tineye",
+    "wikidata",
+    "wikispecies",
+    "wordnik",
+    "woxikon.de synonyme"
+  ]
+}

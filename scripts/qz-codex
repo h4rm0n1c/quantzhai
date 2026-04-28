@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qz-env"
+
+mkdir -p "$QZ_VAR_DIR/codex-home/model-catalogs" "$QZ_VAR_DIR/codex-home/sqlite" "$QZ_VAR_DIR/logs" "$QZ_VAR_DIR/run" "$QZ_VAR_DIR/captures"
+
+if [[ ! -f "$QZ_ROOT/var/codex-home/config.toml" ]]; then
+  cp "$QZ_ROOT/config/codex-config.example.toml" "$QZ_ROOT/var/codex-home/config.toml"
+fi
+
+if [[ ! -f "$QZ_ROOT/var/codex-home/model-catalogs/qwenzhai-models.json" ]]; then
+  cp "$QZ_ROOT/config/qwenzhai-models.example.json" "$QZ_ROOT/var/codex-home/model-catalogs/qwenzhai-models.json"
+fi
+
+tmp_config="$QZ_ROOT/var/codex-home/config.toml.tmp"
+catalog_line="model_catalog_json = \"$QZ_ROOT/var/codex-home/model-catalogs/qwenzhai-models.json\""
+if grep -q '^model_catalog_json' "$QZ_ROOT/var/codex-home/config.toml"; then
+  sed "s|^model_catalog_json = .*|$catalog_line|" "$QZ_ROOT/var/codex-home/config.toml" > "$tmp_config"
+else
+  { printf '%s\n' "$catalog_line"; cat "$QZ_ROOT/var/codex-home/config.toml"; } > "$tmp_config"
+fi
+mv "$tmp_config" "$QZ_ROOT/var/codex-home/config.toml"
+
+export CODEX_HOME="$QZ_ROOT/var/codex-home"
+export CODEX_SQLITE_HOME="$CODEX_HOME/sqlite"
+export CODEX_OSS_BASE_URL="http://$QZ_PROXY_HOST:$QZ_PROXY_PORT"
+export LOCAL_QWEN_API_KEY="${LOCAL_QWEN_API_KEY:-local}"
+
+case "${1:-high}" in
+  low|QwenZhai-low) model="Qwen3.6Turbo-low" ;;
+  medium|QwenZhai-medium) model="Qwen3.6Turbo-medium" ;;
+  high|QwenZhai-high) model="Qwen3.6Turbo-high" ;;
+  max|QwenZhai-max) model="Qwen3.6Turbo-max" ;;
+  *) model="$1" ;;
+esac
+
+exec codex --oss -m "$model"
