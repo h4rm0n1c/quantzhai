@@ -48,4 +48,31 @@ qz_docker run -d \
   --metrics \
   --reasoning-format deepseek
 
+printf 'waiting for backend: http://%s:%s/health\n' "$QZ_SERVER_HOST" "$QZ_SERVER_PORT"
+
+backend_ok=0
+for i in $(seq 1 120); do
+  if curl -fsS "http://$QZ_SERVER_HOST:$QZ_SERVER_PORT/health" >/dev/null 2>&1; then
+    backend_ok=1
+    break
+  fi
+
+  if ! qz_docker ps --format '{{.Names}}' | grep -qx "$QZ_CONTAINER"; then
+    echo "backend container exited before becoming healthy" >&2
+    qz_docker logs --tail=160 "$QZ_CONTAINER" >&2 || true
+    exit 1
+  fi
+
+  sleep 1
+done
+
+if [[ "$backend_ok" != 1 ]]; then
+  echo "backend did not become healthy on http://$QZ_SERVER_HOST:$QZ_SERVER_PORT" >&2
+  qz_docker ps -a --filter "name=^/${QZ_CONTAINER}$" >&2 || true
+  qz_docker logs --tail=160 "$QZ_CONTAINER" >&2 || true
+  exit 1
+fi
+
+printf 'backend healthy: http://%s:%s\n' "$QZ_SERVER_HOST" "$QZ_SERVER_PORT"
+
 "$QZ_ROOT/scripts/qz-proxy"

@@ -44,12 +44,12 @@ def _append_capture(name: str, text: str):
 MODEL_BUDGETS = {
     "QwenZhai-low": 0,
     "QwenZhai-medium": 256,
-    "QwenZhai-high": 1024,
+    "QwenZhai-high": 512,
     "QwenZhai-max": -1,
     "QwenZhai": 256,
     "Qwen3.6Turbo-low": 0,
     "Qwen3.6Turbo-medium": 256,
-    "Qwen3.6Turbo-high": 1024,
+    "Qwen3.6Turbo-high": 512,
     "Qwen3.6Turbo-max": -1,
     "Qwen3.6Turbo": 256,
 }
@@ -90,8 +90,15 @@ COMPACTION_CONFIG = {
     "target_output_tokens": 10000,
 }
 
-FUNCTION_CALL_TYPES = {"function_call", "computer_call", "code_interpreter_call"}
-FUNCTION_OUTPUT_TYPES = {"function_call_output", "computer_call_output", "tool_result", "tool_output"}
+FUNCTION_CALL_TYPES = {"function_call", "computer_call", "code_interpreter_call", "apply_patch_call", "custom_tool_call"}
+FUNCTION_OUTPUT_TYPES = {
+    "function_call_output",
+    "computer_call_output",
+    "apply_patch_call_output",
+    "custom_tool_call_output",
+    "tool_result",
+    "tool_output",
+}
 CHECKPOINT_MARKER = "CONTEXT CHECKPOINT COMPACTION"
 
 HARNESS_TEXT_MARKERS = (
@@ -152,6 +159,254 @@ def clean_content(text: str) -> str:
     text = re.sub(r"(?im)^\s*\(Done\.\)\s*$", "", text)
 
     return text.strip()
+
+
+APPLY_PATCH_OPERATION_TYPES = {"create_file", "update_file", "delete_file"}
+
+
+def _apply_patch_function_parameters() -> dict:
+    return {
+        "type": "object",
+        "properties": {
+            "operation": {
+                "type": "object",
+                "description": "A single apply_patch operation to return to Codex.",
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "enum": sorted(APPLY_PATCH_OPERATION_TYPES),
+                        "description": "The file operation to perform.",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative file path.",
+                    },
+                    "diff": {
+                        "type": "string",
+                        "description": "V4A diff for create_file or update_file operations.",
+                    },
+                },
+                "required": ["type", "path"],
+                "additionalProperties": False,
+            },
+            "patch": {
+                "type": "string",
+                "description": "Legacy full apply_patch envelope. Prefer operation for native Codex apply_patch.",
+            },
+        },
+        "additionalProperties": False,
+    }
+
+
+def _coerce_apply_patch_operation(value) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+
+    operation_type = value.get("type")
+    path = value.get("path")
+    diff = value.get("diff")
+
+    if operation_type not in APPLY_PATCH_OPERATION_TYPES:
+        return None
+    if not isinstance(path, str) or not path.strip():
+        return None
+
+    operation = {
+        "type": operation_type,
+        "path": path.strip(),
+    }
+
+    if operation_type != "delete_file":
+        if not isinstance(diff, str):
+            return None
+        operation["diff"] = diff
+    elif isinstance(diff, str) and diff:
+        operation["diff"] = diff
+
+    return operation
+
+
+def _parse_apply_patch_arguments(arguments: str) -> dict | None:
+    try:
+        data = json.loads(arguments or "{}")
+    except Exception:
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    operation = _coerce_apply_patch_operation(data.get("operation"))
+    if operation:
+        return operation
+
+    operation = _coerce_apply_patch_operation(data)
+    if operation:
+        return operation
+
+    patch = data.get("patch")
+    path = data.get("path")
+    operation_type = data.get("operation_type") or data.get("type") or "update_file"
+    if isinstance(patch, str) and isinstance(path, str):
+        return _coerce_apply_patch_operation({
+            "type": operation_type,
+            "path": path,
+            "diff": patch,
+        })
+
+    return None
+
+
+def _apply_patch_call_to_function_call(item: dict) -> dict:
+    operation = _coerce_apply_patch_operation(item.get("operation"))
+    arguments = json.dumps({"operation": operation}, ensure_ascii=False) if operation else "{}"
+    return {
+        "id": item.get("id") or item.get("call_id"),
+        "type": "function_call",
+        "status": item.get("status", "completed"),
+        "call_id": item.get("call_id"),
+        "name": "apply_patch",
+        "arguments": arguments,
+    }
+
+
+def _apply_patch_output_to_function_output(item: dict) -> dict:
+    output = {
+        "status": item.get("status"),
+        "output": item.get("output") or "",
+    }
+    return {
+        "type": "function_call_output",
+        "call_id": item.get("call_id"),
+        "output": json.dumps(output, ensure_ascii=False),
+    }
+
+
+def _custom_apply_patch_call_to_function_call(item: dict) -> dict:
+    return {
+        "id": item.get("id") or item.get("call_id"),
+        "type": "function_call",
+        "status": item.get("status", "completed"),
+        "call_id": item.get("call_id"),
+        "name": "apply_patch",
+        "arguments": json.dumps({"patch": item.get("input") or ""}, ensure_ascii=False),
+    }
+
+
+def _custom_apply_patch_output_to_function_output(item: dict) -> dict:
+    return {
+        "type": "function_call_output",
+        "call_id": item.get("call_id"),
+        "output": item.get("output") or "",
+    }
+
+
+def _apply_patch_operation_to_patch_text(operation: dict) -> str:
+    operation_type = operation.get("type")
+    path = operation.get("path")
+    diff = operation.get("diff") or ""
+
+    if operation_type == "create_file":
+        lines = ["*** Begin Patch", f"*** Add File: {path}"]
+        for line in diff.splitlines():
+            if line == "@@" or line.startswith("@@ "):
+                continue
+            lines.append(line if line.startswith("+") else f"+{line}")
+        lines.append("*** End Patch")
+        return "\n".join(lines) + "\n"
+
+    if operation_type == "delete_file":
+        return f"*** Begin Patch\n*** Delete File: {path}\n*** End Patch\n"
+
+    return f"*** Begin Patch\n*** Update File: {path}\n{diff.rstrip()}\n*** End Patch\n"
+
+
+def _function_call_to_apply_patch_call(item: dict) -> dict:
+    operation = _parse_apply_patch_arguments(item.get("arguments") or "{}")
+    if not operation:
+        return item
+
+    call_id = item.get("call_id") or item.get("id") or f"call_apply_patch_{_now_ts()}"
+    item_id = item.get("id") or f"apc_local_{_now_ts()}"
+    return {
+        "id": item_id,
+        "type": "apply_patch_call",
+        "status": item.get("status", "completed"),
+        "call_id": call_id,
+        "operation": operation,
+    }
+
+
+def _function_call_to_custom_apply_patch_call(item: dict) -> dict:
+    operation = _parse_apply_patch_arguments(item.get("arguments") or "{}")
+    if operation:
+        patch_text = _apply_patch_operation_to_patch_text(operation)
+    else:
+        try:
+            data = json.loads(item.get("arguments") or "{}")
+        except Exception:
+            return item
+        patch_text = data.get("patch") if isinstance(data, dict) else None
+        if not isinstance(patch_text, str) or not patch_text.strip():
+            return item
+
+    return {
+        "type": "custom_tool_call",
+        "status": item.get("status", "completed"),
+        "call_id": item.get("call_id") or item.get("id") or f"call_apply_patch_{_now_ts()}",
+        "name": "apply_patch",
+        "input": patch_text,
+    }
+
+
+def _apply_patch_output_style(body: dict) -> str:
+    for tool in body.get("tools") or []:
+        if isinstance(tool, dict) and tool.get("type") == "custom" and tool.get("name") == "apply_patch":
+            return "custom"
+        if isinstance(tool, dict) and tool.get("type") == "apply_patch":
+            return "native"
+    return "native"
+
+
+def normalize_apply_patch_output_for_codex(output_items, output_style: str = "native"):
+    if not isinstance(output_items, list):
+        return output_items
+
+    normalized = []
+    for item in output_items:
+        if (
+            isinstance(item, dict)
+            and item.get("type") == "function_call"
+            and item.get("name") == "apply_patch"
+        ):
+            if output_style == "custom":
+                normalized.append(_function_call_to_custom_apply_patch_call(item))
+            else:
+                normalized.append(_function_call_to_apply_patch_call(item))
+            continue
+        normalized.append(item)
+    return normalized
+
+
+def normalize_apply_patch_input_for_llamacpp(input_items):
+    if not isinstance(input_items, list):
+        return input_items
+
+    normalized = []
+    for item in input_items:
+        if isinstance(item, dict) and item.get("type") == "apply_patch_call":
+            normalized.append(_apply_patch_call_to_function_call(item))
+            continue
+        if isinstance(item, dict) and item.get("type") == "apply_patch_call_output":
+            normalized.append(_apply_patch_output_to_function_output(item))
+            continue
+        if isinstance(item, dict) and item.get("type") == "custom_tool_call" and item.get("name") == "apply_patch":
+            normalized.append(_custom_apply_patch_call_to_function_call(item))
+            continue
+        if isinstance(item, dict) and item.get("type") == "custom_tool_call_output":
+            normalized.append(_custom_apply_patch_output_to_function_output(item))
+            continue
+        normalized.append(item)
+    return normalized
 
 
 
@@ -273,6 +528,22 @@ def normalize_responses_input_for_qwen(body: dict) -> dict:
         if item_type in ("reasoning", "web_search_call"):
             continue
 
+        if item_type == "apply_patch_call":
+            clean_input.append(_apply_patch_call_to_function_call(item))
+            continue
+
+        if item_type == "apply_patch_call_output":
+            clean_input.append(_apply_patch_output_to_function_output(item))
+            continue
+
+        if item_type == "custom_tool_call" and item.get("name") == "apply_patch":
+            clean_input.append(_custom_apply_patch_call_to_function_call(item))
+            continue
+
+        if item_type == "custom_tool_call_output":
+            clean_input.append(_custom_apply_patch_output_to_function_output(item))
+            continue
+
         if _is_local_checkpoint_prompt(item):
             continue
 
@@ -329,21 +600,11 @@ def normalize_tools_for_llamacpp(body: dict) -> dict:
             clean.append(tool)
             continue
 
-        if tool_type == "custom" and tool_name == "apply_patch":
+        if tool_type in ("apply_patch",) or (tool_type == "custom" and tool_name == "apply_patch"):
             clean.append(function_tool(
                 "apply_patch",
-                tool.get("description") or "Apply a structured patch to files.",
-                {
-                    "type": "object",
-                    "properties": {
-                        "patch": {
-                            "type": "string",
-                            "description": "The complete apply_patch envelope to execute.",
-                        }
-                    },
-                    "required": ["patch"],
-                    "additionalProperties": False,
-                },
+                tool.get("description") or "Emit a single Codex apply_patch operation. QuantZhai adapts this call but does not apply files.",
+                _apply_patch_function_parameters(),
             ))
             translated.append("apply_patch")
             continue
@@ -422,7 +683,7 @@ def normalize_tools_for_llamacpp(body: dict) -> dict:
     if isinstance(body.get("tool_choice"), dict):
         tool_choice_type = body["tool_choice"].get("type")
         tool_name = body["tool_choice"].get("name")
-        if tool_choice_type == "custom" and tool_name == "apply_patch":
+        if tool_choice_type in ("apply_patch",) or (tool_choice_type == "custom" and tool_name == "apply_patch"):
             body["tool_choice"] = {"type": "function", "name": "apply_patch"}
         elif tool_choice_type == "web_search":
             body["tool_choice"] = {"type": "function", "name": "web_search"}
@@ -455,6 +716,35 @@ def extract_response_output_text(out: dict) -> str:
             if part.get("type") == "output_text" and isinstance(part.get("text"), str):
                 texts.append(part["text"])
     return "\n".join(texts).strip()
+
+
+def _token_count(value, fallback: int = 0) -> int:
+    try:
+        count = int(value)
+    except Exception:
+        return fallback
+    return max(0, count)
+
+
+def _normalize_response_usage(usage) -> dict:
+    source = usage if isinstance(usage, dict) else {}
+    normalized = dict(source)
+
+    input_tokens = _token_count(source.get("input_tokens"), _token_count(source.get("prompt_tokens")))
+    output_tokens = _token_count(source.get("output_tokens"), _token_count(source.get("completion_tokens")))
+    total_tokens = _token_count(source.get("total_tokens"), input_tokens + output_tokens)
+    if total_tokens < input_tokens + output_tokens:
+        total_tokens = input_tokens + output_tokens
+
+    normalized["input_tokens"] = input_tokens
+    normalized["output_tokens"] = output_tokens
+    normalized["total_tokens"] = total_tokens
+    if not isinstance(normalized.get("input_tokens_details"), dict):
+        normalized["input_tokens_details"] = {"cached_tokens": 0}
+    if not isinstance(normalized.get("output_tokens_details"), dict):
+        normalized["output_tokens_details"] = {"reasoning_tokens": 0}
+    return normalized
+
 
 def make_response_stream_events(out: dict):
     response_id = out.get("id", "resp_local")
@@ -701,6 +991,51 @@ def make_response_stream_events(out: dict):
             completed_output.append(done_item)
             continue
 
+        if item_type == "apply_patch_call":
+            item_id = item.get("id") or f"apc_local_{output_index}"
+            call_id = item.get("call_id") or f"call_apply_patch_{output_index}"
+            done_item = {
+                "id": item_id,
+                "type": "apply_patch_call",
+                "status": item.get("status", "completed"),
+                "call_id": call_id,
+                "operation": item.get("operation") or {},
+            }
+
+            yield ev("response.output_item.added", {
+                "output_index": output_index,
+                "item": dict(done_item, status="in_progress"),
+            })
+            yield ev("response.output_item.done", {
+                "output_index": output_index,
+                "item": done_item,
+            })
+
+            completed_output.append(done_item)
+            continue
+
+        if item_type == "custom_tool_call":
+            call_id = item.get("call_id") or f"call_custom_{output_index}"
+            done_item = {
+                "type": "custom_tool_call",
+                "status": item.get("status", "completed"),
+                "call_id": call_id,
+                "name": item.get("name"),
+                "input": item.get("input") or "",
+            }
+
+            yield ev("response.output_item.added", {
+                "output_index": output_index,
+                "item": dict(done_item, status="in_progress"),
+            })
+            yield ev("response.output_item.done", {
+                "output_index": output_index,
+                "item": done_item,
+            })
+
+            completed_output.append(done_item)
+            continue
+
         if item_type == "web_search_call":
             item_id = item.get("id") or f"wsc_local_{output_index}"
             added_item = {
@@ -732,10 +1067,28 @@ def make_response_stream_events(out: dict):
             completed_output.append(done_item)
             continue
 
+        # Last-resort preservation: never silently drop an output item just
+        # because llama.cpp or Codex grew a new Responses item type.
+        done_item = dict(item)
+        done_item.setdefault("id", f"item_local_{output_index}")
+        done_item.setdefault("status", "completed")
+        added_item = dict(done_item)
+        added_item["status"] = "in_progress"
+
+        yield ev("response.output_item.added", {
+            "output_index": output_index,
+            "item": added_item,
+        })
+        yield ev("response.output_item.done", {
+            "output_index": output_index,
+            "item": done_item,
+        })
+        completed_output.append(done_item)
+
     completed = dict(created)
     completed["status"] = "completed"
     completed["output"] = completed_output
-    completed["usage"] = out.get("usage")
+    completed["usage"] = _normalize_response_usage(out.get("usage"))
 
     yield ev("response.completed", {"response": completed})
     yield b"data: [DONE]\n\n"
@@ -920,7 +1273,13 @@ def _expand_local_compaction_items(items):
             if payload:
                 summary_text = _normalize_ws(payload.get("summary_text", ""))
                 if summary_text:
-                    expanded.append(_make_input_text_message("developer", summary_text))
+                    # Keep local compaction summaries alive. normalize_responses_input_for_qwen()
+                    # drops replayed developer/system messages when the active Codex harness
+                    # is present, so carry this as ordinary user-visible context to llama.cpp.
+                    expanded.append(_make_input_text_message(
+                        "user",
+                        "Context carried forward from local compaction:\n" + summary_text,
+                    ))
                 continue
         expanded.append(item)
     return expanded
@@ -2220,7 +2579,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             content_type = resp.headers.get("Content-Type", "application/json")
         return status, content_type, resp_data
 
-    def _run_responses_locally(self, body: dict, requested_model: str):
+    def _run_responses_locally(self, body: dict, requested_model: str, apply_patch_output_style: str = "native"):
         url = self.upstream + "/v1/responses"
         working_body = json.loads(json.dumps(body))
         working_body["stream"] = False
@@ -2243,7 +2602,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
             if not web_calls:
                 final_out = dict(out)
-                final_out["output"] = public_trace + output_items
+                final_out["output"] = public_trace + normalize_apply_patch_output_for_codex(
+                    output_items,
+                    apply_patch_output_style,
+                )
+                final_out["usage"] = _normalize_response_usage(final_out.get("usage"))
                 self._annotate_output_with_url_citations(final_out, gathered_sources)
                 self._runtime_log("latest-web-runtime-final.json", final_out)
                 return status, content_type, final_out
@@ -2275,7 +2638,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     "annotations": [],
                 }],
             }],
-            "usage": {},
+            "usage": _normalize_response_usage({}),
         }
         self._annotate_output_with_url_citations(fallback_out, gathered_sources)
         self._runtime_log("latest-web-runtime-final.json", fallback_out)
@@ -2318,14 +2681,23 @@ class ProxyHandler(BaseHTTPRequestHandler):
         body.setdefault("temperature", 0.1)
 
         if upstream_path == "/v1/responses":
+            apply_patch_output_style = _apply_patch_output_style(body)
             input_items = body.get("input")
             if isinstance(input_items, list):
                 body["input"] = _microcompact_old_tool_results(_expand_local_compaction_items(input_items))
             body = normalize_responses_input_for_qwen(body)
             body = normalize_tools_for_llamacpp(body)
+            try:
+                _write_capture("latest-normalized-request.json", body)
+            except Exception:
+                pass
 
             try:
-                status, content_type, out = self._run_responses_locally(body, requested_model)
+                status, content_type, out = self._run_responses_locally(
+                    body,
+                    requested_model,
+                    apply_patch_output_style,
+                )
             except urllib.error.HTTPError as e:
                 resp_data = e.read()
                 try:
@@ -2350,13 +2722,21 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.send_response(status)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache")
-                self.send_header("Connection", "keep-alive")
+                self.send_header("Connection", "close")
                 self._send_codex_rate_limit_headers()
                 self.end_headers()
                 self._write_codex_rate_limits_event()
-                for chunk in make_response_stream_events(out):
-                    self.wfile.write(chunk)
-                    self.wfile.flush()
+                sse_log = None
+                try:
+                    sse_log = _capture_path("latest-synthetic-sse.raw").open("wb")
+                    for chunk in make_response_stream_events(out):
+                        sse_log.write(chunk)
+                        sse_log.flush()
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                finally:
+                    if sse_log is not None:
+                        sse_log.close()
                 return
 
             self._send_json(status, out)
@@ -2412,7 +2792,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_response(status)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
+            self.send_header("Connection", "close")
             self._send_codex_rate_limit_headers()
             self.end_headers()
             self._write_codex_rate_limits_event()
@@ -2436,6 +2816,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 if raw_log is not None:
                     raw_log.close()
                 resp.close()
+            self.close_connection = True
             return
 
         resp_data = resp.read()
@@ -2453,6 +2834,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
         try:
             out = json.loads(resp_data.decode("utf-8"))
             out["model"] = requested_model
+            if upstream_path == "/v1/responses":
+                out["usage"] = _normalize_response_usage(out.get("usage"))
             # Do not recursively clean response text here.
             # Reasoning format conversion belongs in the SSE transform layer.
             # Final output_text must pass through unchanged.
@@ -2461,7 +2844,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.send_response(status)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache")
-                self.send_header("Connection", "keep-alive")
+                self.send_header("Connection", "close")
                 self._send_codex_rate_limit_headers()
                 self.end_headers()
                 self._write_codex_rate_limits_event()

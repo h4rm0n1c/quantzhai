@@ -1,0 +1,560 @@
+#!/usr/bin/env bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ -f "$SCRIPT_DIR/qz-env" ]]; then
+  source "$SCRIPT_DIR/qz-env"
+fi
+
+set +e
+set +u
+set +o pipefail 2>/dev/null
+
+python3 - "$@" <<'PY'
+import argparse
+import curses
+import os
+import re
+import shlex
+import signal
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from typing import List, Tuple
+
+
+@dataclass
+class GpuRow:
+    index: str
+    name: str
+    util: float
+    mem_used: float
+    mem_total: float
+    power: float
+    temp: float
+    gen: str
+    width: str
+
+
+@dataclass
+class Rates:
+    requests: int = 0
+    checkpoints: int = 0
+    restores: int = 0
+    oom: int = 0
+    prompt_latest: float = 0.0
+    prompt_max: float = 0.0
+    prompt_tokens: int = 0
+    prompt_ms: float = 0.0
+    gen_latest: float = 0.0
+    gen_max: float = 0.0
+    gen_tokens: int = 0
+    gen_ms: float = 0.0
+    total_latest: float = 0.0
+    total_max: float = 0.0
+    total_tokens: int = 0
+    total_ms: float = 0.0
+    recent: List[Tuple[str, str]] = None
+
+
+def run_cmd(args, timeout=2.0) -> str:
+    try:
+        return subprocess.check_output(
+            args,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        return str(exc)
+
+
+def docker_cmd() -> List[str]:
+    raw = os.environ.get("QZ_DOCKER_CMD", "docker")
+    return shlex.split(raw)
+
+
+def docker(args: List[str], timeout=3.0) -> str:
+    return run_cmd(docker_cmd() + args, timeout=timeout)
+
+
+def curl_health(host: str, port: str) -> bool:
+    try:
+        out = subprocess.check_output(
+            ["curl", "-fsS", f"http://{host}:{port}/health"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=1.0,
+        )
+    except Exception:
+        return False
+    return "status" in out or out.strip() == "OK" or out.strip() == "ok"
+
+
+def get_logs(lines: int) -> str:
+    container = os.environ.get("QZ_CONTAINER", "qwen36turbo")
+    out = docker(["logs", f"--tail={lines}", container], timeout=2.5)
+    out = out.replace("\r", "\n")
+    out = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", out)
+    return out
+
+
+def parse_num(text: str) -> float:
+    try:
+        return float(str(text).strip())
+    except Exception:
+        return 0.0
+
+
+def parse_gpus() -> List[GpuRow]:
+    query = (
+        "index,name,utilization.gpu,memory.used,memory.total,"
+        "power.draw,temperature.gpu,pcie.link.gen.current,pcie.link.width.current"
+    )
+    out = run_cmd(
+        [
+            "nvidia-smi",
+            f"--query-gpu={query}",
+            "--format=csv,noheader,nounits",
+        ],
+        timeout=2.0,
+    )
+    rows = []
+    for line in out.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 9:
+            continue
+        if not parts[0].isdigit():
+            continue
+        rows.append(
+            GpuRow(
+                index=parts[0],
+                name=parts[1],
+                util=parse_num(parts[2]),
+                mem_used=parse_num(parts[3]),
+                mem_total=parse_num(parts[4]),
+                power=parse_num(parts[5]),
+                temp=parse_num(parts[6]),
+                gen=parts[7],
+                width=parts[8],
+            )
+        )
+    return rows
+
+
+def extract_rate(line: str) -> float:
+    match = re.search(r",\s*([0-9.]+)\s+tokens per second", line)
+    return float(match.group(1)) if match else 0.0
+
+
+def extract_ms_tokens(line: str) -> Tuple[float, int]:
+    match = re.search(r"=\s*([0-9.]+)\s+ms\s*/\s*([0-9]+)\s+tokens", line)
+    if not match:
+        return 0.0, 0
+    return float(match.group(1)), int(match.group(2))
+
+
+def recent_kind(line: str) -> str:
+    if "prompt eval time" in line:
+        return "prompt"
+    if re.search(r"^\s*eval time\s*=", line):
+        return "gen"
+    if "total time =" in line:
+        return "total"
+    if "restored context checkpoint" in line:
+        return "restore"
+    if "created context checkpoint" in line:
+        return "checkpoint"
+    if "CUDA error: out of memory" in line:
+        return "OOM"
+    if "done request:" in line:
+        return "request"
+    return "log"
+
+
+def clean_recent(line: str) -> str:
+    line = re.sub(r"\s+", " ", line).strip()
+    line = re.sub(r"172\.17\.0\.1\s+", "", line)
+    line = line.replace("srv log_server_r: ", "")
+    line = line.replace("slot update_slots: ", "")
+    line = line.replace("slot create_check: ", "")
+    return line
+
+
+def parse_rates(logs: str) -> Rates:
+    rates = Rates(recent=[])
+    for line in logs.splitlines():
+        if "done request:" in line:
+            rates.requests += 1
+        if "created context checkpoint" in line:
+            rates.checkpoints += 1
+        if "restored context checkpoint" in line:
+            rates.restores += 1
+        if "CUDA error: out of memory" in line:
+            rates.oom += 1
+
+        if "prompt eval time =" in line:
+            rates.prompt_latest = extract_rate(line)
+            rates.prompt_ms, rates.prompt_tokens = extract_ms_tokens(line)
+            rates.prompt_max = max(rates.prompt_max, rates.prompt_latest)
+
+        elif re.search(r"^\s*eval time\s*=", line):
+            rates.gen_latest = extract_rate(line)
+            rates.gen_ms, rates.gen_tokens = extract_ms_tokens(line)
+            rates.gen_max = max(rates.gen_max, rates.gen_latest)
+
+        elif "total time =" in line:
+            rates.total_ms, rates.total_tokens = extract_ms_tokens(line)
+            if rates.total_ms > 0:
+                rates.total_latest = rates.total_tokens * 1000.0 / rates.total_ms
+                rates.total_max = max(rates.total_max, rates.total_latest)
+
+        if re.search(
+            r"prompt eval time|^\s*eval time\s*=|total time =|"
+            r"restored context checkpoint|created context checkpoint|"
+            r"CUDA error: out of memory|done request:",
+            line,
+        ):
+            rates.recent.append((recent_kind(line), clean_recent(line)))
+
+    rates.recent = rates.recent[-9:]
+    return rates
+
+
+def clip(text: str, width: int) -> str:
+    text = str(text)
+    if width <= 0:
+        return ""
+    if len(text) <= width:
+        return text
+    if width == 1:
+        return "…"
+    return text[: width - 1] + "…"
+
+
+class UI:
+    def __init__(self, stdscr, interval: float, log_lines: int):
+        self.stdscr = stdscr
+        self.interval = interval
+        self.log_lines = log_lines
+        self.running = True
+        self.setup_colours()
+
+    def setup_colours(self):
+        curses.start_color()
+        curses.use_default_colors()
+        pairs = [
+            (1, curses.COLOR_GREEN),
+            (2, curses.COLOR_YELLOW),
+            (3, curses.COLOR_RED),
+            (4, curses.COLOR_CYAN),
+            (5, curses.COLOR_BLUE),
+            (6, curses.COLOR_MAGENTA),
+            (7, curses.COLOR_WHITE),
+        ]
+        for pair, colour in pairs:
+            try:
+                curses.init_pair(pair, colour, -1)
+            except Exception:
+                pass
+
+        self.green = curses.color_pair(1)
+        self.yellow = curses.color_pair(2)
+        self.red = curses.color_pair(3)
+        self.cyan = curses.color_pair(4)
+        self.blue = curses.color_pair(5)
+        self.magenta = curses.color_pair(6)
+        self.white = curses.color_pair(7)
+        self.bold = curses.A_BOLD
+        self.dim = curses.A_DIM
+
+    def colour_for_pct(self, pct: float):
+        if pct >= 92:
+            return self.red | self.bold
+        if pct >= 82:
+            return self.yellow | self.bold
+        return self.green | self.bold
+
+    def colour_for_util(self, util: float):
+        if util >= 70:
+            return self.red | self.bold
+        if util >= 40:
+            return self.yellow | self.bold
+        return self.green | self.bold
+
+    def add(self, y: int, x: int, text: str, attr=0):
+        h, w = self.stdscr.getmaxyx()
+        if y < 0 or y >= h or x >= w:
+            return
+        room = max(0, w - x - 1)
+        try:
+            self.stdscr.addstr(y, x, clip(text, room), attr)
+        except curses.error:
+            pass
+
+    def box(self, y: int, x: int, h: int, w: int, title: str):
+        max_h, max_w = self.stdscr.getmaxyx()
+        if y >= max_h or x >= max_w:
+            return
+        h = min(h, max_h - y)
+        w = min(w, max_w - x)
+        if h < 3 or w < 8:
+            return
+
+        top = "┌" + "─" * (w - 2) + "┐"
+        mid = "│" + " " * (w - 2) + "│"
+        bot = "└" + "─" * (w - 2) + "┘"
+
+        self.add(y, x, top, self.dim)
+        for row in range(1, h - 1):
+            self.add(y + row, x, mid, self.dim)
+        self.add(y + h - 1, x, bot, self.dim)
+
+        label = f" {title} "
+        if len(label) < w - 4:
+            self.add(y, x + 2, label, self.cyan | self.bold)
+
+    def bar(self, used: float, total: float, width: int) -> Tuple[str, float]:
+        if total <= 0:
+            total = 1.0
+        pct = used / total * 100.0
+        filled = int((pct / 100.0) * width + 0.5)
+        filled = max(0, min(width, filled))
+        return "█" * filled + "░" * (width - filled), pct
+
+    def draw_header(self, backend_ok: bool, proxy_ok: bool):
+        h, w = self.stdscr.getmaxyx()
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        self.add(0, 0, " QZ-TOP ", self.cyan | self.bold)
+        self.add(0, 9, ts, self.bold)
+
+        bx = 31
+        self.add(0, bx, "backend=", self.dim)
+        self.add(0, bx + 8, "ok" if backend_ok else "fail", self.green | self.bold if backend_ok else self.red | self.bold)
+        self.add(0, bx + 13, "proxy=", self.dim)
+        self.add(0, bx + 19, "ok" if proxy_ok else "fail", self.green | self.bold if proxy_ok else self.red | self.bold)
+        self.add(0, bx + 25, f"refresh={self.interval:g}s", self.dim)
+        self.add(0, bx + 37, f"logs={self.log_lines}", self.dim)
+        self.add(1, 0, "─" * max(1, w - 1), self.dim)
+
+    def draw_profile(self, y: int, x: int, h: int, w: int):
+        self.box(y, x, h, w, "PROFILE")
+        labels = ["CTX", "NP", "SPLIT", "BATCH", "UBATCH", "CACHE", "REUSE", "KV"]
+        values = [
+            os.environ.get("QZ_CONTEXT", "?"),
+            os.environ.get("QZ_PARALLEL", "?"),
+            os.environ.get("QZ_TENSOR_SPLIT", "?"),
+            os.environ.get("QZ_BATCH", "?"),
+            os.environ.get("QZ_UBATCH", "?"),
+            os.environ.get("QZ_CACHE_RAM", "?") + "M",
+            os.environ.get("QZ_CACHE_REUSE", "?"),
+            os.environ.get("QZ_KV_KEY", "?") + "/" + os.environ.get("QZ_KV_VALUE", "?"),
+        ]
+        widths = [10, 5, 8, 8, 8, 9, 8, 16]
+
+        cx = x + 2
+        for label, width in zip(labels, widths):
+            self.add(y + 1, cx, f"{label:<{width}}", self.dim | self.bold)
+            cx += width + 1
+
+        cx = x + 2
+        for value, width in zip(values, widths):
+            self.add(y + 2, cx, f"{clip(value, width):<{width}}", self.white)
+            cx += width + 1
+
+    def draw_container(self, y: int, x: int, h: int, w: int):
+        self.box(y, x, h, w, "CONTAINER")
+        self.add(y + 1, x + 2, f"{'NAME':<16} {'STATUS':<27} PORTS", self.dim | self.bold)
+        out = docker(
+            [
+                "ps",
+                "-a",
+                "--filter",
+                f"name=^/{os.environ.get('QZ_CONTAINER', 'qwen36turbo')}$",
+                "--format",
+                "{{.Names}}|{{.Status}}|{{.Ports}}",
+            ],
+            timeout=2.0,
+        )
+        line = out.splitlines()[0] if out.splitlines() else "no container found||"
+        parts = line.split("|")
+        if len(parts) >= 3:
+            name, status, ports = parts[0], parts[1], parts[2]
+            attr = self.green if status.startswith("Up") else self.red | self.bold
+            self.add(y + 2, x + 2, f"{clip(name, 16):<16} ", self.white)
+            self.add(y + 2, x + 19, f"{clip(status, 27):<27}", attr)
+            self.add(y + 2, x + 47, clip(ports, w - 50), self.white)
+        else:
+            self.add(y + 2, x + 2, clip(line, w - 4), self.red | self.bold)
+
+    def draw_gpu(self, y: int, x: int, h: int, w: int, gpus: List[GpuRow]):
+        self.box(y, x, h, w, "GPU")
+        self.add(
+            y + 1,
+            x + 2,
+            f"{'ID':<5}{'NAME':<27}{'UTIL':>7}  {'VRAM':<27}{'USED/TOTAL':>17}{'POWER':>9}{'TEMP':>7}{'PCIE':>8}",
+            self.dim | self.bold,
+        )
+        for i, gpu in enumerate(gpus[: max(0, h - 3)]):
+            row = y + 2 + i
+            name = clip(gpu.name, 26)
+            bar, pct = self.bar(gpu.mem_used, gpu.mem_total, 18)
+            self.add(row, x + 2, f"GPU{gpu.index:<2} {name:<26}", self.white)
+            self.add(row, x + 34, f"{gpu.util:5.0f}%", self.colour_for_util(gpu.util))
+            self.add(row, x + 42, bar, self.colour_for_pct(pct))
+            self.add(row, x + 61, f"{pct:5.1f}%", self.colour_for_pct(pct))
+            self.add(row, x + 69, f"{gpu.mem_used:5.0f}/{gpu.mem_total:<5.0f}", self.white)
+            self.add(row, x + 85, f"{gpu.power:6.1f}W", self.white)
+            self.add(row, x + 94, f"{gpu.temp:4.0f}C", self.white)
+            self.add(row, x + 101, f"g{gpu.gen}x{gpu.width}", self.white)
+
+    def draw_throughput(self, y: int, x: int, h: int, w: int, rates: Rates):
+        self.box(y, x, h, w, "THROUGHPUT")
+        self.add(y + 1, x + 2, f"{'METRIC':<12}{'LATEST':>14}{'MAX':>14}{'TOKENS':>12}{'MS':>11}", self.dim | self.bold)
+
+        rows = [
+            ("prompt", rates.prompt_latest, rates.prompt_max, rates.prompt_tokens, rates.prompt_ms),
+            ("generate", rates.gen_latest, rates.gen_max, rates.gen_tokens, rates.gen_ms),
+            ("total", rates.total_latest, rates.total_max, rates.total_tokens, rates.total_ms),
+        ]
+        for idx, (name, latest, max_rate, tokens, ms) in enumerate(rows):
+            row = y + 2 + idx
+            attr = self.green | self.bold if latest > 0 else self.dim
+            self.add(row, x + 2, f"{name:<12}", self.white)
+            self.add(row, x + 14, f"{latest:11.2f}/s", attr)
+            self.add(row, x + 28, f"{max_rate:11.2f}/s", self.yellow | self.bold)
+            self.add(row, x + 45, f"{tokens:8d}", self.white)
+            self.add(row, x + 56, f"{ms:8.0f}", self.white)
+
+        self.add(
+            y + 6,
+            x + 2,
+            f"requests={rates.requests:<5} checkpoints={rates.checkpoints:<5} restores={rates.restores:<5} CUDA_OOM=",
+            self.white,
+        )
+        oom_attr = self.green | self.bold if rates.oom == 0 else self.red | self.bold
+        self.add(y + 6, x + 60, f"{rates.oom}", oom_attr)
+
+    def draw_recent(self, y: int, x: int, h: int, w: int, rates: Rates):
+        self.box(y, x, h, w, "RECENT")
+        self.add(y + 1, x + 2, f"{'TYPE':<11} MESSAGE", self.dim | self.bold)
+        max_msg = max(10, w - 17)
+        for idx, (kind, msg) in enumerate((rates.recent or [])[-(h - 3):]):
+            row = y + 2 + idx
+            attr = self.white
+            if kind == "OOM":
+                attr = self.red | self.bold
+            elif kind in ("restore", "checkpoint"):
+                attr = self.cyan
+            elif kind in ("prompt", "gen", "total"):
+                attr = self.green
+            self.add(row, x + 2, f"{kind:<11}", attr | self.bold)
+            self.add(row, x + 14, clip(msg, max_msg), self.white)
+
+    def draw(self):
+        self.stdscr.erase()
+        h, w = self.stdscr.getmaxyx()
+
+        backend_ok = curl_health(
+            os.environ.get("QZ_SERVER_HOST", "127.0.0.1"),
+            os.environ.get("QZ_SERVER_PORT", "18084"),
+        )
+        proxy_ok = curl_health(
+            os.environ.get("QZ_PROXY_HOST", "127.0.0.1"),
+            os.environ.get("QZ_PROXY_PORT", "18180"),
+        )
+
+        logs = get_logs(self.log_lines)
+        rates = parse_rates(logs)
+        gpus = parse_gpus()
+
+        self.draw_header(backend_ok, proxy_ok)
+
+        if h < 24 or w < 100:
+            self.add(3, 2, "Terminal too small. Need roughly 100x24.", self.red | self.bold)
+            self.stdscr.refresh()
+            return
+
+        full_w = w - 2
+        self.draw_profile(2, 0, 5, full_w)
+        self.draw_container(7, 0, 5, full_w)
+        self.draw_gpu(12, 0, 5 + min(2, len(gpus)), full_w, gpus)
+        throughput_y = 17 + min(2, len(gpus))
+        self.draw_throughput(throughput_y, 0, 9, full_w, rates)
+
+        recent_y = throughput_y + 9
+        recent_h = max(6, h - recent_y - 2)
+        self.draw_recent(recent_y, 0, recent_h, full_w, rates)
+
+        self.add(h - 1, 0, " q quit  Ctrl-C quit ", self.dim | self.bold)
+        self.stdscr.refresh()
+
+    def loop(self):
+        self.stdscr.nodelay(True)
+        curses.curs_set(0)
+        while self.running:
+            self.draw()
+            deadline = time.time() + self.interval
+            while time.time() < deadline:
+                try:
+                    key = self.stdscr.getch()
+                except KeyboardInterrupt:
+                    return
+                if key in (ord("q"), ord("Q")):
+                    return
+                if key == 3:
+                    return
+                time.sleep(0.05)
+
+
+def once(log_lines: int):
+    backend = curl_health(os.environ.get("QZ_SERVER_HOST", "127.0.0.1"), os.environ.get("QZ_SERVER_PORT", "18084"))
+    proxy = curl_health(os.environ.get("QZ_PROXY_HOST", "127.0.0.1"), os.environ.get("QZ_PROXY_PORT", "18180"))
+    logs = get_logs(log_lines)
+    rates = parse_rates(logs)
+    gpus = parse_gpus()
+
+    print(f"QZ-TOP {time.strftime('%Y-%m-%d %H:%M:%S')} backend={'ok' if backend else 'fail'} proxy={'ok' if proxy else 'fail'}")
+    print()
+    print("PROFILE")
+    print(f"  ctx={os.environ.get('QZ_CONTEXT', '?')} np={os.environ.get('QZ_PARALLEL', '?')} split={os.environ.get('QZ_TENSOR_SPLIT', '?')} batch={os.environ.get('QZ_BATCH', '?')} ubatch={os.environ.get('QZ_UBATCH', '?')} cache={os.environ.get('QZ_CACHE_RAM', '?')}MiB reuse={os.environ.get('QZ_CACHE_REUSE', '?')} kv={os.environ.get('QZ_KV_KEY', '?')}/{os.environ.get('QZ_KV_VALUE', '?')}")
+    print()
+    print("GPU")
+    for gpu in gpus:
+        pct = gpu.mem_used / max(1, gpu.mem_total) * 100
+        print(f"  GPU{gpu.index} {gpu.name:<26} util={gpu.util:3.0f}% mem={gpu.mem_used:.0f}/{gpu.mem_total:.0f} MiB ({pct:.1f}%) pwr={gpu.power:.1f}W temp={gpu.temp:.0f}C PCIe=g{gpu.gen}x{gpu.width}")
+    print()
+    print("THROUGHPUT")
+    print(f"  prompt   latest={rates.prompt_latest:.2f}/s max={rates.prompt_max:.2f}/s tokens={rates.prompt_tokens} ms={rates.prompt_ms:.0f}")
+    print(f"  generate latest={rates.gen_latest:.2f}/s max={rates.gen_max:.2f}/s tokens={rates.gen_tokens} ms={rates.gen_ms:.0f}")
+    print(f"  total    latest={rates.total_latest:.2f}/s max={rates.total_max:.2f}/s tokens={rates.total_tokens} ms={rates.total_ms:.0f}")
+    print(f"  requests={rates.requests} checkpoints={rates.checkpoints} restores={rates.restores} CUDA_OOM={rates.oom}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="QuantZhai top-style monitor")
+    parser.add_argument("--once", "-1", action="store_true", help="print one snapshot and exit")
+    parser.add_argument("-i", "--interval", type=float, default=1.0, help="refresh interval in seconds")
+    parser.add_argument("-n", "--lines", type=int, default=int(os.environ.get("QZ_TOP_LOG_LINES", "10000")), help="container log lines to scan")
+    args = parser.parse_args()
+
+    if args.once:
+        once(args.lines)
+        return
+
+    def handle_signal(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
+    try:
+        curses.wrapper(lambda stdscr: UI(stdscr, args.interval, args.lines).loop())
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()
+PY

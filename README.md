@@ -185,7 +185,10 @@ Important settings:
 - `QZ_SERVER_PORT`: host port for llama.cpp server, default `18084`.
 - `QZ_PROXY_PORT`: host port for QuantZhai proxy, default `18180`.
 - `QZ_CONTEXT`: context window, default `131072`.
-- `QZ_TENSOR_SPLIT`: GPU split passed to llama.cpp, default `10,16`.
+- `QZ_PARALLEL`: llama.cpp parallel slots, default `1`.
+- `QZ_BATCH` / `QZ_UBATCH`: batch settings, defaults `4096` and `512`.
+- `QZ_TENSOR_SPLIT`: GPU split passed to llama.cpp, default `9,17`.
+- `QZ_CACHE_RAM` / `QZ_CACHE_REUSE`: prompt cache settings, defaults `8192` and `256`.
 - `QZ_KV_KEY` / `QZ_KV_VALUE`: KV cache quant settings.
 - `SEARXNG_BASE_URL`: optional SearXNG base URL for local web search. Leave empty to disable search.
 - `SEARXNG_POLICY`: search routing policy, default `docs/searxng-agent-policy-profiled.json`.
