@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/quantzhai_logo_full.svg" alt="QuantZhai logo" width="180">
+  <img src="docs/logo.png" alt="QuantZhai logo" width="180">
 </p>
 
 # QuantZhai
