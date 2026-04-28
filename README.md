@@ -286,6 +286,12 @@ run/
 
 These may contain local paths, prompts, tool output, secrets, request captures, sqlite state, sessions, or model blobs.
 
+## Roadmaps
+
+- `docs/search-roadmap.md`: profile-aware local search plan.
+- `docs/fox-roadmap.md`: future Fox backend evaluation and parity gate.
+- `docs/proxy-architecture-roadmap.md`: Python proxy restructure, test harness, and possible Rust port.
+
 ## Name
 
 `Zhai` comes from `shanzhai`: scrappy, DIY, mountain-fort energy. QuantZhai means local quant stack built from practical parts.

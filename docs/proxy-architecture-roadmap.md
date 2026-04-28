@@ -1,0 +1,108 @@
+# Proxy Architecture Roadmap
+
+Date: 2026-04-28
+
+## Goal
+
+Turn the current Python proxy into a conventional, testable proxy/arbitrator/adapter package before considering a Rust port.
+
+The near-term target is not a rewrite. It is to break `proxy/quantzhai_proxy.py` into focused units that can be tested without launching Docker, Codex, or a live model server.
+
+## Current Shape
+
+- `proxy/quantzhai_proxy.py` is the working implementation.
+- It owns HTTP handling, OpenAI/Responses adaptation, upstream calls, streaming, tool handling, logging, and runtime configuration in one file.
+- This is acceptable for the first working stack, but it makes regression testing and future backend work harder than necessary.
+
+## Phase 1: Python Package Restructure
+
+Move toward a package layout like:
+
+```text
+proxy/
+  quantzhai_proxy/
+    __init__.py
+    __main__.py
+    server.py
+    config.py
+    upstream.py
+    responses.py
+    streaming.py
+    tools.py
+    logging_utils.py
+    errors.py
+  quantzhai_proxy.py
+```
+
+Keep `proxy/quantzhai_proxy.py` as a compatibility entrypoint at first, so existing scripts continue to work.
+
+## Phase 2: Extract Testable Core Units
+
+Extract functions and classes that can be tested with plain inputs and outputs:
+
+- Request normalization.
+- Responses API to upstream chat/completions translation.
+- Upstream response normalization.
+- Streaming chunk parsing and emission.
+- Tool-call detection and formatting.
+- Error mapping.
+- Runtime config loading and validation.
+- Capture/log path selection.
+
+Avoid changing behavior during extraction. The first win is a cleaner internal shape with the same external contract.
+
+## Phase 3: Test Harness
+
+Add a lightweight test layout:
+
+```text
+tests/
+  test_config.py
+  test_responses_adapter.py
+  test_streaming.py
+  test_tools.py
+  fixtures/
+```
+
+Target tests that do not require GPU, Docker, or Codex:
+
+- Golden request/response fixture conversion.
+- Streaming fixture replay.
+- Tool-call fixture parsing.
+- Config defaults and `.env` override behavior.
+- Error response shapes.
+
+Only add live integration checks later, and keep them opt-in.
+
+## Phase 4: Backend Adapter Boundary
+
+Define a small backend contract before adding more model servers:
+
+- `list_models()`
+- `chat_completion()`
+- `stream_chat_completion()`
+- `healthcheck()`
+- `cancel()` if the backend supports it.
+
+The current llama.cpp path should become one adapter. A future Fox backend should plug into the same boundary only after Fox reaches feature parity with `thetom/llama.cpp-turboquant`.
+
+## Phase 5: Rust Port Maybe
+
+A Rust port is a maybe, not a default destination.
+
+Consider Rust only after the Python package has clear module boundaries and tests. Rust becomes attractive if QuantZhai needs:
+
+- Lower proxy overhead under sustained streaming.
+- Stronger typed adapter boundaries.
+- A single static binary for easier deployment.
+- Better concurrency and cancellation behavior.
+- Cleaner long-term maintenance than the Python version.
+
+Do not start with Rust. Use the Python restructure to discover the real boundaries first.
+
+## Non-Goals For Now
+
+- Do not rewrite the proxy while it is still being made testable.
+- Do not break `scripts/qz-proxy` or `scripts/qz-up`.
+- Do not require Docker, Codex, or a live model for normal unit tests.
+- Do not add a build system until tests need it.
