@@ -32,6 +32,15 @@ sandbox_mode = "workspace-write"
 model_context_window = 131072
 model_max_output_tokens = 4096
 
+[profiles.quantzhai-caveman]
+model = "Qwen3.6Turbo-caveman"
+model_provider = "quantzhai"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+model_context_window = 131072
+model_max_output_tokens = 2048
+model_instructions_file = "docs/qz-caveman-codex-model-instructions-v2.md"
+
 [profiles.quantzhai-high]
 model = "Qwen3.6Turbo-high"
 model_provider = "quantzhai"

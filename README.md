@@ -154,18 +154,24 @@ Default profile aliases:
 ```text
 low
 medium
+caveman
 high
 max
 ```
 
-These aliases currently map to the proven Codex model names:
+These aliases currently map to these Codex model names:
 
 ```text
 Qwen3.6Turbo-low
 Qwen3.6Turbo-medium
+Qwen3.6Turbo-caveman
 Qwen3.6Turbo-high
 Qwen3.6Turbo-max
 ```
+
+`caveman` is an experimental compact-instructions profile. `scripts/qz-codex caveman`
+loads `docs/qz-caveman-codex-model-instructions-v2.md` and caps Codex output at
+2048 tokens for that session.
 
 ## Configuration
 

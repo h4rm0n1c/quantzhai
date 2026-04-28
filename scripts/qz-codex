@@ -9,8 +9,45 @@ if [[ ! -f "$QZ_ROOT/var/codex-home/config.toml" ]]; then
   cp "$QZ_ROOT/config/codex-config.example.toml" "$QZ_ROOT/var/codex-home/config.toml"
 fi
 
-if [[ ! -f "$QZ_ROOT/var/codex-home/model-catalogs/qwenzhai-models.json" ]]; then
-  cp "$QZ_ROOT/config/qwenzhai-models.example.json" "$QZ_ROOT/var/codex-home/model-catalogs/qwenzhai-models.json"
+catalog_src="$QZ_ROOT/config/qwenzhai-models.example.json"
+catalog_dst="$QZ_ROOT/var/codex-home/model-catalogs/qwenzhai-models.json"
+if [[ ! -f "$catalog_dst" ]]; then
+  cp "$catalog_src" "$catalog_dst"
+else
+  python3 - "$catalog_src" "$catalog_dst" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+src_path = Path(sys.argv[1])
+dst_path = Path(sys.argv[2])
+
+src = json.loads(src_path.read_text(encoding="utf-8"))
+dst = json.loads(dst_path.read_text(encoding="utf-8"))
+
+dst_models = dst.setdefault("models", [])
+dst_slugs = {model.get("slug") for model in dst_models if isinstance(model, dict)}
+dst_index = {model.get("slug"): index for index, model in enumerate(dst_models) if isinstance(model, dict)}
+refresh_slugs = {"Qwen3.6Turbo-caveman"}
+changed = False
+
+for model in src.get("models", []):
+    slug = model.get("slug") if isinstance(model, dict) else None
+    if not slug:
+        continue
+    if slug in refresh_slugs and slug in dst_index:
+        if dst_models[dst_index[slug]] != model:
+            dst_models[dst_index[slug]] = model
+            changed = True
+    elif slug not in dst_slugs:
+        dst_models.append(model)
+        dst_slugs.add(slug)
+        dst_index[slug] = len(dst_models) - 1
+        changed = True
+
+if changed:
+    dst_path.write_text(json.dumps(dst, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+PY
 fi
 
 tmp_config="$QZ_ROOT/var/codex-home/config.toml.tmp"
@@ -27,12 +64,20 @@ export CODEX_SQLITE_HOME="$CODEX_HOME/sqlite"
 export CODEX_OSS_BASE_URL="http://$QZ_PROXY_HOST:$QZ_PROXY_PORT"
 export LOCAL_QWEN_API_KEY="${LOCAL_QWEN_API_KEY:-local}"
 
+codex_args=(--oss)
 case "${1:-high}" in
   low|QwenZhai-low) model="Qwen3.6Turbo-low" ;;
   medium|QwenZhai-medium) model="Qwen3.6Turbo-medium" ;;
   high|QwenZhai-high) model="Qwen3.6Turbo-high" ;;
   max|QwenZhai-max) model="Qwen3.6Turbo-max" ;;
+  caveman|QwenZhai-caveman|Qwen3.6Turbo-caveman)
+    model="Qwen3.6Turbo-caveman"
+    codex_args+=(
+      -c "model_instructions_file=\"$QZ_ROOT/docs/qz-caveman-codex-model-instructions-v2.md\""
+      -c "model_max_output_tokens=2048"
+    )
+    ;;
   *) model="$1" ;;
 esac
 
-exec codex --oss -m "$model"
+exec codex "${codex_args[@]}" -m "$model"
