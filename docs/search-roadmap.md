@@ -25,21 +25,28 @@ The near-term target is a profile-aware SearXNG-backed search runtime:
 
 ## Phase 1: Land Profile Routing
 
-- Add `profile` to the `web_search` tool schema.
-- Support `auto`, `broad`, `coding`, `sysadmin`, `research`, `news`, `ai_models`, and `reference`.
-- Keep `categories` and `engines` as expert overrides.
-- Replace coding-first routing with profile resolution.
-- Include `profile` in repeat-detection signatures.
+Status: landed in the proxy.
+
+- `profile` is accepted by the `web_search` tool schema.
+- `auto`, `broad`, `coding`, `sysadmin`, `research`, `news`, `ai_models`, and `reference` are supported.
+- `categories` and `engines` remain expert overrides.
+- Coding-first routing has been replaced with profile resolution.
+- `profile` is included in repeat-detection signatures.
 
 ## Phase 2: Policy-Driven Engine Selection
 
-- Load `searxng-agent-policy-profiled.json` from a configurable path.
-- Resolve profile to categories and engines through policy JSON.
-- Apply disabled, quarantined, and non-text engine filters.
-- Add low-result fallback routing.
-- Return debug metadata showing requested profile, selected profile, engines, categories, and fallback use.
+Status: landed and smoke tested against a local SearXNG instance.
+
+- `searxng-agent-policy-profiled.json` loads from configurable `SEARXNG_POLICY`.
+- Profiles resolve to categories and engines through policy JSON.
+- Disabled, quarantined, and non-text engine filters are applied.
+- Low-result fallback routing is implemented.
+- Debug metadata is returned and the latest route is written to `var/captures/latest-web-search-route.json`.
+- Smoke tuning handled two early quality issues: AI/model searches now fall back to `broad` before `coding`, and coding error searches narrow to Q&A engines.
 
 ## Phase 3: Result Quality
+
+Status: started.
 
 - Deduplicate by canonical URL.
 - Prefer primary sources for coding and technical docs.
@@ -47,12 +54,26 @@ The near-term target is a profile-aware SearXNG-backed search runtime:
 - Penalize low-signal mirrors, spam pages, and tool-hostile sources.
 - Keep page-open and find-in-page behavior separate from search result ranking.
 
+Current first-pass quality behavior:
+
+- Qwen/GGUF/model queries route to `ai_models`, then fall back to broad text search when focused model engines are sparse.
+- Coding error queries route to `coding` and narrow to StackOverflow, SuperUser, AskUbuntu, and discuss.python.
+- Reference queries route to `reference`.
+
 ## Phase 4: Observability
+
+Status: started.
 
 - Write search request/response captures under `var/captures/`.
 - Add compact logs for selected profile, engine failures, timeout counts, fallback hits, and result counts.
 - Keep captures ignored by git.
 - Add a small manual smoke-test checklist for each profile.
+
+Current capture:
+
+```text
+var/captures/latest-web-search-route.json
+```
 
 ## Phase 5: Agent UX
 

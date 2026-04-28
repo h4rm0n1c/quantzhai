@@ -94,6 +94,8 @@ If Docker needs sudo on your machine, set this in `.env`:
 QZ_DOCKER_CMD="sudo docker"
 ```
 
+For non-interactive runs, including Codex-driven setup checks, sudo must already be able to run. Either run the scripts in a terminal where sudo can prompt, pre-auth with `sudo -v`, or add the user to the Docker group if that is acceptable for the machine.
+
 ## Build Docker Image
 
 If `scripts/qz-doctor` says the Docker image is missing, build it locally:
@@ -185,8 +187,55 @@ Important settings:
 - `QZ_CONTEXT`: context window, default `131072`.
 - `QZ_TENSOR_SPLIT`: GPU split passed to llama.cpp, default `10,16`.
 - `QZ_KV_KEY` / `QZ_KV_VALUE`: KV cache quant settings.
+- `SEARXNG_BASE_URL`: optional SearXNG base URL for local web search. Leave empty to disable search.
+- `SEARXNG_POLICY`: search routing policy, default `docs/searxng-agent-policy-profiled.json`.
 
 The current defaults came from the working two-GPU Qwen3.6 setup. They are not universal.
+
+## Local Search
+
+QuantZhai can expose one local `web_search` tool to Codex when `SEARXNG_BASE_URL` points at a running SearXNG instance.
+
+Search supports profiles:
+
+```text
+auto
+broad
+coding
+sysadmin
+research
+news
+ai_models
+reference
+```
+
+Normal use should leave `profile` as `auto`. The proxy routes the query through `docs/searxng-agent-policy-profiled.json`, filters disabled or non-text engines, and writes the latest routing decision to:
+
+```text
+var/captures/latest-web-search-route.json
+```
+
+Example `.env` setting:
+
+```bash
+SEARXNG_BASE_URL=http://127.0.0.1:8080
+```
+
+Quick smoke test:
+
+```bash
+source scripts/qz-env
+curl "$SEARXNG_BASE_URL/search?q=quantzhai%20smoke%20test&format=json"
+scripts/qz-proxy
+```
+
+Useful test queries for Codex or a proxy-level smoke:
+
+```text
+latest qwen gguf release
+python json decode error stdin
+define shanzhai
+```
 
 ## Useful Commands
 
@@ -239,6 +288,8 @@ Then build the image:
 ```bash
 scripts/qz-build-image
 ```
+
+If `qz-doctor` says Docker daemon access failed, fix Docker permissions first. With `QZ_DOCKER_CMD="sudo docker"`, run the script in a real terminal where sudo can prompt, or refresh sudo with `sudo -v` before running Codex-driven setup commands.
 
 If `qz-proxy` says the port is in use, clear old proxy processes:
 

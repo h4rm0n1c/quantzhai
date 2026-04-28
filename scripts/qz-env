@@ -39,6 +39,11 @@ export QZ_CACHE_REUSE="${QZ_CACHE_REUSE:-256}"
 export QZ_KV_KEY="${QZ_KV_KEY:-q8_0}"
 export QZ_KV_VALUE="${QZ_KV_VALUE:-turbo3}"
 
+export SEARXNG_BASE_URL="${SEARXNG_BASE_URL:-}"
+export SEARXNG_TIMEOUT="${SEARXNG_TIMEOUT:-15}"
+export SEARXNG_POLICY="${SEARXNG_POLICY:-$QZ_ROOT/docs/searxng-agent-policy-profiled.json}"
+export SEARXNG_CAPABILITIES="${SEARXNG_CAPABILITIES:-}"
+
 qz_docker() {
   $QZ_DOCKER_CMD "$@"
 }

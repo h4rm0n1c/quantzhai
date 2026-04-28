@@ -15,7 +15,18 @@ check() {
   fi
 }
 
-check docker qz_docker --version
+docker_cli_status=0
+docker_cli_output="$(qz_docker --version 2>&1)" || docker_cli_status=$?
+if [[ "$docker_cli_status" -eq 0 ]]; then
+  printf 'ok   docker cli\n'
+else
+  printf 'fail docker cli\n'
+  if [[ "$QZ_DOCKER_CMD" == sudo* ]]; then
+    printf 'hint QZ_DOCKER_CMD uses sudo; run from a terminal where sudo can prompt, or use docker group access\n'
+  fi
+  fail=1
+fi
+
 check codex codex --version
 check python3 python3 --version
 check nvidia-smi nvidia-smi
@@ -27,12 +38,32 @@ else
   fail=1
 fi
 
-if qz_docker image inspect "$QZ_IMAGE" >/dev/null 2>&1; then
+docker_image_status=0
+docker_image_output="$(qz_docker image inspect "$QZ_IMAGE" 2>&1)" || docker_image_status=$?
+if [[ "$docker_image_status" -eq 0 ]]; then
   printf 'ok   docker image: %s\n' "$QZ_IMAGE"
 else
-  printf 'fail docker image missing: %s\n' "$QZ_IMAGE"
-  printf 'hint build it with: scripts/qz-build-image\n'
+  if grep -Eiq 'permission denied|password is required|terminal is required|sudo' <<<"$docker_image_output"; then
+    printf 'fail docker daemon access for image check\n'
+    printf 'hint fix Docker permissions, or run from a terminal where sudo can prompt\n'
+  else
+    printf 'fail docker image missing: %s\n' "$QZ_IMAGE"
+    printf 'hint build it with: scripts/qz-build-image\n'
+  fi
   fail=1
+fi
+
+if [[ -n "$SEARXNG_POLICY" && -f "$SEARXNG_POLICY" ]]; then
+  printf 'ok   search policy: %s\n' "$SEARXNG_POLICY"
+else
+  printf 'fail search policy missing: %s\n' "${SEARXNG_POLICY:-unset}"
+  fail=1
+fi
+
+if [[ -n "$SEARXNG_BASE_URL" ]]; then
+  printf 'ok   search base configured: %s\n' "$SEARXNG_BASE_URL"
+else
+  printf 'skip search base: set SEARXNG_BASE_URL to enable local web_search\n'
 fi
 
 exit "$fail"

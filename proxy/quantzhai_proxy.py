@@ -364,6 +364,11 @@ def normalize_tools_for_llamacpp(body: dict) -> dict:
                             "type": "string",
                             "description": "Search query for search, or needle text for find_in_page.",
                         },
+                        "profile": {
+                            "type": "string",
+                            "enum": ["auto", "broad", "coding", "research", "news", "ai_models", "reference", "sysadmin"],
+                            "description": "Search profile used to select SearXNG categories and engines.",
+                        },
                         "url": {
                             "type": "string",
                             "description": "Page URL for open_page or find_in_page.",
@@ -1045,6 +1050,26 @@ WEB_SEARCH_MAX_HOPS = 6
 WEB_SEARCH_MAX_SEARCHES = 2
 WEB_SEARCH_MAX_OPENS = 3
 WEB_SEARCH_USER_AGENT = "qwen36turbo-web-runtime/1.0"
+VALID_WEB_SEARCH_PROFILES = {
+    "auto",
+    "broad",
+    "coding",
+    "research",
+    "news",
+    "ai_models",
+    "reference",
+    "sysadmin",
+}
+
+
+def _string_list(value):
+    if not isinstance(value, list):
+        return []
+    out = []
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            out.append(item.strip())
+    return out
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -1575,14 +1600,134 @@ class ProxyHandler(BaseHTTPRequestHandler):
     def _allowed_engine_names(self):
         caps = self.searxng_capabilities or {}
         ok = set()
+        for name, meta in (caps.get("engine_probe") or {}).items():
+            if isinstance(meta, dict) and meta.get("status") == "ok":
+                ok.add(name)
+        if ok:
+            return ok
         for item in caps.get("recommended_for_coding_agent") or []:
             if isinstance(item, dict) and item.get("name"):
                 ok.add(item["name"])
-        if not ok:
-            for name, meta in (caps.get("engine_probe") or {}).items():
-                if isinstance(meta, dict) and meta.get("status") == "ok":
-                    ok.add(name)
         return ok
+
+    def _policy_get_path(self, dotted, default=None):
+        obj = self.searxng_policy or {}
+        for part in str(dotted or "").split("."):
+            if not part:
+                continue
+            if not isinstance(obj, dict):
+                return default
+            obj = obj.get(part)
+        return obj if obj is not None else default
+
+    def _blocked_engines(self, profile: str):
+        policy = self.searxng_policy or {}
+        blocked = set(_string_list(policy.get("disabled_even_if_configured")))
+        blocked.update(_string_list(policy.get("non_text_engines_disabled_for_current_web_search_tool")))
+        blocked.update(_string_list(policy.get("quarantine_until_fixed")))
+        if profile == "coding":
+            blocked.update(_string_list(policy.get("never_for_coding_agent")))
+        return blocked
+
+    def _filter_engines(self, engines, profile: str):
+        blocked = self._blocked_engines(profile)
+        ok_engines = self._allowed_engine_names()
+        filtered = []
+        seen = set()
+        for engine in _string_list(engines):
+            if engine in seen or engine in blocked:
+                continue
+            if ok_engines and engine not in ok_engines:
+                continue
+            seen.add(engine)
+            filtered.append(engine)
+        return filtered
+
+    def _infer_search_profile(self, query: str):
+        routing = (self.searxng_policy or {}).get("routing") or {}
+        keywords = routing.get("auto_keywords") or {}
+        precedence = _string_list(routing.get("auto_precedence")) or [
+            "ai_models",
+            "sysadmin",
+            "coding",
+            "research",
+            "news",
+            "reference",
+            "broad",
+        ]
+        text = _normalize_ws(query or "").lower()
+        for profile in precedence:
+            if profile not in VALID_WEB_SEARCH_PROFILES or profile == "auto":
+                continue
+            for keyword in _string_list(keywords.get(profile)):
+                if keyword.lower() in text:
+                    return profile
+        default_profile = str(routing.get("default_profile") or "broad").strip()
+        return default_profile if default_profile in VALID_WEB_SEARCH_PROFILES and default_profile != "auto" else "broad"
+
+    def _profile_config(self, profile: str, query: str):
+        requested_profile = str(profile or "auto").strip()
+        if requested_profile not in VALID_WEB_SEARCH_PROFILES:
+            requested_profile = "auto"
+        actual_profile = self._infer_search_profile(query) if requested_profile == "auto" else requested_profile
+        if actual_profile not in VALID_WEB_SEARCH_PROFILES or actual_profile == "auto":
+            actual_profile = "broad"
+
+        profiles = (self.searxng_policy or {}).get("web_search_profiles") or {}
+        cfg = profiles.get(actual_profile) if isinstance(profiles, dict) else None
+        cfg = cfg if isinstance(cfg, dict) else {}
+
+        categories = _string_list(cfg.get("categories"))
+        categories_from = cfg.get("categories_from")
+        if not categories and isinstance(categories_from, str):
+            categories = _string_list(self._policy_get_path(categories_from))
+
+        engines = _string_list(cfg.get("engines"))
+        engines_from = cfg.get("engines_from")
+        if not engines and isinstance(engines_from, str):
+            engines = _string_list(self._policy_get_path(engines_from))
+
+        fallback_profiles = [
+            item for item in _string_list(cfg.get("fallback_profiles"))
+            if item in VALID_WEB_SEARCH_PROFILES and item != "auto" and item != actual_profile
+        ]
+
+        if not categories and actual_profile == "coding":
+            legacy = self._coding_profile()
+            categories = legacy["categories"]
+            engines = engines or legacy["engines"]
+            fallback_profiles = fallback_profiles or ["broad"]
+        elif not categories:
+            categories = ["general", "web"] if actual_profile == "broad" else ["general"]
+
+        if not engines and actual_profile == "broad":
+            engines = _string_list((self.searxng_policy or {}).get("agent_default", {}).get("engines"))
+
+        if actual_profile == "coding":
+            text = _normalize_ws(query or "").lower()
+            coding_error_terms = (
+                " error",
+                "error:",
+                "traceback",
+                "exception",
+                "decode",
+                "stdin",
+                "failed",
+                "cannot",
+                "can't",
+                "stack trace",
+            )
+            if any(term in f" {text}" for term in coding_error_terms):
+                categories = ["q&a"]
+                engines = ["stackoverflow", "superuser", "askubuntu", "discuss.python"]
+
+        return {
+            "requested_profile": requested_profile,
+            "profile": actual_profile,
+            "categories": categories,
+            "engines": self._filter_engines(engines, actual_profile),
+            "fallback_profiles": fallback_profiles,
+        }
 
     def _coding_profile(self):
         policy = self.searxng_policy or {}
@@ -1686,23 +1831,91 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self._cache_put(self.web_search_cache, key, result)
         return result
 
-    def _search_web(self, query: str, categories=None, engines=None, top_k: int = WEB_SEARCH_MAX_RESULTS):
-        profile = self._coding_profile()
-        primary_categories = categories or profile["categories"]
-        primary_engines = engines or profile["engines"]
-        result = self._query_searxng(query, primary_categories, primary_engines, top_k=top_k)
-        if result.get("results"):
-            result["profile"] = "coding"
+    def _search_web(self, query: str, profile="auto", categories=None, engines=None, top_k: int = WEB_SEARCH_MAX_RESULTS):
+        route = self._profile_config(profile, query)
+        explicit_categories = _string_list(categories)
+        explicit_engines = _string_list(engines)
+        primary_categories = explicit_categories or route["categories"]
+        primary_engines = self._filter_engines(explicit_engines, route["profile"]) if explicit_engines else route["engines"]
+        query_categories = [] if route["profile"] in ("ai_models", "broad") and primary_engines else primary_categories
+
+        threshold = 1
+        try:
+            threshold = int(((self.searxng_policy or {}).get("routing") or {}).get("low_result_fallback_threshold") or 1)
+        except Exception:
+            threshold = 1
+        threshold = max(1, min(threshold, WEB_SEARCH_MAX_RESULTS))
+
+        result = self._query_searxng(query, query_categories, primary_engines, top_k=top_k)
+        result.update({
+            "requested_profile": route["requested_profile"],
+            "profile": route["profile"],
+            "fallback_used": None,
+            "fallback_profiles": route["fallback_profiles"],
+            "categories": primary_categories,
+            "engines": primary_engines,
+            "query_categories": query_categories,
+        })
+
+        route_log = {
+            "query": query,
+            "requested_profile": route["requested_profile"],
+            "selected_profile": route["profile"],
+            "categories": primary_categories,
+            "query_categories": query_categories,
+            "engines": primary_engines,
+            "fallback_profiles": route["fallback_profiles"],
+            "fallback_used": None,
+            "result_count": len(result.get("results") or []),
+            "threshold": threshold,
+            "explicit_categories": bool(explicit_categories),
+            "explicit_engines": bool(explicit_engines),
+        }
+
+        # Explicit engine/category calls are expert overrides. Do not silently route elsewhere.
+        if explicit_categories or explicit_engines or len(result.get("results") or []) >= threshold:
+            self._runtime_log("latest-web-search-route.json", route_log)
             return result
 
-        fallback = self._query_searxng(
-            query,
-            profile["fallback_categories"],
-            profile["fallback_engines"],
-            top_k=top_k,
-        )
-        fallback["profile"] = "fallback"
-        return fallback
+        best = result
+        primary_count = len(result.get("results") or [])
+        for fallback_profile in route["fallback_profiles"]:
+            fallback_route = self._profile_config(fallback_profile, query)
+            fallback_query_categories = [] if fallback_route["profile"] in ("ai_models", "broad") and fallback_route["engines"] else fallback_route["categories"]
+            fallback = self._query_searxng(
+                query,
+                fallback_query_categories,
+                fallback_route["engines"],
+                top_k=top_k,
+            )
+            fallback_count = len(fallback.get("results") or [])
+            route_log.setdefault("fallback_attempts", []).append({
+                "profile": fallback_route["profile"],
+                "categories": fallback_route["categories"],
+                "query_categories": fallback_query_categories,
+                "engines": fallback_route["engines"],
+                "result_count": fallback_count,
+            })
+            if fallback_count > len(best.get("results") or []):
+                fallback.update({
+                    "requested_profile": route["requested_profile"],
+                    "profile": fallback_route["profile"],
+                    "fallback_used": fallback_route["profile"],
+                    "fallback_profiles": route["fallback_profiles"],
+                    "primary_profile": route["profile"],
+                    "primary_result_count": primary_count,
+                    "categories": fallback_route["categories"],
+                    "query_categories": fallback_query_categories,
+                    "engines": fallback_route["engines"],
+                })
+                best = fallback
+            if len(best.get("results") or []) >= threshold:
+                break
+
+        route_log["fallback_used"] = best.get("fallback_used")
+        route_log["result_count"] = len(best.get("results") or [])
+        self._runtime_log("latest-web-search-route.json", route_log)
+        return best
 
     def _open_page(self, url: str):
         canonical_url = _canonicalize_url(url)
@@ -1816,6 +2029,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
             data = {}
         action = str(data.get("action") or "").strip() or "search"
         query = data.get("query")
+        profile = str(data.get("profile") or "auto").strip()
+        if profile not in VALID_WEB_SEARCH_PROFILES:
+            profile = "auto"
         url = data.get("url")
         page_id = data.get("page_id")
         categories = data.get("categories") if isinstance(data.get("categories"), list) else None
@@ -1829,6 +2045,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         return {
             "action": action,
             "query": query,
+            "profile": profile,
             "url": url,
             "page_id": page_id,
             "categories": categories,
@@ -1840,10 +2057,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
         args = self._parse_web_search_arguments(call_item.get("arguments") or "{}")
         action = args["action"]
         query = args.get("query")
+        profile = args.get("profile") or "auto"
         url = args.get("url")
         page_id = args.get("page_id")
         signature = (
             action,
+            profile if action == "search" else "",
             _normalize_ws(query or "").lower(),
             _canonicalize_url(url or ""),
             page_id or "",
@@ -1870,6 +2089,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 counters["search"] += 1
                 payload = self._search_web(
                     query=query.strip(),
+                    profile=profile,
                     categories=args.get("categories"),
                     engines=args.get("engines"),
                     top_k=args.get("top_k") or WEB_SEARCH_MAX_RESULTS,
@@ -1921,6 +2141,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         if action == "search" and isinstance(query, str):
             web_call_item["action"]["queries"] = [query]
+            web_call_item["action"]["profile"] = profile
+            if isinstance(payload, dict) and payload.get("profile"):
+                web_call_item["action"]["selected_profile"] = payload.get("profile")
+            if isinstance(payload, dict) and payload.get("fallback_used"):
+                web_call_item["action"]["fallback_used"] = payload.get("fallback_used")
             web_call_item["action"]["result_count"] = len((payload or {}).get("results") or [])
         elif action == "open_page" and isinstance(url, str):
             web_call_item["action"]["url"] = payload.get("url") if isinstance(payload, dict) else url

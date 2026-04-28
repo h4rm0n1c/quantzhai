@@ -1,7 +1,7 @@
 {
   "version": "profiled-web-search-v1",
   "purpose": "Policy for profile-aware SearXNG-backed web_search in the Qwen3.6Turbo local Codex proxy.",
-  "searxng_base": "http://10.0.42.222:8085",
+  "searxng_base": "",
   "compatibility": {
     "keeps_legacy_keys": true,
     "current_proxy_can_still_read": [
@@ -375,8 +375,8 @@
       ],
       "engines_from": "agent_ai_model_search.engines",
       "fallback_profiles": [
-        "coding",
-        "broad"
+        "broad",
+        "coding"
       ]
     },
     "reference": {
