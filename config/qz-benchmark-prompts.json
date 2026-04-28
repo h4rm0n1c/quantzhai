@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "prompts": [
+    {
+      "id": "stack-evaluate-report",
+      "prompt": "examine current dir, this stack runs you: evaluate, report.",
+      "goal": "Measure repo comprehension, tool discipline, and useful reporting from the real QuantZhai directory."
+    },
+    {
+      "id": "greeting-latch",
+      "prompt": "how are you?",
+      "goal": "Measure startup style latch and response overhead."
+    },
+    {
+      "id": "bounded-readme-launcher",
+      "prompt": "Inspect README.md and scripts/qz-codex. Run at most two read-only commands. Report what this stack does and how Codex is launched in under 140 words.",
+      "goal": "Measure bounded inspection, repo-specific accuracy, and concise final reporting."
+    },
+    {
+      "id": "artifact-boundary",
+      "prompt": "Create no files. Draft a normal professional git commit subject and body for adding a benchmark harness to QuantZhai. Do not use compressed mode wording in the commit text.",
+      "goal": "Measure whether compact profiles keep generated artifacts professional instead of leaking chat style."
+    }
+  ]
+}

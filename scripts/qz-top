@@ -13,6 +13,7 @@ set +o pipefail 2>/dev/null
 python3 - "$@" <<'PY'
 import argparse
 import curses
+import json
 import os
 import re
 import shlex
@@ -21,7 +22,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 
 @dataclass
@@ -56,6 +57,16 @@ class Rates:
     total_tokens: int = 0
     total_ms: float = 0.0
     recent: List[Tuple[str, str]] = None
+
+
+@dataclass
+class BenchmarkSummary:
+    run_id: str = ""
+    baseline: str = ""
+    profile: str = ""
+    input_ratio: float = 0.0
+    input_savings: float = 0.0
+    cases: int = 0
 
 
 def run_cmd(args, timeout=2.0) -> str:
@@ -220,6 +231,48 @@ def parse_rates(logs: str) -> Rates:
 
     rates.recent = rates.recent[-9:]
     return rates
+
+
+def latest_benchmark() -> Optional[BenchmarkSummary]:
+    path = os.path.join(os.environ.get("QZ_VAR_DIR", "var"), "benchmarks", "latest-summary.json")
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except Exception:
+        return None
+
+    aggregate = data.get("aggregate")
+    if not isinstance(aggregate, dict) or not aggregate:
+        return None
+
+    best_profile = ""
+    best_row = None
+    for profile, row in aggregate.items():
+        if not isinstance(row, dict):
+            continue
+        ratio = row.get("avg_input_ratio")
+        if ratio is None:
+            ratio = row.get("avg_output_ratio")
+        if ratio is None:
+            continue
+        best_ratio = best_row.get("avg_input_ratio") if best_row else None
+        if best_ratio is None and best_row:
+            best_ratio = best_row.get("avg_output_ratio", 9999)
+        if best_row is None or float(ratio) < float(best_ratio):
+            best_profile = profile
+            best_row = row
+
+    if best_row is None:
+        return None
+
+    return BenchmarkSummary(
+        run_id=str(data.get("run_id", "")),
+        baseline=str(data.get("baseline_profile", "")),
+        profile=best_profile,
+        input_ratio=float(best_row.get("avg_input_ratio", best_row.get("avg_output_ratio")) or 0.0),
+        input_savings=float(best_row.get("avg_input_savings", best_row.get("avg_output_savings")) or 0.0),
+        cases=int(best_row.get("cases") or 0),
+    )
 
 
 def clip(text: str, width: int) -> str:
@@ -409,7 +462,7 @@ class UI:
             self.add(row, x + 94, f"{gpu.temp:4.0f}C", self.white)
             self.add(row, x + 101, f"g{gpu.gen}x{gpu.width}", self.white)
 
-    def draw_throughput(self, y: int, x: int, h: int, w: int, rates: Rates):
+    def draw_throughput(self, y: int, x: int, h: int, w: int, rates: Rates, benchmark: Optional[BenchmarkSummary]):
         self.box(y, x, h, w, "THROUGHPUT")
         self.add(y + 1, x + 2, f"{'METRIC':<12}{'LATEST':>14}{'MAX':>14}{'TOKENS':>12}{'MS':>11}", self.dim | self.bold)
 
@@ -435,6 +488,14 @@ class UI:
         )
         oom_attr = self.green | self.bold if rates.oom == 0 else self.red | self.bold
         self.add(y + 6, x + 60, f"{rates.oom}", oom_attr)
+
+        if benchmark is not None:
+            bench_text = (
+                f"bench={clip(benchmark.run_id, 18)} base={benchmark.baseline} "
+                f"{benchmark.profile} input={benchmark.input_ratio:.2f} save={benchmark.input_savings * 100:.0f}% "
+                f"cases={benchmark.cases}"
+            )
+            self.add(y + 7, x + 2, clip(bench_text, w - 4), self.cyan | self.bold)
 
     def draw_recent(self, y: int, x: int, h: int, w: int, rates: Rates):
         self.box(y, x, h, w, "RECENT")
@@ -467,6 +528,7 @@ class UI:
 
         logs = get_logs(self.log_lines)
         rates = parse_rates(logs)
+        benchmark = latest_benchmark()
         gpus = parse_gpus()
 
         self.draw_header(backend_ok, proxy_ok)
@@ -481,7 +543,7 @@ class UI:
         self.draw_container(7, 0, 5, full_w)
         self.draw_gpu(12, 0, 5 + min(2, len(gpus)), full_w, gpus)
         throughput_y = 17 + min(2, len(gpus))
-        self.draw_throughput(throughput_y, 0, 9, full_w, rates)
+        self.draw_throughput(throughput_y, 0, 9, full_w, rates, benchmark)
 
         recent_y = throughput_y + 9
         recent_h = max(6, h - recent_y - 2)
@@ -513,6 +575,7 @@ def once(log_lines: int):
     proxy = curl_health(os.environ.get("QZ_PROXY_HOST", "127.0.0.1"), os.environ.get("QZ_PROXY_PORT", "18180"))
     logs = get_logs(log_lines)
     rates = parse_rates(logs)
+    benchmark = latest_benchmark()
     gpus = parse_gpus()
 
     print(f"QZ-TOP {time.strftime('%Y-%m-%d %H:%M:%S')} backend={'ok' if backend else 'fail'} proxy={'ok' if proxy else 'fail'}")
@@ -530,6 +593,10 @@ def once(log_lines: int):
     print(f"  generate latest={rates.gen_latest:.2f}/s max={rates.gen_max:.2f}/s tokens={rates.gen_tokens} ms={rates.gen_ms:.0f}")
     print(f"  total    latest={rates.total_latest:.2f}/s max={rates.total_max:.2f}/s tokens={rates.total_tokens} ms={rates.total_ms:.0f}")
     print(f"  requests={rates.requests} checkpoints={rates.checkpoints} restores={rates.restores} CUDA_OOM={rates.oom}")
+    if benchmark is not None:
+        print()
+        print("BENCHMARK")
+        print(f"  run={benchmark.run_id} baseline={benchmark.baseline} profile={benchmark.profile} input_ratio={benchmark.input_ratio:.2f} input_savings={benchmark.input_savings * 100:.0f}% cases={benchmark.cases}")
 
 
 def main():

@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+docker_bin="${QZ_HELPER_DOCKER_BIN:-/usr/bin/docker}"
+if [[ ! -x "$docker_bin" ]]; then
+  docker_bin="$(command -v docker 2>/dev/null || true)"
+fi
+if [[ -z "$docker_bin" || ! -x "$docker_bin" ]]; then
+  echo "qz-docker-root-helper: docker not found" >&2
+  exit 127
+fi
+
+deny() {
+  echo "qz-docker-root-helper: denied: $*" >&2
+  exit 126
+}
+
+valid_ref() {
+  [[ "$1" =~ ^[A-Za-z0-9._:/@+-]+$ ]]
+}
+
+valid_container() {
+  [[ "$1" =~ ^qwen36turbo[A-Za-z0-9_.-]*$ ]]
+}
+
+valid_tail() {
+  [[ "$1" =~ ^[0-9]+$ ]] && (( "$1" <= 1000 ))
+}
+
+valid_mount() {
+  local mount_spec="$1"
+  [[ "$mount_spec" == type=bind,* ]] || return 1
+  [[ "$mount_spec" == *",readonly"* || "$mount_spec" == *",ro"* ]] || return 1
+  [[ "$mount_spec" == *",dst=/models/"* || "$mount_spec" == *",target=/models/"* ]] || return 1
+}
+
+[[ $# -gt 0 ]] || deny "missing docker command"
+
+case "$1" in
+  --version)
+    [[ $# -eq 1 ]] || deny "unexpected --version args"
+    exec "$docker_bin" --version
+    ;;
+
+  version)
+    [[ $# -eq 1 ]] || deny "unexpected version args"
+    exec "$docker_bin" version
+    ;;
+
+  image)
+    [[ $# -eq 3 ]] || deny "expected: image inspect IMAGE"
+    [[ "$2" == "inspect" ]] || deny "only image inspect allowed"
+    valid_ref "$3" || deny "bad image ref"
+    exec "$docker_bin" "$@"
+    ;;
+
+  ps)
+    for arg in "$@"; do
+      case "$arg" in
+        ps|-a|--all|--no-trunc|--quiet|-q|--format|--filter|name=*|name=^/*|{{.Names}}|--format=*|--filter=*)
+          ;;
+        *)
+          # Values for --format/--filter may contain braces, dots, or slashes.
+          if [[ "$arg" =~ ^[\{\}\.A-Za-z0-9_=:/\^\$\*\[\]-]+$ ]]; then
+            continue
+          fi
+          deny "unsupported ps arg: $arg"
+          ;;
+      esac
+    done
+    exec "$docker_bin" "$@"
+    ;;
+
+  logs)
+    shift
+    tail_value=""
+    if [[ "${1:-}" == --tail=* ]]; then
+      valid_tail "${1#--tail=}" || deny "bad tail"
+      tail_value="${1#--tail=}"
+      shift
+    elif [[ "${1:-}" == "--tail" ]]; then
+      valid_tail "${2:-}" || deny "bad tail"
+      tail_value="$2"
+      shift 2
+    fi
+    [[ -n "$tail_value" ]] || deny "logs require --tail"
+    [[ $# -eq 1 ]] || deny "logs require one container"
+    valid_container "$1" || deny "bad container"
+    exec "$docker_bin" logs --tail="$tail_value" "$1"
+    ;;
+
+  rm)
+    [[ $# -eq 3 ]] || deny "expected: rm -f CONTAINER"
+    [[ "$2" == "-f" ]] || deny "only rm -f allowed"
+    valid_container "$3" || deny "bad container"
+    exec "$docker_bin" "$@"
+    ;;
+
+  run)
+    saw_detach=0
+    saw_name=0
+    saw_safe_mount=0
+    image_ref=""
+    i=2
+    while (( i <= $# )); do
+      arg="${!i}"
+      case "$arg" in
+        -d)
+          saw_detach=1
+          ;;
+        --name)
+          (( i < $# )) || deny "--name needs value"
+          i=$((i + 1))
+          valid_container "${!i}" || deny "bad container name"
+          saw_name=1
+          ;;
+        --name=*)
+          valid_container "${arg#--name=}" || deny "bad container name"
+          saw_name=1
+          ;;
+        --mount)
+          (( i < $# )) || deny "--mount needs value"
+          i=$((i + 1))
+          valid_mount "${!i}" || deny "unsafe mount"
+          saw_safe_mount=1
+          ;;
+        --mount=*)
+          valid_mount "${arg#--mount=}" || deny "unsafe mount"
+          saw_safe_mount=1
+          ;;
+        --gpus|--cap-add|--ulimit|-p|--publish)
+          (( i < $# )) || deny "$arg needs value"
+          i=$((i + 1))
+          ;;
+        --gpus=*|--cap-add=*|--ulimit=*|-p=*|--publish=*)
+          ;;
+        -v|--volume|--volume=*)
+          deny "volume mounts not allowed"
+          ;;
+        --privileged|--pid=host|--network=host|--userns=host|--uts=host|--ipc=host)
+          deny "host-level option not allowed: $arg"
+          ;;
+        -*)
+          deny "unsupported run option: $arg"
+          ;;
+        *)
+          image_ref="$arg"
+          break
+          ;;
+      esac
+      i=$((i + 1))
+    done
+
+    [[ "$saw_detach" -eq 1 ]] || deny "run must use -d"
+    [[ "$saw_name" -eq 1 ]] || deny "run must name qwen36turbo container"
+    [[ "$saw_safe_mount" -eq 1 ]] || deny "run needs readonly /models bind mount"
+    [[ "$image_ref" == "thetom-llama-cpp-turboquant:cuda-server" ]] || deny "unexpected image: ${image_ref:-missing}"
+    exec "$docker_bin" "$@"
+    ;;
+
+  *)
+    deny "docker command not allowed: $1"
+    ;;
+esac

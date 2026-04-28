@@ -21,7 +21,9 @@ if [[ "$docker_cli_status" -eq 0 ]]; then
   printf 'ok   docker cli\n'
 else
   printf 'fail docker cli\n'
-  if [[ "$QZ_DOCKER_CMD" == sudo* ]]; then
+  if [[ "$QZ_DOCKER_CMD" == *qz-docker-quantzhai* ]]; then
+    printf 'hint install helper once: scripts/qz-install-sudo-helper\n'
+  elif [[ "$QZ_DOCKER_CMD" == sudo* ]]; then
     printf 'hint QZ_DOCKER_CMD uses sudo; run from a terminal where sudo can prompt, or use docker group access\n'
   fi
   fail=1
@@ -45,7 +47,11 @@ if [[ "$docker_image_status" -eq 0 ]]; then
 else
   if grep -Eiq 'permission denied|password is required|terminal is required|sudo' <<<"$docker_image_output"; then
     printf 'fail docker daemon access for image check\n'
-    printf 'hint fix Docker permissions, or run from a terminal where sudo can prompt\n'
+    if [[ "$QZ_DOCKER_CMD" == *qz-docker-quantzhai* ]]; then
+      printf 'hint install helper once: scripts/qz-install-sudo-helper\n'
+    else
+      printf 'hint fix Docker permissions, or run from a terminal where sudo can prompt\n'
+    fi
   else
     printf 'fail docker image missing: %s\n' "$QZ_IMAGE"
     printf 'hint build it with: scripts/qz-build-image\n'

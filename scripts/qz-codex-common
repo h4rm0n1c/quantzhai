@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+
+QZ_CODEX_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# shellcheck disable=SC1091
+source "$QZ_CODEX_COMMON_DIR/qz-env"
+
+qz_prepare_codex_home() {
+  mkdir -p \
+    "$QZ_VAR_DIR/codex-home/model-catalogs" \
+    "$QZ_VAR_DIR/codex-home/sqlite" \
+    "$QZ_VAR_DIR/logs" \
+    "$QZ_VAR_DIR/run" \
+    "$QZ_VAR_DIR/captures" \
+    "$QZ_VAR_DIR/benchmarks"
+
+  if [[ ! -f "$QZ_ROOT/var/codex-home/config.toml" ]]; then
+    cp "$QZ_ROOT/config/codex-config.example.toml" "$QZ_ROOT/var/codex-home/config.toml"
+  fi
+
+  local catalog_src="$QZ_ROOT/config/qwenzhai-models.example.json"
+  local catalog_dst="$QZ_ROOT/var/codex-home/model-catalogs/qwenzhai-models.json"
+  if [[ ! -f "$catalog_dst" ]]; then
+    cp "$catalog_src" "$catalog_dst"
+  else
+    python3 - "$catalog_src" "$catalog_dst" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+src_path = Path(sys.argv[1])
+dst_path = Path(sys.argv[2])
+
+src = json.loads(src_path.read_text(encoding="utf-8"))
+dst = json.loads(dst_path.read_text(encoding="utf-8"))
+
+dst_models = dst.setdefault("models", [])
+dst_slugs = {model.get("slug") for model in dst_models if isinstance(model, dict)}
+dst_index = {model.get("slug"): index for index, model in enumerate(dst_models) if isinstance(model, dict)}
+refresh_slugs = {"Qwen3.6Turbo-caveman"}
+changed = False
+
+for model in src.get("models", []):
+    slug = model.get("slug") if isinstance(model, dict) else None
+    if not slug:
+        continue
+    if slug in refresh_slugs and slug in dst_index:
+        if dst_models[dst_index[slug]] != model:
+            dst_models[dst_index[slug]] = model
+            changed = True
+    elif slug not in dst_slugs:
+        dst_models.append(model)
+        dst_slugs.add(slug)
+        dst_index[slug] = len(dst_models) - 1
+        changed = True
+
+if changed:
+    dst_path.write_text(json.dumps(dst, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+PY
+  fi
+
+  local tmp_config="$QZ_ROOT/var/codex-home/config.toml.tmp"
+  local catalog_line="model_catalog_json = \"$QZ_ROOT/var/codex-home/model-catalogs/qwenzhai-models.json\""
+  if grep -q '^model_catalog_json' "$QZ_ROOT/var/codex-home/config.toml"; then
+    sed "s|^model_catalog_json = .*|$catalog_line|" "$QZ_ROOT/var/codex-home/config.toml" > "$tmp_config"
+  else
+    { printf '%s\n' "$catalog_line"; cat "$QZ_ROOT/var/codex-home/config.toml"; } > "$tmp_config"
+  fi
+  mv "$tmp_config" "$QZ_ROOT/var/codex-home/config.toml"
+
+  export CODEX_HOME="$QZ_ROOT/var/codex-home"
+  export CODEX_SQLITE_HOME="$CODEX_HOME/sqlite"
+  export CODEX_OSS_BASE_URL="http://$QZ_PROXY_HOST:$QZ_PROXY_PORT"
+  export LOCAL_QWEN_API_KEY="${LOCAL_QWEN_API_KEY:-local}"
+
+  QZ_CODEX_MODEL_PROVIDER="${QZ_CODEX_MODEL_PROVIDER:-$(python3 - "$QZ_ROOT/var/codex-home/config.toml" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    if line.lstrip().startswith("["):
+        break
+    match = re.match(r'\s*model_provider\s*=\s*"([^"]+)"', line)
+    if match:
+        print(match.group(1))
+        break
+PY
+)}"
+  export QZ_CODEX_MODEL_PROVIDER
+}
+
+qz_resolve_codex_profile() {
+  local profile="${1:-high}"
+  QZ_CODEX_MODEL=""
+  QZ_CODEX_EXTRA_ARGS=()
+  if [[ -n "${QZ_CODEX_MODEL_PROVIDER:-}" ]]; then
+    QZ_CODEX_EXTRA_ARGS+=(-c "model_provider=\"$QZ_CODEX_MODEL_PROVIDER\"")
+  fi
+
+  case "$profile" in
+    low|QwenZhai-low) QZ_CODEX_MODEL="Qwen3.6Turbo-low" ;;
+    medium|QwenZhai-medium) QZ_CODEX_MODEL="Qwen3.6Turbo-medium" ;;
+    high|QwenZhai-high) QZ_CODEX_MODEL="Qwen3.6Turbo-high" ;;
+    max|QwenZhai-max) QZ_CODEX_MODEL="Qwen3.6Turbo-max" ;;
+    caveman|QwenZhai-caveman|Qwen3.6Turbo-caveman)
+      QZ_CODEX_MODEL="Qwen3.6Turbo-caveman"
+      QZ_CODEX_EXTRA_ARGS+=(
+        -c "model_instructions_file=\"$QZ_ROOT/docs/qz-caveman-codex-model-instructions-v2.md\""
+        -c "model_max_output_tokens=2048"
+      )
+      ;;
+    *) QZ_CODEX_MODEL="$profile" ;;
+  esac
+
+  export QZ_CODEX_MODEL
+}

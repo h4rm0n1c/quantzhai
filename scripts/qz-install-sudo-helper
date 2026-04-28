@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+helper_src="$script_dir/qz-docker-root-helper"
+helper_dst="${QZ_SUDO_HELPER_DST:-/usr/local/sbin/qz-docker-quantzhai}"
+sudoers_dst="${QZ_SUDOERS_DST:-/etc/sudoers.d/quantzhai-codex}"
+target_user="${1:-${USER:-}}"
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/qz-install-sudo-helper [user]
+
+Installs a root-owned QuantZhai Docker helper and a narrow sudoers rule so
+Codex can run qz-up/qz-down/qz-doctor/qz-top without an interactive sudo prompt.
+
+After install, set this in .env:
+  QZ_DOCKER_CMD="sudo -n /usr/local/sbin/qz-docker-quantzhai"
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ -z "$target_user" ]]; then
+  echo "target user not found; pass username explicitly" >&2
+  exit 2
+fi
+if [[ ! "$target_user" =~ ^[A-Za-z_][A-Za-z0-9_-]*[$]?$ ]]; then
+  echo "refusing unsafe username: $target_user" >&2
+  exit 2
+fi
+if [[ ! -f "$helper_src" ]]; then
+  echo "helper source not found: $helper_src" >&2
+  exit 1
+fi
+
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+
+cat > "$tmp" <<EOF
+# QuantZhai local Docker helper for non-interactive Codex runs.
+# The helper is root-owned and contains its own Docker command allowlist.
+$target_user ALL=(root) NOPASSWD: $helper_dst *
+EOF
+
+sudo visudo -cf "$tmp" >/dev/null
+sudo install -o root -g root -m 0755 "$helper_src" "$helper_dst"
+sudo install -o root -g root -m 0440 "$tmp" "$sudoers_dst"
+sudo visudo -cf "$sudoers_dst" >/dev/null
+
+cat <<EOF
+installed helper: $helper_dst
+installed sudoers: $sudoers_dst
+
+Add this to .env:
+QZ_DOCKER_CMD="sudo -n $helper_dst"
+
+Then test:
+./scripts/qz-doctor
+./scripts/qz-up
+EOF

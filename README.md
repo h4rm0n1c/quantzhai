@@ -94,7 +94,25 @@ If Docker needs sudo on your machine, set this in `.env`:
 QZ_DOCKER_CMD="sudo docker"
 ```
 
-For non-interactive runs, including Codex-driven setup checks, sudo must already be able to run. Either run the scripts in a terminal where sudo can prompt, pre-auth with `sudo -v`, or add the user to the Docker group if that is acceptable for the machine.
+For non-interactive Codex runs on sudo-only hosts, install the narrow helper
+once:
+
+```bash
+scripts/qz-install-sudo-helper
+```
+
+Then set this in `.env`:
+
+```bash
+QZ_DOCKER_CMD="sudo -n /usr/local/sbin/qz-docker-quantzhai"
+```
+
+The helper is copied to a root-owned path and sudoers grants passwordless sudo
+only for that helper. It allows the Docker operations used by `qz-up`,
+`qz-down`, `qz-doctor`, and `qz-top` with the default local image tag; it does
+not allow Docker builds. For manual setup, you can still run scripts in a
+terminal where sudo can prompt, pre-auth with `sudo -v`, or add the user to the
+Docker group if that is acceptable for the machine.
 
 ## Build Docker Image
 
@@ -172,6 +190,33 @@ Qwen3.6Turbo-max
 `caveman` is an experimental compact-instructions profile. `scripts/qz-codex caveman`
 loads `docs/qz-caveman-codex-model-instructions-v2.md` and caps Codex output at
 2048 tokens for that session.
+
+## Benchmark Harness
+
+Run fixed Codex exec prompts against local profiles:
+
+```bash
+scripts/qz-up
+scripts/qz-benchmark high caveman
+```
+
+Benchmark artifacts are written under `var/benchmarks/`, including per-case
+Codex JSONL events, final answers, proxy captures, and a run summary. The latest
+summary is also shown by `scripts/qz-top`. The main compression metric is input
+token ratio versus the baseline profile; instruction, final-answer, total-token,
+and wall-time ratios are recorded too.
+
+If the backend is healthy but the proxy is not running, `qz-benchmark` starts a
+temporary proxy for the run. Pass `--no-manage-proxy` to require an existing
+proxy.
+
+The prompt fixture lives at:
+
+```text
+config/qz-benchmark-prompts.json
+```
+
+See `docs/quantzhai-benchmark-harness.md` for metrics and focused runs.
 
 ## Configuration
 
@@ -298,7 +343,11 @@ Then build the image:
 scripts/qz-build-image
 ```
 
-If `qz-doctor` says Docker daemon access failed, fix Docker permissions first. With `QZ_DOCKER_CMD="sudo docker"`, run the script in a real terminal where sudo can prompt, or refresh sudo with `sudo -v` before running Codex-driven setup commands.
+If `qz-doctor` says Docker daemon access failed, fix Docker permissions first.
+For Codex-driven runs, prefer the non-interactive helper from the requirements
+section. With plain `QZ_DOCKER_CMD="sudo docker"`, run the script in a real
+terminal where sudo can prompt, or refresh sudo with `sudo -v` before setup
+commands.
 
 If `qz-proxy` says the port is in use, clear old proxy processes:
 
