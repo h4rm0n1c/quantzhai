@@ -4,9 +4,35 @@ import json
 import re
 
 try:
+    from .qz_tool_apply_patch import (
+        APPLY_PATCH_TOOL_ADAPTER,
+        _apply_patch_call_to_function_call,
+        _apply_patch_output_style,
+        _apply_patch_output_to_function_output,
+        _custom_apply_patch_call_to_function_call,
+        _custom_apply_patch_output_to_function_output,
+        _parse_apply_patch_arguments,
+        normalize_apply_patch_input_for_llamacpp,
+        normalize_apply_patch_output_for_codex,
+    )
+    from .qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
     from .qz_runtime_io import capture_path, write_capture
+    from .qz_tools import ToolRegistry
 except ImportError:
+    from qz_tool_apply_patch import (
+        APPLY_PATCH_TOOL_ADAPTER,
+        _apply_patch_call_to_function_call,
+        _apply_patch_output_style,
+        _apply_patch_output_to_function_output,
+        _custom_apply_patch_call_to_function_call,
+        _custom_apply_patch_output_to_function_output,
+        _parse_apply_patch_arguments,
+        normalize_apply_patch_input_for_llamacpp,
+        normalize_apply_patch_output_for_codex,
+    )
+    from qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
     from qz_runtime_io import capture_path, write_capture
+    from qz_tools import ToolRegistry
 
 LOCAL_COMPACTION_PREFIX = "localcmp:v1:"
 COMPACTION_CONFIG = {
@@ -48,6 +74,8 @@ META_ASSISTANT_TEXT_MARKERS = (
     "the recursion is indeed funny",
 )
 
+TOOL_REGISTRY = ToolRegistry((APPLY_PATCH_TOOL_ADAPTER, WEB_SEARCH_TOOL_ADAPTER))
+
 def clean_content(text: str) -> str:
     if not isinstance(text, str):
         return text
@@ -88,255 +116,6 @@ def clean_content(text: str) -> str:
     text = re.sub(r"(?im)^\s*\(Done\.\)\s*$", "", text)
 
     return text.strip()
-
-
-APPLY_PATCH_OPERATION_TYPES = {"create_file", "update_file", "delete_file"}
-
-
-def _apply_patch_function_parameters() -> dict:
-    return {
-        "type": "object",
-        "properties": {
-            "operation": {
-                "type": "object",
-                "description": "A single apply_patch operation to return to Codex.",
-                "properties": {
-                    "type": {
-                        "type": "string",
-                        "enum": sorted(APPLY_PATCH_OPERATION_TYPES),
-                        "description": "The file operation to perform.",
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "Workspace-relative file path.",
-                    },
-                    "diff": {
-                        "type": "string",
-                        "description": "V4A diff for create_file or update_file operations.",
-                    },
-                },
-                "required": ["type", "path"],
-                "additionalProperties": False,
-            },
-            "patch": {
-                "type": "string",
-                "description": "Legacy full apply_patch envelope. Prefer operation for native Codex apply_patch.",
-            },
-        },
-        "additionalProperties": False,
-    }
-
-
-def _coerce_apply_patch_operation(value) -> dict | None:
-    if not isinstance(value, dict):
-        return None
-
-    operation_type = value.get("type")
-    path = value.get("path")
-    diff = value.get("diff")
-
-    if operation_type not in APPLY_PATCH_OPERATION_TYPES:
-        return None
-    if not isinstance(path, str) or not path.strip():
-        return None
-
-    operation = {
-        "type": operation_type,
-        "path": path.strip(),
-    }
-
-    if operation_type != "delete_file":
-        if not isinstance(diff, str):
-            return None
-        operation["diff"] = diff
-    elif isinstance(diff, str) and diff:
-        operation["diff"] = diff
-
-    return operation
-
-
-def _parse_apply_patch_arguments(arguments: str) -> dict | None:
-    try:
-        data = json.loads(arguments or "{}")
-    except Exception:
-        return None
-
-    if not isinstance(data, dict):
-        return None
-
-    operation = _coerce_apply_patch_operation(data.get("operation"))
-    if operation:
-        return operation
-
-    operation = _coerce_apply_patch_operation(data)
-    if operation:
-        return operation
-
-    patch = data.get("patch")
-    path = data.get("path")
-    operation_type = data.get("operation_type") or data.get("type") or "update_file"
-    if isinstance(patch, str) and isinstance(path, str):
-        return _coerce_apply_patch_operation({
-            "type": operation_type,
-            "path": path,
-            "diff": patch,
-        })
-
-    return None
-
-
-def _apply_patch_call_to_function_call(item: dict) -> dict:
-    operation = _coerce_apply_patch_operation(item.get("operation"))
-    arguments = json.dumps({"operation": operation}, ensure_ascii=False) if operation else "{}"
-    return {
-        "id": item.get("id") or item.get("call_id"),
-        "type": "function_call",
-        "status": item.get("status", "completed"),
-        "call_id": item.get("call_id"),
-        "name": "apply_patch",
-        "arguments": arguments,
-    }
-
-
-def _apply_patch_output_to_function_output(item: dict) -> dict:
-    output = {
-        "status": item.get("status"),
-        "output": item.get("output") or "",
-    }
-    return {
-        "type": "function_call_output",
-        "call_id": item.get("call_id"),
-        "output": json.dumps(output, ensure_ascii=False),
-    }
-
-
-def _custom_apply_patch_call_to_function_call(item: dict) -> dict:
-    return {
-        "id": item.get("id") or item.get("call_id"),
-        "type": "function_call",
-        "status": item.get("status", "completed"),
-        "call_id": item.get("call_id"),
-        "name": "apply_patch",
-        "arguments": json.dumps({"patch": item.get("input") or ""}, ensure_ascii=False),
-    }
-
-
-def _custom_apply_patch_output_to_function_output(item: dict) -> dict:
-    return {
-        "type": "function_call_output",
-        "call_id": item.get("call_id"),
-        "output": item.get("output") or "",
-    }
-
-
-def _apply_patch_operation_to_patch_text(operation: dict) -> str:
-    operation_type = operation.get("type")
-    path = operation.get("path")
-    diff = operation.get("diff") or ""
-
-    if operation_type == "create_file":
-        lines = ["*** Begin Patch", f"*** Add File: {path}"]
-        for line in diff.splitlines():
-            if line == "@@" or line.startswith("@@ "):
-                continue
-            lines.append(line if line.startswith("+") else f"+{line}")
-        lines.append("*** End Patch")
-        return "\n".join(lines) + "\n"
-
-    if operation_type == "delete_file":
-        return f"*** Begin Patch\n*** Delete File: {path}\n*** End Patch\n"
-
-    return f"*** Begin Patch\n*** Update File: {path}\n{diff.rstrip()}\n*** End Patch\n"
-
-
-def _function_call_to_apply_patch_call(item: dict) -> dict:
-    operation = _parse_apply_patch_arguments(item.get("arguments") or "{}")
-    if not operation:
-        return item
-
-    call_id = item.get("call_id") or item.get("id") or f"call_apply_patch_{_now_ts()}"
-    item_id = item.get("id") or f"apc_local_{_now_ts()}"
-    return {
-        "id": item_id,
-        "type": "apply_patch_call",
-        "status": item.get("status", "completed"),
-        "call_id": call_id,
-        "operation": operation,
-    }
-
-
-def _function_call_to_custom_apply_patch_call(item: dict) -> dict:
-    operation = _parse_apply_patch_arguments(item.get("arguments") or "{}")
-    if operation:
-        patch_text = _apply_patch_operation_to_patch_text(operation)
-    else:
-        try:
-            data = json.loads(item.get("arguments") or "{}")
-        except Exception:
-            return item
-        patch_text = data.get("patch") if isinstance(data, dict) else None
-        if not isinstance(patch_text, str) or not patch_text.strip():
-            return item
-
-    return {
-        "type": "custom_tool_call",
-        "status": item.get("status", "completed"),
-        "call_id": item.get("call_id") or item.get("id") or f"call_apply_patch_{_now_ts()}",
-        "name": "apply_patch",
-        "input": patch_text,
-    }
-
-
-def _apply_patch_output_style(body: dict) -> str:
-    for tool in body.get("tools") or []:
-        if isinstance(tool, dict) and tool.get("type") == "custom" and tool.get("name") == "apply_patch":
-            return "custom"
-        if isinstance(tool, dict) and tool.get("type") == "apply_patch":
-            return "native"
-    return "native"
-
-
-def normalize_apply_patch_output_for_codex(output_items, output_style: str = "native"):
-    if not isinstance(output_items, list):
-        return output_items
-
-    normalized = []
-    for item in output_items:
-        if (
-            isinstance(item, dict)
-            and item.get("type") == "function_call"
-            and item.get("name") == "apply_patch"
-        ):
-            if output_style == "custom":
-                normalized.append(_function_call_to_custom_apply_patch_call(item))
-            else:
-                normalized.append(_function_call_to_apply_patch_call(item))
-            continue
-        normalized.append(item)
-    return normalized
-
-
-def normalize_apply_patch_input_for_llamacpp(input_items):
-    if not isinstance(input_items, list):
-        return input_items
-
-    normalized = []
-    for item in input_items:
-        if isinstance(item, dict) and item.get("type") == "apply_patch_call":
-            normalized.append(_apply_patch_call_to_function_call(item))
-            continue
-        if isinstance(item, dict) and item.get("type") == "apply_patch_call_output":
-            normalized.append(_apply_patch_output_to_function_output(item))
-            continue
-        if isinstance(item, dict) and item.get("type") == "custom_tool_call" and item.get("name") == "apply_patch":
-            normalized.append(_custom_apply_patch_call_to_function_call(item))
-            continue
-        if isinstance(item, dict) and item.get("type") == "custom_tool_call_output":
-            normalized.append(_custom_apply_patch_output_to_function_output(item))
-            continue
-        normalized.append(item)
-    return normalized
-
 
 
 def normalize_responses_input_for_qwen(body: dict) -> dict:
@@ -457,20 +236,9 @@ def normalize_responses_input_for_qwen(body: dict) -> dict:
         if item_type in ("reasoning", "web_search_call"):
             continue
 
-        if item_type == "apply_patch_call":
-            clean_input.append(_apply_patch_call_to_function_call(item))
-            continue
-
-        if item_type == "apply_patch_call_output":
-            clean_input.append(_apply_patch_output_to_function_output(item))
-            continue
-
-        if item_type == "custom_tool_call" and item.get("name") == "apply_patch":
-            clean_input.append(_custom_apply_patch_call_to_function_call(item))
-            continue
-
-        if item_type == "custom_tool_call_output":
-            clean_input.append(_custom_apply_patch_output_to_function_output(item))
+        adapted_tool_item = APPLY_PATCH_TOOL_ADAPTER.input_to_upstream(item)
+        if adapted_tool_item is not None:
+            clean_input.append(adapted_tool_item)
             continue
 
         if _is_local_checkpoint_prompt(item):
@@ -506,14 +274,6 @@ def normalize_tools_for_llamacpp(body: dict) -> dict:
     if not isinstance(tools, list):
         return body
 
-    def function_tool(name: str, description: str, parameters: dict) -> dict:
-        return {
-            "type": "function",
-            "name": name,
-            "description": description,
-            "parameters": parameters,
-        }
-
     clean = []
     dropped = []
     translated = []
@@ -529,66 +289,10 @@ def normalize_tools_for_llamacpp(body: dict) -> dict:
             clean.append(tool)
             continue
 
-        if tool_type in ("apply_patch",) or (tool_type == "custom" and tool_name == "apply_patch"):
-            clean.append(function_tool(
-                "apply_patch",
-                tool.get("description") or "Emit a single Codex apply_patch operation. QuantZhai adapts this call but does not apply files.",
-                _apply_patch_function_parameters(),
-            ))
-            translated.append("apply_patch")
-            continue
-
-        if tool_type == "web_search":
-            clean.append(function_tool(
-                "web_search",
-                "Search the web, open a page, or find text in an opened page using the local web runtime.",
-                {
-                    "type": "object",
-                    "properties": {
-                        "action": {
-                            "type": "string",
-                            "enum": ["search", "open_page", "find_in_page"],
-                            "description": "The web action to perform.",
-                        },
-                        "query": {
-                            "type": "string",
-                            "description": "Search query for search, or needle text for find_in_page.",
-                        },
-                        "profile": {
-                            "type": "string",
-                            "enum": ["auto", "broad", "coding", "research", "news", "ai_models", "reference", "sysadmin"],
-                            "description": "Search profile used to select SearXNG categories and engines.",
-                        },
-                        "url": {
-                            "type": "string",
-                            "description": "Page URL for open_page or find_in_page.",
-                        },
-                        "page_id": {
-                            "type": "string",
-                            "description": "Previously opened page identifier for find_in_page.",
-                        },
-                        "categories": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Optional SearXNG categories to use for search.",
-                        },
-                        "engines": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Optional SearXNG engines to use for search.",
-                        },
-                        "top_k": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 8,
-                            "description": "Optional maximum number of search results to return.",
-                        },
-                    },
-                    "required": ["action"],
-                    "additionalProperties": False,
-                },
-            ))
-            translated.append("web_search")
+        tool_adapter = TOOL_REGISTRY.adapter_for_tool(tool)
+        if tool_adapter:
+            clean.append(tool_adapter.to_upstream_tool(tool))
+            translated.append(tool_adapter.upstream_name)
             continue
 
         dropped.append(str(tool_name))
@@ -611,11 +315,9 @@ def normalize_tools_for_llamacpp(body: dict) -> dict:
 
     if isinstance(body.get("tool_choice"), dict):
         tool_choice_type = body["tool_choice"].get("type")
-        tool_name = body["tool_choice"].get("name")
-        if tool_choice_type in ("apply_patch",) or (tool_choice_type == "custom" and tool_name == "apply_patch"):
-            body["tool_choice"] = {"type": "function", "name": "apply_patch"}
-        elif tool_choice_type == "web_search":
-            body["tool_choice"] = {"type": "function", "name": "web_search"}
+        adapted_choice = TOOL_REGISTRY.normalize_tool_choice(body["tool_choice"])
+        if adapted_choice is not None:
+            body["tool_choice"] = adapted_choice
         elif tool_choice_type not in (None, "function"):
             body["tool_choice"] = "auto"
 

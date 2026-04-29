@@ -17,6 +17,9 @@ The near-term target is not a rewrite. It is to break `proxy/quantzhai_proxy.py`
 - `proxy/qz_telemetry.py` now holds the first in-memory telemetry bus and subscriber ring buffer.
 - `proxy/qz_runtime_io.py` now holds runtime `var/captures` path helpers and capture writes.
 - `proxy/qz_responses.py` now holds pure Responses normalization, apply_patch translation, tool declaration adaptation, and local compaction helpers.
+- `proxy/qz_tools.py` now defines the first tool adapter/registry API.
+- `proxy/qz_tool_apply_patch.py` now holds the apply_patch tool adapter and compatibility helpers.
+- `proxy/qz_tool_web.py` now holds the web_search declaration/tool-choice adapter; web execution remains in the handler pending a focused extraction.
 - This is acceptable for the first working stack, but it makes regression testing and future backend work harder than necessary.
 
 ## Phase 1: Python Package Restructure
@@ -51,6 +54,30 @@ First extraction landed:
 - in-memory telemetry event bus and local telemetry endpoints
 - runtime capture path/write helpers
 - Responses input/tool normalization, apply_patch adaptation, and local compaction helpers
+- initial tool adapter/registry API with apply_patch as the first concrete adapter
+- web_search declaration/tool-choice adapter
+
+## Tool Adapter API
+
+Tool code should sit behind small adapters so the proxy does not special-case
+each tool throughout request normalization, streaming, and local execution.
+
+Current adapter responsibilities:
+
+- Detect supported Codex/OpenAI tool declarations.
+- Translate tool declarations into upstream llama.cpp function tools.
+- Normalize `tool_choice`.
+- Translate replayed history items into upstream-compatible function call/output
+  items.
+- Translate upstream function calls back into Codex-compatible output items.
+
+This gives real SSE a cleaner hook point: the streaming state machine can detect
+a completed function call, dispatch the adapter, append the result, and resume
+the upstream request without embedding tool-specific rules into the stream
+parser.
+
+Next target: move `web_search` execution and cache/runtime state behind the
+`qz_tool_web.py` adapter.
 
 ## Phase 2: Extract Testable Core Units
 
