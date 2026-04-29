@@ -3,7 +3,27 @@ set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qz-codex-common"
 
-qz_prepare_codex_home
-qz_resolve_codex_profile "${1:-high}"
+codex_subcommands=(
+  exec review login logout mcp plugin mcp-server app-server completion sandbox
+  debug apply resume fork cloud exec-server features help
+)
 
-exec codex "${QZ_CODEX_EXTRA_ARGS[@]}" -m "$QZ_CODEX_MODEL"
+is_codex_subcommand() {
+  local arg="${1:-}"
+  local cmd
+  for cmd in "${codex_subcommands[@]}"; do
+    [[ "$arg" == "$cmd" ]] && return 0
+  done
+  return 1
+}
+
+profile="high"
+if [[ $# -gt 0 ]] && ! is_codex_subcommand "$1"; then
+  profile="$1"
+  shift
+fi
+
+qz_prepare_codex_home
+qz_resolve_codex_profile "$profile"
+
+exec codex "${QZ_CODEX_EXTRA_ARGS[@]}" -m "$QZ_CODEX_MODEL" "$@"

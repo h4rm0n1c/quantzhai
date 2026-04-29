@@ -191,6 +191,14 @@ Qwen3.6Turbo-max
 loads `docs/qz-caveman-codex-model-instructions-v2.md` and caps Codex output at
 2048 tokens for that session.
 
+`scripts/qz-codex` passes remaining arguments through to Codex after the optional
+profile. For example:
+
+```bash
+scripts/qz-codex caveman resume 019dd7a5-ca8b-7b31-994e-fcde3def5824
+scripts/qz-codex caveman resume --last
+```
+
 ## Benchmark Harness
 
 Run fixed Codex exec prompts against local profiles:
