@@ -1,7 +1,14 @@
 import json
 import unittest
 
-from proxy.qz_streaming import StreamedFunctionCallAssembler, parse_sse_event_lines
+from proxy.qz_streaming import (
+    StreamedFunctionCallAssembler,
+    is_function_call_stream_event,
+    is_terminal_stream_event,
+    parse_sse_event_lines,
+    public_tool_item_events,
+    rewrite_sse_payload,
+)
 
 
 def _event(event_type, payload):
@@ -66,6 +73,7 @@ class StreamingStateTests(unittest.TestCase):
         self.assertEqual(completed[0]["call_id"], "call_1")
         self.assertEqual(completed[0]["name"], "web_search")
         self.assertEqual(completed[0]["arguments"], "{\"action\":\"search\",\"query\":\"quantzhai\"}")
+        self.assertEqual(completed[0]["output_index"], 0)
 
     def test_function_call_done_arguments_override_deltas(self):
         assembler = StreamedFunctionCallAssembler()
@@ -97,6 +105,55 @@ class StreamingStateTests(unittest.TestCase):
         })
 
         self.assertEqual(completed[0]["arguments"], "{\"cmd\":\"ok\"}")
+
+    def test_function_call_event_detection(self):
+        self.assertTrue(is_function_call_stream_event("response.function_call_arguments.delta", {"delta": "{}"}))
+        self.assertTrue(is_function_call_stream_event("response.output_item.done", {
+            "item": {"type": "function_call"},
+        }))
+        self.assertFalse(is_function_call_stream_event("response.output_item.done", {
+            "item": {"type": "message"},
+        }))
+
+    def test_terminal_event_detection(self):
+        self.assertTrue(is_terminal_stream_event("response.completed", {"type": "response.completed"}))
+        self.assertTrue(is_terminal_stream_event("done", "[DONE]"))
+        self.assertFalse(is_terminal_stream_event("response.output_text.delta", {"delta": "ok"}))
+
+    def test_public_tool_item_events_emit_added_and_done(self):
+        chunks, sequence = public_tool_item_events({
+            "id": "wsc_1",
+            "type": "web_search_call",
+            "status": "completed",
+            "action": {"type": "search", "queries": ["quantzhai"]},
+        }, output_index=2, sequence_start=10)
+        stream = b"".join(chunks).decode("utf-8")
+
+        self.assertEqual(sequence, 12)
+        self.assertIn("response.output_item.added", stream)
+        self.assertIn("response.output_item.done", stream)
+        self.assertIn('"type": "web_search_call"', stream)
+
+    def test_rewrite_sse_payload_offsets_output_index_and_prepends_output(self):
+        event_type, payload = rewrite_sse_payload(
+            "response.completed",
+            {
+                "type": "response.completed",
+                "output_index": 0,
+                "response": {
+                    "model": "old",
+                    "output": [{"type": "message", "id": "msg_1"}],
+                },
+            },
+            output_index_offset=2,
+            prepend_output=[{"type": "web_search_call", "id": "wsc_1"}],
+            model="Qwen3.6Turbo",
+        )
+
+        self.assertEqual(event_type, "response.completed")
+        self.assertEqual(payload["output_index"], 2)
+        self.assertEqual(payload["response"]["model"], "Qwen3.6Turbo")
+        self.assertEqual(payload["response"]["output"][0]["type"], "web_search_call")
 
 
 if __name__ == "__main__":

@@ -11,6 +11,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from proxy.quantzhai_proxy import ProxyHandler  # noqa: E402
 
 
+def _sse_block(event_type, payload):
+    payload = dict(payload)
+    payload.setdefault("type", event_type)
+    return (
+        f"event: {event_type}\n"
+        f"data: {json.dumps(payload)}\n\n"
+    ).encode("utf-8")
+
+
 class FakeUpstreamHandler(BaseHTTPRequestHandler):
     requests = []
 
@@ -21,6 +30,62 @@ class FakeUpstreamHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0") or "0")
         body = json.loads(self.rfile.read(length).decode("utf-8"))
         self.__class__.requests.append({"path": self.path, "body": body})
+
+        arguments = json.dumps({
+            "operation": {
+                "type": "create_file",
+                "path": "tmp/quantzhai-smoke.txt",
+                "diff": "@@\n+quantzhai apply_patch smoke\n",
+            }
+        })
+
+        if body.get("stream") is True:
+            chunks = [
+                _sse_block("response.created", {
+                    "response": {
+                        "id": "resp_fake_apply_patch",
+                        "object": "response",
+                        "created_at": 4102444800,
+                        "status": "in_progress",
+                        "model": body.get("model", "fake"),
+                        "output": [],
+                    },
+                }),
+                _sse_block("response.output_item.added", {
+                    "output_index": 0,
+                    "item": {
+                        "id": "fc_fake_apply_patch",
+                        "type": "function_call",
+                        "status": "in_progress",
+                        "call_id": "call_fake_apply_patch",
+                        "name": "apply_patch",
+                        "arguments": "",
+                    },
+                }),
+                _sse_block("response.function_call_arguments.delta", {
+                    "item_id": "fc_fake_apply_patch",
+                    "output_index": 0,
+                    "delta": arguments,
+                }),
+                _sse_block("response.output_item.done", {
+                    "output_index": 0,
+                    "item": {
+                        "id": "fc_fake_apply_patch",
+                        "type": "function_call",
+                        "status": "completed",
+                        "call_id": "call_fake_apply_patch",
+                        "name": "apply_patch",
+                    },
+                }),
+                b"data: [DONE]\n\n",
+            ]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            for chunk in chunks:
+                self.wfile.write(chunk)
+                self.wfile.flush()
+            return
 
         response = {
             "id": "resp_fake_apply_patch",
@@ -33,13 +98,7 @@ class FakeUpstreamHandler(BaseHTTPRequestHandler):
                 "status": "completed",
                 "call_id": "call_fake_apply_patch",
                 "name": "apply_patch",
-                "arguments": json.dumps({
-                    "operation": {
-                        "type": "create_file",
-                        "path": "tmp/quantzhai-smoke.txt",
-                        "diff": "@@\n+quantzhai apply_patch smoke\n",
-                    }
-                }),
+                "arguments": arguments,
             }],
             "usage": {},
         }
