@@ -1,6 +1,6 @@
 # Proxy Architecture Roadmap
 
-Date: 2026-04-28
+Date: 2026-04-30
 
 ## Goal
 
@@ -13,9 +13,12 @@ The near-term target is not a rewrite. It is to break `proxy/quantzhai_proxy.py`
 - `proxy/quantzhai_proxy.py` is the working implementation.
 - It owns HTTP handling, OpenAI/Responses adaptation, upstream calls, streaming, tool handling, logging, and most runtime behavior in one file.
 - `proxy/qz_proxy_config.py` now holds the first extracted runtime constants and API contract metadata.
-- `proxy/qz_sse.py` now holds pure SSE event formatting, synthetic Responses stream generation, reasoning visibility transforms, and response usage normalization.
+- `proxy/qz_sse.py` now holds pure SSE event formatting, test-only synthetic Responses stream helpers, reasoning visibility transforms, and response usage normalization.
 - `proxy/qz_telemetry.py` now holds the first in-memory telemetry bus and subscriber ring buffer.
 - `proxy/qz_runtime_io.py` now holds runtime `var/captures` path helpers and capture writes.
+- `proxy/qz_backend.py` now holds the upstream/backend HTTP client helpers for model load/list and JSON forwarding.
+- `proxy/qz_model_catalog.py` now holds GGUF scanning, metadata extraction, override merging, and the proxy-facing model catalog.
+- `proxy/qz_model_router.py` now holds the model-selection, backend-load, readiness/status snapshots, compact runtime-state injection, and Ollama-compatibility route handling.
 - `proxy/qz_responses.py` now holds pure Responses normalization, apply_patch translation, tool declaration adaptation, and local compaction helpers.
 - `proxy/qz_tools.py` now defines the first tool adapter/registry API.
 - `proxy/qz_tool_apply_patch.py` now holds the apply_patch tool adapter and compatibility helpers.
@@ -52,10 +55,13 @@ First extraction landed:
 - local Codex rate-limit metadata
 - current API endpoint contract
 - legacy endpoint deprecation metadata
-- synthetic SSE event helpers and reasoning stream transforms
+- SSE event helpers, test-only synthetic stream helpers, and reasoning stream transforms
 - in-memory telemetry event bus and local telemetry endpoints
 - runtime capture path/write helpers
+- upstream/backend HTTP client helpers
 - Responses input/tool normalization, apply_patch adaptation, and local compaction helpers
+- GGUF catalog scanning and backend model metadata wiring
+- model-selection and backend-load route handling
 - initial tool adapter/registry API with apply_patch as the first concrete adapter
 - web_search declaration/tool-choice adapter and local execution runtime
 - streamed SSE function-call assembly and the first real-SSE tool continuation path

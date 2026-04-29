@@ -2,13 +2,12 @@
 import argparse
 import json
 import os
-import urllib.error
 import urllib.parse
-import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 try:
+    from .qz_backend import BackendClient
     from .qz_proxy_config import (
         CURRENT_API_ENDPOINTS,
         LEGACY_API_ENDPOINTS,
@@ -17,6 +16,8 @@ try:
         api_contract_payload,
     )
     from .qz_model_catalog import ModelCatalog
+    from .qz_model_router import ModelRouter
+    from .qz_request_router import RequestRouter
     from .qz_responses import (
         _apply_patch_call_to_function_call,
         _apply_patch_output_style,
@@ -42,8 +43,8 @@ try:
     from .qz_responses_stream import ResponsesStreamRuntime
     from .qz_sse import (
         _normalize_response_usage,
-        make_response_stream_events,
         make_sse_block,
+        make_response_stream_events,
         transform_sse_event,
     )
     from .qz_streaming import StreamedFunctionCallAssembler, parse_sse_event_lines
@@ -51,6 +52,7 @@ try:
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import append_capture, capture_path, runtime_log, write_capture
 except ImportError:
+    from qz_backend import BackendClient
     from qz_proxy_config import (
         CURRENT_API_ENDPOINTS,
         LEGACY_API_ENDPOINTS,
@@ -59,6 +61,8 @@ except ImportError:
         api_contract_payload,
     )
     from qz_model_catalog import ModelCatalog
+    from qz_model_router import ModelRouter
+    from qz_request_router import RequestRouter
     from qz_responses import (
         _apply_patch_call_to_function_call,
         _apply_patch_output_style,
@@ -84,8 +88,8 @@ except ImportError:
     from qz_responses_stream import ResponsesStreamRuntime
     from qz_sse import (
         _normalize_response_usage,
-        make_response_stream_events,
         make_sse_block,
+        make_response_stream_events,
         transform_sse_event,
     )
     from qz_streaming import StreamedFunctionCallAssembler, parse_sse_event_lines
@@ -96,8 +100,10 @@ except ImportError:
 class ProxyHandler(BaseHTTPRequestHandler):
     upstream = "http://127.0.0.1:18084"
     reasoning_stream_format = "raw"
+    runtime_state_enabled = False
     model_catalog = None
     model_catalog_path = None
+    backend_client = None
     searxng_base_url = None
     searxng_timeout = 15.0
     searxng_policy_path = None
@@ -108,6 +114,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
     opened_page_cache = {}
     active_deprecation = None
     telemetry = DEFAULT_TELEMETRY
+    model_load_state = "idle"
+    model_load_error = None
+    model_load_started_at = None
+    model_load_finished_at = None
+    model_load_model = None
+    model_load_health = None
 
     def log_message(self, fmt, *args):
         return
@@ -351,689 +363,48 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.__class__.model_catalog_path = str(self.model_catalog.cache_path)
         return self.model_catalog
 
-    def _backend_models(self):
-        try:
-            url = self.upstream.rstrip("/") + "/models"
-            req = urllib.request.Request(url, method="GET", headers={"Accept": "application/json"})
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-        except Exception:
-            return {}
+    def _model_router(self):
+        return ModelRouter(self)
 
-        backend = {}
-        for item in payload.get("data") or []:
-            if not isinstance(item, dict):
-                continue
-            model_id = item.get("id") or item.get("name")
-            if not isinstance(model_id, str) or not model_id:
-                continue
-            status = item.get("status") or {}
-            state = status.get("value") if isinstance(status, dict) else "unknown"
-            backend[model_id] = {
-                "state": state or "unknown",
-                "path": item.get("path"),
-                "quantization_level": item.get("quantization_level") or item.get("quant") or item.get("type"),
-            }
-        return backend
+    def _backend(self, authorization=None):
+        auth = authorization or self.headers.get("Authorization", "Bearer local")
+        if self.backend_client is None or self.backend_client.authorization != auth or self.backend_client.upstream != self.upstream:
+            self.__class__.backend_client = BackendClient(self.upstream, auth)
+        return self.backend_client
+
+    def _backend_models(self):
+        return self._model_router().backend_models()
 
     def _load_backend_model(self, model_id: str):
-        if not model_id:
-            return
-        url = self.upstream.rstrip("/") + "/models/load"
-        body = json.dumps({"model": model_id}).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=body,
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            resp.read()
+        self._model_router().load_backend_model(model_id)
 
     def _resolve_model_selection(self, requested_model):
-        catalog = self._model_catalog()
-        if not requested_model or requested_model in MODEL_BUDGETS:
-            selected = catalog.selected or (catalog.entries[0] if catalog.entries else None)
-            reason = f"profile {requested_model or 'default'}"
-        else:
-            selected, reason = catalog.resolve(query=requested_model)
-        if selected is None and catalog.entries:
-            selected = catalog.entries[0]
-            reason = reason or "catalog fallback"
-        if selected is None:
-            return None, reason
-        canonical = selected["key"]
-        self._load_backend_model(canonical)
-        return selected, reason
+        return self._model_router().resolve_model_selection(requested_model)
 
     def _model_catalog_payload(self):
-        catalog = self._model_catalog()
-        backend_models = self._backend_models()
-        return catalog.to_v1_models(backend_models=backend_models)
+        return self._model_router().model_catalog_payload()
 
     def _ollama_models(self):
-        catalog = self._model_catalog()
-        backend_models = self._backend_models()
-        return catalog.to_ollama_models(backend_models=backend_models)
+        return self._model_router().ollama_models()
 
     def _handle_ollama_get(self):
-        # Codex --oss may probe Ollama-compatible endpoints before using /v1.
-        if self.path in ("/api/tags", "/v1/api/tags"):
-            self._send_json(200, {"models": self._ollama_models()})
-            return True
-
-        if self.path in ("/api/version", "/v1/api/version"):
-            self._send_json(200, {"version": "0.13.4"})
-            return True
-
-        if self.path in ("/api/ps", "/v1/api/ps"):
-            self._send_json(200, {"models": self._ollama_models()})
-            return True
-
-        return False
+        return self._model_router().handle_ollama_get()
 
     def _handle_ollama_post(self):
-        if self.path not in ("/api/pull", "/v1/api/pull", "/api/show", "/v1/api/show"):
-            return False
+        return self._model_router().handle_ollama_post()
 
-        length = int(self.headers.get("Content-Length", "0") or "0")
-        raw = self.rfile.read(length) if length else b"{}"
-
-        try:
-            body = json.loads(raw.decode("utf-8"))
-        except Exception:
-            body = {}
-
-        model = body.get("model") or body.get("name") or "Qwen3.6Turbo-medium"
-
-        if self.path in ("/api/pull", "/v1/api/pull"):
-            # Pretend the model is already installed.
-            # Ollama permits non-stream response {"status":"success"} when stream=false;
-            # Codex only needs pull to not fail.
-            self._send_json(200, {"status": "success"})
-            return True
-
-        if self.path in ("/api/show", "/v1/api/show"):
-            self._send_json(200, {
-                "modelfile": f"FROM {model}\n",
-                "parameters": "",
-                "template": "",
-                "details": {
-                    "parent_model": "",
-                    "format": "gguf",
-                    "family": "qwen",
-                    "families": ["qwen"],
-                    "parameter_size": "35B-A3B",
-                    "quantization_level": "Q4_K_M+TurboQuant"
-                },
-                "model_info": {
-                    "general.architecture": "qwen",
-                    "general.name": model,
-                    "qwen36turbo.context_length": 131072
-                },
-                "capabilities": ["completion", "tools", "thinking"]
-            })
-            return True
-
-        return False
-
-
-    def _log_request_path(self, method):
-        if self.path.startswith("/qz/telemetry"):
-            return
-        self.telemetry.emit("request_started", {
-            "method": method,
-            "path": self.path,
-            "accept": self.headers.get("Accept", ""),
-            "content_type": self.headers.get("Content-Type", ""),
-        })
-        try:
-            import time
-            append_capture("latest-paths.log", f"{time.time():.3f} {method} {self.path} accept={self.headers.get('Accept','')} content_type={self.headers.get('Content-Type','')}\n")
-        except Exception:
-            pass
+    def _handle_ready_get(self):
+        return self._model_router().handle_ready_get()
+    def _request_router(self):
+        return RequestRouter(self)
 
     def do_GET(self):
         self.active_deprecation = None
-        self._log_request_path("GET")
-        if self._handle_ollama_get():
-            return
-
-        if self.path == "/health":
-            self._send_json(200, {
-                "status": "ok",
-                "proxy": "Qwen3.6Turbo",
-                "upstream": self.upstream,
-                "models": MODEL_BUDGETS,
-                "catalog": self._model_catalog_payload(),
-                "supports": list(CURRENT_API_ENDPOINTS),
-                "api_contract": api_contract_payload(),
-            })
-            return
-
-        if self.path == "/qz/telemetry/state":
-            self._send_json(200, self.telemetry.state())
-            return
-
-        if self.path.startswith("/qz/telemetry/recent"):
-            limit = 100
-            try:
-                query = urllib.parse.urlparse(self.path).query
-                params = urllib.parse.parse_qs(query)
-                limit = int((params.get("limit") or [limit])[0])
-            except Exception:
-                limit = 100
-            self._send_json(200, {
-                "events": self.telemetry.recent(limit),
-                "state": self.telemetry.state(),
-            })
-            return
-
-        if self.path == "/qz/telemetry/events":
-            self._send_telemetry_sse()
-            return
-
-        if self.path == "/v1/models":
-            self._send_json(200, self._model_catalog_payload())
-            return
-
-        if self.path == "/qz/models":
-            catalog = self._model_catalog()
-            self._send_json(200, {
-                "catalog": catalog.to_payload(),
-                "backend": self._backend_models(),
-            })
-            return
-
-        self._proxy_raw("GET")
+        self._request_router().handle_get()
 
     def do_POST(self):
         self.active_deprecation = None
-        self._log_request_path("POST")
-
-        if self._handle_ollama_post():
-            return
-
-        if self.path in LEGACY_API_ENDPOINTS:
-            self._mark_deprecated_endpoint(self.path)
-            self._proxy_json_api("/v1/chat/completions")
-            return
-
-        if self.path in ("/responses/compact", "/v1/responses/compact"):
-            self._handle_responses_compact()
-            return
-
-        if self.path in ("/responses", "/v1/responses"):
-            self._proxy_json_api("/v1/responses")
-            return
-
-        if self.path == "/qz/models/refresh":
-            catalog = self._model_catalog()
-            catalog.refresh()
-            self._send_json(200, {
-                "catalog": catalog.to_payload(),
-                "backend": self._backend_models(),
-            })
-            return
-
-        if self.path in ("/qz/models/load", "/qz/models/select"):
-            length = int(self.headers.get("Content-Length", "0") or "0")
-            raw = self.rfile.read(length) if length else b"{}"
-            try:
-                body = json.loads(raw.decode("utf-8"))
-            except Exception as e:
-                self._send_json(400, {"error": f"invalid JSON: {e}"})
-                return
-            requested = body.get("model") or body.get("key") or body.get("name")
-            catalog = self._model_catalog()
-            selected, reason = catalog.select(requested)
-            if selected is None:
-                self._send_json(404, {"error": "no model selected", "reason": reason, "catalog": catalog.to_payload()})
-                return
-            try:
-                self._load_backend_model(selected["key"])
-            except Exception as exc:
-                self._send_json(502, {"error": f"backend model load failed: {exc}", "selected": selected, "reason": reason})
-                return
-            self._send_json(200, {
-                "selected": selected,
-                "reason": reason,
-                "backend": self._backend_models(),
-                "catalog": catalog.to_payload(),
-            })
-            return
-
-        self._proxy_raw("POST")
-
-    def _web_runtime(self):
-        return WebSearchRuntime(
-            base_url=self.searxng_base_url,
-            timeout=self.searxng_timeout,
-            policy=self.searxng_policy,
-            capabilities=self.searxng_capabilities,
-            search_cache=self.web_search_cache,
-            opened_page_cache=self.opened_page_cache,
-        )
-
-    def _annotate_output_with_url_citations(self, out: dict, sources):
-        unique_sources = _unique_sources(sources)[:4]
-        if not unique_sources:
-            return out
-
-        output_items = out.get("output") or []
-        for item in reversed(output_items):
-            if not isinstance(item, dict) or item.get("type") != "message" or item.get("role") != "assistant":
-                continue
-            content = item.get("content") or []
-            for part in content:
-                if not isinstance(part, dict) or part.get("type") != "output_text":
-                    continue
-                text = part.get("text") or ""
-                annotations = list(part.get("annotations") or [])
-                for idx, source in enumerate(unique_sources, start=1):
-                    marker = f" [{idx}]"
-                    start_index = len(text)
-                    text += marker
-                    end_index = len(text) - 1
-                    annotations.append({
-                        "type": "url_citation",
-                        "start_index": start_index,
-                        "end_index": end_index,
-                        "title": source.get("title") or source.get("url"),
-                        "url": source.get("url"),
-                    })
-                part["text"] = text
-                part["annotations"] = annotations
-                return out
-        return out
-
-    def _call_upstream_json(self, url: str, body: dict):
-        data = json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=data,
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": self.headers.get("Authorization", "Bearer local"),
-                "Accept": "application/json",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=900) as resp:
-            resp_data = resp.read()
-            status = resp.status
-            content_type = resp.headers.get("Content-Type", "application/json")
-        return status, content_type, resp_data
-
-    def _write_sse_chunk(self, chunk: bytes, raw_log=None):
-        if raw_log is not None:
-            raw_log.write(chunk)
-            raw_log.flush()
-        self._emit_sse_telemetry(chunk)
-        self.wfile.write(chunk)
-        self.wfile.flush()
-
-    def _run_responses_streaming_locally(self, body: dict, requested_model: str, apply_patch_output_style: str = "native"):
-        runtime = ResponsesStreamRuntime(
-            upstream=self.upstream,
-            authorization=self.headers.get("Authorization", "Bearer local"),
-            reasoning_stream_format=self.reasoning_stream_format,
-            web_runtime=self._web_runtime(),
-            chunk_writer=self._write_sse_chunk,
-        )
-        runtime.run(body, requested_model, apply_patch_output_style)
-
-    def _run_responses_locally(self, body: dict, requested_model: str, apply_patch_output_style: str = "native"):
-        url = self.upstream + "/v1/responses"
-        working_body = json.loads(json.dumps(body))
-        working_body["stream"] = False
-
-        public_trace = []
-        gathered_sources = []
-        counters = {"search": 0, "open_page": 0}
-        seen_signatures = set()
-        web_runtime = self._web_runtime()
-
-        for _hop in range(WEB_SEARCH_MAX_HOPS):
-            status, content_type, resp_data = self._call_upstream_json(url, working_body)
-            out = json.loads(resp_data.decode("utf-8"))
-            out["model"] = requested_model
-
-            output_items = out.get("output") or []
-            web_calls = [
-                item for item in output_items
-                if isinstance(item, dict) and item.get("type") == "function_call" and item.get("name") == "web_search"
-            ]
-
-            if not web_calls:
-                final_out = dict(out)
-                final_out["output"] = public_trace + normalize_apply_patch_output_for_codex(
-                    output_items,
-                    apply_patch_output_style,
-                )
-                final_out["usage"] = _normalize_response_usage(final_out.get("usage"))
-                self._annotate_output_with_url_citations(final_out, gathered_sources)
-                runtime_log("latest-web-runtime-final.json", final_out)
-                return status, content_type, final_out
-
-            next_input = list(working_body.get("input") or [])
-            next_input.extend(output_items)
-
-            for call in web_calls:
-                public_item, tool_output_item, sources = web_runtime.execute_web_search_call(call, counters, seen_signatures)
-                public_trace.append(public_item)
-                gathered_sources.extend(sources)
-                next_input.append(tool_output_item)
-
-            working_body["input"] = next_input
-
-        fallback_out = {
-            "id": f"resp_local_{_now_ts()}",
-            "object": "response",
-            "created_at": _now_ts(),
-            "model": requested_model,
-            "output": public_trace + [{
-                "id": f"msg_local_{_now_ts()}",
-                "type": "message",
-                "status": "completed",
-                "role": "assistant",
-                "content": [{
-                    "type": "output_text",
-                    "text": "I stopped the web tool loop after hitting the safety limit for repeated search/open actions.",
-                    "annotations": [],
-                }],
-            }],
-            "usage": _normalize_response_usage({}),
-        }
-        self._annotate_output_with_url_citations(fallback_out, gathered_sources)
-        runtime_log("latest-web-runtime-final.json", fallback_out)
-        return 200, "application/json", fallback_out
-
-
-
-    def _proxy_json_api(self, upstream_path):
-        try:
-            import time
-            append_capture("latest-json-api.log", f"{time.time():.3f} ENTER path={self.path} upstream_path={upstream_path} accept={self.headers.get('Accept','')}\n")
-        except Exception:
-            pass
-
-        length = int(self.headers.get("Content-Length", "0") or "0")
-        raw = self.rfile.read(length)
-
-        try:
-            body = json.loads(raw.decode("utf-8"))
-        except Exception as e:
-            self._send_json(400, {"error": f"invalid JSON: {e}"})
-            return
-
-        # Debug: dump latest request so we can see Codex tool schema.
-        try:
-            write_capture("latest-request.json", body)
-        except Exception:
-            pass
-
-        client_wants_stream = (
-            body.get("stream") is True
-            or "text/event-stream" in self.headers.get("Accept", "")
-        )
-
-        client_model = body.get("model") or "Qwen3.6Turbo-medium"
-        selected_model, selection_reason = self._resolve_model_selection(client_model)
-        if selected_model is None:
-            self._send_json(404, {
-                "error": "no model available",
-                "reason": selection_reason,
-                "catalog": self._model_catalog().to_payload(),
-            })
-            return
-
-        backend_model = selected_model["key"]
-        budget = MODEL_BUDGETS.get(client_model, MODEL_BUDGETS.get("Qwen3.6Turbo", 256))
-
-        body["model"] = backend_model
-        body["thinking_budget_tokens"] = budget
-        body.setdefault("temperature", 0.1)
-
-        if upstream_path == "/v1/responses":
-            apply_patch_output_style = _apply_patch_output_style(body)
-            input_items = body.get("input")
-            if isinstance(input_items, list):
-                body["input"] = _microcompact_old_tool_results(_expand_local_compaction_items(input_items))
-            body = normalize_responses_input_for_qwen(body)
-            body = normalize_tools_for_llamacpp(body)
-            try:
-                write_capture("latest-normalized-request.json", body)
-            except Exception:
-                pass
-
-            if client_wants_stream:
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream")
-                self.send_header("Cache-Control", "no-cache")
-                self.send_header("Connection", "close")
-                self._send_codex_rate_limit_headers()
-                self.end_headers()
-                self._write_codex_rate_limits_event()
-                try:
-                    self._run_responses_streaming_locally(
-                        body,
-                        client_model,
-                        apply_patch_output_style,
-                    )
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
-                except Exception as e:
-                    try:
-                        import traceback
-                        runtime_log("latest-stream-runtime-error.txt", traceback.format_exc())
-                    except Exception:
-                        pass
-                    error_payload = {
-                        "type": "response.failed",
-                        "response": {
-                            "id": f"resp_local_{_now_ts()}",
-                            "object": "response",
-                            "created_at": _now_ts(),
-                            "status": "failed",
-                            "model": client_model,
-                            "error": {"message": f"local streaming runtime error: {e}"},
-                            "output": [],
-                            "usage": _normalize_response_usage({}),
-                        },
-                    }
-                    self._write_sse_chunk(make_sse_block("response.failed", error_payload))
-                    self._write_sse_chunk(b"data: [DONE]\n\n")
-                self.close_connection = True
-                return
-
-            try:
-                status, content_type, out = self._run_responses_locally(
-                    body,
-                    client_model,
-                    apply_patch_output_style,
-                )
-            except urllib.error.HTTPError as e:
-                resp_data = e.read()
-                try:
-                    self._send_json(e.code, json.loads(resp_data.decode("utf-8")))
-                except Exception:
-                    self.send_response(e.code)
-                    self.send_header("Content-Type", "text/plain")
-                    self._send_codex_rate_limit_headers()
-                    self.end_headers()
-                    self.wfile.write(resp_data)
-                return
-            except Exception as e:
-                try:
-                    import traceback
-                    runtime_log("latest-web-runtime-error.txt", traceback.format_exc())
-                except Exception:
-                    pass
-                self._send_json(502, {"error": f"local web runtime error: {e}"})
-                return
-
-            self._send_json(status, out)
-            return
-
-        data = json.dumps(body).encode("utf-8")
-        url = self.upstream + upstream_path
-
-        try:
-            import time
-            append_capture("latest-json-api.log", f"{time.time():.3f} UPSTREAM url={url} bytes={len(data)} stream={body.get('stream')}\n")
-        except Exception:
-            pass
-
-        req = urllib.request.Request(
-            url,
-            data=data,
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": self.headers.get("Authorization", "Bearer local"),
-                "Accept": self.headers.get("Accept", "application/json"),
-            },
-        )
-
-        try:
-            resp = urllib.request.urlopen(req, timeout=900)
-        except urllib.error.HTTPError as e:
-            resp_data = e.read()
-            try:
-                self._send_json(e.code, json.loads(resp_data.decode("utf-8")))
-            except Exception:
-                self.send_response(e.code)
-                self.send_header("Content-Type", "text/plain")
-                self._send_codex_rate_limit_headers()
-                self.end_headers()
-                self.wfile.write(resp_data)
-            return
-        except Exception as e:
-            try:
-                import time, traceback
-                append_capture("latest-json-api.log", f"{time.time():.3f} UPSTREAM_EXCEPTION {type(e).__name__}: {e}\n")
-                append_capture("latest-json-api.log", traceback.format_exc() + "\n")
-            except Exception:
-                pass
-            self._send_json(502, {"error": f"upstream error: {e}"})
-            return
-
-        content_type = resp.headers.get("Content-Type", "application/json")
-        status = resp.status
-
-        if upstream_path == "/v1/responses" and client_wants_stream and "text/event-stream" in content_type:
-            self.send_response(status)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "close")
-            self._send_codex_rate_limit_headers()
-            self.end_headers()
-            self._write_codex_rate_limits_event()
-
-            try:
-                raw_log_path = capture_path("latest-upstream-response.raw")
-                status_path = capture_path("latest-upstream-status.txt")
-                status_path.write_text(
-                    f"status={status}\ncontent_type={content_type}\nstream=passthrough\nreasoning_stream_format={self.reasoning_stream_format}\nrate_limits=local\n",
-                    encoding="utf-8"
-                )
-                raw_log = raw_log_path.open("wb")
-            except Exception:
-                raw_log = None
-
-            try:
-                self._write_transformed_sse_stream(resp, raw_log)
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-            finally:
-                if raw_log is not None:
-                    raw_log.close()
-                resp.close()
-            self.close_connection = True
-            return
-
-        resp_data = resp.read()
-        resp.close()
-
-        try:
-            write_capture("latest-upstream-response.raw", resp_data, mode="bytes")
-            capture_path("latest-upstream-status.txt").write_text(
-                f"status={status}\ncontent_type={content_type}\n",
-                encoding="utf-8"
-            )
-        except Exception:
-            pass
-
-        try:
-            out = json.loads(resp_data.decode("utf-8"))
-            out["model"] = client_model
-            if upstream_path == "/v1/responses":
-                out["usage"] = _normalize_response_usage(out.get("usage"))
-            # Do not recursively clean response text here.
-            # Reasoning format conversion belongs in the SSE transform layer.
-            # Final output_text must pass through unchanged.
-
-            if upstream_path == "/v1/responses" and client_wants_stream:
-                self.send_response(status)
-                self.send_header("Content-Type", "text/event-stream")
-                self.send_header("Cache-Control", "no-cache")
-                self.send_header("Connection", "close")
-                self._send_codex_rate_limit_headers()
-                self.end_headers()
-                self._write_codex_rate_limits_event()
-                for chunk in make_response_stream_events(out):
-                    self._emit_sse_telemetry(chunk)
-                    self.wfile.write(chunk)
-                    self.wfile.flush()
-                return
-
-            self._send_json(status, out)
-        except Exception:
-            self.send_response(status)
-            self.send_header("Content-Type", content_type)
-            self._send_codex_rate_limit_headers()
-            self.send_header("Content-Length", str(len(resp_data)))
-            self.end_headers()
-            self.wfile.write(resp_data)
-
-    def _proxy_raw(self, method):
-        length = int(self.headers.get("Content-Length", "0") or "0")
-        data = self.rfile.read(length) if length else None
-        url = self.upstream + self.path
-
-        req = urllib.request.Request(
-            url,
-            data=data,
-            method=method,
-            headers={
-                "Content-Type": self.headers.get("Content-Type", "application/json"),
-                "Authorization": self.headers.get("Authorization", "Bearer local"),
-            },
-        )
-
-        try:
-            with urllib.request.urlopen(req, timeout=900) as resp:
-                resp_data = resp.read()
-                status = resp.status
-                content_type = resp.headers.get("Content-Type", "application/json")
-        except urllib.error.HTTPError as e:
-            resp_data = e.read()
-            status = e.code
-            content_type = e.headers.get("Content-Type", "application/json")
-        except Exception as e:
-            self._send_json(502, {"error": f"upstream error: {e}"})
-            return
-
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self._send_codex_rate_limit_headers()
-        self.send_header("Content-Length", str(len(resp_data)))
-        self.end_headers()
-        self.wfile.write(resp_data)
+        self._request_router().handle_post()
 
 def main():
     ap = argparse.ArgumentParser()
@@ -1045,10 +416,13 @@ def main():
     ap.add_argument("--searxng-timeout", type=float, default=float(os.environ.get("SEARXNG_TIMEOUT", "15")))
     ap.add_argument("--searxng-policy", default=os.environ.get("SEARXNG_POLICY"))
     ap.add_argument("--searxng-capabilities", default=os.environ.get("SEARXNG_CAPABILITIES"))
+    ap.add_argument("--qzstate", dest="runtime_state_enabled", action="store_true", default=os.environ.get("QZSTATE", "").strip() in {"1", "true", "yes", "on"})
+    ap.add_argument("--no-qzstate", dest="runtime_state_enabled", action="store_false")
     args = ap.parse_args()
 
     ProxyHandler.upstream = args.upstream.rstrip("/")
     ProxyHandler.reasoning_stream_format = args.reasoning_stream_format
+    ProxyHandler.runtime_state_enabled = args.runtime_state_enabled
 
     script_dir = Path(__file__).resolve().parent
     policy_path = Path(args.searxng_policy) if args.searxng_policy else script_dir / "searxng-agent-policy.json"
@@ -1069,19 +443,7 @@ def main():
 
     try:
         if catalog.selected is not None:
-            url = args.upstream.rstrip("/") + "/models/load"
-            body = json.dumps({"model": catalog.selected["key"]}).encode("utf-8")
-            req = urllib.request.Request(
-                url,
-                data=body,
-                method="POST",
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                },
-            )
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                resp.read()
+            BackendClient(args.upstream).load_model(catalog.selected["key"], timeout=120)
     except Exception:
         pass
 

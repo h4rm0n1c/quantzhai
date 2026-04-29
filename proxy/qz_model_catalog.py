@@ -242,6 +242,7 @@ def build_entry(path: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
         "key": filename,
         "filename": filename,
         "stem": stem,
+        "backend_id": stem,
         "path": str(path.resolve()),
         "size_bytes": stat.st_size,
         "mtime": int(stat.st_mtime),
@@ -432,7 +433,7 @@ class ModelCatalog:
         data = []
         backend_models = backend_models or {}
         for entry in self.entries:
-            backend = backend_models.get(entry["key"], {})
+            backend = backend_models.get(entry.get("backend_id") or entry["key"], backend_models.get(entry["key"], {}))
             data.append({
                 "id": entry["key"],
                 "object": "model",
@@ -440,6 +441,7 @@ class ModelCatalog:
                 "label": entry["label"],
                 "architecture": entry.get("architecture"),
                 "context_length": entry.get("context_length"),
+                "backend_id": entry.get("backend_id"),
                 "server_alias": entry.get("server_alias"),
                 "state": backend.get("state", "unloaded"),
                 "backend_path": backend.get("path"),
@@ -452,19 +454,19 @@ class ModelCatalog:
         backend_models = backend_models or {}
         models = []
         for entry in self.entries:
-            backend = backend_models.get(entry["key"], {})
+            backend = backend_models.get(entry.get("backend_id") or entry["key"], backend_models.get(entry["key"], {}))
             models.append({
-                "name": entry["key"],
-                "model": entry["key"],
+                "name": entry.get("backend_id") or entry["key"],
+                "model": entry.get("backend_id") or entry["key"],
                 "modified_at": now,
                 "size": entry.get("size_bytes", 1),
-                "digest": f"local-{entry['key']}",
+                "digest": f"local-{entry.get('backend_id') or entry['key']}",
                 "details": {
                     "parent_model": "",
                     "format": "gguf",
                     "family": entry.get("architecture") or "unknown",
                     "families": [entry.get("architecture") or "unknown"],
-                    "parameter_size": entry.get("label") or entry["key"],
+                    "parameter_size": entry.get("label") or entry.get("backend_id") or entry["key"],
                     "quantization_level": backend.get("quantization_level") or "unknown",
                 }
             })

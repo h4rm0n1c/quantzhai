@@ -124,11 +124,10 @@ What works well:
 What is weak:
 
 - Streaming transforms are fragile without replay fixtures.
-- The local `/v1/responses` tool/search loop currently buffers upstream output
-  with `stream=false`, then emits synthetic Responses SSE after the upstream
-  response completes.
-- There is no multi-hop streamed Responses runtime that can pause on a tool
-  call, execute the local tool, append the tool result, and continue streaming.
+- The local `/v1/responses` tool/search loop now streams upstream output for
+  streamed requests, then pauses on a tool call, executes the local tool,
+  appends the tool result, and continues streaming.
+- The non-stream path still buffers when the client does not request SSE.
 - Fake rate-limit metadata satisfies client expectations but is not real accounting.
 - Some event shapes may lag behind Codex/OpenAI changes.
 
@@ -140,13 +139,10 @@ Discovered during `qz-thoughts` work on 2026-04-29:
 
 - The current `/v1/responses` local runtime uses a buffered upstream request
   when it needs to manage local tool/search recursion.
-- The proxy then writes `var/captures/latest-synthetic-sse.raw` and emits
-  Responses-style stream events from the completed upstream response.
-- This keeps the current local `web_search` path simple and functional, but it
-  means reasoning/thought text is not token-live for the Responses path.
-- `scripts/qz-thoughts` can show the latest synthetic thought/output capture
-  and live backend activity from llama.cpp logs, but it cannot show token-live
-  reasoning until streaming and tool continuation are integrated.
+- The proxy now keeps streamed SSE on the live path and uses captures only for
+  debugging or replay.
+- `scripts/qz-thoughts` can show streamed thought/output activity and live
+  backend state when the stream path is active.
 - The target is not "streaming or tools"; the target is streamed Responses with
   tool-call continuation.
 
@@ -181,6 +177,7 @@ Current behavior:
 - Unsupported tools are dropped and recorded.
 - Native and custom `apply_patch` declarations are translated into a model-friendly function schema.
 - Valid model `apply_patch` function calls are translated back into native `apply_patch_call` items.
+- If Codex does not explicitly declare native `apply_patch`, the proxy treats the tool as custom output style so the current CLI harness keeps working.
 - Current Codex CLI custom `apply_patch` calls are translated back into `custom_tool_call` patch envelopes.
 - `apply_patch_call_output` history is translated back into function-call output history for llama.cpp.
 
@@ -215,6 +212,10 @@ Maturity:
 - `web_search`: beta.
 - `apply_patch`: alpha protocol adapter, smoke-tested.
 - General tool runtime: missing.
+
+Live smoke note:
+
+- The Codex exec apply_patch smoke now uses a real SSE-shaped upstream response and includes a minimal usage block on `response.completed`, so the end-to-end temp-workspace edit path is verified against the current proxy contract.
 
 ## Search
 

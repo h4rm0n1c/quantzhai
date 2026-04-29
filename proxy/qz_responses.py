@@ -16,7 +16,7 @@ try:
         normalize_apply_patch_output_for_codex,
     )
     from .qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
-    from .qz_runtime_io import capture_path, write_capture
+    from .qz_runtime_io import capture_enabled, capture_path, write_capture
     from .qz_tools import ToolRegistry
 except ImportError:
     from qz_tool_apply_patch import (
@@ -31,7 +31,7 @@ except ImportError:
         normalize_apply_patch_output_for_codex,
     )
     from qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
-    from qz_runtime_io import capture_path, write_capture
+    from qz_runtime_io import capture_enabled, capture_path, write_capture
     from qz_tools import ToolRegistry
 
 LOCAL_COMPACTION_PREFIX = "localcmp:v1:"
@@ -299,19 +299,20 @@ def normalize_tools_for_llamacpp(body: dict) -> dict:
 
     body["tools"] = clean
 
-    try:
-        notes = []
-        if translated:
-            notes.append("translated: " + ", ".join(translated))
-        if dropped:
-            notes.append("dropped: " + ", ".join(dropped))
-        capture_path("latest-dropped-tools.txt").write_text(
-            "\n".join(notes) + ("\n" if notes else ""),
-            encoding="utf-8"
-        )
-        write_capture("latest-forwarded.json", body)
-    except Exception:
-        pass
+    if capture_enabled():
+        try:
+            notes = []
+            if translated:
+                notes.append("translated: " + ", ".join(translated))
+            if dropped:
+                notes.append("dropped: " + ", ".join(dropped))
+            capture_path("latest-dropped-tools.txt").write_text(
+                "\n".join(notes) + ("\n" if notes else ""),
+                encoding="utf-8"
+            )
+            write_capture("latest-forwarded.json", body)
+        except Exception:
+            pass
 
     if isinstance(body.get("tool_choice"), dict):
         tool_choice_type = body["tool_choice"].get("type")

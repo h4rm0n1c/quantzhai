@@ -3,6 +3,7 @@ import unittest
 
 from proxy.quantzhai_proxy import (
     _apply_patch_call_to_function_call,
+    _apply_patch_output_style,
     _apply_patch_output_to_function_output,
     _custom_apply_patch_call_to_function_call,
     _custom_apply_patch_output_to_function_output,
@@ -85,6 +86,31 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertEqual(out["call_id"], "call_1")
         self.assertEqual(out["operation"]["type"], "create_file")
         self.assertEqual(out["operation"]["path"], "notes.md")
+
+    def test_missing_apply_patch_tool_declaration_defaults_to_custom_output(self):
+        self.assertEqual(_apply_patch_output_style({}), "custom")
+
+        function_call = {
+            "id": "fc_1",
+            "type": "function_call",
+            "status": "completed",
+            "call_id": "call_1",
+            "name": "apply_patch",
+            "arguments": json.dumps({
+                "operation": {
+                    "type": "create_file",
+                    "path": "notes.md",
+                    "diff": "@@\n+hello\n",
+                }
+            }),
+        }
+
+        out = normalize_apply_patch_output_for_codex([function_call], "custom")[0]
+
+        self.assertEqual(out["type"], "custom_tool_call")
+        self.assertEqual(out["call_id"], "call_1")
+        self.assertEqual(out["name"], "apply_patch")
+        self.assertIn("*** Add File: notes.md", out["input"])
 
     def test_model_function_call_becomes_custom_apply_patch_call_when_requested(self):
         function_call = {

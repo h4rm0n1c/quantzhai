@@ -215,7 +215,7 @@ def _apply_patch_output_style(body: dict) -> str:
             return "custom"
         if isinstance(tool, dict) and tool.get("type") == "apply_patch":
             return "native"
-    return "native"
+    return "custom"
 
 
 class ApplyPatchToolAdapter:

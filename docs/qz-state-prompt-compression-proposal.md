@@ -16,6 +16,17 @@ Inject a compact dynamic state block through the same kind of additional prompt
 mechanism used for profile harnessing. The block is runtime data, not a new
 instruction pile.
 
+Default stance: keep `QZSTATE` disabled unless a config/env/CLI flag explicitly
+turns it on. Preserve the state machinery and the proposal, but do not inject it
+into prompts by default.
+
+Suggested opt-in contract:
+
+- `QZSTATE=0` or unset: no prompt injection, status surfaces still available
+- `QZSTATE=1`: inject the compact state block
+- optional `QZSTATE_MODE=` knob: choose the density ladder later without
+  changing the basic enable/disable switch
+
 Readable baseline:
 
 ```text
@@ -296,6 +307,11 @@ For Codex CLI, the practical path is to inject a fresh `QZS` block into each
 `/v1/responses` request. The proxy can update telemetry continuously for live
 monitors, then give the model a compact snapshot at the next request or tool-loop
 resume point.
+
+QuantZhai now does the first step of that path in the proxy: it prepends a
+compact `QZSTATE` block to Responses instructions and mirrors the same snapshot
+into request metadata, while `/ready` and `/qz/status` expose the same runtime
+view for humans and harnesses.
 
 Benchmark prompts:
 

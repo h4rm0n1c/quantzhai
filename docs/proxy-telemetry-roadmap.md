@@ -4,10 +4,10 @@ Date: 2026-04-29
 
 ## Problem
 
-The proxy currently uses files under `var/` as both debugging captures and live
-observability transport. That works for development because the latest request,
-normalized body, upstream response, and synthetic SSE can be inspected with
-normal shell tools.
+The proxy currently uses files under `var/` as debugging captures and keeps
+live observability on the HTTP/SSE path. That works for development because the
+latest request, normalized body, upstream response, and streamed SSE can be
+inspected with normal shell tools.
 
 It is not the right long-term live path.
 
@@ -57,7 +57,7 @@ Examples:
 - latest normalized request body
 - latest upstream response
 - latest raw SSE stream
-- latest synthetic SSE stream
+- latest streamed SSE capture
 
 Captures are useful for debugging, but they should be optional and configurable.
 
@@ -68,8 +68,10 @@ QZ_CAPTURE_MODE=off|minimal|latest|full
 QZ_CAPTURE_RAW=0|1
 ```
 
-Default development mode can keep latest-file captures. Live benchmarking should
-be able to disable raw capture writes or keep only minimal metadata.
+Default env should keep captures off. Local debugging or benchmark runs can
+enable `latest` or `full` capture modes when raw artifacts are useful. Live
+benchmarking should be able to disable raw capture writes or keep only minimal
+metadata.
 
 ## Logs
 

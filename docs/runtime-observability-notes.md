@@ -13,15 +13,17 @@ Date: 2026-04-29
   host services may not be visible from sandboxed curls. Live stack validation
   should run `qz-proxy`, curl probes, `qz-top --once`, and `qz-thoughts --once`
   on the host network.
-- The current local `/v1/responses` tool/search path uses a buffered upstream
-  request and then emits synthetic Responses SSE from the completed response.
-- Because of that buffering, `qz-thoughts` can show live backend activity from
-  logs, but thought/reasoning text from Responses captures is not token-live
-  yet.
-- The proxy telemetry path works for synthetic Responses SSE: a streamed
+- Host live tests need the proxy and model server kept alive in background
+  sessions; one-shot sandbox commands can die before probe commands finish.
+- The local `/v1/responses` tool/search path now uses streamed upstream SSE for
+  streaming requests. The non-stream path still buffers by design.
+- Because the stream is now real on the streaming path, `qz-thoughts` can show
+  live backend activity and streamed thought/reasoning text instead of only
+  buffered captures.
+- The proxy telemetry path works for streamed Responses SSE: a streamed
   `/v1/responses` request emits `sse_event` telemetry, `qz-top` reports the
-  resulting throughput, and `qz-thoughts` can reconstruct the latest thought and
-  answer without reading capture files.
+  resulting throughput, and `qz-thoughts` can reconstruct the latest thought
+  and answer without reading capture files.
 - Small `max_output_tokens` caps can produce reasoning-only responses on this
   profile. That is model/profile tuning behavior, not a monitor failure, and it
   should be measured when comparing grug/caveman prompt variants.
@@ -41,8 +43,8 @@ Date: 2026-04-29
   - `--hold` starts the stack and then opens `qz-top`.
   - `--codex PROFILE` starts the stack and then launches Codex with the selected
     profile.
-- `scripts/qz-thoughts` was added as a curses-style monitor for synthetic
-  thought/output captures and live backend activity.
+- `scripts/qz-thoughts` was added as a curses-style monitor for streamed
+  thought/output activity and live backend state.
 - `scripts/qz-thoughts` now uses proxy telemetry first, isolates the latest
   response window, and filters health/telemetry poll noise from its activity
   view.

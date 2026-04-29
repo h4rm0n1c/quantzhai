@@ -3,8 +3,13 @@ import json
 import urllib.request
 
 try:
-    from .qz_responses import _now_ts, normalize_apply_patch_output_for_codex
-    from .qz_runtime_io import capture_path, write_capture
+    from .qz_responses import (
+        _now_ts,
+        normalize_apply_patch_output_for_codex,
+        normalize_responses_input_for_qwen,
+        normalize_tools_for_llamacpp,
+    )
+    from .qz_runtime_io import capture_enabled, capture_path, write_capture
     from .qz_sse import _normalize_response_usage, make_sse_block, transform_sse_event
     from .qz_streaming import (
         StreamedFunctionCallAssembler,
@@ -16,8 +21,13 @@ try:
     )
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS
 except ImportError:
-    from qz_responses import _now_ts, normalize_apply_patch_output_for_codex
-    from qz_runtime_io import capture_path, write_capture
+    from qz_responses import (
+        _now_ts,
+        normalize_apply_patch_output_for_codex,
+        normalize_responses_input_for_qwen,
+        normalize_tools_for_llamacpp,
+    )
+    from qz_runtime_io import capture_enabled, capture_path, write_capture
     from qz_sse import _normalize_response_usage, make_sse_block, transform_sse_event
     from qz_streaming import (
         StreamedFunctionCallAssembler,
@@ -99,7 +109,7 @@ class ResponsesStreamRuntime:
         return call
 
     def _start_capture(self):
-        if not self.capture_enabled:
+        if not self.capture_enabled or not capture_enabled():
             return
         try:
             write_capture("latest-upstream-response.raw", b"", mode="bytes")
@@ -115,7 +125,7 @@ class ResponsesStreamRuntime:
             pass
 
     def _open_raw_log(self):
-        if not self.capture_enabled:
+        if not self.capture_enabled or not capture_enabled():
             return None
         try:
             return capture_path("latest-upstream-response.raw").open("ab")
@@ -163,11 +173,15 @@ class ResponsesStreamRuntime:
         self._start_capture()
 
         for _hop in range(WEB_SEARCH_MAX_HOPS):
-            resp = self.stream_opener(working_body)
+            hop_body = json.loads(json.dumps(working_body))
+            hop_body["stream"] = True
+            hop_body = normalize_responses_input_for_qwen(hop_body)
+            hop_body = normalize_tools_for_llamacpp(hop_body)
+            resp = self.stream_opener(hop_body)
             raw_log = self._open_raw_log()
             assembler = StreamedFunctionCallAssembler()
             event_lines = []
-            next_input = list(working_body.get("input") or [])
+            next_input = list(hop_body.get("input") or [])
             completed_call = None
             max_output_index = -1
 

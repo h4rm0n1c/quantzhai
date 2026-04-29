@@ -57,7 +57,7 @@ The proxy exists because Codex expects OpenAI-style Responses behavior, model ca
 var/
   codex-home/   # Codex config, sessions, history, sqlite state, plugin/cache data
   logs/         # Proxy logs
-  captures/     # latest request/response/debug captures
+  captures/     # optional latest request/response/debug captures
   run/          # pid files
 ```
 
@@ -242,6 +242,9 @@ Important settings:
 - `QZ_MODEL_DIR`: directory scanned for local `*.gguf` files, default `var/models`.
 - `QZ_MODEL_KEY`: optional explicit selection by filename, stem, or model alias.
 - `QZ_MODEL_OVERRIDES`: local JSON overrides file, default `var/model-overrides.json`.
+- `QZ_CAPTURE_MODE`: file capture mode, `off` by default; set `latest` for
+  request/response captures or `full` for heavier debug capture.
+- `QZSTATE`: optional `1/true/yes/on` flag to inject the compact runtime state block into `/v1/responses`; off by default.
 - `QZ_SERVER_PORT`: host port for llama.cpp server, default `18084`.
 - `QZ_PROXY_PORT`: host port for QuantZhai proxy, default `18180`.
 - `QZ_CONTEXT`: context window, default `131072`.

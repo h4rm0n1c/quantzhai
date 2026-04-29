@@ -1,0 +1,542 @@
+#!/usr/bin/env python3
+import json
+import time
+
+try:
+    from .qz_proxy_config import CURRENT_API_ENDPOINTS, LEGACY_API_ENDPOINTS, MODEL_BUDGETS, api_contract_payload
+    from .qz_responses import (
+        _apply_patch_output_style,
+        _build_local_compaction_response,
+        _decode_local_compaction_blob,
+        _expand_local_compaction_items,
+        _microcompact_old_tool_results,
+        _now_ts,
+        clean_content,
+        extract_response_output_text,
+        normalize_apply_patch_output_for_codex,
+        normalize_responses_input_for_qwen,
+        normalize_tools_for_llamacpp,
+    )
+    from .qz_responses_stream import ResponsesStreamRuntime
+    from .qz_sse import _normalize_response_usage, make_sse_block
+    from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
+    from .qz_runtime_io import append_capture, capture_enabled, capture_path, runtime_log, write_capture
+except ImportError:
+    from qz_proxy_config import CURRENT_API_ENDPOINTS, LEGACY_API_ENDPOINTS, MODEL_BUDGETS, api_contract_payload
+    from qz_responses import (
+        _apply_patch_output_style,
+        _build_local_compaction_response,
+        _decode_local_compaction_blob,
+        _expand_local_compaction_items,
+        _microcompact_old_tool_results,
+        _now_ts,
+        clean_content,
+        extract_response_output_text,
+        normalize_apply_patch_output_for_codex,
+        normalize_responses_input_for_qwen,
+        normalize_tools_for_llamacpp,
+    )
+    from qz_responses_stream import ResponsesStreamRuntime
+    from qz_sse import _normalize_response_usage, make_sse_block
+    from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
+    from qz_runtime_io import append_capture, capture_enabled, capture_path, runtime_log, write_capture
+
+
+class RequestRouter:
+    def __init__(self, handler):
+        self.handler = handler
+
+    def _log_request_path(self, method):
+        if self.handler.path.startswith("/qz/telemetry"):
+            return
+        self.handler.telemetry.emit("request_started", {
+            "method": method,
+            "path": self.handler.path,
+            "accept": self.handler.headers.get("Accept", ""),
+            "content_type": self.handler.headers.get("Content-Type", ""),
+        })
+        try:
+            append_capture(
+                "latest-paths.log",
+                f"{time.time():.3f} {method} {self.handler.path} accept={self.handler.headers.get('Accept','')} content_type={self.handler.headers.get('Content-Type','')}\n",
+            )
+        except Exception:
+            pass
+
+    def handle_get(self):
+        self._log_request_path("GET")
+        if self.handler._handle_ollama_get():
+            return
+
+        if self.handler._handle_ready_get():
+            return
+
+        if self.handler.path == "/health":
+            self.handler._send_json(200, {
+                "status": "ok",
+                "proxy": "Qwen3.6Turbo",
+                "upstream": self.handler.upstream,
+                "models": MODEL_BUDGETS,
+                "catalog": self.handler._model_catalog_payload(),
+                "supports": list(CURRENT_API_ENDPOINTS),
+                "api_contract": api_contract_payload(),
+            })
+            return
+
+        if self.handler.path == "/qz/telemetry/state":
+            self.handler._send_json(200, self.handler.telemetry.state())
+            return
+
+        if self.handler.path.startswith("/qz/telemetry/recent"):
+            limit = 100
+            try:
+                query = self.handler.path.split("?", 1)[1] if "?" in self.handler.path else ""
+                params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
+                limit = int(params.get("limit", limit))
+            except Exception:
+                limit = 100
+            self.handler._send_json(200, {
+                "events": self.handler.telemetry.recent(limit),
+                "state": self.handler.telemetry.state(),
+            })
+            return
+
+        if self.handler.path == "/qz/telemetry/events":
+            self.handler._send_telemetry_sse()
+            return
+
+        if self.handler.path == "/v1/models":
+            self.handler._send_json(200, self.handler._model_catalog_payload())
+            return
+
+        if self.handler.path == "/qz/models":
+            catalog = self.handler._model_catalog()
+            self.handler._send_json(200, {
+                "catalog": catalog.to_payload(),
+                "backend": self.handler._backend_models(),
+            })
+            return
+
+        self.proxy_raw("GET")
+
+    def handle_post(self):
+        self._log_request_path("POST")
+
+        if self.handler._handle_ollama_post():
+            return
+
+        if self.handler.path in LEGACY_API_ENDPOINTS:
+            self.handler._mark_deprecated_endpoint(self.handler.path)
+            self.proxy_json_api("/v1/chat/completions")
+            return
+
+        if self.handler.path in ("/responses/compact", "/v1/responses/compact"):
+            self.handler._handle_responses_compact()
+            return
+
+        if self.handler.path in ("/responses", "/v1/responses"):
+            self.proxy_json_api("/v1/responses")
+            return
+
+        if self.handler.path == "/qz/models/refresh":
+            catalog = self.handler._model_catalog()
+            catalog.refresh()
+            self.handler._send_json(200, {
+                "catalog": catalog.to_payload(),
+                "backend": self.handler._backend_models(),
+            })
+            return
+
+        if self.handler.path in ("/qz/models/load", "/qz/models/select"):
+            length = int(self.handler.headers.get("Content-Length", "0") or "0")
+            raw = self.handler.rfile.read(length) if length else b"{}"
+            try:
+                body = json.loads(raw.decode("utf-8"))
+            except Exception as e:
+                self.handler._send_json(400, {"error": f"invalid JSON: {e}"})
+                return
+            requested = body.get("model") or body.get("key") or body.get("name")
+            catalog = self.handler._model_catalog()
+            selected, reason = catalog.select(requested)
+            if selected is None:
+                self.handler._send_json(404, {"error": "no model selected", "reason": reason, "catalog": catalog.to_payload()})
+                return
+            try:
+                self.handler._load_backend_model(selected.get("backend_id") or selected["key"])
+            except Exception as exc:
+                self.handler._send_json(502, {"error": f"backend model load failed: {exc}", "selected": selected, "reason": reason})
+                return
+            self.handler._send_json(200, {
+                "selected": selected,
+                "reason": reason,
+                "backend": self.handler._backend_models(),
+                "catalog": catalog.to_payload(),
+            })
+            return
+
+        self.proxy_raw("POST")
+
+    def _web_runtime(self):
+        return WebSearchRuntime(
+            base_url=self.handler.searxng_base_url,
+            timeout=self.handler.searxng_timeout,
+            policy=self.handler.searxng_policy,
+            capabilities=self.handler.searxng_capabilities,
+            search_cache=self.handler.web_search_cache,
+            opened_page_cache=self.handler.opened_page_cache,
+        )
+
+    def _annotate_output_with_url_citations(self, out: dict, sources):
+        unique_sources = _unique_sources(sources)[:4]
+        if not unique_sources:
+            return out
+
+        output_items = out.get("output") or []
+        for item in reversed(output_items):
+            if not isinstance(item, dict) or item.get("type") != "message" or item.get("role") != "assistant":
+                continue
+            content = item.get("content") or []
+            for part in content:
+                if not isinstance(part, dict) or part.get("type") != "output_text":
+                    continue
+                text = part.get("text") or ""
+                annotations = list(part.get("annotations") or [])
+                for idx, source in enumerate(unique_sources, start=1):
+                    marker = f" [{idx}]"
+                    start_index = len(text)
+                    text += marker
+                    end_index = len(text) - 1
+                    annotations.append({
+                        "type": "url_citation",
+                        "start_index": start_index,
+                        "end_index": end_index,
+                        "title": source.get("title") or source.get("url"),
+                        "url": source.get("url"),
+                    })
+                part["text"] = text
+                part["annotations"] = annotations
+                return out
+        return out
+
+    def _call_upstream_json(self, url: str, body: dict):
+        resp = self.handler._backend().post_json(url, body, timeout=900)
+        return resp.status, resp.content_type, resp.data
+
+    def _write_sse_chunk(self, chunk: bytes, raw_log=None):
+        if raw_log is not None:
+            raw_log.write(chunk)
+            raw_log.flush()
+        self.handler._emit_sse_telemetry(chunk)
+        self.handler.wfile.write(chunk)
+        self.handler.wfile.flush()
+
+    def _run_responses_streaming_locally(self, body: dict, requested_model: str, apply_patch_output_style: str = "native"):
+        runtime = ResponsesStreamRuntime(
+            upstream=self.handler.upstream,
+            authorization=self.handler.headers.get("Authorization", "Bearer local"),
+            reasoning_stream_format=self.handler.reasoning_stream_format,
+            web_runtime=self._web_runtime(),
+            chunk_writer=self._write_sse_chunk,
+        )
+        runtime.run(body, requested_model, apply_patch_output_style)
+
+    def _run_responses_locally(self, body: dict, requested_model: str, apply_patch_output_style: str = "native"):
+        url = self.handler.upstream + "/v1/responses"
+        working_body = json.loads(json.dumps(body))
+        working_body["stream"] = False
+
+        public_trace = []
+        gathered_sources = []
+        counters = {"search": 0, "open_page": 0}
+        seen_signatures = set()
+        web_runtime = self._web_runtime()
+
+        for _hop in range(WEB_SEARCH_MAX_HOPS):
+            hop_body = json.loads(json.dumps(working_body))
+            hop_body["stream"] = False
+            hop_body = normalize_responses_input_for_qwen(hop_body)
+            hop_body = normalize_tools_for_llamacpp(hop_body)
+            status, content_type, resp_data = self._call_upstream_json(url, hop_body)
+            out = json.loads(resp_data.decode("utf-8"))
+            out["model"] = requested_model
+
+            output_items = out.get("output") or []
+            web_calls = [
+                item for item in output_items
+                if isinstance(item, dict) and item.get("type") == "function_call" and item.get("name") == "web_search"
+            ]
+
+            if not web_calls:
+                final_out = dict(out)
+                final_out["output"] = public_trace + normalize_apply_patch_output_for_codex(
+                    output_items,
+                    apply_patch_output_style,
+                )
+                final_out["usage"] = _normalize_response_usage(final_out.get("usage"))
+                self._annotate_output_with_url_citations(final_out, gathered_sources)
+                runtime_log("latest-web-runtime-final.json", final_out)
+                return status, content_type, final_out
+
+            next_input = list(hop_body.get("input") or [])
+            next_input.extend(output_items)
+
+            for call in web_calls:
+                public_item, tool_output_item, sources = web_runtime.execute_web_search_call(call, counters, seen_signatures)
+                public_trace.append(public_item)
+                gathered_sources.extend(sources)
+                next_input.append(tool_output_item)
+
+            working_body["input"] = next_input
+
+        fallback_out = {
+            "id": f"resp_local_{_now_ts()}",
+            "object": "response",
+            "created_at": _now_ts(),
+            "model": requested_model,
+            "output": public_trace + [{
+                "id": f"msg_local_{_now_ts()}",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": "I stopped the web tool loop after hitting the safety limit for repeated search/open actions.",
+                    "annotations": [],
+                }],
+            }],
+            "usage": _normalize_response_usage({}),
+        }
+        self._annotate_output_with_url_citations(fallback_out, gathered_sources)
+        runtime_log("latest-web-runtime-final.json", fallback_out)
+        return 200, "application/json", fallback_out
+
+    def proxy_json_api(self, upstream_path):
+        try:
+            append_capture("latest-json-api.log", f"{time.time():.3f} ENTER path={self.handler.path} upstream_path={upstream_path} accept={self.handler.headers.get('Accept','')}\n")
+        except Exception:
+            pass
+
+        length = int(self.handler.headers.get("Content-Length", "0") or "0")
+        raw = self.handler.rfile.read(length)
+
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except Exception as e:
+            self.handler._send_json(400, {"error": f"invalid JSON: {e}"})
+            return
+
+        try:
+            write_capture("latest-request.json", body)
+        except Exception:
+            pass
+
+        client_wants_stream = (
+            body.get("stream") is True
+            or "text/event-stream" in self.handler.headers.get("Accept", "")
+        )
+
+        client_model = body.get("model") or "Qwen3.6Turbo-medium"
+        selected_model, selection_reason = self.handler._resolve_model_selection(client_model)
+        if selected_model is None:
+            self.handler._send_json(404, {
+                "error": "no model available",
+                "reason": selection_reason,
+                "catalog": self.handler._model_catalog().to_payload(),
+            })
+            return
+
+        backend_model = selected_model.get("backend_id") or selected_model["key"]
+        budget = MODEL_BUDGETS.get(client_model, MODEL_BUDGETS.get("Qwen3.6Turbo", 256))
+
+        body["model"] = backend_model
+        body["thinking_budget_tokens"] = budget
+        body.setdefault("temperature", 0.1)
+
+        if upstream_path == "/v1/responses":
+            body = self.handler._model_router().inject_runtime_state(body, client_model)
+            apply_patch_output_style = _apply_patch_output_style(body)
+            input_items = body.get("input")
+            if isinstance(input_items, list):
+                body["input"] = _microcompact_old_tool_results(_expand_local_compaction_items(input_items))
+            body = normalize_responses_input_for_qwen(body)
+            body = normalize_tools_for_llamacpp(body)
+            try:
+                write_capture("latest-normalized-request.json", body)
+            except Exception:
+                pass
+
+            if client_wants_stream:
+                self.handler.send_response(200)
+                self.handler.send_header("Content-Type", "text/event-stream")
+                self.handler.send_header("Cache-Control", "no-cache")
+                self.handler.send_header("Connection", "close")
+                self.handler._send_codex_rate_limit_headers()
+                self.handler.end_headers()
+                self.handler._write_codex_rate_limits_event()
+                try:
+                    self._run_responses_streaming_locally(
+                        body,
+                        client_model,
+                        apply_patch_output_style,
+                    )
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                except Exception as e:
+                    try:
+                        import traceback
+                        runtime_log("latest-stream-runtime-error.txt", traceback.format_exc())
+                    except Exception:
+                        pass
+                    error_payload = {
+                        "type": "response.failed",
+                        "response": {
+                            "id": f"resp_local_{_now_ts()}",
+                            "object": "response",
+                            "created_at": _now_ts(),
+                            "status": "failed",
+                            "model": client_model,
+                            "error": {"message": f"local streaming runtime error: {e}"},
+                            "output": [],
+                            "usage": _normalize_response_usage({}),
+                        },
+                    }
+                    self._write_sse_chunk(make_sse_block("response.failed", error_payload))
+                    self._write_sse_chunk(b"data: [DONE]\n\n")
+                self.handler.close_connection = True
+                return
+
+            try:
+                status, content_type, out = self._run_responses_locally(
+                    body,
+                    client_model,
+                    apply_patch_output_style,
+                )
+                if status >= 400:
+                    try:
+                        self.handler._send_json(status, out)
+                    except Exception:
+                        self.handler.send_response(status)
+                        self.handler.send_header("Content-Type", "text/plain")
+                        self.handler._send_codex_rate_limit_headers()
+                        self.handler.end_headers()
+                        self.handler.wfile.write(json.dumps(out).encode("utf-8"))
+                    return
+
+                self.handler._send_json(status, out)
+                return
+            except Exception as e:
+                try:
+                    import traceback
+                    runtime_log("latest-web-runtime-error.txt", traceback.format_exc())
+                except Exception:
+                    pass
+                self.handler._send_json(502, {"error": f"local web runtime error: {e}"})
+                return
+
+        try:
+            append_capture("latest-json-api.log", f"{time.time():.3f} UPSTREAM url={self.handler.upstream + upstream_path} bytes={len(json.dumps(body).encode('utf-8'))} stream={body.get('stream')}\n")
+        except Exception:
+            pass
+        try:
+            resp = self.handler._backend().request(
+                upstream_path,
+                method="POST",
+                body=json.dumps(body).encode("utf-8"),
+                headers={"Accept": self.handler.headers.get("Accept", "application/json")},
+                timeout=900,
+            )
+        except Exception as e:
+            try:
+                import traceback
+                append_capture("latest-json-api.log", f"{time.time():.3f} UPSTREAM_EXCEPTION {type(e).__name__}: {e}\n")
+                append_capture("latest-json-api.log", traceback.format_exc() + "\n")
+            except Exception:
+                pass
+            self.handler._send_json(502, {"error": f"upstream error: {e}"})
+            return
+
+        content_type = resp.content_type
+        status = resp.status
+
+        if upstream_path == "/v1/responses" and client_wants_stream and "text/event-stream" in content_type:
+            self.handler.send_response(status)
+            self.handler.send_header("Content-Type", "text/event-stream")
+            self.handler.send_header("Cache-Control", "no-cache")
+            self.handler.send_header("Connection", "close")
+            self.handler._send_codex_rate_limit_headers()
+            self.handler.end_headers()
+            self.handler._write_codex_rate_limits_event()
+
+            try:
+                if capture_enabled():
+                    raw_log_path = capture_path("latest-upstream-response.raw")
+                    status_path = capture_path("latest-upstream-status.txt")
+                    status_path.write_text(
+                        f"status={status}\ncontent_type={content_type}\nstream=passthrough\nreasoning_stream_format={self.handler.reasoning_stream_format}\nrate_limits=local\n",
+                        encoding="utf-8"
+                    )
+                    raw_log = raw_log_path.open("wb")
+                else:
+                    raw_log = None
+            except Exception:
+                raw_log = None
+
+            try:
+                self.handler._write_transformed_sse_stream(resp, raw_log)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            finally:
+                if raw_log is not None:
+                    raw_log.close()
+            self.handler.close_connection = True
+            return
+
+        resp_data = resp.data
+
+        if capture_enabled():
+            try:
+                write_capture("latest-upstream-response.raw", resp_data, mode="bytes")
+                capture_path("latest-upstream-status.txt").write_text(
+                    f"status={status}\ncontent_type={content_type}\n",
+                    encoding="utf-8"
+                )
+            except Exception:
+                pass
+
+        try:
+            out = json.loads(resp_data.decode("utf-8"))
+            out["model"] = client_model
+            if upstream_path == "/v1/responses":
+                out["usage"] = _normalize_response_usage(out.get("usage"))
+
+            self.handler._send_json(status, out)
+        except Exception:
+            self.handler.send_response(status)
+            self.handler.send_header("Content-Type", content_type)
+            self.handler._send_codex_rate_limit_headers()
+            self.handler.send_header("Content-Length", str(len(resp_data)))
+            self.handler.end_headers()
+            self.handler.wfile.write(resp_data)
+
+    def proxy_raw(self, method):
+        length = int(self.handler.headers.get("Content-Length", "0") or "0")
+        data = self.handler.rfile.read(length) if length else None
+
+        try:
+            resp = self.handler._backend().request(
+                self.handler.path,
+                method=method,
+                body=data,
+                headers={"Content-Type": self.handler.headers.get("Content-Type", "application/json")},
+                timeout=900,
+            )
+        except Exception as e:
+            self.handler._send_json(502, {"error": f"upstream error: {e}"})
+            return
+
+        self.handler.send_response(resp.status)
+        self.handler.send_header("Content-Type", resp.content_type)
+        self.handler._send_codex_rate_limit_headers()
+        self.handler.send_header("Content-Length", str(len(resp.data)))
+        self.handler.end_headers()
+        self.handler.wfile.write(resp.data)

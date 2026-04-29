@@ -31,7 +31,7 @@ valid_mount() {
   local mount_spec="$1"
   [[ "$mount_spec" == type=bind,* ]] || return 1
   [[ "$mount_spec" == *",readonly"* || "$mount_spec" == *",ro"* ]] || return 1
-  [[ "$mount_spec" == *",dst=/models/"* || "$mount_spec" == *",target=/models/"* ]] || return 1
+  [[ "$mount_spec" == *",dst=/models"* || "$mount_spec" == *",target=/models"* ]] || return 1
 }
 
 [[ $# -gt 0 ]] || deny "missing docker command"

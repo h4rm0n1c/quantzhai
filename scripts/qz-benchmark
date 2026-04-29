@@ -159,7 +159,7 @@ ensure_proxy() {
   fi
 
   printf 'proxy not healthy; starting temporary proxy for benchmark\n' >&2
-  python3 "$QZ_ROOT/proxy/quantzhai_proxy.py" \
+  QZ_CAPTURE_MODE="${QZ_CAPTURE_MODE:-latest}" python3 "$QZ_ROOT/proxy/quantzhai_proxy.py" \
     --listen "$QZ_PROXY_HOST" \
     --port "$QZ_PROXY_PORT" \
     --upstream "http://$QZ_SERVER_HOST:$QZ_SERVER_PORT" \

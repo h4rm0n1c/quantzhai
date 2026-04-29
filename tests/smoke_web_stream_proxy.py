@@ -213,8 +213,11 @@ def main():
         assert "web_search_call" in stream_text, stream_text
         assert "function_call" not in stream_text, stream_text
         assert "searched." in stream_text, stream_text
-        assert len(FakeWebUpstreamHandler.requests) == 2, FakeWebUpstreamHandler.requests
-        second_body = FakeWebUpstreamHandler.requests[1]["body"]
+        assert len(FakeWebUpstreamHandler.requests) == 3, FakeWebUpstreamHandler.requests
+        assert FakeWebUpstreamHandler.requests[0]["path"] == "/models/load", FakeWebUpstreamHandler.requests
+        assert FakeWebUpstreamHandler.requests[1]["path"] == "/v1/responses", FakeWebUpstreamHandler.requests
+        assert FakeWebUpstreamHandler.requests[2]["path"] == "/v1/responses", FakeWebUpstreamHandler.requests
+        second_body = FakeWebUpstreamHandler.requests[2]["body"]
         assert any(item.get("type") == "function_call_output" for item in second_body.get("input") or []), second_body
 
         print("ok web stream proxy smoke")

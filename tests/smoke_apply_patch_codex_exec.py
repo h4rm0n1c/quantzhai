@@ -18,6 +18,25 @@ ROOT = Path(__file__).resolve().parents[1]
 MODEL = "Qwen3.6Turbo-high"
 
 
+def _sse_block(event_type, payload):
+    payload = dict(payload)
+    payload.setdefault("type", event_type)
+    return (
+        f"event: {event_type}\n"
+        f"data: {json.dumps(payload)}\n\n"
+    ).encode("utf-8")
+
+
+def _usage():
+    return {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "input_tokens_details": {"cached_tokens": 0},
+        "output_tokens_details": {"reasoning_tokens": 0},
+    }
+
+
 class FakeCodexUpstreamHandler(BaseHTTPRequestHandler):
     requests = []
 
@@ -40,52 +59,123 @@ class FakeCodexUpstreamHandler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(length).decode("utf-8"))
         self.__class__.requests.append({"path": self.path, "body": body})
 
-        if _has_tool_output(body.get("input")):
-            response = {
-                "id": "resp_fake_final",
-                "object": "response",
-                "created_at": 4102444800,
-                "model": body.get("model", MODEL),
-                "output": [{
-                    "id": "msg_fake_final",
-                    "type": "message",
-                    "status": "completed",
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": "Patch smoke complete."}],
-                }],
-                "usage": {},
-            }
-        else:
-            response = {
-                "id": "resp_fake_apply_patch",
-                "object": "response",
-                "created_at": 4102444800,
-                "model": body.get("model", MODEL),
-                "output": [{
-                    "id": "fc_fake_apply_patch",
-                    "type": "function_call",
-                    "status": "completed",
-                    "call_id": "call_fake_apply_patch",
-                    "name": "apply_patch",
-                    "arguments": json.dumps({
-                        "operation": {
-                            "type": "create_file",
-                            "path": "codex-patch-smoke.txt",
-                            "diff": "@@\n+quantzhai codex apply_patch smoke\n",
-                        }
-                    }),
-                }],
-                "usage": {},
-            }
-        self._send_json(response)
-
-    def _send_json(self, payload):
-        data = json.dumps(payload).encode("utf-8")
         self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
-        self.wfile.write(data)
+        if _has_tool_output(body.get("input")):
+            chunks = [
+                _sse_block("response.created", {
+                    "response": {
+                        "id": "resp_fake_final",
+                        "object": "response",
+                        "created_at": 4102444800,
+                        "status": "in_progress",
+                        "model": body.get("model", MODEL),
+                        "output": [],
+                    },
+                }),
+                _sse_block("response.output_item.added", {
+                    "output_index": 0,
+                    "item": {
+                        "id": "msg_fake_final",
+                        "type": "message",
+                        "status": "in_progress",
+                        "role": "assistant",
+                        "content": [],
+                    },
+                }),
+                _sse_block("response.content_part.added", {
+                    "item_id": "msg_fake_final",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "part": {"type": "output_text", "text": "", "annotations": []},
+                }),
+                _sse_block("response.output_text.delta", {
+                    "item_id": "msg_fake_final",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "Patch smoke complete.",
+                }),
+                _sse_block("response.output_item.done", {
+                    "output_index": 0,
+                    "item": {
+                        "id": "msg_fake_final",
+                        "type": "message",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Patch smoke complete.", "annotations": []}],
+                    },
+                }),
+                _sse_block("response.completed", {
+                    "response": {
+                        "id": "resp_fake_final",
+                        "object": "response",
+                        "created_at": 4102444800,
+                        "status": "completed",
+                        "model": body.get("model", MODEL),
+                        "output": [{
+                            "id": "msg_fake_final",
+                            "type": "message",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "Patch smoke complete.", "annotations": []}],
+                        }],
+                        "usage": _usage(),
+                    },
+                }),
+                b"data: [DONE]\n\n",
+            ]
+        else:
+            arguments = json.dumps({
+                "operation": {
+                    "type": "create_file",
+                    "path": "codex-patch-smoke.txt",
+                    "diff": "@@\n+quantzhai codex apply_patch smoke\n",
+                }
+            })
+            chunks = [
+                _sse_block("response.created", {
+                    "response": {
+                        "id": "resp_fake_apply_patch",
+                        "object": "response",
+                        "created_at": 4102444800,
+                        "status": "in_progress",
+                        "model": body.get("model", MODEL),
+                        "output": [],
+                    },
+                }),
+                _sse_block("response.output_item.added", {
+                    "output_index": 0,
+                    "item": {
+                        "id": "fc_fake_apply_patch",
+                        "type": "function_call",
+                        "status": "in_progress",
+                        "call_id": "call_fake_apply_patch",
+                        "name": "apply_patch",
+                        "arguments": "",
+                    },
+                }),
+                _sse_block("response.function_call_arguments.delta", {
+                    "item_id": "fc_fake_apply_patch",
+                    "output_index": 0,
+                    "delta": arguments,
+                }),
+                _sse_block("response.output_item.done", {
+                    "output_index": 0,
+                    "item": {
+                        "id": "fc_fake_apply_patch",
+                        "type": "function_call",
+                        "status": "completed",
+                        "call_id": "call_fake_apply_patch",
+                        "name": "apply_patch",
+                    },
+                }),
+                b"data: [DONE]\n\n",
+            ]
+
+        for chunk in chunks:
+            self.wfile.write(chunk)
+            self.wfile.flush()
 
 
 def _has_tool_output(value):
@@ -247,7 +337,11 @@ def main():
 
         assert len(FakeCodexUpstreamHandler.requests) >= 2, FakeCodexUpstreamHandler.requests
 
-        upstream_body = FakeCodexUpstreamHandler.requests[0]["body"]
+        upstream_body = next(
+            request["body"]
+            for request in FakeCodexUpstreamHandler.requests
+            if request["path"] == "/v1/responses"
+        )
         upstream_tools = upstream_body.get("tools") or []
         assert any(tool.get("type") == "function" and tool.get("name") == "apply_patch" for tool in upstream_tools), upstream_tools
 
