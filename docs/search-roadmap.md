@@ -82,6 +82,31 @@ var/captures/latest-web-search-route.json
 - Decide whether `auto` is enough for normal users or if `qz-codex` should expose profile defaults.
 - Keep the public tool name as `web_search` unless a hard compatibility issue appears.
 
+## Phase 5b: Fresh and Source-Aware Search
+
+Mentioning an entity does not mean that entity is well known, indexed by general
+search engines, or discoverable through the default broad profile. New projects,
+fresh repos, private forks, niche packages, and just-published docs often need a
+source-aware route before normal web search is useful.
+
+Example: QuantZhai is hosted on GitHub and is brand new, so prompts that ask the
+model to search for "QuantZhai" should prefer GitHub search or an explicit
+`site:github.com` query before trusting general web results. Google or broad
+SearXNG results may miss the repo, return stale mirrors, or collide with unrelated
+near-name entities.
+
+Target behavior:
+
+- Detect source hints from context: repo hosted on GitHub, package lives on PyPI,
+  project docs live on a known domain, issue reference mentions GitHub, etc.
+- Let `profile=auto` route fresh software/project queries through source-specific
+  engines or query forms before broad web search.
+- Add benchmark prompts that verify the tool can find a new or unindexed project
+  from the likely source of truth instead of hallucinating from low-signal broad
+  results.
+- Record when broad search returns weak near-name matches so the model can say
+  "not found in broad web search" rather than overfitting unrelated results.
+
 ## Phase 6: Budgeted Search Packets
 
 Status: planned after streaming/tool continuation work is easier to test.

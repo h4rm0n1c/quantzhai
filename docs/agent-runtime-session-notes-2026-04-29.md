@@ -182,6 +182,17 @@ Modes:
 Budget controls should be enforced by the proxy, not merely requested in the
 prompt.
 
+Search quality also needs source awareness. A name appearing in a prompt does
+not imply that the thing is well known or indexed by broad web search. New
+projects, new repos, private forks, and niche package names can be invisible to
+Google-style search while still being findable from the source of truth.
+
+Example: QuantZhai is brand new and hosted on GitHub. A benchmark or live test
+that asks the model to search for QuantZhai should try GitHub search, or an
+explicit GitHub-scoped query, before trusting broad search results. Otherwise the
+tool may return near-name collisions and the model may overfit them into a
+confident but wrong answer.
+
 Useful metrics for `qz-top`:
 
 - search calls
