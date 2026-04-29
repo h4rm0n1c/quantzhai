@@ -44,6 +44,7 @@ try:
         make_sse_block,
         transform_sse_event,
     )
+    from .qz_streaming import StreamedFunctionCallAssembler, parse_sse_event_lines
     from .qz_telemetry import DEFAULT_TELEMETRY
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import append_capture, capture_path, runtime_log, write_capture
@@ -83,6 +84,7 @@ except ImportError:
         make_sse_block,
         transform_sse_event,
     )
+    from qz_streaming import StreamedFunctionCallAssembler, parse_sse_event_lines
     from qz_telemetry import DEFAULT_TELEMETRY
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import append_capture, capture_path, runtime_log, write_capture
@@ -306,12 +308,15 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def _write_transformed_sse_stream(self, resp, raw_log=None):
         summary_started = set()
+        function_calls = StreamedFunctionCallAssembler()
         event_lines = []
 
         while True:
             chunk = resp.readline()
             if not chunk:
                 if event_lines:
+                    event_type, payload = parse_sse_event_lines(event_lines)
+                    function_calls.observe(event_type, payload)
                     for out_chunk in transform_sse_event(event_lines, summary_started, self.reasoning_stream_format):
                         self._emit_sse_telemetry(out_chunk)
                         self.wfile.write(out_chunk)
@@ -324,6 +329,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
             event_lines.append(chunk)
             if chunk in (b"\n", b"\r\n"):
+                event_type, payload = parse_sse_event_lines(event_lines)
+                function_calls.observe(event_type, payload)
                 for out_chunk in transform_sse_event(event_lines, summary_started, self.reasoning_stream_format):
                     self._emit_sse_telemetry(out_chunk)
                     self.wfile.write(out_chunk)

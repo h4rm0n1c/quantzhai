@@ -20,6 +20,7 @@ The near-term target is not a rewrite. It is to break `proxy/quantzhai_proxy.py`
 - `proxy/qz_tools.py` now defines the first tool adapter/registry API.
 - `proxy/qz_tool_apply_patch.py` now holds the apply_patch tool adapter and compatibility helpers.
 - `proxy/qz_tool_web.py` now holds the web_search declaration/tool-choice adapter and the local web runtime for search/open/find execution.
+- `proxy/qz_streaming.py` now holds the first streamed Responses state helpers, including SSE event parsing and streamed function-call assembly.
 - This is acceptable for the first working stack, but it makes regression testing and future backend work harder than necessary.
 
 ## Phase 1: Python Package Restructure
@@ -56,6 +57,7 @@ First extraction landed:
 - Responses input/tool normalization, apply_patch adaptation, and local compaction helpers
 - initial tool adapter/registry API with apply_patch as the first concrete adapter
 - web_search declaration/tool-choice adapter and local execution runtime
+- streamed SSE function-call assembly for the future real-SSE tool loop
 
 ## Tool Adapter API
 
@@ -76,8 +78,9 @@ a completed function call, dispatch the adapter, append the result, and resume
 the upstream request without embedding tool-specific rules into the stream
 parser.
 
-Next target: have real SSE call the tool registry/runtime directly when a
-streamed function call completes.
+Next target: have real SSE call the tool registry/runtime directly when
+`qz_streaming.StreamedFunctionCallAssembler` reports a completed tool call,
+then resume the upstream request with the tool result.
 
 ## Phase 2: Extract Testable Core Units
 
@@ -87,7 +90,7 @@ Extract functions and classes that can be tested with plain inputs and outputs:
 - Responses API to upstream chat/completions translation.
 - Upstream response normalization.
 - Streaming chunk parsing and emission.
-- Multi-hop Responses streaming state machine.
+- Multi-hop Responses streaming state machine. Initial function-call assembly is extracted; dispatch/resume remains.
 - Incremental streaming capture writer.
 - Tool-call detection and formatting.
 - Tool-call continuation boundaries between streamed upstream requests.
