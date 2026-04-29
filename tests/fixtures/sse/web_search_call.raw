@@ -1,0 +1,17 @@
+event: response.created
+data: {"response":{"id":"resp_fixture_web","object":"response","created_at":4102444800,"status":"in_progress","model":"fixture","output":[]},"type":"response.created","sequence_number":1}
+
+event: response.in_progress
+data: {"response":{"id":"resp_fixture_web","object":"response","created_at":4102444800,"status":"in_progress","model":"fixture","output":[]},"type":"response.in_progress","sequence_number":2}
+
+event: response.output_item.added
+data: {"output_index":0,"item":{"id":"fc_fixture_web","type":"function_call","status":"in_progress","call_id":"call_fixture_web","name":"web_search","arguments":""},"type":"response.output_item.added","sequence_number":3}
+
+event: response.function_call_arguments.delta
+data: {"item_id":"fc_fixture_web","output_index":0,"delta":"{\"action\":\"search\",\"query\":\"quantzhai\"}","type":"response.function_call_arguments.delta","sequence_number":4}
+
+event: response.output_item.done
+data: {"output_index":0,"item":{"id":"fc_fixture_web","type":"function_call","status":"completed","call_id":"call_fixture_web","name":"web_search"},"type":"response.output_item.done","sequence_number":5}
+
+data: [DONE]
+

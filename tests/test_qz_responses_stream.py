@@ -1,7 +1,10 @@
 import json
 import unittest
+from pathlib import Path
 
 from proxy.qz_responses_stream import ResponsesStreamRuntime
+
+FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "sse"
 
 
 def _sse_block(event_type, payload):
@@ -27,6 +30,31 @@ class FakeStream:
 
     def close(self):
         self.closed = True
+
+
+def _fixture_chunks(name):
+    return [FIXTURE_DIR.joinpath(name).read_bytes()]
+
+
+def _parse_sse_events(stream_text):
+    events = []
+    event_type = None
+    data_lines = []
+    for line in stream_text.splitlines():
+        if line.startswith("event:"):
+            event_type = line.split(":", 1)[1].strip()
+            continue
+        if line.startswith("data:"):
+            data_lines.append(line.split(":", 1)[1].lstrip())
+            continue
+        if line == "":
+            if data_lines:
+                data = "\n".join(data_lines)
+                payload = "[DONE]" if data == "[DONE]" else json.loads(data)
+                events.append((event_type or (payload.get("type") if isinstance(payload, dict) else None), payload))
+            event_type = None
+            data_lines = []
+    return events
 
 
 class FakeWebRuntime:
@@ -258,6 +286,58 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertIn('"type": "apply_patch_call"', stream_text)
         self.assertNotIn('"type": "function_call"', stream_text)
         self.assertIn("response.completed", stream_text)
+
+    def test_golden_basic_message_stream_replays_unchanged(self):
+        requests = []
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            return FakeStream(_fixture_chunks("basic_message.raw"))
+
+        stream_text = self._run_runtime(opener)
+        events = _parse_sse_events(stream_text)
+
+        self.assertEqual(len(requests), 1)
+        self.assertEqual([event for event, _payload in events].count("response.created"), 1)
+        self.assertIn("stream ok", stream_text)
+        self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+
+    def test_golden_web_search_stream_replays_with_continuation(self):
+        requests = []
+        web_runtime = FakeWebRuntime()
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            has_tool_output = any(
+                isinstance(item, dict)
+                and item.get("type") == "function_call_output"
+                and item.get("call_id") == "call_fixture_web"
+                for item in body.get("input") or []
+            )
+            fixture = "web_search_final.raw" if has_tool_output else "web_search_call.raw"
+            return FakeStream(_fixture_chunks(fixture))
+
+        stream_text = self._run_runtime(opener, web_runtime=web_runtime)
+        events = _parse_sse_events(stream_text)
+        output_indexes = [
+            payload.get("output_index")
+            for _event, payload in events
+            if isinstance(payload, dict) and isinstance(payload.get("output_index"), int)
+        ]
+        completed = next(
+            payload["response"]
+            for event, payload in events
+            if event == "response.completed" and isinstance(payload, dict)
+        )
+
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(len(web_runtime.calls), 1)
+        self.assertIn('"type": "web_search_call"', stream_text)
+        self.assertIn("searched.", stream_text)
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertIn(1, output_indexes)
+        self.assertEqual(completed["model"], "QwenZhai-high")
+        self.assertEqual(completed["output"][0]["type"], "web_search_call")
 
 
 if __name__ == "__main__":

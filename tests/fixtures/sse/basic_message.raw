@@ -1,0 +1,29 @@
+event: response.created
+data: {"response":{"id":"resp_fixture_basic","object":"response","created_at":4102444800,"status":"in_progress","model":"fixture","output":[]},"type":"response.created","sequence_number":1}
+
+event: response.in_progress
+data: {"response":{"id":"resp_fixture_basic","object":"response","created_at":4102444800,"status":"in_progress","model":"fixture","output":[]},"type":"response.in_progress","sequence_number":2}
+
+event: response.output_item.added
+data: {"output_index":0,"item":{"id":"msg_fixture_basic","type":"message","status":"in_progress","role":"assistant","content":[]},"type":"response.output_item.added","sequence_number":3}
+
+event: response.content_part.added
+data: {"item_id":"msg_fixture_basic","output_index":0,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]},"type":"response.content_part.added","sequence_number":4}
+
+event: response.output_text.delta
+data: {"item_id":"msg_fixture_basic","output_index":0,"content_index":0,"delta":"stream ok","type":"response.output_text.delta","sequence_number":5}
+
+event: response.output_text.done
+data: {"item_id":"msg_fixture_basic","output_index":0,"content_index":0,"text":"stream ok","logprobs":[],"type":"response.output_text.done","sequence_number":6}
+
+event: response.content_part.done
+data: {"item_id":"msg_fixture_basic","output_index":0,"content_index":0,"part":{"type":"output_text","text":"stream ok","annotations":[]},"type":"response.content_part.done","sequence_number":7}
+
+event: response.output_item.done
+data: {"output_index":0,"item":{"id":"msg_fixture_basic","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"stream ok","annotations":[]}]},"type":"response.output_item.done","sequence_number":8}
+
+event: response.completed
+data: {"response":{"id":"resp_fixture_basic","object":"response","created_at":4102444800,"status":"completed","model":"fixture","output":[{"id":"msg_fixture_basic","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"stream ok","annotations":[]}]}],"usage":{}},"type":"response.completed","sequence_number":9}
+
+data: [DONE]
+
