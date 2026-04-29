@@ -98,6 +98,16 @@ def _post_json_stream(url, payload):
         return resp.status, resp.headers.get("Content-Type", ""), b"".join(chunks)
 
 
+def _get_json(url):
+    req = urllib.request.Request(
+        url,
+        method="GET",
+        headers={"Accept": "application/json", "Authorization": "Bearer local"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return resp.status, resp.headers.get("Content-Type", ""), json.loads(resp.read().decode("utf-8"))
+
+
 def main():
     upstream = _free_server(FakeUpstreamHandler)
     proxy = None
@@ -183,6 +193,16 @@ def main():
         assert len(custom_calls) == 1, custom_response
         assert custom_calls[0]["name"] == "apply_patch", custom_calls[0]
         assert "*** Add File: tmp/quantzhai-smoke.txt" in custom_calls[0]["input"], custom_calls[0]
+
+        status, content_type, telemetry_state = _get_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/state")
+        assert status == 200, status
+        assert "application/json" in content_type, content_type
+        assert telemetry_state["counters"]["request_started"] >= 1, telemetry_state
+
+        status, content_type, telemetry_recent = _get_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/recent?limit=5")
+        assert status == 200, status
+        assert "application/json" in content_type, content_type
+        assert telemetry_recent["events"], telemetry_recent
 
         print("ok apply_patch proxy smoke")
         print(f"proxy_port={proxy.server_port}")

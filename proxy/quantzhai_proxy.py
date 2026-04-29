@@ -26,6 +26,7 @@ try:
         make_sse_block,
         transform_sse_event,
     )
+    from .qz_telemetry import DEFAULT_TELEMETRY
 except ImportError:
     from qz_proxy_config import (
         CURRENT_API_ENDPOINTS,
@@ -40,6 +41,7 @@ except ImportError:
         make_sse_block,
         transform_sse_event,
     )
+    from qz_telemetry import DEFAULT_TELEMETRY
 
 
 def _quantzhai_var_dir() -> Path:
@@ -1187,6 +1189,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
     web_search_cache = {}
     opened_page_cache = {}
     active_deprecation = None
+    telemetry = DEFAULT_TELEMETRY
 
     def log_message(self, fmt, *args):
         return
@@ -1199,6 +1202,32 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def _send_telemetry_sse(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self._send_codex_rate_limit_headers()
+        self.end_headers()
+
+        with self.telemetry.subscribe() as events:
+            try:
+                for event in self.telemetry.recent(50):
+                    self.wfile.write(make_sse_block(event["type"], event))
+                    self.wfile.flush()
+
+                while True:
+                    try:
+                        event = events.get(timeout=30)
+                    except Exception:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                        continue
+                    self.wfile.write(make_sse_block(event["type"], event))
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                return
 
 
     def _send_codex_rate_limit_headers(self):
@@ -1236,6 +1265,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.active_deprecation = LEGACY_API_ENDPOINTS.get(path)
         if not self.active_deprecation:
             return
+        self.telemetry.emit("deprecated_endpoint", {
+            "path": path,
+            "replacement": self.active_deprecation.get("replacement"),
+            "removal": self.active_deprecation.get("removal"),
+        })
         try:
             import time
             _append_capture(
@@ -1400,6 +1434,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
 
     def _log_request_path(self, method):
+        self.telemetry.emit("request_started", {
+            "method": method,
+            "path": self.path,
+            "accept": self.headers.get("Accept", ""),
+            "content_type": self.headers.get("Content-Type", ""),
+        })
         try:
             import time
             _append_capture("latest-paths.log", f"{time.time():.3f} {method} {self.path} accept={self.headers.get('Accept','')} content_type={self.headers.get('Content-Type','')}\n")
@@ -1421,6 +1461,28 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 "supports": list(CURRENT_API_ENDPOINTS),
                 "api_contract": api_contract_payload(),
             })
+            return
+
+        if self.path == "/qz/telemetry/state":
+            self._send_json(200, self.telemetry.state())
+            return
+
+        if self.path.startswith("/qz/telemetry/recent"):
+            limit = 100
+            try:
+                query = urllib.parse.urlparse(self.path).query
+                params = urllib.parse.parse_qs(query)
+                limit = int((params.get("limit") or [limit])[0])
+            except Exception:
+                limit = 100
+            self._send_json(200, {
+                "events": self.telemetry.recent(limit),
+                "state": self.telemetry.state(),
+            })
+            return
+
+        if self.path == "/qz/telemetry/events":
+            self._send_telemetry_sse()
             return
 
         if self.path == "/v1/models":
