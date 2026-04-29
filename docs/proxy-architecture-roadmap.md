@@ -13,6 +13,7 @@ The near-term target is not a rewrite. It is to break `proxy/quantzhai_proxy.py`
 - `proxy/quantzhai_proxy.py` is the working implementation.
 - It owns HTTP handling, OpenAI/Responses adaptation, upstream calls, streaming, tool handling, logging, and most runtime behavior in one file.
 - `proxy/qz_proxy_config.py` now holds the first extracted runtime constants and API contract metadata.
+- `proxy/qz_sse.py` now holds pure SSE event formatting, synthetic Responses stream generation, reasoning visibility transforms, and response usage normalization.
 - This is acceptable for the first working stack, but it makes regression testing and future backend work harder than necessary.
 
 ## Phase 1: Python Package Restructure
@@ -43,6 +44,7 @@ First extraction landed:
 - local Codex rate-limit metadata
 - current API endpoint contract
 - legacy endpoint deprecation metadata
+- synthetic SSE event helpers and reasoning stream transforms
 
 ## Phase 2: Extract Testable Core Units
 
