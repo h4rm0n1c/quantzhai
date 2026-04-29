@@ -63,5 +63,14 @@ Date: 2026-04-29
 - Agents should receive a stable current date/timezone anchor, with exact clock
   time fetched only when the task needs it, so time-aware work is grounded
   without destroying prompt-cache reuse.
+- QuantZhai's concurrency target is single-user local performance, not
+  multi-user serving. Researching Linux process schedulers and interactive
+  scheduling patterns may still provide useful hints for prioritizing the
+  foreground Codex session, proxy streaming, monitors, tool subprocesses, and
+  backend inference without adding a complex application-level scheduler.
+- Classic Mac OS cooperative multitasking may also be worth reviewing as a
+  low-confidence analogy: not as an implementation model, but for ideas around
+  explicit yielding, foreground task priority, and keeping a single-user
+  interactive system responsive under constrained resources.
 
 See also: `docs/agent-runtime-session-notes-2026-04-29.md`.

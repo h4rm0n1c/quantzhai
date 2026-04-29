@@ -15,6 +15,8 @@ The near-term target is not a rewrite. It is to break `proxy/quantzhai_proxy.py`
 - `proxy/qz_proxy_config.py` now holds the first extracted runtime constants and API contract metadata.
 - `proxy/qz_sse.py` now holds pure SSE event formatting, synthetic Responses stream generation, reasoning visibility transforms, and response usage normalization.
 - `proxy/qz_telemetry.py` now holds the first in-memory telemetry bus and subscriber ring buffer.
+- `proxy/qz_runtime_io.py` now holds runtime `var/captures` path helpers and capture writes.
+- `proxy/qz_responses.py` now holds pure Responses normalization, apply_patch translation, tool declaration adaptation, and local compaction helpers.
 - This is acceptable for the first working stack, but it makes regression testing and future backend work harder than necessary.
 
 ## Phase 1: Python Package Restructure
@@ -47,6 +49,8 @@ First extraction landed:
 - legacy endpoint deprecation metadata
 - synthetic SSE event helpers and reasoning stream transforms
 - in-memory telemetry event bus and local telemetry endpoints
+- runtime capture path/write helpers
+- Responses input/tool normalization, apply_patch adaptation, and local compaction helpers
 
 ## Phase 2: Extract Testable Core Units
 

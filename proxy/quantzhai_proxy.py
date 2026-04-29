@@ -3,7 +3,6 @@ import argparse
 import base64
 import json
 import os
-import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,6 +19,28 @@ try:
         MODEL_BUDGETS,
         api_contract_payload,
     )
+    from .qz_responses import (
+        _apply_patch_call_to_function_call,
+        _apply_patch_output_style,
+        _apply_patch_output_to_function_output,
+        _build_local_compaction_response,
+        _custom_apply_patch_call_to_function_call,
+        _custom_apply_patch_output_to_function_output,
+        _decode_local_compaction_blob,
+        _expand_local_compaction_items,
+        _microcompact_old_tool_results,
+        _normalize_ws,
+        _now_ts,
+        _parse_apply_patch_arguments,
+        _truncate,
+        clean_content,
+        extract_response_output_text,
+        normalize_apply_patch_input_for_llamacpp,
+        normalize_apply_patch_output_for_codex,
+        normalize_responses_input_for_qwen,
+        normalize_tools_for_llamacpp,
+        recursive_clean,
+    )
     from .qz_sse import (
         _normalize_response_usage,
         make_response_stream_events,
@@ -27,6 +48,7 @@ try:
         transform_sse_event,
     )
     from .qz_telemetry import DEFAULT_TELEMETRY
+    from .qz_runtime_io import append_capture, capture_path, runtime_log, write_capture
 except ImportError:
     from qz_proxy_config import (
         CURRENT_API_ENDPOINTS,
@@ -35,6 +57,28 @@ except ImportError:
         MODEL_BUDGETS,
         api_contract_payload,
     )
+    from qz_responses import (
+        _apply_patch_call_to_function_call,
+        _apply_patch_output_style,
+        _apply_patch_output_to_function_output,
+        _build_local_compaction_response,
+        _custom_apply_patch_call_to_function_call,
+        _custom_apply_patch_output_to_function_output,
+        _decode_local_compaction_blob,
+        _expand_local_compaction_items,
+        _microcompact_old_tool_results,
+        _normalize_ws,
+        _now_ts,
+        _parse_apply_patch_arguments,
+        _truncate,
+        clean_content,
+        extract_response_output_text,
+        normalize_apply_patch_input_for_llamacpp,
+        normalize_apply_patch_output_for_codex,
+        normalize_responses_input_for_qwen,
+        normalize_tools_for_llamacpp,
+        recursive_clean,
+    )
     from qz_sse import (
         _normalize_response_usage,
         make_response_stream_events,
@@ -42,982 +86,7 @@ except ImportError:
         transform_sse_event,
     )
     from qz_telemetry import DEFAULT_TELEMETRY
-
-
-def _quantzhai_var_dir() -> Path:
-    return Path(os.environ.get("QZ_VAR_DIR") or Path(__file__).resolve().parents[1] / "var")
-
-
-def _capture_dir() -> Path:
-    path = _quantzhai_var_dir() / "captures"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _capture_path(name: str) -> Path:
-    return _capture_dir() / name
-
-
-def _write_capture(name: str, payload, mode: str = "text"):
-    path = _capture_path(name)
-    if mode == "bytes":
-        path.write_bytes(payload)
-    elif isinstance(payload, (dict, list)):
-        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    else:
-        path.write_text(str(payload), encoding="utf-8")
-
-
-def _append_capture(name: str, text: str):
-    with _capture_path(name).open("a", encoding="utf-8") as handle:
-        handle.write(text)
-
-LOCAL_COMPACTION_PREFIX = "localcmp:v1:"
-COMPACTION_CONFIG = {
-    "keep_recent_items": 8,
-    "min_preserve_items": 4,
-    "max_summary_chars": 12000,
-    "max_tool_output_chars": 600,
-    "max_item_summary_chars": 500,
-    "max_compaction_depth": 6,
-    "target_output_tokens": 10000,
-}
-
-FUNCTION_CALL_TYPES = {"function_call", "computer_call", "code_interpreter_call", "apply_patch_call", "custom_tool_call"}
-FUNCTION_OUTPUT_TYPES = {
-    "function_call_output",
-    "computer_call_output",
-    "apply_patch_call_output",
-    "custom_tool_call_output",
-    "tool_result",
-    "tool_output",
-}
-CHECKPOINT_MARKER = "CONTEXT CHECKPOINT COMPACTION"
-
-HARNESS_TEXT_MARKERS = (
-    "<permissions instructions>",
-    "<collaboration_mode>",
-    "<skills_instructions>",
-    "<environment_context>",
-    "you are qwen3.6turbo running locally through the codex cli",
-)
-
-META_USER_TEXT_MARKERS = (
-    "can you show me your system prompt",
-)
-
-META_ASSISTANT_TEXT_MARKERS = (
-    "system prompt",
-    "the proxy's source code",
-    "the recursion is indeed funny",
-)
-
-def clean_content(text: str) -> str:
-    if not isinstance(text, str):
-        return text
-
-    text = text.replace("\r\n", "\n")
-
-    text = re.sub(r"^\s*</think>\s*", "", text)
-    text = re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL)
-    text = text.replace("<think>", "").replace("</think>", "")
-
-    scratch_markers = (
-        "Self-Correction",
-        "Verification during thought",
-        "Output Generation",
-        "Final Output Generation",
-        "matches the draft",
-        "Check constraint",
-        "All constraints met",
-        "Output matches",
-        "Proceed",
-        "Ready.",
-        "✅",
-    )
-
-    has_scratch = any(m in text for m in scratch_markers)
-    numbered_starts = list(re.finditer(r"(?m)^\s*1\.\s+", text))
-
-    if numbered_starts:
-        if has_scratch or len(numbered_starts) >= 2:
-            text = text[numbered_starts[-1].start():]
-
-    if any(m in text for m in scratch_markers):
-        useful = re.search(r"(?m)^\s*(?:1\.|- |\* |### |## )", text)
-        if useful:
-            text = text[useful.start():]
-
-    text = re.sub(r"(?im)^\s*\*\(Done\.\)\*\s*$", "", text)
-    text = re.sub(r"(?im)^\s*\(Done\.\)\s*$", "", text)
-
-    return text.strip()
-
-
-APPLY_PATCH_OPERATION_TYPES = {"create_file", "update_file", "delete_file"}
-
-
-def _apply_patch_function_parameters() -> dict:
-    return {
-        "type": "object",
-        "properties": {
-            "operation": {
-                "type": "object",
-                "description": "A single apply_patch operation to return to Codex.",
-                "properties": {
-                    "type": {
-                        "type": "string",
-                        "enum": sorted(APPLY_PATCH_OPERATION_TYPES),
-                        "description": "The file operation to perform.",
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "Workspace-relative file path.",
-                    },
-                    "diff": {
-                        "type": "string",
-                        "description": "V4A diff for create_file or update_file operations.",
-                    },
-                },
-                "required": ["type", "path"],
-                "additionalProperties": False,
-            },
-            "patch": {
-                "type": "string",
-                "description": "Legacy full apply_patch envelope. Prefer operation for native Codex apply_patch.",
-            },
-        },
-        "additionalProperties": False,
-    }
-
-
-def _coerce_apply_patch_operation(value) -> dict | None:
-    if not isinstance(value, dict):
-        return None
-
-    operation_type = value.get("type")
-    path = value.get("path")
-    diff = value.get("diff")
-
-    if operation_type not in APPLY_PATCH_OPERATION_TYPES:
-        return None
-    if not isinstance(path, str) or not path.strip():
-        return None
-
-    operation = {
-        "type": operation_type,
-        "path": path.strip(),
-    }
-
-    if operation_type != "delete_file":
-        if not isinstance(diff, str):
-            return None
-        operation["diff"] = diff
-    elif isinstance(diff, str) and diff:
-        operation["diff"] = diff
-
-    return operation
-
-
-def _parse_apply_patch_arguments(arguments: str) -> dict | None:
-    try:
-        data = json.loads(arguments or "{}")
-    except Exception:
-        return None
-
-    if not isinstance(data, dict):
-        return None
-
-    operation = _coerce_apply_patch_operation(data.get("operation"))
-    if operation:
-        return operation
-
-    operation = _coerce_apply_patch_operation(data)
-    if operation:
-        return operation
-
-    patch = data.get("patch")
-    path = data.get("path")
-    operation_type = data.get("operation_type") or data.get("type") or "update_file"
-    if isinstance(patch, str) and isinstance(path, str):
-        return _coerce_apply_patch_operation({
-            "type": operation_type,
-            "path": path,
-            "diff": patch,
-        })
-
-    return None
-
-
-def _apply_patch_call_to_function_call(item: dict) -> dict:
-    operation = _coerce_apply_patch_operation(item.get("operation"))
-    arguments = json.dumps({"operation": operation}, ensure_ascii=False) if operation else "{}"
-    return {
-        "id": item.get("id") or item.get("call_id"),
-        "type": "function_call",
-        "status": item.get("status", "completed"),
-        "call_id": item.get("call_id"),
-        "name": "apply_patch",
-        "arguments": arguments,
-    }
-
-
-def _apply_patch_output_to_function_output(item: dict) -> dict:
-    output = {
-        "status": item.get("status"),
-        "output": item.get("output") or "",
-    }
-    return {
-        "type": "function_call_output",
-        "call_id": item.get("call_id"),
-        "output": json.dumps(output, ensure_ascii=False),
-    }
-
-
-def _custom_apply_patch_call_to_function_call(item: dict) -> dict:
-    return {
-        "id": item.get("id") or item.get("call_id"),
-        "type": "function_call",
-        "status": item.get("status", "completed"),
-        "call_id": item.get("call_id"),
-        "name": "apply_patch",
-        "arguments": json.dumps({"patch": item.get("input") or ""}, ensure_ascii=False),
-    }
-
-
-def _custom_apply_patch_output_to_function_output(item: dict) -> dict:
-    return {
-        "type": "function_call_output",
-        "call_id": item.get("call_id"),
-        "output": item.get("output") or "",
-    }
-
-
-def _apply_patch_operation_to_patch_text(operation: dict) -> str:
-    operation_type = operation.get("type")
-    path = operation.get("path")
-    diff = operation.get("diff") or ""
-
-    if operation_type == "create_file":
-        lines = ["*** Begin Patch", f"*** Add File: {path}"]
-        for line in diff.splitlines():
-            if line == "@@" or line.startswith("@@ "):
-                continue
-            lines.append(line if line.startswith("+") else f"+{line}")
-        lines.append("*** End Patch")
-        return "\n".join(lines) + "\n"
-
-    if operation_type == "delete_file":
-        return f"*** Begin Patch\n*** Delete File: {path}\n*** End Patch\n"
-
-    return f"*** Begin Patch\n*** Update File: {path}\n{diff.rstrip()}\n*** End Patch\n"
-
-
-def _function_call_to_apply_patch_call(item: dict) -> dict:
-    operation = _parse_apply_patch_arguments(item.get("arguments") or "{}")
-    if not operation:
-        return item
-
-    call_id = item.get("call_id") or item.get("id") or f"call_apply_patch_{_now_ts()}"
-    item_id = item.get("id") or f"apc_local_{_now_ts()}"
-    return {
-        "id": item_id,
-        "type": "apply_patch_call",
-        "status": item.get("status", "completed"),
-        "call_id": call_id,
-        "operation": operation,
-    }
-
-
-def _function_call_to_custom_apply_patch_call(item: dict) -> dict:
-    operation = _parse_apply_patch_arguments(item.get("arguments") or "{}")
-    if operation:
-        patch_text = _apply_patch_operation_to_patch_text(operation)
-    else:
-        try:
-            data = json.loads(item.get("arguments") or "{}")
-        except Exception:
-            return item
-        patch_text = data.get("patch") if isinstance(data, dict) else None
-        if not isinstance(patch_text, str) or not patch_text.strip():
-            return item
-
-    return {
-        "type": "custom_tool_call",
-        "status": item.get("status", "completed"),
-        "call_id": item.get("call_id") or item.get("id") or f"call_apply_patch_{_now_ts()}",
-        "name": "apply_patch",
-        "input": patch_text,
-    }
-
-
-def _apply_patch_output_style(body: dict) -> str:
-    for tool in body.get("tools") or []:
-        if isinstance(tool, dict) and tool.get("type") == "custom" and tool.get("name") == "apply_patch":
-            return "custom"
-        if isinstance(tool, dict) and tool.get("type") == "apply_patch":
-            return "native"
-    return "native"
-
-
-def normalize_apply_patch_output_for_codex(output_items, output_style: str = "native"):
-    if not isinstance(output_items, list):
-        return output_items
-
-    normalized = []
-    for item in output_items:
-        if (
-            isinstance(item, dict)
-            and item.get("type") == "function_call"
-            and item.get("name") == "apply_patch"
-        ):
-            if output_style == "custom":
-                normalized.append(_function_call_to_custom_apply_patch_call(item))
-            else:
-                normalized.append(_function_call_to_apply_patch_call(item))
-            continue
-        normalized.append(item)
-    return normalized
-
-
-def normalize_apply_patch_input_for_llamacpp(input_items):
-    if not isinstance(input_items, list):
-        return input_items
-
-    normalized = []
-    for item in input_items:
-        if isinstance(item, dict) and item.get("type") == "apply_patch_call":
-            normalized.append(_apply_patch_call_to_function_call(item))
-            continue
-        if isinstance(item, dict) and item.get("type") == "apply_patch_call_output":
-            normalized.append(_apply_patch_output_to_function_output(item))
-            continue
-        if isinstance(item, dict) and item.get("type") == "custom_tool_call" and item.get("name") == "apply_patch":
-            normalized.append(_custom_apply_patch_call_to_function_call(item))
-            continue
-        if isinstance(item, dict) and item.get("type") == "custom_tool_call_output":
-            normalized.append(_custom_apply_patch_output_to_function_output(item))
-            continue
-        normalized.append(item)
-    return normalized
-
-
-
-def normalize_responses_input_for_qwen(body: dict) -> dict:
-    """
-    Canonicalize replayed Codex Responses history for the local llama.cpp/Qwen bridge.
-
-    Key rules:
-    - assistant messages must use output_text/refusal parts
-    - user/developer/system messages use input_text parts
-    - replayed reasoning items are dropped instead of being merged into instructions
-    - old harness/meta blocks are discarded because the current request already carries
-      the active Codex harness in body["instructions"]
-    """
-    input_items = body.get("input")
-    if not isinstance(input_items, list):
-        return body
-
-    clean_input = []
-    have_base_instructions = isinstance(body.get("instructions"), str) and body["instructions"].strip()
-    fallback_instructions = []
-
-    def extract_text(content):
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            parts = []
-            for item in content:
-                if isinstance(item, dict):
-                    text = item.get("text")
-                    if isinstance(text, str):
-                        parts.append(text)
-                    elif isinstance(item.get("content"), str):
-                        parts.append(item["content"])
-                    elif isinstance(item.get("refusal"), str):
-                        parts.append(item["refusal"])
-                elif isinstance(item, str):
-                    parts.append(item)
-            return "\n".join(parts)
-        return ""
-
-    def looks_like_meta(role, text):
-        lower = (text or "").strip().lower()
-        if not lower:
-            return False
-        if any(marker in lower for marker in HARNESS_TEXT_MARKERS):
-            return True
-        if role == "user" and any(marker in lower for marker in META_USER_TEXT_MARKERS):
-            return True
-        if role == "assistant" and any(marker in lower for marker in META_ASSISTANT_TEXT_MARKERS):
-            return True
-        return False
-
-    def canonicalize_message(item):
-        role = item.get("role") or "user"
-        content = item.get("content")
-        content_items = content if isinstance(content, list) else [content]
-        parts = []
-
-        if role == "assistant":
-            for part in content_items:
-                if isinstance(part, str):
-                    text = part.strip()
-                    if text:
-                        parts.append({"type": "output_text", "text": text, "annotations": []})
-                    continue
-                if not isinstance(part, dict):
-                    continue
-                part_type = part.get("type")
-                if part_type == "refusal":
-                    refusal = part.get("refusal") or part.get("text") or part.get("content")
-                    if isinstance(refusal, str) and refusal.strip():
-                        parts.append({"type": "refusal", "refusal": refusal.strip()})
-                    continue
-                text = part.get("text")
-                if not isinstance(text, str):
-                    text = part.get("content") if isinstance(part.get("content"), str) else None
-                if isinstance(text, str) and text.strip():
-                    parts.append({"type": "output_text", "text": text.strip(), "annotations": []})
-            if not parts:
-                text = extract_text(content)
-                if text.strip():
-                    parts.append({"type": "output_text", "text": text.strip(), "annotations": []})
-            return {"type": "message", "role": "assistant", "content": parts}
-
-        for part in content_items:
-            if isinstance(part, str):
-                text = part.strip()
-                if text:
-                    parts.append({"type": "input_text", "text": text})
-                continue
-            if not isinstance(part, dict):
-                continue
-            text = part.get("text")
-            if not isinstance(text, str):
-                if isinstance(part.get("content"), str):
-                    text = part.get("content")
-                elif isinstance(part.get("refusal"), str):
-                    text = part.get("refusal")
-            if isinstance(text, str) and text.strip():
-                parts.append({"type": "input_text", "text": text.strip()})
-        if not parts:
-            text = extract_text(content)
-            if text.strip():
-                parts.append({"type": "input_text", "text": text.strip()})
-        return {"type": "message", "role": role, "content": parts}
-
-    for item in input_items:
-        if not isinstance(item, dict):
-            text = str(item).strip()
-            if text:
-                clean_input.append({"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]})
-            continue
-
-        item_type = item.get("type")
-        role = item.get("role")
-        item_text = extract_text(item.get("content"))
-
-        if item_type in ("reasoning", "web_search_call"):
-            continue
-
-        if item_type == "apply_patch_call":
-            clean_input.append(_apply_patch_call_to_function_call(item))
-            continue
-
-        if item_type == "apply_patch_call_output":
-            clean_input.append(_apply_patch_output_to_function_output(item))
-            continue
-
-        if item_type == "custom_tool_call" and item.get("name") == "apply_patch":
-            clean_input.append(_custom_apply_patch_call_to_function_call(item))
-            continue
-
-        if item_type == "custom_tool_call_output":
-            clean_input.append(_custom_apply_patch_output_to_function_output(item))
-            continue
-
-        if _is_local_checkpoint_prompt(item):
-            continue
-
-        if looks_like_meta(role, item_text):
-            continue
-
-        if role in ("system", "developer"):
-            if not have_base_instructions and item_text.strip():
-                fallback_instructions.append(item_text.strip())
-            continue
-
-        if item_type == "message" or role in ("user", "assistant", "tool"):
-            clean_input.append(canonicalize_message(item))
-            continue
-
-        clean_input.append(item)
-
-    if fallback_instructions:
-        existing = body.get("instructions")
-        merged = []
-        if isinstance(existing, str) and existing.strip():
-            merged.append(existing.strip())
-        merged.extend(fallback_instructions)
-        body["instructions"] = "\n\n".join(merged)
-
-    body["input"] = clean_input
-    return body
-
-def normalize_tools_for_llamacpp(body: dict) -> dict:
-    tools = body.get("tools")
-    if not isinstance(tools, list):
-        return body
-
-    def function_tool(name: str, description: str, parameters: dict) -> dict:
-        return {
-            "type": "function",
-            "name": name,
-            "description": description,
-            "parameters": parameters,
-        }
-
-    clean = []
-    dropped = []
-    translated = []
-
-    for tool in tools:
-        if not isinstance(tool, dict):
-            continue
-
-        tool_type = tool.get("type")
-        tool_name = tool.get("name") or tool.get("server_label") or tool_type
-
-        if tool_type == "function":
-            clean.append(tool)
-            continue
-
-        if tool_type in ("apply_patch",) or (tool_type == "custom" and tool_name == "apply_patch"):
-            clean.append(function_tool(
-                "apply_patch",
-                tool.get("description") or "Emit a single Codex apply_patch operation. QuantZhai adapts this call but does not apply files.",
-                _apply_patch_function_parameters(),
-            ))
-            translated.append("apply_patch")
-            continue
-
-        if tool_type == "web_search":
-            clean.append(function_tool(
-                "web_search",
-                "Search the web, open a page, or find text in an opened page using the local web runtime.",
-                {
-                    "type": "object",
-                    "properties": {
-                        "action": {
-                            "type": "string",
-                            "enum": ["search", "open_page", "find_in_page"],
-                            "description": "The web action to perform.",
-                        },
-                        "query": {
-                            "type": "string",
-                            "description": "Search query for search, or needle text for find_in_page.",
-                        },
-                        "profile": {
-                            "type": "string",
-                            "enum": ["auto", "broad", "coding", "research", "news", "ai_models", "reference", "sysadmin"],
-                            "description": "Search profile used to select SearXNG categories and engines.",
-                        },
-                        "url": {
-                            "type": "string",
-                            "description": "Page URL for open_page or find_in_page.",
-                        },
-                        "page_id": {
-                            "type": "string",
-                            "description": "Previously opened page identifier for find_in_page.",
-                        },
-                        "categories": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Optional SearXNG categories to use for search.",
-                        },
-                        "engines": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Optional SearXNG engines to use for search.",
-                        },
-                        "top_k": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 8,
-                            "description": "Optional maximum number of search results to return.",
-                        },
-                    },
-                    "required": ["action"],
-                    "additionalProperties": False,
-                },
-            ))
-            translated.append("web_search")
-            continue
-
-        dropped.append(str(tool_name))
-
-    body["tools"] = clean
-
-    try:
-        notes = []
-        if translated:
-            notes.append("translated: " + ", ".join(translated))
-        if dropped:
-            notes.append("dropped: " + ", ".join(dropped))
-        _capture_path("latest-dropped-tools.txt").write_text(
-            "\n".join(notes) + ("\n" if notes else ""),
-            encoding="utf-8"
-        )
-        _write_capture("latest-forwarded.json", body)
-    except Exception:
-        pass
-
-    if isinstance(body.get("tool_choice"), dict):
-        tool_choice_type = body["tool_choice"].get("type")
-        tool_name = body["tool_choice"].get("name")
-        if tool_choice_type in ("apply_patch",) or (tool_choice_type == "custom" and tool_name == "apply_patch"):
-            body["tool_choice"] = {"type": "function", "name": "apply_patch"}
-        elif tool_choice_type == "web_search":
-            body["tool_choice"] = {"type": "function", "name": "web_search"}
-        elif tool_choice_type not in (None, "function"):
-            body["tool_choice"] = "auto"
-
-    return body
-
-
-def recursive_clean(obj):
-    if isinstance(obj, dict):
-        out = {}
-        for k, v in obj.items():
-            if k in ("content", "text", "output_text") and isinstance(v, str):
-                out[k] = clean_content(v)
-            else:
-                out[k] = recursive_clean(v)
-        return out
-    if isinstance(obj, list):
-        return [recursive_clean(x) for x in obj]
-    return obj
-
-
-def extract_response_output_text(out: dict) -> str:
-    texts = []
-    for item in out.get("output", []):
-        if item.get("type") != "message":
-            continue
-        for part in item.get("content", []):
-            if part.get("type") == "output_text" and isinstance(part.get("text"), str):
-                texts.append(part["text"])
-    return "\n".join(texts).strip()
-
-
-def _now_ts() -> int:
-    import time
-    return int(time.time())
-
-
-def _normalize_ws(text: str) -> str:
-    return re.sub(r"\s+", " ", text or "").strip()
-
-
-def _truncate(text: str, limit: int) -> str:
-    text = text or ""
-    if len(text) <= limit:
-        return text
-    if limit <= 3:
-        return text[:limit]
-    return text[: limit - 3] + "..."
-
-
-def _approx_tokens(text: str) -> int:
-    return max(1, len(text or "") // 4)
-
-
-def _content_to_text(content) -> str:
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        return ""
-    parts = []
-    for item in content:
-        if isinstance(item, str):
-            parts.append(item)
-            continue
-        if not isinstance(item, dict):
-            continue
-        for key in ("text", "content", "output", "arguments", "result"):
-            value = item.get(key)
-            if isinstance(value, str):
-                parts.append(value)
-                break
-    return "\n".join(parts).strip()
-
-
-def _decode_local_compaction_blob(blob: str):
-    if not isinstance(blob, str) or not blob.startswith(LOCAL_COMPACTION_PREFIX):
-        return None
-    raw = blob[len(LOCAL_COMPACTION_PREFIX):]
-    try:
-        padded = raw + "=" * (-len(raw) % 4)
-        decoded = base64.urlsafe_b64decode(padded.encode("ascii"))
-        payload = json.loads(decoded.decode("utf-8"))
-    except Exception:
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
-def _encode_local_compaction_blob(payload: dict) -> str:
-    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    encoded = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
-    return LOCAL_COMPACTION_PREFIX + encoded
-
-
-def _make_input_text_message(role: str, text: str) -> dict:
-    part_type = "output_text" if role == "assistant" else "input_text"
-    part = {"type": part_type, "text": text}
-    if part_type == "output_text":
-        part["annotations"] = []
-    return {
-        "type": "message",
-        "role": role,
-        "content": [part],
-    }
-
-
-def _is_local_checkpoint_prompt(item: dict) -> bool:
-    if not isinstance(item, dict):
-        return False
-    if item.get("type") != "message":
-        return False
-    text = _content_to_text(item.get("content"))
-    return CHECKPOINT_MARKER in (text or "")
-
-
-def _item_text(item: dict) -> str:
-    if not isinstance(item, dict):
-        return _normalize_ws(str(item))
-
-    item_type = item.get("type")
-    if item_type == "message":
-        text = _normalize_ws(_content_to_text(item.get("content")))
-        if not text:
-            return ""
-        lower = text.lower()
-        if CHECKPOINT_MARKER in text or any(marker in lower for marker in HARNESS_TEXT_MARKERS):
-            return ""
-        if item.get("role") == "user" and any(marker in lower for marker in META_USER_TEXT_MARKERS):
-            return ""
-        if item.get("role") == "assistant" and any(marker in lower for marker in META_ASSISTANT_TEXT_MARKERS):
-            return ""
-        role = item.get("role", "unknown")
-        return f"{role}: {text}"
-
-    if item_type in ("reasoning", "web_search_call"):
-        return ""
-
-    if item_type in FUNCTION_CALL_TYPES:
-        name = item.get("name") or item.get("call_id") or "function"
-        arguments = _truncate(_normalize_ws(item.get("arguments") or ""), COMPACTION_CONFIG["max_item_summary_chars"])
-        return f"tool call {name}: {arguments}" if arguments else f"tool call {name}"
-
-    if item_type in FUNCTION_OUTPUT_TYPES:
-        name = item.get("name") or item.get("call_id") or "tool output"
-        output = _truncate(_normalize_ws(_content_to_text(item.get("content")) or item.get("output") or item.get("result") or ""), COMPACTION_CONFIG["max_tool_output_chars"])
-        return f"tool result {name}: {output}" if output else f"tool result {name}"
-
-    if item_type == "compaction":
-        payload = _decode_local_compaction_blob(item.get("encrypted_content", ""))
-        if payload:
-            return _normalize_ws(payload.get("summary_text", ""))
-        return "compacted earlier context"
-
-    text = _normalize_ws(_content_to_text(item.get("content")))
-    if text:
-        return text
-    return _normalize_ws(json.dumps(item, sort_keys=True))
-
-
-def _is_tool_like(item: dict) -> bool:
-    if not isinstance(item, dict):
-        return False
-    item_type = item.get("type")
-    if item_type in FUNCTION_CALL_TYPES or item_type in FUNCTION_OUTPUT_TYPES:
-        return True
-    return item.get("role") == "tool"
-
-
-def _tail_start_for_compaction(items):
-    keep_recent = COMPACTION_CONFIG["keep_recent_items"]
-    if len(items) <= keep_recent:
-        return 0
-    start = max(0, len(items) - keep_recent)
-    while start > 0 and _is_tool_like(items[start]):
-        start -= 1
-    if start > 0 and items[start - 1].get("type") in FUNCTION_CALL_TYPES and _is_tool_like(items[start]):
-        start -= 1
-    return start
-
-
-def _microcompact_old_tool_results(items):
-    if not isinstance(items, list):
-        return items
-    start = _tail_start_for_compaction(items)
-    compacted = []
-    for idx, item in enumerate(items):
-        if idx >= start or not isinstance(item, dict):
-            compacted.append(item)
-            continue
-        item_type = item.get("type")
-        if item_type in FUNCTION_OUTPUT_TYPES or item.get("role") == "tool":
-            name = item.get("name") or item.get("call_id") or "tool"
-            placeholder = _make_input_text_message(
-                "assistant",
-                f"Older tool output compacted locally for {name}. The detailed payload was dropped to save context.",
-            )
-            compacted.append(placeholder)
-            continue
-        compacted.append(item)
-    return compacted
-
-
-def _expand_local_compaction_items(items):
-    if not isinstance(items, list):
-        return items
-    expanded = []
-    for item in items:
-        if isinstance(item, dict) and item.get("type") == "compaction":
-            payload = _decode_local_compaction_blob(item.get("encrypted_content", ""))
-            if payload:
-                summary_text = _normalize_ws(payload.get("summary_text", ""))
-                if summary_text:
-                    # Keep local compaction summaries alive. normalize_responses_input_for_qwen()
-                    # drops replayed developer/system messages when the active Codex harness
-                    # is present, so carry this as ordinary user-visible context to llama.cpp.
-                    expanded.append(_make_input_text_message(
-                        "user",
-                        "Context carried forward from local compaction:\n" + summary_text,
-                    ))
-                continue
-        expanded.append(item)
-    return expanded
-
-
-def _summarize_items_for_compaction(items):
-    lines = []
-    for item in items:
-        text = _item_text(item)
-        text = _normalize_ws(text)
-        if not text:
-            continue
-        text = _truncate(text, COMPACTION_CONFIG["max_item_summary_chars"])
-        if not lines or lines[-1] != text:
-            lines.append(text)
-    if not lines:
-        return ""
-    summary = "Earlier conversation summary:\n" + "\n".join(f"- {line}" for line in lines)
-    return _truncate(summary, COMPACTION_CONFIG["max_summary_chars"])
-
-
-def _estimate_items_tokens(items):
-    total = 0
-    for item in items or []:
-        total += _approx_tokens(_item_text(item))
-    return total
-
-
-def _build_local_compaction_response(body: dict) -> dict:
-    input_items = body.get("input")
-    if isinstance(input_items, str):
-        input_items = [_make_input_text_message("user", input_items)]
-    elif not isinstance(input_items, list):
-        input_items = []
-
-    working_items = []
-    for item in input_items:
-        if _is_local_checkpoint_prompt(item):
-            continue
-        if isinstance(item, dict) and item.get("type") in ("reasoning", "web_search_call"):
-            continue
-        if isinstance(item, dict) and item.get("type") == "message":
-            text = _normalize_ws(_content_to_text(item.get("content")))
-            lower = text.lower()
-            role = item.get("role")
-            if any(marker in lower for marker in HARNESS_TEXT_MARKERS):
-                continue
-            if role == "user" and any(marker in lower for marker in META_USER_TEXT_MARKERS):
-                continue
-            if role == "assistant" and any(marker in lower for marker in META_ASSISTANT_TEXT_MARKERS):
-                continue
-        working_items.append(item)
-    working_items = _microcompact_old_tool_results(working_items)
-
-    existing_depth = 0
-    for item in working_items:
-        if isinstance(item, dict) and item.get("type") == "compaction":
-            payload = _decode_local_compaction_blob(item.get("encrypted_content", ""))
-            if payload:
-                existing_depth = max(existing_depth, int(payload.get("depth", 1)))
-
-    tail_start = _tail_start_for_compaction(working_items)
-    older = working_items[:tail_start]
-    recent = working_items[tail_start:]
-    if len(recent) < COMPACTION_CONFIG["min_preserve_items"]:
-        recent = working_items[-COMPACTION_CONFIG["min_preserve_items"]:]
-        older = working_items[:-len(recent)] if recent else working_items
-
-    summary_text = _summarize_items_for_compaction(older)
-    if not summary_text:
-        summary_text = "No older turns required compaction."
-
-    depth = min(existing_depth + 1, COMPACTION_CONFIG["max_compaction_depth"])
-
-    payload = {
-        "version": 1,
-        "source": "turboquant-local",
-        "depth": depth,
-        "created_at": _now_ts(),
-        "summary_text": summary_text,
-        "preserved_items": len(recent),
-    }
-    encrypted = _encode_local_compaction_blob(payload)
-
-    recent = [
-        item for item in recent
-        if not (isinstance(item, dict) and item.get("type") == "compaction")
-        and not _is_local_checkpoint_prompt(item)
-    ]
-
-    output_items = [
-        {
-            "type": "compaction",
-            "id": f"cmp_local_{_now_ts()}",
-            "created_by": "turboquant-local",
-            "encrypted_content": encrypted,
-        },
-    ]
-    output_items.extend(recent)
-
-    while _estimate_items_tokens(output_items) > COMPACTION_CONFIG["target_output_tokens"] and len(recent) > COMPACTION_CONFIG["min_preserve_items"]:
-        recent = recent[1:]
-        output_items = output_items[:1] + recent
-
-    summary_text = _truncate(summary_text, COMPACTION_CONFIG["max_summary_chars"])
-    payload["summary_text"] = summary_text
-    payload["preserved_items"] = len(recent)
-    output_items[0]["encrypted_content"] = _encode_local_compaction_blob(payload)
-
-    return {
-        "id": f"resp_cmp_local_{_now_ts()}",
-        "object": "response.compaction",
-        "created_at": _now_ts(),
-        "output": output_items,
-        "usage": {
-            "input_tokens": _estimate_items_tokens(working_items),
-            "output_tokens": _estimate_items_tokens(output_items),
-            "total_tokens": _estimate_items_tokens(working_items) + _estimate_items_tokens(output_items),
-        },
-    }
-
+    from qz_runtime_io import append_capture, capture_path, runtime_log, write_capture
 
 WEB_SEARCH_SEARCH_CACHE_TTL = 300
 WEB_SEARCH_PAGE_CACHE_TTL = 900
@@ -1341,7 +410,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         })
         try:
             import time
-            _append_capture(
+            append_capture(
                 "latest-deprecated-api.log",
                 f"{time.time():.3f} {path} replacement={self.active_deprecation.get('replacement')} removal={self.active_deprecation.get('removal')}\n",
             )
@@ -1373,7 +442,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            _write_capture("latest-compact-request.json", body)
+            write_capture("latest-compact-request.json", body)
         except Exception:
             pass
 
@@ -1384,7 +453,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             cmp_item = next((item for item in out.get("output", []) if isinstance(item, dict) and item.get("type") == "compaction"), None)
             payload = _decode_local_compaction_blob(cmp_item.get("encrypted_content", "")) if cmp_item else None
             if payload:
-                _capture_path("latest-compact-summary.txt").write_text(
+                capture_path("latest-compact-summary.txt").write_text(
                     payload.get("summary_text", ""),
                     encoding="utf-8",
                 )
@@ -1515,7 +584,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         })
         try:
             import time
-            _append_capture("latest-paths.log", f"{time.time():.3f} {method} {self.path} accept={self.headers.get('Accept','')} content_type={self.headers.get('Content-Type','')}\n")
+            append_capture("latest-paths.log", f"{time.time():.3f} {method} {self.path} accept={self.headers.get('Accept','')} content_type={self.headers.get('Content-Type','')}\n")
         except Exception:
             pass
 
@@ -1604,19 +673,6 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def _cache_put(self, cache: dict, key: str, value):
         cache[key] = {"ts": _now_float(), "value": value}
-
-    def _proxy_dir(self) -> Path:
-        return _capture_dir()
-
-    def _runtime_log(self, name: str, payload):
-        try:
-            path = self._proxy_dir() / name
-            if isinstance(payload, (dict, list)):
-                path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-            else:
-                path.write_text(str(payload), encoding="utf-8")
-        except Exception:
-            pass
 
     def _allowed_engine_names(self):
         caps = self.searxng_capabilities or {}
@@ -1895,7 +951,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         # Explicit engine/category calls are expert overrides. Do not silently route elsewhere.
         if explicit_categories or explicit_engines or len(result.get("results") or []) >= threshold:
-            self._runtime_log("latest-web-search-route.json", route_log)
+            runtime_log("latest-web-search-route.json", route_log)
             return result
 
         best = result
@@ -1935,7 +991,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         route_log["fallback_used"] = best.get("fallback_used")
         route_log["result_count"] = len(best.get("results") or [])
-        self._runtime_log("latest-web-search-route.json", route_log)
+        runtime_log("latest-web-search-route.json", route_log)
         return best
 
     def _open_page(self, url: str):
@@ -2270,7 +1326,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 )
                 final_out["usage"] = _normalize_response_usage(final_out.get("usage"))
                 self._annotate_output_with_url_citations(final_out, gathered_sources)
-                self._runtime_log("latest-web-runtime-final.json", final_out)
+                runtime_log("latest-web-runtime-final.json", final_out)
                 return status, content_type, final_out
 
             next_input = list(working_body.get("input") or [])
@@ -2303,7 +1359,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             "usage": _normalize_response_usage({}),
         }
         self._annotate_output_with_url_citations(fallback_out, gathered_sources)
-        self._runtime_log("latest-web-runtime-final.json", fallback_out)
+        runtime_log("latest-web-runtime-final.json", fallback_out)
         return 200, "application/json", fallback_out
 
 
@@ -2311,7 +1367,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
     def _proxy_json_api(self, upstream_path):
         try:
             import time
-            _append_capture("latest-json-api.log", f"{time.time():.3f} ENTER path={self.path} upstream_path={upstream_path} accept={self.headers.get('Accept','')}\n")
+            append_capture("latest-json-api.log", f"{time.time():.3f} ENTER path={self.path} upstream_path={upstream_path} accept={self.headers.get('Accept','')}\n")
         except Exception:
             pass
 
@@ -2326,7 +1382,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         # Debug: dump latest request so we can see Codex tool schema.
         try:
-            _write_capture("latest-request.json", body)
+            write_capture("latest-request.json", body)
         except Exception:
             pass
 
@@ -2350,7 +1406,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             body = normalize_responses_input_for_qwen(body)
             body = normalize_tools_for_llamacpp(body)
             try:
-                _write_capture("latest-normalized-request.json", body)
+                write_capture("latest-normalized-request.json", body)
             except Exception:
                 pass
 
@@ -2374,7 +1430,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 try:
                     import traceback
-                    self._runtime_log("latest-web-runtime-error.txt", traceback.format_exc())
+                    runtime_log("latest-web-runtime-error.txt", traceback.format_exc())
                 except Exception:
                     pass
                 self._send_json(502, {"error": f"local web runtime error: {e}"})
@@ -2390,7 +1446,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self._write_codex_rate_limits_event()
                 sse_log = None
                 try:
-                    sse_log = _capture_path("latest-synthetic-sse.raw").open("wb")
+                    sse_log = capture_path("latest-synthetic-sse.raw").open("wb")
                     for chunk in make_response_stream_events(out):
                         sse_log.write(chunk)
                         sse_log.flush()
@@ -2410,7 +1466,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         try:
             import time
-            _append_capture("latest-json-api.log", f"{time.time():.3f} UPSTREAM url={url} bytes={len(data)} stream={body.get('stream')}\n")
+            append_capture("latest-json-api.log", f"{time.time():.3f} UPSTREAM url={url} bytes={len(data)} stream={body.get('stream')}\n")
         except Exception:
             pass
 
@@ -2441,8 +1497,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
         except Exception as e:
             try:
                 import time, traceback
-                _append_capture("latest-json-api.log", f"{time.time():.3f} UPSTREAM_EXCEPTION {type(e).__name__}: {e}\n")
-                _append_capture("latest-json-api.log", traceback.format_exc() + "\n")
+                append_capture("latest-json-api.log", f"{time.time():.3f} UPSTREAM_EXCEPTION {type(e).__name__}: {e}\n")
+                append_capture("latest-json-api.log", traceback.format_exc() + "\n")
             except Exception:
                 pass
             self._send_json(502, {"error": f"upstream error: {e}"})
@@ -2461,8 +1517,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self._write_codex_rate_limits_event()
 
             try:
-                raw_log_path = _capture_path("latest-upstream-response.raw")
-                status_path = _capture_path("latest-upstream-status.txt")
+                raw_log_path = capture_path("latest-upstream-response.raw")
+                status_path = capture_path("latest-upstream-status.txt")
                 status_path.write_text(
                     f"status={status}\ncontent_type={content_type}\nstream=passthrough\nreasoning_stream_format={self.reasoning_stream_format}\nrate_limits=local\n",
                     encoding="utf-8"
@@ -2486,8 +1542,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
         resp.close()
 
         try:
-            _write_capture("latest-upstream-response.raw", resp_data, mode="bytes")
-            _capture_path("latest-upstream-status.txt").write_text(
+            write_capture("latest-upstream-response.raw", resp_data, mode="bytes")
+            capture_path("latest-upstream-status.txt").write_text(
                 f"status={status}\ncontent_type={content_type}\n",
                 encoding="utf-8"
             )
