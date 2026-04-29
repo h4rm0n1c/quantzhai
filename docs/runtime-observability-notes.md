@@ -43,3 +43,10 @@ Date: 2026-04-29
 - The architecture split should include a testable streaming state machine,
   incremental capture writer, and fixtures for streamed tool continuation,
   buffered fallback, malformed events, and cancellation.
+- Runtime monitors should eventually display search budget use, pages fetched,
+  returned search tokens, cache hits, and exact run timestamps.
+- Agents should receive a stable current date/timezone anchor, with exact clock
+  time fetched only when the task needs it, so time-aware work is grounded
+  without destroying prompt-cache reuse.
+
+See also: `docs/agent-runtime-session-notes-2026-04-29.md`.

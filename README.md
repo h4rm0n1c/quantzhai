@@ -426,6 +426,9 @@ These may contain local paths, prompts, tool output, secrets, request captures, 
 - `docs/search-roadmap.md`: profile-aware local search plan.
 - `docs/fox-roadmap.md`: future Fox backend evaluation and parity gate.
 - `docs/proxy-architecture-roadmap.md`: Python proxy restructure, test harness, and possible Rust port.
+- `docs/agent-runtime-session-notes-2026-04-29.md`: compact-profile,
+  benchmark, observability, streaming, search, and time-grounding notes from
+  the 2026-04-29 tuning session.
 
 ## Name
 

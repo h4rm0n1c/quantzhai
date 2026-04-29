@@ -230,6 +230,19 @@ What is weak:
 
 Maturity: good enough beta, parked for now.
 
+Next search direction from the 2026-04-29 tuning session:
+
+- Do not simply raise the per-turn search-call limit.
+- Add a budgeted search-packet mode where one `web_search` call can fan out
+  internally to query variants, profiles, dedupe, ranking, page fetch, and span
+  extraction.
+- Return a compressed evidence packet to the model and store larger artifacts
+  under run-scoped captures.
+- Surface search call count, fanout count, pages fetched, returned tokens,
+  cache hits, and budget use in runtime monitors.
+
+See also: `docs/agent-runtime-session-notes-2026-04-29.md`.
+
 ## Compaction
 
 Current behavior:
@@ -265,6 +278,16 @@ Current behavior:
   backend activity in a curses-style view.
 - Runtime state and logs are intended to live under `var/`.
 - `var/` is ignored by git.
+
+Time/date grounding direction from the 2026-04-29 tuning session:
+
+- The runtime should give agents a cheap current date/time bearing when the user
+  anchors work to today, yesterday, latest, current, now, deadlines, schedules,
+  logs, or benchmark times.
+- Prefer a stable session anchor such as current date and timezone so prompt
+  caching is not invalidated every second.
+- Use exact timestamps only when needed by the task.
+- Record exact run timestamps in benchmark and monitor artifacts.
 
 What works well:
 

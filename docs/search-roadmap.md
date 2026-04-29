@@ -82,9 +82,33 @@ var/captures/latest-web-search-route.json
 - Decide whether `auto` is enough for normal users or if `qz-codex` should expose profile defaults.
 - Keep the public tool name as `web_search` unless a hard compatibility issue appears.
 
+## Phase 6: Budgeted Search Packets
+
+Status: planned after streaming/tool continuation work is easier to test.
+
+The next improvement should not be raising the model-visible per-turn search
+limit. The better shape is a budgeted packet mode: one `web_search` call can do
+controlled internal fanout and return compressed evidence.
+
+Target behavior:
+
+- Accept `mode` values such as `quick`, `normal`, and `deep`.
+- Accept a hard `max_context_tokens` budget.
+- Generate a small number of query variants internally.
+- Search across selected profiles and engines in parallel where practical.
+- Deduplicate URLs and rank sources.
+- Fetch a bounded number of top pages.
+- Extract relevant spans instead of returning whole pages.
+- Return one compact evidence packet to the model.
+- Store full details under run-scoped captures.
+
+The proxy must enforce the budget. Prompt guidance alone is not enough.
+
 ## Open Questions
 
 - Should SearXNG live outside QuantZhai, or should this repo eventually include a minimal compose file?
 - Should search policy be user-editable in `.env`, runtime `var/`, or tracked `config/`?
 - Should QuantZhai support multiple search backends later, or keep SearXNG as the single local adapter?
 - How much of search quality should be policy JSON versus Python scoring code?
+- Should `mode=deep` be available by default, or require an explicit profile or
+  benchmark flag to avoid accidental long searches?
