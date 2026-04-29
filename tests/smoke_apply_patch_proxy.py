@@ -199,10 +199,20 @@ def main():
         assert "application/json" in content_type, content_type
         assert telemetry_state["counters"]["request_started"] >= 1, telemetry_state
 
-        status, content_type, telemetry_recent = _get_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/recent?limit=5")
+        status, content_type, telemetry_recent = _get_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/recent?limit=100")
         assert status == 200, status
         assert "application/json" in content_type, content_type
         assert telemetry_recent["events"], telemetry_recent
+        assert any(
+            event.get("type") == "sse_event"
+            and (event.get("payload") or {}).get("event_type") == "response.output_item.done"
+            for event in telemetry_recent["events"]
+        ), telemetry_recent
+        assert not any(
+            event.get("type") == "request_started"
+            and str((event.get("payload") or {}).get("path", "")).startswith("/qz/telemetry")
+            for event in telemetry_recent["events"]
+        ), telemetry_recent
 
         print("ok apply_patch proxy smoke")
         print(f"proxy_port={proxy.server_port}")

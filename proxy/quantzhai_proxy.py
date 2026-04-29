@@ -1229,6 +1229,75 @@ class ProxyHandler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 return
 
+    def _telemetry_sse_payload(self, event_type, payload):
+        if not isinstance(payload, dict):
+            return None
+        compact = dict(payload)
+        response = compact.get("response")
+        if isinstance(response, dict):
+            compact["response"] = {
+                key: response.get(key)
+                for key in ("id", "model", "status", "created_at")
+                if response.get(key) is not None
+            }
+        item = compact.get("item")
+        if isinstance(item, dict):
+            compact["item"] = {
+                key: item.get(key)
+                for key in ("id", "type", "status", "role", "call_id", "name")
+                if item.get(key) is not None
+            }
+        return {
+            "event_type": event_type,
+            "payload": compact,
+        }
+
+    def _emit_sse_telemetry(self, chunk):
+        if not chunk:
+            return
+        event_name = ""
+        data_lines = []
+        for raw_line in chunk.splitlines():
+            try:
+                line = raw_line.decode("utf-8", errors="replace")
+            except AttributeError:
+                line = str(raw_line)
+            if line.startswith("event:"):
+                event_name = line.split(":", 1)[1].strip()
+            elif line.startswith("data:"):
+                data_lines.append(line.split(":", 1)[1].lstrip())
+
+        if not data_lines:
+            return
+        data = "\n".join(data_lines).strip()
+        if not data or data == "[DONE]":
+            return
+        try:
+            payload = json.loads(data)
+        except Exception:
+            return
+
+        event_type = event_name or payload.get("type") or "event"
+        if event_type not in {
+            "response.created",
+            "response.in_progress",
+            "response.completed",
+            "response.output_item.added",
+            "response.output_item.done",
+            "response.reasoning_text.delta",
+            "response.reasoning_text.done",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.done",
+            "response.output_text.delta",
+            "response.output_text.done",
+            "response.function_call_arguments.delta",
+        }:
+            return
+
+        compact = self._telemetry_sse_payload(event_type, payload)
+        if compact is not None:
+            self.telemetry.emit("sse_event", compact)
+
 
     def _send_codex_rate_limit_headers(self):
         primary = LOCAL_CODEX_RATE_LIMITS["primary"]
@@ -1334,6 +1403,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             if not chunk:
                 if event_lines:
                     for out_chunk in transform_sse_event(event_lines, summary_started, self.reasoning_stream_format):
+                        self._emit_sse_telemetry(out_chunk)
                         self.wfile.write(out_chunk)
                         self.wfile.flush()
                 break
@@ -1345,6 +1415,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             event_lines.append(chunk)
             if chunk in (b"\n", b"\r\n"):
                 for out_chunk in transform_sse_event(event_lines, summary_started, self.reasoning_stream_format):
+                    self._emit_sse_telemetry(out_chunk)
                     self.wfile.write(out_chunk)
                     self.wfile.flush()
                 event_lines = []
@@ -1434,6 +1505,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
 
     def _log_request_path(self, method):
+        if self.path.startswith("/qz/telemetry"):
+            return
         self.telemetry.emit("request_started", {
             "method": method,
             "path": self.path,
@@ -2321,6 +2394,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     for chunk in make_response_stream_events(out):
                         sse_log.write(chunk)
                         sse_log.flush()
+                        self._emit_sse_telemetry(chunk)
                         self.wfile.write(chunk)
                         self.wfile.flush()
                 finally:
@@ -2438,6 +2512,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self._write_codex_rate_limits_event()
                 for chunk in make_response_stream_events(out):
+                    self._emit_sse_telemetry(chunk)
                     self.wfile.write(chunk)
                     self.wfile.flush()
                 return

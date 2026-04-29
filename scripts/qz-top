@@ -21,6 +21,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.request
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -105,6 +106,24 @@ def curl_health(host: str, port: str) -> bool:
     except Exception:
         return False
     return "status" in out or out.strip() == "OK" or out.strip() == "ok"
+
+
+def proxy_base_url() -> str:
+    host = os.environ.get("QZ_PROXY_HOST", "127.0.0.1")
+    port = os.environ.get("QZ_PROXY_PORT", "18180")
+    return f"http://{host}:{port}"
+
+
+def fetch_json(url: str, timeout: float = 0.5) -> Optional[dict]:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def telemetry_recent(limit: int = 30) -> Optional[dict]:
+    return fetch_json(f"{proxy_base_url()}/qz/telemetry/recent?limit={limit}")
 
 
 def get_logs(lines: int) -> str:
@@ -240,6 +259,49 @@ def parse_rates(logs: str) -> Rates:
                 rates.recent.append(("error", clean_recent(line)))
 
     rates.recent = rates.recent[-9:]
+    return rates
+
+
+def telemetry_row(event: dict) -> Optional[Tuple[str, str]]:
+    payload = event.get("payload") if isinstance(event, dict) else {}
+    if not isinstance(payload, dict):
+        payload = {}
+    ev_type = str(event.get("type") or "event")
+    if ev_type == "request_started":
+        method = payload.get("method", "")
+        path = payload.get("path", "")
+        if str(path).startswith("/qz/telemetry"):
+            return None
+        return ("request", f"{method} {path}".strip())
+    if ev_type == "deprecated_endpoint":
+        path = payload.get("path", "")
+        replacement = payload.get("replacement", "")
+        return ("deprecated", f"{path} -> {replacement}".strip(" ->"))
+    if ev_type == "sse_event":
+        sse_type = str(payload.get("event_type") or "")
+        if sse_type.endswith(".delta"):
+            return ("stream", sse_type)
+        if sse_type in ("response.created", "response.completed"):
+            return ("stream", sse_type.rsplit(".", 1)[-1])
+    return None
+
+
+def merge_telemetry(rates: Rates, telemetry: Optional[dict]) -> Rates:
+    if not isinstance(telemetry, dict):
+        return rates
+    state = telemetry.get("state") or {}
+    counters = state.get("counters") or {}
+    try:
+        rates.requests = max(rates.requests, int(counters.get("request_started") or 0))
+    except Exception:
+        pass
+
+    rows = list(rates.recent or [])
+    for event in telemetry.get("events") or []:
+        row = telemetry_row(event)
+        if row:
+            rows.append(row)
+    rates.recent = rows[-9:]
     return rates
 
 
@@ -541,6 +603,8 @@ class UI:
 
         logs = get_logs(self.log_lines)
         rates = parse_rates(logs)
+        if proxy_ok:
+            rates = merge_telemetry(rates, telemetry_recent())
         benchmark = latest_benchmark()
         gpus = parse_gpus()
 
@@ -589,6 +653,8 @@ def once(log_lines: int):
     proxy = curl_health(os.environ.get("QZ_PROXY_HOST", "127.0.0.1"), os.environ.get("QZ_PROXY_PORT", "18180"))
     logs = get_logs(log_lines)
     rates = parse_rates(logs)
+    if proxy:
+        rates = merge_telemetry(rates, telemetry_recent())
     benchmark = latest_benchmark()
     gpus = parse_gpus()
 

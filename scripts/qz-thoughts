@@ -21,9 +21,10 @@ import subprocess
 import signal
 import textwrap
 import time
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 MAX_LOG_LINES = 200
 
@@ -48,6 +49,20 @@ class ThoughtState:
 def capture_path(name: str) -> Path:
     root = Path(os.environ.get("QZ_VAR_DIR", "var"))
     return root / "captures" / name
+
+
+def proxy_base_url() -> str:
+    host = os.environ.get("QZ_PROXY_HOST", "127.0.0.1")
+    port = os.environ.get("QZ_PROXY_PORT", "18180")
+    return f"http://{host}:{port}"
+
+
+def fetch_json(url: str, timeout: float = 0.5) -> Optional[dict]:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
 
 
 def docker_cmd() -> List[str]:
@@ -229,6 +244,53 @@ def load_state(path: Path) -> ThoughtState:
         state.parse_error = f"{type(exc).__name__}: {exc}"
         return state
     return parse_sse(raw, path)
+
+
+def load_telemetry_state(limit: int = 200) -> Optional[ThoughtState]:
+    data = fetch_json(f"{proxy_base_url()}/qz/telemetry/recent?limit={limit}")
+    if not isinstance(data, dict):
+        return None
+
+    raw_parts: List[str] = []
+    prefix_rows: List[Tuple[str, str]] = []
+    latest_ts = 0.0
+    for event in data.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        try:
+            latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
+        except Exception:
+            pass
+        ev_type = event.get("type")
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        if ev_type == "sse_event":
+            event_type = payload.get("event_type") or "event"
+            sse_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+            raw_parts.append(f"event: {event_type}\n")
+            raw_parts.append("data: " + json.dumps(sse_payload, separators=(",", ":")) + "\n\n")
+        elif ev_type == "request_started":
+            path = payload.get("path", "")
+            if not str(path).startswith("/qz/telemetry"):
+                prefix_rows.append(("request", f"{payload.get('method', '')} {path}".strip()))
+        elif ev_type == "deprecated_endpoint":
+            prefix_rows.append(("deprecated", str(payload.get("path", ""))))
+
+    if not raw_parts:
+        return None
+
+    raw = "".join(raw_parts)
+    state = parse_sse(raw, Path("proxy-telemetry"))
+    state.mtime = latest_ts or time.time()
+    state.bytes_read = len(raw.encode("utf-8"))
+    state.activity = (prefix_rows + state.activity)[-40:]
+    return state
+
+
+def load_live_state(path: Path) -> ThoughtState:
+    state = load_telemetry_state()
+    if state is not None:
+        return state
+    return load_state(path)
 
 
 def wrap_lines(text: str, width: int, limit: int) -> List[str]:
@@ -416,7 +478,7 @@ class UI:
 
     def loop(self):
         while True:
-            state = load_state(self.path)
+            state = load_live_state(self.path)
             state.backend, state.backend_error = read_backend_logs(self.log_lines)
             self.draw(state)
             deadline = time.time() + self.interval
@@ -431,7 +493,7 @@ class UI:
 
 
 def print_once(path: Path, log_lines: int):
-    state = load_state(path)
+    state = load_live_state(path)
     state.backend, state.backend_error = read_backend_logs(log_lines)
     age = max(0.0, time.time() - state.mtime) if state.mtime else 0.0
     print(f"QZ-THOUGHTS {time.strftime('%Y-%m-%d %H:%M:%S')} status={state.status or '?'} events={state.events} age={age:.1f}s bytes={state.bytes_read}")
