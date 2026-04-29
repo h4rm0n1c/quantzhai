@@ -184,7 +184,25 @@ class RequestRouter:
             capabilities=self.handler.searxng_capabilities,
             search_cache=self.handler.web_search_cache,
             opened_page_cache=self.handler.opened_page_cache,
+            telemetry=self.handler.telemetry,
         )
+
+    def _emit_request_telemetry(self, event_type: str, started_at: float, upstream_path: str, client_model: str, backend_model: str = "", **extra):
+        payload = {
+            "method": "POST",
+            "path": self.handler.path,
+            "upstream_path": upstream_path,
+            "stream": bool(extra.pop("stream", False)),
+            "model": client_model,
+            "backend_model": backend_model,
+            "elapsed_ms": round(max(0.0, time.time() - started_at) * 1000.0, 2),
+        }
+        if extra:
+            payload.update(extra)
+        try:
+            self.handler.telemetry.emit(event_type, payload)
+        except Exception:
+            pass
 
     def _annotate_output_with_url_citations(self, out: dict, sources):
         unique_sources = _unique_sources(sources)[:4]
@@ -237,6 +255,7 @@ class RequestRouter:
             reasoning_stream_format=self.handler.reasoning_stream_format,
             web_runtime=self._web_runtime(),
             chunk_writer=self._write_sse_chunk,
+            telemetry=self.handler.telemetry,
         )
         runtime.run(body, requested_model, apply_patch_output_style)
 
@@ -311,6 +330,7 @@ class RequestRouter:
         return 200, "application/json", fallback_out
 
     def proxy_json_api(self, upstream_path):
+        started_at = time.time()
         try:
             append_capture("latest-json-api.log", f"{time.time():.3f} ENTER path={self.handler.path} upstream_path={upstream_path} accept={self.handler.headers.get('Accept','')}\n")
         except Exception:
@@ -322,6 +342,7 @@ class RequestRouter:
         try:
             body = json.loads(raw.decode("utf-8"))
         except Exception as e:
+            self._emit_request_telemetry("request_failed", started_at, upstream_path, "", error=f"invalid JSON: {e}", phase="parse")
             self.handler._send_json(400, {"error": f"invalid JSON: {e}"})
             return
 
@@ -338,6 +359,7 @@ class RequestRouter:
         client_model = body.get("model") or "Qwen3.6Turbo-medium"
         selected_model, selection_reason = self.handler._resolve_model_selection(client_model)
         if selected_model is None:
+            self._emit_request_telemetry("request_failed", started_at, upstream_path, client_model, error=selection_reason or "no model available", phase="select_model")
             self.handler._send_json(404, {
                 "error": "no model available",
                 "reason": selection_reason,
@@ -379,7 +401,26 @@ class RequestRouter:
                         client_model,
                         apply_patch_output_style,
                     )
+                    self._emit_request_telemetry(
+                        "request_completed",
+                        started_at,
+                        upstream_path,
+                        client_model,
+                        backend_model=backend_model,
+                        stream=True,
+                        status=200,
+                    )
                 except (BrokenPipeError, ConnectionResetError):
+                    self._emit_request_telemetry(
+                        "request_failed",
+                        started_at,
+                        upstream_path,
+                        client_model,
+                        backend_model=backend_model,
+                        stream=True,
+                        error="client disconnected",
+                        phase="stream",
+                    )
                     pass
                 except Exception as e:
                     try:
@@ -387,6 +428,16 @@ class RequestRouter:
                         runtime_log("latest-stream-runtime-error.txt", traceback.format_exc())
                     except Exception:
                         pass
+                    self._emit_request_telemetry(
+                        "request_failed",
+                        started_at,
+                        upstream_path,
+                        client_model,
+                        backend_model=backend_model,
+                        stream=True,
+                        error=str(e),
+                        phase="stream",
+                    )
                     error_payload = {
                         "type": "response.failed",
                         "response": {
@@ -420,9 +471,29 @@ class RequestRouter:
                         self.handler._send_codex_rate_limit_headers()
                         self.handler.end_headers()
                         self.handler.wfile.write(json.dumps(out).encode("utf-8"))
+                    self._emit_request_telemetry(
+                        "request_completed",
+                        started_at,
+                        upstream_path,
+                        client_model,
+                        backend_model=backend_model,
+                        stream=False,
+                        status=status,
+                        content_type=content_type,
+                    )
                     return
 
                 self.handler._send_json(status, out)
+                self._emit_request_telemetry(
+                    "request_completed",
+                    started_at,
+                    upstream_path,
+                    client_model,
+                    backend_model=backend_model,
+                    stream=False,
+                    status=status,
+                    content_type=content_type,
+                )
                 return
             except Exception as e:
                 try:
@@ -430,11 +501,30 @@ class RequestRouter:
                     runtime_log("latest-web-runtime-error.txt", traceback.format_exc())
                 except Exception:
                     pass
+                self._emit_request_telemetry(
+                    "request_failed",
+                    started_at,
+                    upstream_path,
+                    client_model,
+                    backend_model=backend_model,
+                    stream=False,
+                    error=str(e),
+                    phase="local_web_runtime",
+                )
                 self.handler._send_json(502, {"error": f"local web runtime error: {e}"})
                 return
 
         try:
             append_capture("latest-json-api.log", f"{time.time():.3f} UPSTREAM url={self.handler.upstream + upstream_path} bytes={len(json.dumps(body).encode('utf-8'))} stream={body.get('stream')}\n")
+        except Exception:
+            pass
+        try:
+            self.handler.telemetry.emit("upstream_request", {
+                "path": upstream_path,
+                "model": client_model,
+                "backend_model": backend_model,
+                "stream": bool(body.get("stream")),
+            })
         except Exception:
             pass
         try:
@@ -452,6 +542,16 @@ class RequestRouter:
                 append_capture("latest-json-api.log", traceback.format_exc() + "\n")
             except Exception:
                 pass
+            self._emit_request_telemetry(
+                "request_failed",
+                started_at,
+                upstream_path,
+                client_model,
+                backend_model=backend_model,
+                stream=bool(body.get("stream")),
+                error=str(e),
+                phase="upstream_request",
+            )
             self.handler._send_json(502, {"error": f"upstream error: {e}"})
             return
 
@@ -484,10 +584,30 @@ class RequestRouter:
             try:
                 self.handler._write_transformed_sse_stream(resp, raw_log)
             except (BrokenPipeError, ConnectionResetError):
+                self._emit_request_telemetry(
+                    "request_failed",
+                    started_at,
+                    upstream_path,
+                    client_model,
+                    backend_model=backend_model,
+                    stream=True,
+                    error="client disconnected",
+                    phase="upstream_stream",
+                )
                 pass
             finally:
                 if raw_log is not None:
                     raw_log.close()
+            self._emit_request_telemetry(
+                "request_completed",
+                started_at,
+                upstream_path,
+                client_model,
+                backend_model=backend_model,
+                stream=True,
+                status=status,
+                content_type=content_type,
+            )
             self.handler.close_connection = True
             return
 
@@ -510,6 +630,16 @@ class RequestRouter:
                 out["usage"] = _normalize_response_usage(out.get("usage"))
 
             self.handler._send_json(status, out)
+            self._emit_request_telemetry(
+                "request_completed",
+                started_at,
+                upstream_path,
+                client_model,
+                backend_model=backend_model,
+                stream=bool(body.get("stream")),
+                status=status,
+                content_type=content_type,
+            )
         except Exception:
             self.handler.send_response(status)
             self.handler.send_header("Content-Type", content_type)
@@ -517,6 +647,16 @@ class RequestRouter:
             self.handler.send_header("Content-Length", str(len(resp_data)))
             self.handler.end_headers()
             self.handler.wfile.write(resp_data)
+            self._emit_request_telemetry(
+                "request_completed",
+                started_at,
+                upstream_path,
+                client_model,
+                backend_model=backend_model,
+                stream=bool(body.get("stream")),
+                status=status,
+                content_type=content_type,
+            )
 
     def proxy_raw(self, method):
         length = int(self.handler.headers.get("Content-Length", "0") or "0")

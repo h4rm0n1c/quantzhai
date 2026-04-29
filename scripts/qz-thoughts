@@ -69,6 +69,11 @@ def docker_cmd() -> List[str]:
     return shlex.split(os.environ.get("QZ_DOCKER_CMD", "docker"))
 
 
+def monitor_log_fallback_enabled() -> bool:
+    raw = str(os.environ.get("QZ_MONITOR_LOG_FALLBACK", "")).strip().lower()
+    return raw in {"1", "true", "yes", "on", "latest", "full"}
+
+
 def read_backend_logs(lines: int) -> Tuple[List[Tuple[str, str]], str]:
     container = os.environ.get("QZ_CONTAINER", "qwen36turbo")
     lines = max(1, min(lines, MAX_LOG_LINES))
@@ -295,6 +300,92 @@ def load_telemetry_state(limit: int = 200) -> Optional[ThoughtState]:
                 pass
             if path:
                 prefix_rows.append(("request", f"{payload.get('method', '')} {path}".strip()))
+        elif ev_type == "request_completed":
+            try:
+                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
+            except Exception:
+                pass
+            path = payload.get("path", "")
+            model = payload.get("backend_model") or payload.get("model") or ""
+            elapsed = payload.get("elapsed_ms")
+            bits = [f"{payload.get('method', '')} {path}".strip()]
+            if model:
+                bits.append(f"model={model}")
+            if elapsed is not None:
+                try:
+                    bits.append(f"{float(elapsed):.0f}ms")
+                except Exception:
+                    pass
+            prefix_rows.append(("request", " ".join(bit for bit in bits if bit).strip() or "request completed"))
+        elif ev_type == "request_failed":
+            try:
+                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
+            except Exception:
+                pass
+            path = payload.get("path", "")
+            error = payload.get("error") or payload.get("reason") or "request failed"
+            bits = [f"{payload.get('method', '')} {path}".strip()]
+            if payload.get("phase"):
+                bits.append(f"phase={payload.get('phase')}")
+            if error:
+                bits.append(str(error))
+            message = " ".join(bit for bit in bits if bit).strip() or "request failed"
+            prefix_rows.append(("error", message))
+            state.backend_error = str(error)
+        elif ev_type == "model_selected":
+            try:
+                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
+            except Exception:
+                pass
+            requested = payload.get("requested") or "default"
+            selected = payload.get("selected") or payload.get("backend_id") or "?"
+            reason = payload.get("reason") or ""
+            message = f"{requested} -> {selected} {reason}".strip()
+            prefix_rows.append(("model", message))
+        elif ev_type in ("model_load_started", "model_load_pending", "model_load_ready", "model_load_failed"):
+            try:
+                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
+            except Exception:
+                pass
+            model = payload.get("model") or "?"
+            detail = payload.get("error") or payload.get("health_status") or payload.get("wait")
+            message = f"{model} {ev_type}"
+            if detail not in (None, "", False):
+                message = f"{message} {detail}"
+            prefix_rows.append(("model", message))
+            if ev_type == "model_load_failed" and payload.get("error"):
+                state.backend_error = str(payload.get("error"))
+        elif ev_type == "tool_call_started":
+            try:
+                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
+            except Exception:
+                pass
+            prefix_rows.append(("tool", f"start {payload.get('tool', payload.get('name', 'tool'))}"))
+        elif ev_type == "tool_call_completed":
+            try:
+                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
+            except Exception:
+                pass
+            prefix_rows.append(("tool", f"done {payload.get('tool', payload.get('name', 'tool'))}"))
+        elif ev_type == "web_search_route":
+            try:
+                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
+            except Exception:
+                pass
+            prefix_rows.append(("web", str(payload.get("query", payload.get("route", "web_search")))))
+        elif ev_type == "upstream_request":
+            try:
+                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
+            except Exception:
+                pass
+            prefix_rows.append(("upstream", f"{payload.get('method', '')} {payload.get('path', '')}".strip()))
+        elif ev_type in ("stream_started", "stream_completed", "stream_failed"):
+            try:
+                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
+            except Exception:
+                pass
+            detail = payload.get("error") or payload.get("fallback") or ""
+            prefix_rows.append(("stream", f"{ev_type} {detail}".strip()))
         elif ev_type == "deprecated_endpoint":
             try:
                 latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
@@ -387,10 +478,12 @@ class UI:
             return self.magenta | self.bold
         if kind in ("answer", "message", "completed", "done"):
             return self.green | self.bold
-        if kind in ("prompt", "generate", "total", "request"):
+        if kind in ("prompt", "generate", "total", "request", "upstream", "stream"):
             return self.cyan | self.bold
-        if kind in ("restore", "checkpoint", "tool"):
+        if kind in ("restore", "checkpoint", "tool", "web"):
             return self.yellow | self.bold
+        if kind in ("model",):
+            return self.blue | self.bold
         return self.white
 
     def add(self, y: int, x: int, text: str, attr=0):
@@ -506,7 +599,10 @@ class UI:
     def loop(self):
         while True:
             state = load_live_state(self.path)
-            state.backend, state.backend_error = read_backend_logs(self.log_lines)
+            if monitor_log_fallback_enabled():
+                state.backend, state.backend_error = read_backend_logs(self.log_lines)
+            else:
+                state.backend = []
             self.draw(state)
             deadline = time.time() + self.interval
             while time.time() < deadline:
@@ -521,7 +617,10 @@ class UI:
 
 def print_once(path: Path, log_lines: int):
     state = load_live_state(path)
-    state.backend, state.backend_error = read_backend_logs(log_lines)
+    if monitor_log_fallback_enabled():
+        state.backend, state.backend_error = read_backend_logs(log_lines)
+    else:
+        state.backend = []
     age = max(0.0, time.time() - state.mtime) if state.mtime else 0.0
     print(f"QZ-THOUGHTS {time.strftime('%Y-%m-%d %H:%M:%S')} status={state.status or '?'} events={state.events} age={age:.1f}s bytes={state.bytes_read}")
     print(f"source={state.path}")

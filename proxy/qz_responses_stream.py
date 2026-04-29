@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import time
 import urllib.request
 
 try:
@@ -52,6 +53,7 @@ class ResponsesStreamRuntime:
         chunk_writer,
         stream_opener=None,
         capture_enabled: bool = True,
+        telemetry=None,
     ):
         self.upstream = upstream.rstrip("/")
         self.authorization = authorization or "Bearer local"
@@ -60,6 +62,7 @@ class ResponsesStreamRuntime:
         self.chunk_writer = chunk_writer
         self.stream_opener = stream_opener or self._open_upstream_stream
         self.capture_enabled = capture_enabled
+        self.telemetry = telemetry
 
     def _open_upstream_stream(self, body: dict):
         data = json.dumps(body).encode("utf-8")
@@ -77,6 +80,14 @@ class ResponsesStreamRuntime:
 
     def _write_chunk(self, chunk: bytes):
         self.chunk_writer(chunk)
+
+    def _emit(self, event_type: str, payload: dict | None = None):
+        if not self.telemetry:
+            return
+        try:
+            self.telemetry.emit(event_type, payload if isinstance(payload, dict) else {})
+        except Exception:
+            pass
 
     def _transformed_chunks(
         self,
@@ -159,10 +170,19 @@ class ResponsesStreamRuntime:
             self._write_chunk(out_chunk)
         self._write_chunk(b"data: [DONE]\n\n")
 
+    def _emit_stream_completed(self, requested_model: str, output_items: int, started_at: float, fallback: bool = False):
+        self._emit("stream_completed", {
+            "model": requested_model,
+            "output_items": output_items,
+            "duration_ms": round((time.time() - started_at) * 1000.0, 2),
+            "fallback": bool(fallback),
+        })
+
     def run(self, body: dict, requested_model: str, apply_patch_output_style: str = "native"):
         working_body = json.loads(json.dumps(body))
         working_body["stream"] = True
 
+        started_at = time.time()
         public_trace = []
         counters = {"search": 0, "open_page": 0}
         seen_signatures = set()
@@ -171,116 +191,130 @@ class ResponsesStreamRuntime:
         sequence = 0
         sent_response_start = False
         self._start_capture()
+        self._emit("stream_started", {
+            "model": requested_model,
+            "apply_patch_output_style": apply_patch_output_style,
+            "tool_hops_max": WEB_SEARCH_MAX_HOPS,
+        })
 
-        for _hop in range(WEB_SEARCH_MAX_HOPS):
-            hop_body = json.loads(json.dumps(working_body))
-            hop_body["stream"] = True
-            hop_body = normalize_responses_input_for_qwen(hop_body)
-            hop_body = normalize_tools_for_llamacpp(hop_body)
-            resp = self.stream_opener(hop_body)
-            raw_log = self._open_raw_log()
-            assembler = StreamedFunctionCallAssembler()
-            event_lines = []
-            next_input = list(hop_body.get("input") or [])
-            completed_call = None
-            max_output_index = -1
+        try:
+            for _hop in range(WEB_SEARCH_MAX_HOPS):
+                hop_body = json.loads(json.dumps(working_body))
+                hop_body["stream"] = True
+                hop_body = normalize_responses_input_for_qwen(hop_body)
+                hop_body = normalize_tools_for_llamacpp(hop_body)
+                try:
+                    resp = self.stream_opener(hop_body)
+                    raw_log = self._open_raw_log()
+                    assembler = StreamedFunctionCallAssembler()
+                    event_lines = []
+                    next_input = list(hop_body.get("input") or [])
+                    completed_call = None
+                    max_output_index = -1
 
-            try:
-                while True:
-                    chunk = resp.readline()
-                    if not chunk:
-                        break
-
-                    if raw_log is not None:
-                        raw_log.write(chunk)
-                        raw_log.flush()
-
-                    event_lines.append(chunk)
-                    if chunk not in (b"\n", b"\r\n"):
-                        continue
-
-                    event_type, payload = parse_sse_event_lines(event_lines)
-                    if isinstance(payload, dict) and isinstance(payload.get("output_index"), int):
-                        max_output_index = max(max_output_index, payload["output_index"])
-                    if isinstance(payload, dict) and isinstance(payload.get("sequence_number"), int):
-                        sequence = max(sequence, payload["sequence_number"])
-
-                    completed = assembler.observe(event_type, payload)
-                    if completed:
-                        completed_call = completed[0]
-                        public_index = completed_call.get("output_index")
-                        if not isinstance(public_index, int):
-                            public_index = max_output_index + 1
-                        public_index += output_index_offset
-
-                        if completed_call.get("name") == "web_search":
-                            public_item, tool_output_item, _sources = self.web_runtime.execute_web_search_call(
-                                completed_call,
-                                counters,
-                                seen_signatures,
-                            )
-                            public_trace.append(public_item)
-                            next_input.append(completed_call)
-                            next_input.append(tool_output_item)
-                            sequence = self._emit_public_tool_item(public_item, public_index, sequence)
+                    while True:
+                        chunk = resp.readline()
+                        if not chunk:
                             break
 
-                        public_item = self._public_tool_item_from_function_call(completed_call, apply_patch_output_style)
-                        public_trace.append(public_item)
-                        sequence = self._emit_public_tool_item(public_item, public_index, sequence)
-                        self._emit_completed(requested_model, public_trace, summary_started)
-                        return
+                        if raw_log is not None:
+                            raw_log.write(chunk)
+                            raw_log.flush()
 
-                    if is_function_call_stream_event(event_type, payload):
-                        event_lines = []
-                        continue
+                        event_lines.append(chunk)
+                        if chunk not in (b"\n", b"\r\n"):
+                            continue
 
-                    if is_terminal_stream_event(event_type, payload) and completed_call and completed_call.get("name") == "web_search":
-                        event_lines = []
-                        continue
+                        event_type, payload = parse_sse_event_lines(event_lines)
+                        if isinstance(payload, dict) and isinstance(payload.get("output_index"), int):
+                            max_output_index = max(max_output_index, payload["output_index"])
+                        if isinstance(payload, dict) and isinstance(payload.get("sequence_number"), int):
+                            sequence = max(sequence, payload["sequence_number"])
 
-                    if event_type in {"response.created", "response.in_progress"}:
-                        if sent_response_start:
+                        completed = assembler.observe(event_type, payload)
+                        if completed:
+                            completed_call = completed[0]
+                            public_index = completed_call.get("output_index")
+                            if not isinstance(public_index, int):
+                                public_index = max_output_index + 1
+                            public_index += output_index_offset
+
+                            if completed_call.get("name") == "web_search":
+                                public_item, tool_output_item, _sources = self.web_runtime.execute_web_search_call(
+                                    completed_call,
+                                    counters,
+                                    seen_signatures,
+                                )
+                                public_trace.append(public_item)
+                                next_input.append(completed_call)
+                                next_input.append(tool_output_item)
+                                sequence = self._emit_public_tool_item(public_item, public_index, sequence)
+                                break
+
+                            public_item = self._public_tool_item_from_function_call(completed_call, apply_patch_output_style)
+                            public_trace.append(public_item)
+                            sequence = self._emit_public_tool_item(public_item, public_index, sequence)
+                            self._emit_stream_completed(requested_model, len(public_trace), started_at)
+                            self._emit_completed(requested_model, public_trace, summary_started)
+                            return
+
+                        if is_function_call_stream_event(event_type, payload):
                             event_lines = []
                             continue
-                        sent_response_start = True
 
-                    if is_terminal_stream_event(event_type, payload):
+                        if is_terminal_stream_event(event_type, payload) and completed_call and completed_call.get("name") == "web_search":
+                            event_lines = []
+                            continue
+
+                        if event_type in {"response.created", "response.in_progress"}:
+                            if sent_response_start:
+                                event_lines = []
+                                continue
+                            sent_response_start = True
+
+                        if is_terminal_stream_event(event_type, payload):
+                            for out_chunk in self._transformed_chunks(
+                                event_type,
+                                payload,
+                                event_lines,
+                                summary_started,
+                                output_index_offset=output_index_offset,
+                                prepend_output=public_trace,
+                                model=requested_model,
+                            ):
+                                self._write_chunk(out_chunk)
+                            event_lines = []
+                            continue
+
                         for out_chunk in self._transformed_chunks(
                             event_type,
                             payload,
                             event_lines,
                             summary_started,
                             output_index_offset=output_index_offset,
-                            prepend_output=public_trace,
                             model=requested_model,
                         ):
                             self._write_chunk(out_chunk)
                         event_lines = []
-                        continue
+                finally:
+                    if raw_log is not None:
+                        raw_log.close()
+                    resp.close()
 
-                    for out_chunk in self._transformed_chunks(
-                        event_type,
-                        payload,
-                        event_lines,
-                        summary_started,
-                        output_index_offset=output_index_offset,
-                        model=requested_model,
-                    ):
-                        self._write_chunk(out_chunk)
-                    event_lines = []
-            finally:
-                if raw_log is not None:
-                    raw_log.close()
-                resp.close()
+                if completed_call and completed_call.get("name") == "web_search":
+                    if max_output_index >= 0:
+                        output_index_offset += max_output_index + 1
+                    working_body["input"] = next_input
+                    continue
 
-            if completed_call and completed_call.get("name") == "web_search":
-                if max_output_index >= 0:
-                    output_index_offset += max_output_index + 1
-                working_body["input"] = next_input
-                continue
-
-            return
+                return
+        except Exception as exc:
+            self._emit("stream_failed", {
+                "model": requested_model,
+                "error": str(exc),
+                "duration_ms": round((time.time() - started_at) * 1000.0, 2),
+            })
+            raise
 
         fallback_output = public_trace + [{
             "id": f"msg_local_{_now_ts()}",
@@ -293,4 +327,5 @@ class ResponsesStreamRuntime:
                 "annotations": [],
             }],
         }]
+        self._emit_stream_completed(requested_model, len(fallback_output), started_at, fallback=True)
         self._emit_completed(requested_model, fallback_output, summary_started)

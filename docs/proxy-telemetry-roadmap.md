@@ -80,6 +80,10 @@ Append-only history for postmortem inspection.
 Logs should not be the primary transport for `qz-top`, `qz-thoughts`, or future
 benchmark monitors. They are for after-the-fact diagnosis.
 
+Live monitors should prefer the proxy telemetry endpoints first. Docker log
+tailing is a fallback path only, enabled explicitly for debug or diagnostics
+with `QZ_MONITOR_LOG_FALLBACK`.
+
 ## Proposed Runtime Shape
 
 Use the proxy HTTP server as the first transport instead of adding custom

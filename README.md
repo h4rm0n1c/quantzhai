@@ -244,6 +244,8 @@ Important settings:
 - `QZ_MODEL_OVERRIDES`: local JSON overrides file, default `var/model-overrides.json`.
 - `QZ_CAPTURE_MODE`: file capture mode, `off` by default; set `latest` for
   request/response captures or `full` for heavier debug capture.
+- `QZ_MONITOR_LOG_FALLBACK`: set to `1/true/yes/on` to let `qz-top` and
+  `qz-thoughts` tail Docker logs when telemetry is unavailable; off by default.
 - `QZSTATE`: optional `1/true/yes/on` flag to inject the compact runtime state block into `/v1/responses`; off by default.
 - `QZ_SERVER_PORT`: host port for llama.cpp server, default `18084`.
 - `QZ_PROXY_PORT`: host port for QuantZhai proxy, default `18180`.

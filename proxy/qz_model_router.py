@@ -12,6 +12,15 @@ class ModelRouter:
     def __init__(self, handler):
         self.handler = handler
 
+    def _emit(self, event_type: str, payload: dict | None = None):
+        telemetry = getattr(self.handler, "telemetry", None)
+        if telemetry is None:
+            return
+        try:
+            telemetry.emit(event_type, payload if isinstance(payload, dict) else {})
+        except Exception:
+            pass
+
     def backend_models(self):
         payload = self.handler._backend().get_models()
 
@@ -136,24 +145,49 @@ class ModelRouter:
         cls.model_load_started_at = time.time()
         cls.model_load_finished_at = None
         cls.model_load_error = None
+        self._emit("model_load_started", {
+            "model": model_id,
+            "wait": bool(wait),
+            "timeout": timeout,
+        })
         resp = self.handler._backend().load_model(model_id, timeout=timeout)
         if resp.status >= 400:
             cls.model_load_state = "failed"
             cls.model_load_error = f"load failed: HTTP {resp.status}"
             cls.model_load_finished_at = time.time()
+            self._emit("model_load_failed", {
+                "model": model_id,
+                "status": resp.status,
+                "error": cls.model_load_error,
+                "wait": bool(wait),
+            })
             return
         cls.model_load_state = "loading"
         if not wait:
+            self._emit("model_load_pending", {
+                "model": model_id,
+                "wait": False,
+            })
             return
         ok, snapshot = self.handler._backend().wait_for_model_ready(model_id, timeout=timeout)
         cls.model_load_finished_at = time.time()
         if ok:
             cls.model_load_state = "ready"
             cls.model_load_error = None
+            self._emit("model_load_ready", {
+                "model": model_id,
+                "health_status": snapshot.get("health_status"),
+            })
         else:
             cls.model_load_state = "loading"
             cls.model_load_error = "timed out waiting for backend model ready"
             cls.model_load_health = snapshot.get("health_status")
+            self._emit("model_load_failed", {
+                "model": model_id,
+                "error": cls.model_load_error,
+                "health_status": cls.model_load_health,
+                "wait": True,
+            })
 
     def resolve_model_selection(self, requested_model):
         catalog = self.handler._model_catalog()
@@ -167,6 +201,13 @@ class ModelRouter:
             reason = reason or "catalog fallback"
         if selected is None:
             return None, reason
+        self._emit("model_selected", {
+            "requested": requested_model,
+            "selected": selected.get("key"),
+            "backend_id": selected.get("backend_id") or selected.get("key"),
+            "reason": reason,
+            "budget": MODEL_BUDGETS.get(requested_model, MODEL_BUDGETS.get("Qwen3.6Turbo", 256)),
+        })
         self.load_backend_model(selected.get("backend_id") or selected["key"])
         return selected, reason
 

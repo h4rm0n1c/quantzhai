@@ -261,13 +261,22 @@ def _extract_page_text(raw: bytes, content_type: str):
     return title, text
 
 class WebSearchRuntime:
-    def __init__(self, base_url=None, timeout=15.0, policy=None, capabilities=None, search_cache=None, opened_page_cache=None):
+    def __init__(self, base_url=None, timeout=15.0, policy=None, capabilities=None, search_cache=None, opened_page_cache=None, telemetry=None):
         self.searxng_base_url = base_url
         self.searxng_timeout = timeout
         self.searxng_policy = policy or {}
         self.searxng_capabilities = capabilities or {}
         self.web_search_cache = search_cache if search_cache is not None else {}
         self.opened_page_cache = opened_page_cache if opened_page_cache is not None else {}
+        self.telemetry = telemetry
+
+    def _emit(self, event_type: str, payload: dict | None = None):
+        if not self.telemetry:
+            return
+        try:
+            self.telemetry.emit(event_type, payload if isinstance(payload, dict) else {})
+        except Exception:
+            pass
 
     def _cache_get(self, cache: dict, key: str, ttl: int):
         now = _now_float()
@@ -531,6 +540,18 @@ class WebSearchRuntime:
             threshold = 1
         threshold = max(1, min(threshold, WEB_SEARCH_MAX_RESULTS))
 
+        self._emit("web_search_route", {
+            "query": query,
+            "requested_profile": route["requested_profile"],
+            "selected_profile": route["profile"],
+            "categories": primary_categories,
+            "query_categories": query_categories,
+            "engines": primary_engines,
+            "fallback_profiles": route["fallback_profiles"],
+            "explicit_categories": bool(explicit_categories),
+            "explicit_engines": bool(explicit_engines),
+        })
+
         result = self._query_searxng(query, query_categories, primary_engines, top_k=top_k)
         result.update({
             "requested_profile": route["requested_profile"],
@@ -599,6 +620,7 @@ class WebSearchRuntime:
 
         route_log["fallback_used"] = best.get("fallback_used")
         route_log["result_count"] = len(best.get("results") or [])
+        self._emit("web_search_route", route_log)
         runtime_log("latest-web-search-route.json", route_log)
         return best
 
@@ -759,6 +781,17 @@ class WebSearchRuntime:
             repeated = False
             seen_signatures.add(signature)
 
+        started_at = _now_float()
+        self._emit("tool_call_started", {
+            "tool": "web_search",
+            "action": action,
+            "call_id": call_item.get("call_id") or call_item.get("id"),
+            "query": query if isinstance(query, str) else None,
+            "profile": profile if action == "search" else None,
+            "url": url if isinstance(url, str) else None,
+            "page_id": page_id if isinstance(page_id, str) else None,
+        })
+
         error = None
         payload = {}
         sources = []
@@ -852,5 +885,15 @@ class WebSearchRuntime:
             "call_id": call_item.get("call_id") or call_item.get("id") or f"fc_local_{_now_ts()}",
             "output": json.dumps(result_payload, ensure_ascii=False),
         }
+
+        self._emit("tool_call_completed", {
+            "tool": "web_search",
+            "action": action,
+            "call_id": call_item.get("call_id") or call_item.get("id"),
+            "status": "failed" if error else "completed",
+            "error": error,
+            "result_count": len(sources) if action == "search" else len(sources),
+            "duration_ms": round((_now_float() - started_at) * 1000.0, 2),
+        })
 
         return web_call_item, tool_output_item, _unique_sources(sources)
