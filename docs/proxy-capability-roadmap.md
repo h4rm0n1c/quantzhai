@@ -22,6 +22,8 @@ It currently covers:
 - Local compaction.
 - Profile-aware `web_search`.
 - Capture files for debugging.
+- Local terminal monitors for stack health, throughput, backend activity, and
+  synthetic Responses thought/output captures.
 
 It is not yet a complete OpenAI API implementation, a complete Ollama implementation, or a general tool runtime.
 
@@ -112,10 +114,53 @@ What works well:
 What is weak:
 
 - Streaming transforms are fragile without replay fixtures.
+- The local `/v1/responses` tool/search loop currently buffers upstream output
+  with `stream=false`, then emits synthetic Responses SSE after the upstream
+  response completes.
+- There is no multi-hop streamed Responses runtime that can pause on a tool
+  call, execute the local tool, append the tool result, and continue streaming.
 - Fake rate-limit metadata satisfies client expectations but is not real accounting.
 - Some event shapes may lag behind Codex/OpenAI changes.
 
 Maturity: working beta, needs regression tests.
+
+## Streaming Discovery: Buffered Tool Calls
+
+Discovered during `qz-thoughts` work on 2026-04-29:
+
+- The current `/v1/responses` local runtime uses a buffered upstream request
+  when it needs to manage local tool/search recursion.
+- The proxy then writes `var/captures/latest-synthetic-sse.raw` and emits
+  Responses-style stream events from the completed upstream response.
+- This keeps the current local `web_search` path simple and functional, but it
+  means reasoning/thought text is not token-live for the Responses path.
+- `scripts/qz-thoughts` can show the latest synthetic thought/output capture
+  and live backend activity from llama.cpp logs, but it cannot show token-live
+  reasoning until streaming and tool continuation are integrated.
+- The target is not "streaming or tools"; the target is streamed Responses with
+  tool-call continuation.
+
+Target runtime shape:
+
+1. Forward the initial upstream request with streaming enabled.
+2. Relay model deltas to Codex and capture them incrementally.
+3. Accumulate output items and function-call arguments locally.
+4. When a function call completes, execute the supported local tool.
+5. Append the tool result to the conversation and issue the next streamed
+   upstream request.
+6. Continue until the final assistant response completes.
+7. Present the chain to Codex as one coherent Responses lifecycle where the
+   protocol allows it, with a buffered fallback for unsupported event cases.
+
+Required details:
+
+- Correct `response.output_item.*` ordering.
+- Correct function-call argument delta/done parsing.
+- No duplicated reasoning, message, or tool-call items between hops.
+- Cancellation and client-disconnect handling.
+- Run-scoped captures instead of latest-only files.
+- Golden SSE replay fixtures for normal streaming, tool continuation,
+  malformed events, and fallback buffering.
 
 ## Tool Handling
 
@@ -133,6 +178,8 @@ Missing or incomplete:
 
 - `apply_patch` has not been tested yet with a live Qwen/TurboQuant model deciding and continuing from a real edit.
 - No proxy-side patch executor exists.
+- Tool-call continuation currently forces the buffered Responses path rather
+  than a live multi-hop stream.
 - No shell/exec tool runtime.
 - No computer-use tool runtime.
 - No code interpreter runtime.
@@ -150,6 +197,7 @@ What is weak:
 - Tool handling is not yet a clean module or interface.
 - Each tool path is too embedded in the proxy flow.
 - There is no shared tool-call lifecycle for request normalization, execution, result injection, streaming, and capture.
+- Tool execution and streaming are not yet one state machine.
 
 Maturity:
 
@@ -204,9 +252,17 @@ Maturity: useful beta.
 
 ## Observability
 
+See also: `docs/runtime-observability-notes.md`.
+
 Current behavior:
 
 - Writes request, forwarded request, upstream response, dropped tools, and search route captures under `var/captures`.
+- Writes `latest-synthetic-sse.raw` for the current synthetic Responses stream.
+- `scripts/qz-top` shows stack health, profile settings, container status, GPU
+  state, throughput, recent backend activity, and latest benchmark compression
+  summary.
+- `scripts/qz-thoughts` shows synthetic thought/output captures plus live
+  backend activity in a curses-style view.
 - Runtime state and logs are intended to live under `var/`.
 - `var/` is ignored by git.
 
@@ -220,6 +276,11 @@ What is weak:
 - Most captures are latest-only and get overwritten.
 - There is no redaction layer.
 - There is no structured run ID across all captures yet.
+- `qz-thoughts` cannot display token-live reasoning for local Responses runs
+  until streamed tool continuation exists.
+- Log inspection must respect the sudo helper's `docker logs --tail <= 1000`
+  boundary; monitors should clamp requested tails rather than surfacing helper
+  failures as broken stack state.
 
 Maturity: useful but ad hoc.
 
@@ -276,6 +337,7 @@ Maturity: working single-backend implementation.
 - Too much compatibility is untested.
 - Tool handling is not generalized.
 - Streaming and Responses behavior need golden fixtures.
+- Responses streaming with local tool/search recursion is buffered today.
 - Capture files are useful but not systematic.
 - Safety boundaries are not strong enough for proxy-side filesystem tools.
 - Config is still more script-shaped than product-shaped.
@@ -293,10 +355,11 @@ Stable enough for current use:
 Working beta:
 
 - Responses adapter.
-- Streaming adapter.
+- Streaming adapter for pass-through and synthetic buffered output.
 - Local compaction.
 - Profile-aware search.
 - Capture-based debugging.
+- `qz-top` and `qz-thoughts` monitors.
 
 Partial:
 
@@ -311,6 +374,7 @@ Alpha:
 
 Missing:
 
+- Multi-hop streamed Responses runtime with tool-call continuation.
 - General tool runtime.
 - Proxy-side shell/code/computer tool support.
 - MCP/app bridge.
@@ -320,16 +384,25 @@ Missing:
 
 ## Near-Term Roadmap
 
-1. Run a live Qwen/TurboQuant patch workflow and capture whether it emits valid patch operations.
-2. Extract tool handling into a small internal boundary.
-3. Add golden tests for Responses normalization and streaming.
-4. Split `proxy/quantzhai_proxy.py` into a conventional Python package.
-5. Add a backend adapter boundary before Fox or Rust work.
-6. Revisit search once the proxy shape is easier to test.
+1. Build a multi-hop streamed Responses runtime with tool-call continuation,
+   starting with no-tool streaming parity, then `web_search` continuation, then
+   patch/tool continuation fixtures.
+2. Add run-scoped streaming captures and wire `qz-thoughts` to follow a selected
+   run instead of only `latest-synthetic-sse.raw`.
+3. Run a live Qwen/TurboQuant patch workflow and capture whether it emits valid patch operations.
+4. Extract tool handling into a small internal boundary.
+5. Add golden tests for Responses normalization and streaming.
+6. Split `proxy/quantzhai_proxy.py` into a conventional Python package.
+7. Add a backend adapter boundary before Fox or Rust work.
+8. Revisit search once the proxy shape is easier to test.
 
 ## Open Questions
 
 - Should unsupported tools be dropped, converted into no-op tool messages, or surfaced as model-visible limitations?
 - Should captures become run-scoped instead of latest-only?
+- Should `qz-thoughts` default to raw reasoning, summary reasoning, hidden
+  reasoning with activity only, or a profile-controlled mode?
+- What exact Responses event sequence does Codex tolerate across streamed
+  tool-call continuation hops?
 - How much config should move from scripts into tracked sample config?
 - Should QuantZhai ever execute filesystem tools directly, or should it always delegate writes back to Codex?

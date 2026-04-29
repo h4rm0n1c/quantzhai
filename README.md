@@ -305,6 +305,18 @@ Start server and proxy:
 scripts/qz-up
 ```
 
+If a terminal window is configured to close when its command finishes, use:
+
+```bash
+scripts/qz-up --hold
+```
+
+To start the stack and enter Codex in one command:
+
+```bash
+scripts/qz-up --codex high
+```
+
 Restart only proxy:
 
 ```bash
@@ -315,6 +327,12 @@ Run Codex:
 
 ```bash
 scripts/qz-codex high
+```
+
+Watch streamed reasoning/thought output from the latest proxy request:
+
+```bash
+scripts/qz-thoughts
 ```
 
 Stop QuantZhai:

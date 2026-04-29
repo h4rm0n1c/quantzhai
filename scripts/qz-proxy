@@ -17,12 +17,19 @@ fi
 pkill -f "[q]uantzhai_proxy.py" 2>/dev/null || true
 pkill -f "[q]wen36turbo_proxy.py" 2>/dev/null || true
 
-nohup python3 "$QZ_ROOT/proxy/quantzhai_proxy.py" \
+proxy_cmd=(
+  python3 "$QZ_ROOT/proxy/quantzhai_proxy.py"
   --listen "$QZ_PROXY_HOST" \
   --port "$QZ_PROXY_PORT" \
   --upstream "http://$QZ_SERVER_HOST:$QZ_SERVER_PORT" \
-  --reasoning-stream-format summary \
-  > "$QZ_VAR_DIR/logs/qz-proxy.log" 2>&1 &
+  --reasoning-stream-format summary
+)
+
+if command -v setsid >/dev/null 2>&1; then
+  nohup setsid "${proxy_cmd[@]}" > "$QZ_VAR_DIR/logs/qz-proxy.log" 2>&1 &
+else
+  nohup "${proxy_cmd[@]}" > "$QZ_VAR_DIR/logs/qz-proxy.log" 2>&1 &
+fi
 
 echo "$!" > "$pid_file"
 sleep 0.5

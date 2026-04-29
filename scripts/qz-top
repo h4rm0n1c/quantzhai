@@ -24,6 +24,8 @@ import time
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
+MAX_LOG_LINES = 1000
+
 
 @dataclass
 class GpuRow:
@@ -77,6 +79,8 @@ def run_cmd(args, timeout=2.0) -> str:
             text=True,
             timeout=timeout,
         )
+    except subprocess.CalledProcessError as exc:
+        return (exc.output or str(exc)).strip()
     except Exception as exc:
         return str(exc)
 
@@ -105,6 +109,7 @@ def curl_health(host: str, port: str) -> bool:
 
 def get_logs(lines: int) -> str:
     container = os.environ.get("QZ_CONTAINER", "qwen36turbo")
+    lines = max(1, min(lines, MAX_LOG_LINES))
     out = docker(["logs", f"--tail={lines}", container], timeout=2.5)
     out = out.replace("\r", "\n")
     out = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", out)
@@ -229,8 +234,17 @@ def parse_rates(logs: str) -> Rates:
         ):
             rates.recent.append((recent_kind(line), clean_recent(line)))
 
+    if not rates.recent:
+        for line in logs.splitlines():
+            if re.search(r"qz-docker-root-helper|returned non-zero|permission denied|Cannot connect|denied:", line, re.I):
+                rates.recent.append(("error", clean_recent(line)))
+
     rates.recent = rates.recent[-9:]
     return rates
+
+
+def normalize_log_lines(lines: int) -> int:
+    return max(1, min(lines, MAX_LOG_LINES))
 
 
 def latest_benchmark() -> Optional[BenchmarkSummary]:
@@ -425,8 +439,7 @@ class UI:
                 "-a",
                 "--filter",
                 f"name=^/{os.environ.get('QZ_CONTAINER', 'qwen36turbo')}$",
-                "--format",
-                "{{.Names}}|{{.Status}}|{{.Ports}}",
+                "--format={{.Names}}|{{.Status}}|{{.Ports}}",
             ],
             timeout=2.0,
         )
@@ -571,6 +584,7 @@ class UI:
 
 
 def once(log_lines: int):
+    log_lines = normalize_log_lines(log_lines)
     backend = curl_health(os.environ.get("QZ_SERVER_HOST", "127.0.0.1"), os.environ.get("QZ_SERVER_PORT", "18084"))
     proxy = curl_health(os.environ.get("QZ_PROXY_HOST", "127.0.0.1"), os.environ.get("QZ_PROXY_PORT", "18180"))
     logs = get_logs(log_lines)
@@ -603,8 +617,9 @@ def main():
     parser = argparse.ArgumentParser(description="QuantZhai top-style monitor")
     parser.add_argument("--once", "-1", action="store_true", help="print one snapshot and exit")
     parser.add_argument("-i", "--interval", type=float, default=1.0, help="refresh interval in seconds")
-    parser.add_argument("-n", "--lines", type=int, default=int(os.environ.get("QZ_TOP_LOG_LINES", "10000")), help="container log lines to scan")
+    parser.add_argument("-n", "--lines", type=int, default=int(os.environ.get("QZ_TOP_LOG_LINES", str(MAX_LOG_LINES))), help=f"container log lines to scan, capped at {MAX_LOG_LINES}")
     args = parser.parse_args()
+    args.lines = normalize_log_lines(args.lines)
 
     if args.once:
         once(args.lines)

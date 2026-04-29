@@ -1,0 +1,387 @@
+#!/usr/bin/env bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ -f "$SCRIPT_DIR/qz-env" ]]; then
+  source "$SCRIPT_DIR/qz-env"
+fi
+
+set +e
+set +u
+set +o pipefail 2>/dev/null
+
+python3 - "$@" <<'PY'
+import argparse
+import curses
+import json
+import os
+import re
+import shlex
+import subprocess
+import signal
+import textwrap
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+
+@dataclass
+class ThoughtState:
+    path: Path
+    mtime: float = 0.0
+    response_id: str = ""
+    model: str = ""
+    status: str = ""
+    thought: str = ""
+    answer: str = ""
+    activity: List[Tuple[str, str]] = field(default_factory=list)
+    backend: List[Tuple[str, str]] = field(default_factory=list)
+    events: int = 0
+    bytes_read: int = 0
+    parse_error: str = ""
+    backend_error: str = ""
+
+
+def capture_path(name: str) -> Path:
+    root = Path(os.environ.get("QZ_VAR_DIR", "var"))
+    return root / "captures" / name
+
+
+def docker_cmd() -> List[str]:
+    return shlex.split(os.environ.get("QZ_DOCKER_CMD", "docker"))
+
+
+def read_backend_logs(lines: int) -> Tuple[List[Tuple[str, str]], str]:
+    container = os.environ.get("QZ_CONTAINER", "qwen36turbo")
+    lines = max(1, min(lines, 200))
+    try:
+        out = subprocess.check_output(
+            docker_cmd() + ["logs", f"--tail={lines}", container],
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=2.0,
+        )
+    except subprocess.CalledProcessError as exc:
+        return [], (exc.output or str(exc)).strip()
+    except Exception as exc:
+        return [], str(exc)
+
+    rows: List[Tuple[str, str]] = []
+    for line in clean(out).splitlines():
+        if "prompt processing progress" in line:
+            rows.append(("prompt", re.sub(r"^.*?prompt processing progress,?\s*", "", line).strip()))
+        elif "created context checkpoint" in line:
+            rows.append(("checkpoint", re.sub(r"^.*?created context checkpoint", "created context checkpoint", line).strip()))
+        elif "restored context checkpoint" in line:
+            rows.append(("restore", re.sub(r"^.*?restored context checkpoint", "restored context checkpoint", line).strip()))
+        elif "reasoning-budget:" in line:
+            rows.append(("budget", line.strip()))
+        elif "prompt eval time =" in line:
+            rows.append(("prompt", line.strip()))
+        elif re.search(r"^\s*eval time\s*=", line):
+            rows.append(("generate", line.strip()))
+        elif "total time =" in line:
+            rows.append(("total", line.strip()))
+        elif "done request:" in line:
+            rows.append(("request", re.sub(r"^.*?done request:", "done request:", line).strip()))
+        elif "processing task" in line:
+            rows.append(("task", line.strip()))
+    return rows[-12:], ""
+
+
+def clean(text: str) -> str:
+    text = (text or "").replace("\r", "\n")
+    text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", text)
+    return text
+
+
+def clip(text: str, width: int) -> str:
+    if width <= 0:
+        return ""
+    text = clean(str(text)).replace("\n", " ")
+    if len(text) <= width:
+        return text
+    return text[: max(0, width - 1)] + "…"
+
+
+def parse_sse(raw: str, path: Path) -> ThoughtState:
+    state = ThoughtState(path=path)
+    try:
+        stat = path.stat()
+        state.mtime = stat.st_mtime
+        state.bytes_read = stat.st_size
+    except Exception:
+        pass
+
+    event_name = ""
+    data_lines: List[str] = []
+
+    def flush():
+        nonlocal event_name, data_lines
+        if not data_lines:
+            event_name = ""
+            return
+
+        data = "\n".join(data_lines).strip()
+        data_lines = []
+        name = event_name
+        event_name = ""
+        if data == "[DONE]":
+            state.status = "done"
+            state.activity.append(("done", "stream completed"))
+            return
+
+        try:
+            payload = json.loads(data)
+        except Exception as exc:
+            state.parse_error = f"{type(exc).__name__}: {exc}"
+            return
+
+        ev_type = payload.get("type") or name or "event"
+        state.events += 1
+
+        if ev_type == "response.created":
+            response = payload.get("response") or {}
+            state.response_id = response.get("id", state.response_id)
+            state.model = response.get("model", state.model)
+            state.status = response.get("status", state.status)
+            state.activity.append(("created", f"{state.model} {state.response_id}"))
+            return
+
+        if ev_type in ("response.in_progress", "response.completed"):
+            response = payload.get("response") or {}
+            state.status = response.get("status", state.status)
+            if response.get("model"):
+                state.model = response["model"]
+            if response.get("id"):
+                state.response_id = response["id"]
+            state.activity.append((ev_type.rsplit(".", 1)[-1], state.status or ev_type))
+            return
+
+        if ev_type == "response.output_item.added":
+            item = payload.get("item") or {}
+            label = item.get("type", "item")
+            state.activity.append(("add", f"{label} {item.get('id', '')}".strip()))
+            return
+
+        if ev_type == "response.output_item.done":
+            item = payload.get("item") or {}
+            label = item.get("type", "item")
+            state.activity.append(("done", f"{label} {item.get('status', '')}".strip()))
+            return
+
+        if ev_type in ("response.reasoning_text.delta", "response.reasoning_summary_text.delta"):
+            state.thought += payload.get("delta") or ""
+            state.activity.append(("thought", f"+{len(payload.get('delta') or '')} chars"))
+            return
+
+        if ev_type in ("response.reasoning_text.done", "response.reasoning_summary_text.done"):
+            text = payload.get("text") or ""
+            if text and len(text) > len(state.thought):
+                state.thought = text
+            state.activity.append(("thought", "done"))
+            return
+
+        if ev_type == "response.output_text.delta":
+            state.answer += payload.get("delta") or ""
+            state.activity.append(("answer", f"+{len(payload.get('delta') or '')} chars"))
+            return
+
+        if ev_type == "response.output_text.done":
+            text = payload.get("text") or ""
+            if text and len(text) > len(state.answer):
+                state.answer = text
+            state.activity.append(("answer", "done"))
+            return
+
+        if ev_type == "response.function_call_arguments.delta":
+            state.activity.append(("tool", clip(payload.get("delta", ""), 80)))
+            return
+
+        state.activity.append(("event", ev_type))
+
+    for line in raw.splitlines():
+        if not line.strip():
+            flush()
+            continue
+        if line.startswith("event:"):
+            event_name = line.split(":", 1)[1].strip()
+        elif line.startswith("data:"):
+            data_lines.append(line.split(":", 1)[1].lstrip())
+
+    flush()
+    state.activity = state.activity[-12:]
+    return state
+
+
+def load_state(path: Path) -> ThoughtState:
+    if not path.exists():
+        state = ThoughtState(path=path)
+        state.parse_error = f"missing: {path}"
+        return state
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:
+        state = ThoughtState(path=path)
+        state.parse_error = f"{type(exc).__name__}: {exc}"
+        return state
+    return parse_sse(raw, path)
+
+
+def wrap_lines(text: str, width: int, limit: int) -> List[str]:
+    width = max(10, width)
+    lines: List[str] = []
+    for para in clean(text).splitlines() or [""]:
+        if not para:
+            lines.append("")
+            continue
+        lines.extend(textwrap.wrap(para, width=width, replace_whitespace=False, drop_whitespace=False) or [""])
+    if len(lines) > limit:
+        return lines[-limit:]
+    return lines
+
+
+class UI:
+    def __init__(self, stdscr, path: Path, interval: float, log_lines: int):
+        self.stdscr = stdscr
+        self.path = path
+        self.interval = interval
+        self.log_lines = log_lines
+        curses.curs_set(0)
+        self.stdscr.nodelay(True)
+        curses.use_default_colors()
+        self.dim = curses.color_pair(0) | curses.A_DIM
+        self.bold = curses.color_pair(0) | curses.A_BOLD
+
+    def add(self, y: int, x: int, text: str, attr=0):
+        h, w = self.stdscr.getmaxyx()
+        if y < 0 or y >= h or x >= w:
+            return
+        self.stdscr.addnstr(y, x, text, max(0, w - x - 1), attr)
+
+    def box(self, y: int, x: int, h: int, w: int, title: str):
+        if h <= 1 or w <= 2:
+            return
+        self.stdscr.hline(y, x + 1, curses.ACS_HLINE, max(0, w - 2))
+        self.stdscr.hline(y + h - 1, x + 1, curses.ACS_HLINE, max(0, w - 2))
+        self.stdscr.vline(y + 1, x, curses.ACS_VLINE, max(0, h - 2))
+        self.stdscr.vline(y + 1, x + w - 1, curses.ACS_VLINE, max(0, h - 2))
+        self.stdscr.addch(y, x, curses.ACS_ULCORNER)
+        self.stdscr.addch(y, x + w - 1, curses.ACS_URCORNER)
+        self.stdscr.addch(y + h - 1, x, curses.ACS_LLCORNER)
+        self.stdscr.addch(y + h - 1, x + w - 1, curses.ACS_LRCORNER)
+        self.add(y, x + 2, f" {title} ", self.bold)
+
+    def draw_text_panel(self, y: int, x: int, h: int, w: int, title: str, text: str):
+        self.box(y, x, h, w, title)
+        lines = wrap_lines(text, max(10, w - 4), max(0, h - 2))
+        for i, line in enumerate(lines[-max(0, h - 2):]):
+            self.add(y + 1 + i, x + 2, clip(line, w - 4))
+
+    def draw_activity(self, y: int, x: int, h: int, w: int, state: ThoughtState):
+        self.box(y, x, h, w, "ACTIVITY")
+        rows = (state.backend + state.activity)[-max(0, h - 2):]
+        for i, (kind, message) in enumerate(rows):
+            self.add(y + 1 + i, x + 2, f"{kind:<9} {clip(message, w - 14)}")
+
+    def draw(self, state: ThoughtState):
+        self.stdscr.erase()
+        h, w = self.stdscr.getmaxyx()
+        age = max(0.0, time.time() - state.mtime) if state.mtime else 0.0
+        header = (
+            f"QZ-THOUGHTS  {time.strftime('%Y-%m-%d %H:%M:%S')}  "
+            f"status={state.status or '?'} events={state.events} age={age:.1f}s bytes={state.bytes_read}"
+        )
+        self.add(0, 0, clip(header, w - 1), self.bold)
+        self.add(1, 0, "─" * max(0, w - 1), self.dim)
+        meta = f"model={state.model or '?'} response={state.response_id or '?'} source={state.path}"
+        if state.parse_error:
+            meta += f" error={state.parse_error}"
+        if state.backend_error:
+            meta += f" backend_error={state.backend_error}"
+        self.add(2, 0, clip(meta, w - 1), self.dim)
+
+        body_y = 3
+        body_h = max(5, h - 5)
+        activity_w = min(52, max(30, w // 3))
+        thought_w = max(20, w - activity_w)
+        answer_h = max(4, min(8, body_h // 4))
+        thought_h = max(3, body_h - answer_h)
+
+        self.draw_text_panel(body_y, 0, thought_h, thought_w, "THOUGHT", state.thought)
+        self.draw_activity(body_y, thought_w, thought_h, activity_w, state)
+        self.draw_text_panel(body_y + thought_h, 0, answer_h, w, "ANSWER", state.answer)
+        self.add(h - 1, 0, " q quit  Ctrl-C quit", self.dim)
+        self.stdscr.refresh()
+
+    def loop(self):
+        while True:
+            state = load_state(self.path)
+            state.backend, state.backend_error = read_backend_logs(self.log_lines)
+            self.draw(state)
+            deadline = time.time() + self.interval
+            while time.time() < deadline:
+                try:
+                    key = self.stdscr.getch()
+                except KeyboardInterrupt:
+                    return
+                if key in (ord("q"), ord("Q"), 3):
+                    return
+                time.sleep(0.05)
+
+
+def print_once(path: Path, log_lines: int):
+    state = load_state(path)
+    state.backend, state.backend_error = read_backend_logs(log_lines)
+    age = max(0.0, time.time() - state.mtime) if state.mtime else 0.0
+    print(f"QZ-THOUGHTS {time.strftime('%Y-%m-%d %H:%M:%S')} status={state.status or '?'} events={state.events} age={age:.1f}s bytes={state.bytes_read}")
+    print(f"source={state.path}")
+    print(f"model={state.model or '?'} response={state.response_id or '?'}")
+    if state.parse_error:
+        print(f"error={state.parse_error}")
+    if state.backend_error:
+        print(f"backend_error={state.backend_error}")
+    print()
+    print("THOUGHT")
+    print(state.thought.strip() or "(empty)")
+    print()
+    print("ANSWER")
+    print(state.answer.strip() or "(empty)")
+    print()
+    print("ACTIVITY")
+    for kind, message in state.backend:
+        print(f"  {kind:<9} {message}")
+    for kind, message in state.activity:
+        print(f"  {kind:<9} {message}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Monitor QuantZhai streamed reasoning/thought output")
+    parser.add_argument("--once", "-1", action="store_true", help="print one snapshot and exit")
+    parser.add_argument("-i", "--interval", type=float, default=0.5, help="refresh interval in seconds")
+    parser.add_argument("-n", "--lines", type=int, default=120, help="backend log lines to scan, capped at 200")
+    parser.add_argument("--file", default=str(capture_path("latest-synthetic-sse.raw")), help="SSE capture file to monitor")
+    args = parser.parse_args()
+    args.lines = max(1, min(args.lines, 200))
+
+    path = Path(args.file)
+    if args.once:
+        print_once(path, args.lines)
+        return
+
+    def handle_signal(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
+    try:
+        curses.wrapper(lambda stdscr: UI(stdscr, path, args.interval, args.lines).loop())
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()
+PY

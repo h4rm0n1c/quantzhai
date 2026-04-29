@@ -3,6 +3,48 @@ set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qz-env"
 
+usage() {
+  cat <<'EOF'
+Usage: scripts/qz-up [options]
+
+Start the QuantZhai backend container and proxy.
+
+Options:
+  --hold             Keep the terminal open by attaching qz-top after startup.
+  --codex PROFILE    Start the stack, then exec scripts/qz-codex PROFILE.
+  -h, --help         Show this help.
+EOF
+}
+
+hold=0
+codex_profile=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --hold)
+      hold=1
+      shift
+      ;;
+    --codex)
+      codex_profile="${2:-}"
+      if [[ -z "$codex_profile" ]]; then
+        echo "--codex requires a profile" >&2
+        exit 2
+      fi
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'unknown option: %s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
 if [[ -z "$QZ_MODEL_SRC" || ! -f "$QZ_MODEL_SRC" ]]; then
   echo "QZ_MODEL_SRC missing or not a file. Copy .env.example to .env and edit it." >&2
   exit 1
@@ -76,3 +118,12 @@ fi
 printf 'backend healthy: http://%s:%s\n' "$QZ_SERVER_HOST" "$QZ_SERVER_PORT"
 
 "$QZ_ROOT/scripts/qz-proxy"
+
+if [[ -n "$codex_profile" ]]; then
+  exec "$QZ_ROOT/scripts/qz-codex" "$codex_profile"
+fi
+
+if [[ "$hold" == "1" ]]; then
+  printf 'QuantZhai ready. Attaching qz-top; Ctrl-C closes the monitor only. Stop the stack with scripts/qz-down.\n'
+  exec "$QZ_ROOT/scripts/qz-top"
+fi

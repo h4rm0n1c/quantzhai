@@ -44,7 +44,10 @@ Extract functions and classes that can be tested with plain inputs and outputs:
 - Responses API to upstream chat/completions translation.
 - Upstream response normalization.
 - Streaming chunk parsing and emission.
+- Multi-hop Responses streaming state machine.
+- Incremental streaming capture writer.
 - Tool-call detection and formatting.
+- Tool-call continuation boundaries between streamed upstream requests.
 - Error mapping.
 - Runtime config loading and validation.
 - Capture/log path selection.
@@ -68,7 +71,11 @@ Target tests that do not require GPU, Docker, or Codex:
 
 - Golden request/response fixture conversion.
 - Streaming fixture replay.
+- Streaming fixture replay with tool-call continuation across multiple upstream
+  requests.
+- Synthetic SSE fixture replay for the current buffered fallback.
 - Tool-call fixture parsing.
+- Cancellation and client-disconnect behavior during streamed runs.
 - Config defaults and `.env` override behavior.
 - Error response shapes.
 
@@ -81,6 +88,8 @@ Define a small backend contract before adding more model servers:
 - `list_models()`
 - `chat_completion()`
 - `stream_chat_completion()`
+- `responses()` or a higher-level equivalent if a backend can natively support
+  Responses-style events.
 - `healthcheck()`
 - `cancel()` if the backend supports it.
 
