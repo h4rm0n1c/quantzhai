@@ -147,6 +147,66 @@ def parse_num(text: str) -> float:
         return 0.0
 
 
+def human_si(value: float, suffix: str = "", precision: int = 1) -> str:
+    try:
+        value = float(value)
+    except Exception:
+        value = 0.0
+    sign = "-" if value < 0 else ""
+    value = abs(value)
+    if value == 0:
+        return f"0{suffix}"
+    units = ["", "k", "M", "G", "T", "P", "E"]
+    idx = 0
+    while value >= 1000.0 and idx < len(units) - 1:
+        value /= 1000.0
+        idx += 1
+    if idx == 0:
+        text = f"{value:.0f}" if value >= 100 else f"{value:.{precision}f}"
+    else:
+        text = f"{value:.{precision}f}"
+    return f"{sign}{text}{units[idx]}{suffix}"
+
+
+def human_bytes_from_mib(value: float, compact: bool = False) -> str:
+    try:
+        value = float(value)
+    except Exception:
+        value = 0.0
+    units = ["MiB", "GiB", "TiB", "PiB"]
+    idx = 0
+    while value >= 1024.0 and idx < len(units) - 1:
+        value /= 1024.0
+        idx += 1
+    text = f"{value:.0f}" if idx == 0 else f"{value:.1f}"
+    sep = "" if compact else " "
+    return f"{text}{sep}{units[idx]}"
+
+
+def human_duration_ms(ms: float) -> str:
+    try:
+        ms = float(ms)
+    except Exception:
+        ms = 0.0
+    if ms < 1000.0:
+        return f"{ms:.0f}ms"
+    seconds = ms / 1000.0
+    if seconds < 60.0:
+        return f"{seconds:.1f}s"
+    minutes = seconds / 60.0
+    if minutes < 60.0:
+        return f"{minutes:.1f}m"
+    hours = minutes / 60.0
+    return f"{hours:.1f}h"
+
+
+def vram_summary(gpus: List[GpuRow]) -> Tuple[float, float, float]:
+    used = sum(max(0.0, gpu.mem_used) for gpu in gpus)
+    total = sum(max(0.0, gpu.mem_total) for gpu in gpus)
+    available = max(0.0, total - used)
+    return used, available, total
+
+
 def parse_gpus() -> List[GpuRow]:
     query = (
         "index,name,utilization.gpu,memory.used,memory.total,"
@@ -520,7 +580,7 @@ class UI:
         filled = max(0, min(width, filled))
         return "█" * filled + "░" * (width - filled), pct
 
-    def draw_header(self, backend_ok: bool, proxy_ok: bool):
+    def draw_header(self, backend_ok: bool, proxy_ok: bool, gpus: Optional[List[GpuRow]] = None):
         h, w = self.stdscr.getmaxyx()
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
         self.add(0, 0, " QZ-TOP ", self.cyan | self.bold)
@@ -533,6 +593,14 @@ class UI:
         self.add(0, bx + 19, "ok" if proxy_ok else "fail", self.green | self.bold if proxy_ok else self.red | self.bold)
         self.add(0, bx + 25, f"refresh={self.interval:g}s", self.dim)
         self.add(0, bx + 37, f"logs={self.log_lines}", self.dim)
+        if gpus:
+            used, available, total = vram_summary(gpus)
+            self.add(
+                0,
+                bx + 48,
+                f"vram={human_bytes_from_mib(used, compact=True)}/{human_bytes_from_mib(available, compact=True)}/{human_bytes_from_mib(total, compact=True)}",
+                self.dim,
+            )
         self.add(1, 0, "─" * max(1, w - 1), self.dim)
 
     def draw_profile(self, y: int, x: int, h: int, w: int):
@@ -544,7 +612,7 @@ class UI:
             os.environ.get("QZ_TENSOR_SPLIT", "?"),
             os.environ.get("QZ_BATCH", "?"),
             os.environ.get("QZ_UBATCH", "?"),
-            os.environ.get("QZ_CACHE_RAM", "?") + "M",
+            human_bytes_from_mib(parse_num(os.environ.get("QZ_CACHE_RAM", "0"))),
             os.environ.get("QZ_CACHE_REUSE", "?"),
             os.environ.get("QZ_KV_KEY", "?") + "/" + os.environ.get("QZ_KV_VALUE", "?"),
         ]
@@ -586,28 +654,23 @@ class UI:
 
     def draw_gpu(self, y: int, x: int, h: int, w: int, gpus: List[GpuRow]):
         self.box(y, x, h, w, "GPU")
-        self.add(
-            y + 1,
-            x + 2,
-            f"{'ID':<5}{'NAME':<27}{'UTIL':>7}  {'VRAM':<27}{'USED/TOTAL':>17}{'POWER':>9}{'TEMP':>7}{'PCIE':>8}",
-            self.dim | self.bold,
-        )
+        self.add(y + 1, x + 2, f"{'ID':<5} {'NAME':<27} {'UTIL':>5}  {'MODEL USE':>11} {'AVAILABLE':>11} {'TOTAL VRAM':>11} {'POWER':>8} {'TEMP':>6} {'PCIE':>8}", self.dim | self.bold)
         for i, gpu in enumerate(gpus[: max(0, h - 3)]):
             row = y + 2 + i
-            name = clip(gpu.name, 26)
-            bar, pct = self.bar(gpu.mem_used, gpu.mem_total, 18)
-            self.add(row, x + 2, f"GPU{gpu.index:<2} {name:<26}", self.white)
-            self.add(row, x + 34, f"{gpu.util:5.0f}%", self.colour_for_util(gpu.util))
-            self.add(row, x + 42, bar, self.colour_for_pct(pct))
-            self.add(row, x + 61, f"{pct:5.1f}%", self.colour_for_pct(pct))
-            self.add(row, x + 69, f"{gpu.mem_used:5.0f}/{gpu.mem_total:<5.0f}", self.white)
-            self.add(row, x + 85, f"{gpu.power:6.1f}W", self.white)
-            self.add(row, x + 94, f"{gpu.temp:4.0f}C", self.white)
-            self.add(row, x + 101, f"g{gpu.gen}x{gpu.width}", self.white)
+            name = clip(gpu.name, 27)
+            used = human_bytes_from_mib(gpu.mem_used)
+            available = human_bytes_from_mib(max(0.0, gpu.mem_total - gpu.mem_used))
+            total = human_bytes_from_mib(gpu.mem_total)
+            row_text = (
+                f"GPU{gpu.index:<2} {name:<27} {gpu.util:>4.0f}%  "
+                f"{used:>11} {available:>11} {total:>11} "
+                f"{gpu.power:>6.1f}W {gpu.temp:>5.0f}C g{gpu.gen}x{gpu.width}"
+            )
+            self.add(row, x + 2, row_text, self.colour_for_util(gpu.util))
 
     def draw_throughput(self, y: int, x: int, h: int, w: int, rates: Rates, benchmark: Optional[BenchmarkSummary]):
         self.box(y, x, h, w, "THROUGHPUT")
-        self.add(y + 1, x + 2, f"{'METRIC':<12}{'LATEST':>14}{'MAX':>14}{'TOKENS':>12}{'MS':>11}", self.dim | self.bold)
+        self.add(y + 1, x + 2, f"{'METRIC':<12} {'LATEST':>10} {'MAX':>10} {'TOKENS':>10} {'TIME':>9}", self.dim | self.bold)
 
         rows = [
             ("prompt", rates.prompt_latest, rates.prompt_max, rates.prompt_tokens, rates.prompt_ms),
@@ -617,20 +680,23 @@ class UI:
         for idx, (name, latest, max_rate, tokens, ms) in enumerate(rows):
             row = y + 2 + idx
             attr = self.green | self.bold if latest > 0 else self.dim
-            self.add(row, x + 2, f"{name:<12}", self.white)
-            self.add(row, x + 14, f"{latest:11.2f}/s", attr)
-            self.add(row, x + 28, f"{max_rate:11.2f}/s", self.yellow | self.bold)
-            self.add(row, x + 45, f"{tokens:8d}", self.white)
-            self.add(row, x + 56, f"{ms:8.0f}", self.white)
+            row_text = (
+                f"{name:<12} "
+                f"{human_si(latest, '/s', precision=2):>10} "
+                f"{human_si(max_rate, '/s', precision=2):>10} "
+                f"{human_si(tokens, precision=1):>10} "
+                f"{human_duration_ms(ms):>9}"
+            )
+            self.add(row, x + 2, row_text, attr)
 
         self.add(
             y + 6,
             x + 2,
-            f"requests={rates.requests:<5} checkpoints={rates.checkpoints:<5} restores={rates.restores:<5} CUDA_OOM=",
+            f"requests={human_si(rates.requests, precision=1):<5} checkpoints={human_si(rates.checkpoints, precision=1):<5} restores={human_si(rates.restores, precision=1):<5} CUDA_OOM=",
             self.white,
         )
         oom_attr = self.green | self.bold if rates.oom == 0 else self.red | self.bold
-        self.add(y + 6, x + 60, f"{rates.oom}", oom_attr)
+        self.add(y + 6, x + 60, human_si(rates.oom, precision=1), oom_attr)
 
         if benchmark is not None:
             bench_text = (
@@ -668,15 +734,15 @@ class UI:
             os.environ.get("QZ_PROXY_HOST", "127.0.0.1"),
             os.environ.get("QZ_PROXY_PORT", "18180"),
         )
+        gpus = parse_gpus()
 
         logs = get_logs(self.log_lines) if monitor_log_fallback_enabled() else ""
         rates = parse_rates(logs)
         if proxy_ok:
             rates = merge_telemetry(rates, telemetry_recent())
         benchmark = latest_benchmark()
-        gpus = parse_gpus()
 
-        self.draw_header(backend_ok, proxy_ok)
+        self.draw_header(backend_ok, proxy_ok, gpus)
 
         if h < 24 or w < 100:
             self.add(3, 2, "Terminal too small. Need roughly 100x24.", self.red | self.bold)
@@ -719,28 +785,35 @@ def once(log_lines: int):
     log_lines = normalize_log_lines(log_lines)
     backend = curl_health(os.environ.get("QZ_SERVER_HOST", "127.0.0.1"), os.environ.get("QZ_SERVER_PORT", "18084"))
     proxy = curl_health(os.environ.get("QZ_PROXY_HOST", "127.0.0.1"), os.environ.get("QZ_PROXY_PORT", "18180"))
+    gpus = parse_gpus()
     logs = get_logs(log_lines) if monitor_log_fallback_enabled() else ""
     rates = parse_rates(logs)
     if proxy:
         rates = merge_telemetry(rates, telemetry_recent())
     benchmark = latest_benchmark()
-    gpus = parse_gpus()
 
     print(f"QZ-TOP {time.strftime('%Y-%m-%d %H:%M:%S')} backend={'ok' if backend else 'fail'} proxy={'ok' if proxy else 'fail'}")
     print()
     print("PROFILE")
-    print(f"  ctx={os.environ.get('QZ_CONTEXT', '?')} np={os.environ.get('QZ_PARALLEL', '?')} split={os.environ.get('QZ_TENSOR_SPLIT', '?')} batch={os.environ.get('QZ_BATCH', '?')} ubatch={os.environ.get('QZ_UBATCH', '?')} cache={os.environ.get('QZ_CACHE_RAM', '?')}MiB reuse={os.environ.get('QZ_CACHE_REUSE', '?')} kv={os.environ.get('QZ_KV_KEY', '?')}/{os.environ.get('QZ_KV_VALUE', '?')}")
+    print(f"  ctx={os.environ.get('QZ_CONTEXT', '?')} np={os.environ.get('QZ_PARALLEL', '?')} split={os.environ.get('QZ_TENSOR_SPLIT', '?')} batch={os.environ.get('QZ_BATCH', '?')} ubatch={os.environ.get('QZ_UBATCH', '?')} cache={human_bytes_from_mib(parse_num(os.environ.get('QZ_CACHE_RAM', '0')))} reuse={os.environ.get('QZ_CACHE_REUSE', '?')} kv={os.environ.get('QZ_KV_KEY', '?')}/{os.environ.get('QZ_KV_VALUE', '?')}")
+    if gpus:
+        used, available, total = vram_summary(gpus)
+        print(f"  vram=model={human_bytes_from_mib(used)} available={human_bytes_from_mib(available)} total={human_bytes_from_mib(total)}")
     print()
     print("GPU")
     for gpu in gpus:
-        pct = gpu.mem_used / max(1, gpu.mem_total) * 100
-        print(f"  GPU{gpu.index} {gpu.name:<26} util={gpu.util:3.0f}% mem={gpu.mem_used:.0f}/{gpu.mem_total:.0f} MiB ({pct:.1f}%) pwr={gpu.power:.1f}W temp={gpu.temp:.0f}C PCIe=g{gpu.gen}x{gpu.width}")
+        avail = max(0.0, gpu.mem_total - gpu.mem_used)
+        print(
+            f"  GPU{gpu.index} {gpu.name:<26} util={gpu.util:3.0f}% "
+            f"model={human_bytes_from_mib(gpu.mem_used)} avail={human_bytes_from_mib(avail)} total={human_bytes_from_mib(gpu.mem_total)} "
+            f"pwr={gpu.power:.1f}W temp={gpu.temp:.0f}C PCIe=g{gpu.gen}x{gpu.width}"
+        )
     print()
     print("THROUGHPUT")
-    print(f"  prompt   latest={rates.prompt_latest:.2f}/s max={rates.prompt_max:.2f}/s tokens={rates.prompt_tokens} ms={rates.prompt_ms:.0f}")
-    print(f"  generate latest={rates.gen_latest:.2f}/s max={rates.gen_max:.2f}/s tokens={rates.gen_tokens} ms={rates.gen_ms:.0f}")
-    print(f"  total    latest={rates.total_latest:.2f}/s max={rates.total_max:.2f}/s tokens={rates.total_tokens} ms={rates.total_ms:.0f}")
-    print(f"  requests={rates.requests} checkpoints={rates.checkpoints} restores={rates.restores} CUDA_OOM={rates.oom}")
+    print(f"  prompt   latest={human_si(rates.prompt_latest, '/s', precision=2)} max={human_si(rates.prompt_max, '/s', precision=2)} tokens={human_si(rates.prompt_tokens, precision=1)} time={human_duration_ms(rates.prompt_ms)}")
+    print(f"  generate latest={human_si(rates.gen_latest, '/s', precision=2)} max={human_si(rates.gen_max, '/s', precision=2)} tokens={human_si(rates.gen_tokens, precision=1)} time={human_duration_ms(rates.gen_ms)}")
+    print(f"  total    latest={human_si(rates.total_latest, '/s', precision=2)} max={human_si(rates.total_max, '/s', precision=2)} tokens={human_si(rates.total_tokens, precision=1)} time={human_duration_ms(rates.total_ms)}")
+    print(f"  requests={human_si(rates.requests, precision=1)} checkpoints={human_si(rates.checkpoints, precision=1)} restores={human_si(rates.restores, precision=1)} CUDA_OOM={human_si(rates.oom, precision=1)}")
     if benchmark is not None:
         print()
         print("BENCHMARK")
