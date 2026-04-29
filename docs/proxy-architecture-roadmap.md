@@ -19,7 +19,7 @@ The near-term target is not a rewrite. It is to break `proxy/quantzhai_proxy.py`
 - `proxy/qz_responses.py` now holds pure Responses normalization, apply_patch translation, tool declaration adaptation, and local compaction helpers.
 - `proxy/qz_tools.py` now defines the first tool adapter/registry API.
 - `proxy/qz_tool_apply_patch.py` now holds the apply_patch tool adapter and compatibility helpers.
-- `proxy/qz_tool_web.py` now holds the web_search declaration/tool-choice adapter; web execution remains in the handler pending a focused extraction.
+- `proxy/qz_tool_web.py` now holds the web_search declaration/tool-choice adapter and the local web runtime for search/open/find execution.
 - This is acceptable for the first working stack, but it makes regression testing and future backend work harder than necessary.
 
 ## Phase 1: Python Package Restructure
@@ -55,7 +55,7 @@ First extraction landed:
 - runtime capture path/write helpers
 - Responses input/tool normalization, apply_patch adaptation, and local compaction helpers
 - initial tool adapter/registry API with apply_patch as the first concrete adapter
-- web_search declaration/tool-choice adapter
+- web_search declaration/tool-choice adapter and local execution runtime
 
 ## Tool Adapter API
 
@@ -76,8 +76,8 @@ a completed function call, dispatch the adapter, append the result, and resume
 the upstream request without embedding tool-specific rules into the stream
 parser.
 
-Next target: move `web_search` execution and cache/runtime state behind the
-`qz_tool_web.py` adapter.
+Next target: have real SSE call the tool registry/runtime directly when a
+streamed function call completes.
 
 ## Phase 2: Extract Testable Core Units
 
