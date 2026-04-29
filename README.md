@@ -33,11 +33,11 @@ The tested launch split model state across both GPUs. Smaller or different model
 ```text
 Codex CLI
   -> QuantZhai proxy on 127.0.0.1:18180
-  -> llama.cpp turboquant server on 127.0.0.1:18084
-  -> local GGUF model mounted into Docker
+  -> llama.cpp router on 127.0.0.1:18084
+  -> local GGUF model directory mounted into Docker
 ```
 
-The proxy exists because Codex expects OpenAI-style Responses behavior, model catalog metadata, streaming events, rate-limit headers, tool-call normalization, and local compaction behavior. The Docker server does the model inference.
+The proxy exists because Codex expects OpenAI-style Responses behavior, model catalog metadata, streaming events, rate-limit headers, tool-call normalization, and local compaction behavior. The proxy now owns model catalog selection and tells the router which GGUF to load. The Docker server does the model inference.
 
 ## What Ships
 
@@ -239,8 +239,9 @@ Important settings:
 - `QZ_TQ_REPO`: turboquant llama.cpp Git repository.
 - `QZ_TQ_BRANCH`: turboquant branch to build.
 - `QZ_CUDA_ARCH`: CUDA architectures for the Docker build.
-- `QZ_MODEL_SRC`: absolute path to the local GGUF.
-- `QZ_MODEL_NAME`: filename mounted inside the container.
+- `QZ_MODEL_DIR`: directory scanned for local `*.gguf` files, default `var/models`.
+- `QZ_MODEL_KEY`: optional explicit selection by filename, stem, or model alias.
+- `QZ_MODEL_OVERRIDES`: local JSON overrides file, default `var/model-overrides.json`.
 - `QZ_SERVER_PORT`: host port for llama.cpp server, default `18084`.
 - `QZ_PROXY_PORT`: host port for QuantZhai proxy, default `18180`.
 - `QZ_CONTEXT`: context window, default `131072`.
@@ -253,6 +254,11 @@ Important settings:
 - `SEARXNG_POLICY`: search routing policy, default `docs/searxng-agent-policy-profiled.json`.
 
 The current defaults came from the working two-GPU Qwen3.6 setup. They are not universal.
+
+`proxy/qz_model_catalog.py` scans `QZ_MODEL_DIR`, merges
+`config/qz-model-overrides.example.json` with `QZ_MODEL_OVERRIDES` if present,
+writes `var/model-inventory.json`, and feeds the proxy's `/v1/models`,
+`/qz/models`, and model-load paths.
 
 ## Local Search
 

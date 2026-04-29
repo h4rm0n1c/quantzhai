@@ -45,16 +45,38 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$QZ_MODEL_SRC" || ! -f "$QZ_MODEL_SRC" ]]; then
-  echo "QZ_MODEL_SRC missing or not a file. Copy .env.example to .env and edit it." >&2
-  exit 1
-fi
-
 mkdir -p "$QZ_VAR_DIR/logs" "$QZ_VAR_DIR/run" "$QZ_VAR_DIR/captures"
+mkdir -p "$QZ_MODEL_DIR"
 
 if qz_docker ps -a --format '{{.Names}}' | grep -qx "$QZ_CONTAINER"; then
   qz_docker rm -f "$QZ_CONTAINER" >/dev/null
 fi
+
+backend_args=(
+  --host 0.0.0.0
+  --port 8080
+  -ngl 999
+  -c "$QZ_CONTEXT"
+  -np "$QZ_PARALLEL"
+  -b "$QZ_BATCH"
+  -ub "$QZ_UBATCH"
+  -t "$QZ_THREADS"
+  -tb "$QZ_THREAD_BATCH"
+  -fa on
+  --split-mode layer
+  --tensor-split "$QZ_TENSOR_SPLIT"
+  --main-gpu "$QZ_MAIN_GPU"
+  --kv-unified
+  --reasoning on
+  --reasoning-budget -1
+  --cache-ram "$QZ_CACHE_RAM"
+  --cache-reuse "$QZ_CACHE_REUSE"
+  --mlock
+  -ctk "$QZ_KV_KEY"
+  -ctv "$QZ_KV_VALUE"
+  --metrics
+  --reasoning-format deepseek
+)
 
 qz_docker run -d \
   --name "$QZ_CONTAINER" \
@@ -62,33 +84,10 @@ qz_docker run -d \
   --cap-add IPC_LOCK \
   --ulimit memlock=-1:-1 \
   -p "$QZ_SERVER_PORT:8080" \
-  --mount "type=bind,src=$QZ_MODEL_SRC,dst=/models/$QZ_MODEL_NAME,readonly" \
+  --mount "type=bind,src=$QZ_MODEL_DIR,dst=/models,readonly" \
   "$QZ_IMAGE" \
-  -m "/models/$QZ_MODEL_NAME" \
-  --alias "$QZ_MODEL_ALIAS" \
-  --host 0.0.0.0 \
-  --port 8080 \
-  -ngl 999 \
-  -c "$QZ_CONTEXT" \
-  -np "$QZ_PARALLEL" \
-  -b "$QZ_BATCH" \
-  -ub "$QZ_UBATCH" \
-  -t "$QZ_THREADS" \
-  -tb "$QZ_THREAD_BATCH" \
-  -fa on \
-  --split-mode layer \
-  --tensor-split "$QZ_TENSOR_SPLIT" \
-  --main-gpu "$QZ_MAIN_GPU" \
-  --kv-unified \
-  --reasoning on \
-  --reasoning-budget -1 \
-  --cache-ram "$QZ_CACHE_RAM" \
-  --cache-reuse "$QZ_CACHE_REUSE" \
-  --mlock \
-  -ctk "$QZ_KV_KEY" \
-  -ctv "$QZ_KV_VALUE" \
-  --metrics \
-  --reasoning-format deepseek
+  --models-dir /models \
+  "${backend_args[@]}"
 
 printf 'waiting for backend: http://%s:%s/health\n' "$QZ_SERVER_HOST" "$QZ_SERVER_PORT"
 

@@ -33,10 +33,17 @@ check codex codex --version
 check python3 python3 --version
 check nvidia-smi nvidia-smi
 
-if [[ -n "$QZ_MODEL_SRC" && -f "$QZ_MODEL_SRC" ]]; then
-  printf 'ok   model: %s\n' "$QZ_MODEL_SRC"
+if model_report="$(python3 "$QZ_ROOT/proxy/qz_model_catalog.py" resolve --json 2>/dev/null)"; then
+  selected_line="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); selected=data["selected"]; print(selected["key"]); print(selected["path"]); print(data["reason"])' <<<"$model_report")"
+  mapfile -t selected_parts <<<"$selected_line"
+  selected_key="${selected_parts[0]:-}"
+  selected_path="${selected_parts[1]:-}"
+  selected_reason="${selected_parts[2]:-}"
+  printf 'ok   model: %s\n' "$selected_path"
+  printf 'ok   model key: %s\n' "$selected_key"
+  printf 'ok   model selection: %s\n' "$selected_reason"
 else
-  printf 'fail model: set QZ_MODEL_SRC in .env\n'
+  printf 'fail model: no GGUF found under %s\n' "$QZ_MODEL_DIR"
   fail=1
 fi
 

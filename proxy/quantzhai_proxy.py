@@ -16,6 +16,7 @@ try:
         MODEL_BUDGETS,
         api_contract_payload,
     )
+    from .qz_model_catalog import ModelCatalog
     from .qz_responses import (
         _apply_patch_call_to_function_call,
         _apply_patch_output_style,
@@ -57,6 +58,7 @@ except ImportError:
         MODEL_BUDGETS,
         api_contract_payload,
     )
+    from qz_model_catalog import ModelCatalog
     from qz_responses import (
         _apply_patch_call_to_function_call,
         _apply_patch_output_style,
@@ -94,6 +96,8 @@ except ImportError:
 class ProxyHandler(BaseHTTPRequestHandler):
     upstream = "http://127.0.0.1:18084"
     reasoning_stream_format = "raw"
+    model_catalog = None
+    model_catalog_path = None
     searxng_base_url = None
     searxng_timeout = 15.0
     searxng_policy_path = None
@@ -340,26 +344,80 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 event_lines = []
 
 
+    def _model_catalog(self):
+        if self.model_catalog is None:
+            root = Path(os.environ.get("QZ_ROOT", Path(__file__).resolve().parents[1]))
+            self.__class__.model_catalog = ModelCatalog.from_env(root)
+            self.__class__.model_catalog_path = str(self.model_catalog.cache_path)
+        return self.model_catalog
+
+    def _backend_models(self):
+        try:
+            url = self.upstream.rstrip("/") + "/models"
+            req = urllib.request.Request(url, method="GET", headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            return {}
+
+        backend = {}
+        for item in payload.get("data") or []:
+            if not isinstance(item, dict):
+                continue
+            model_id = item.get("id") or item.get("name")
+            if not isinstance(model_id, str) or not model_id:
+                continue
+            status = item.get("status") or {}
+            state = status.get("value") if isinstance(status, dict) else "unknown"
+            backend[model_id] = {
+                "state": state or "unknown",
+                "path": item.get("path"),
+                "quantization_level": item.get("quantization_level") or item.get("quant") or item.get("type"),
+            }
+        return backend
+
+    def _load_backend_model(self, model_id: str):
+        if not model_id:
+            return
+        url = self.upstream.rstrip("/") + "/models/load"
+        body = json.dumps({"model": model_id}).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            resp.read()
+
+    def _resolve_model_selection(self, requested_model):
+        catalog = self._model_catalog()
+        if not requested_model or requested_model in MODEL_BUDGETS:
+            selected = catalog.selected or (catalog.entries[0] if catalog.entries else None)
+            reason = f"profile {requested_model or 'default'}"
+        else:
+            selected, reason = catalog.resolve(query=requested_model)
+        if selected is None and catalog.entries:
+            selected = catalog.entries[0]
+            reason = reason or "catalog fallback"
+        if selected is None:
+            return None, reason
+        canonical = selected["key"]
+        self._load_backend_model(canonical)
+        return selected, reason
+
+    def _model_catalog_payload(self):
+        catalog = self._model_catalog()
+        backend_models = self._backend_models()
+        return catalog.to_v1_models(backend_models=backend_models)
+
     def _ollama_models(self):
-        now = "2026-04-27T00:00:00Z"
-        models = []
-        for name in MODEL_BUDGETS:
-            models.append({
-                "name": name,
-                "model": name,
-                "modified_at": now,
-                "size": 1,
-                "digest": "local-qwen36turbo",
-                "details": {
-                    "parent_model": "",
-                    "format": "gguf",
-                    "family": "qwen",
-                    "families": ["qwen"],
-                    "parameter_size": "35B-A3B",
-                    "quantization_level": "Q4_K_M+TurboQuant"
-                }
-            })
-        return models
+        catalog = self._model_catalog()
+        backend_models = self._backend_models()
+        return catalog.to_ollama_models(backend_models=backend_models)
 
     def _handle_ollama_get(self):
         # Codex --oss may probe Ollama-compatible endpoints before using /v1.
@@ -450,6 +508,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 "proxy": "Qwen3.6Turbo",
                 "upstream": self.upstream,
                 "models": MODEL_BUDGETS,
+                "catalog": self._model_catalog_payload(),
                 "supports": list(CURRENT_API_ENDPOINTS),
                 "api_contract": api_contract_payload(),
             })
@@ -478,12 +537,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
             return
 
         if self.path == "/v1/models":
+            self._send_json(200, self._model_catalog_payload())
+            return
+
+        if self.path == "/qz/models":
+            catalog = self._model_catalog()
             self._send_json(200, {
-                "object": "list",
-                "data": [
-                    {"id": name, "object": "model", "owned_by": "local"}
-                    for name in MODEL_BUDGETS
-                ],
+                "catalog": catalog.to_payload(),
+                "backend": self._backend_models(),
             })
             return
 
@@ -507,6 +568,42 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         if self.path in ("/responses", "/v1/responses"):
             self._proxy_json_api("/v1/responses")
+            return
+
+        if self.path == "/qz/models/refresh":
+            catalog = self._model_catalog()
+            catalog.refresh()
+            self._send_json(200, {
+                "catalog": catalog.to_payload(),
+                "backend": self._backend_models(),
+            })
+            return
+
+        if self.path in ("/qz/models/load", "/qz/models/select"):
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                body = json.loads(raw.decode("utf-8"))
+            except Exception as e:
+                self._send_json(400, {"error": f"invalid JSON: {e}"})
+                return
+            requested = body.get("model") or body.get("key") or body.get("name")
+            catalog = self._model_catalog()
+            selected, reason = catalog.select(requested)
+            if selected is None:
+                self._send_json(404, {"error": "no model selected", "reason": reason, "catalog": catalog.to_payload()})
+                return
+            try:
+                self._load_backend_model(selected["key"])
+            except Exception as exc:
+                self._send_json(502, {"error": f"backend model load failed: {exc}", "selected": selected, "reason": reason})
+                return
+            self._send_json(200, {
+                "selected": selected,
+                "reason": reason,
+                "backend": self._backend_models(),
+                "catalog": catalog.to_payload(),
+            })
             return
 
         self._proxy_raw("POST")
@@ -684,10 +781,20 @@ class ProxyHandler(BaseHTTPRequestHandler):
             or "text/event-stream" in self.headers.get("Accept", "")
         )
 
-        requested_model = body.get("model") or "Qwen3.6Turbo-medium"
-        budget = MODEL_BUDGETS.get(requested_model, MODEL_BUDGETS["Qwen3.6Turbo"])
+        client_model = body.get("model") or "Qwen3.6Turbo-medium"
+        selected_model, selection_reason = self._resolve_model_selection(client_model)
+        if selected_model is None:
+            self._send_json(404, {
+                "error": "no model available",
+                "reason": selection_reason,
+                "catalog": self._model_catalog().to_payload(),
+            })
+            return
 
-        body["model"] = requested_model
+        backend_model = selected_model["key"]
+        budget = MODEL_BUDGETS.get(client_model, MODEL_BUDGETS.get("Qwen3.6Turbo", 256))
+
+        body["model"] = backend_model
         body["thinking_budget_tokens"] = budget
         body.setdefault("temperature", 0.1)
 
@@ -714,7 +821,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 try:
                     self._run_responses_streaming_locally(
                         body,
-                        requested_model,
+                        client_model,
                         apply_patch_output_style,
                     )
                 except (BrokenPipeError, ConnectionResetError):
@@ -732,7 +839,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             "object": "response",
                             "created_at": _now_ts(),
                             "status": "failed",
-                            "model": requested_model,
+                            "model": client_model,
                             "error": {"message": f"local streaming runtime error: {e}"},
                             "output": [],
                             "usage": _normalize_response_usage({}),
@@ -746,7 +853,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             try:
                 status, content_type, out = self._run_responses_locally(
                     body,
-                    requested_model,
+                    client_model,
                     apply_patch_output_style,
                 )
             except urllib.error.HTTPError as e:
@@ -863,7 +970,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         try:
             out = json.loads(resp_data.decode("utf-8"))
-            out["model"] = requested_model
+            out["model"] = client_model
             if upstream_path == "/v1/responses":
                 out["usage"] = _normalize_response_usage(out.get("usage"))
             # Do not recursively clean response text here.
@@ -948,6 +1055,10 @@ def main():
     capabilities_path = Path(args.searxng_capabilities) if args.searxng_capabilities else script_dir / "searxng-capabilities.json"
     policy = _safe_json_file(policy_path)
     capabilities = _safe_json_file(capabilities_path)
+    root = Path(os.environ.get("QZ_ROOT", Path(__file__).resolve().parents[1]))
+    catalog = ModelCatalog.from_env(root)
+    ProxyHandler.model_catalog = catalog
+    ProxyHandler.model_catalog_path = str(catalog.cache_path)
 
     ProxyHandler.searxng_policy_path = str(policy_path)
     ProxyHandler.searxng_capabilities_path = str(capabilities_path)
@@ -955,6 +1066,24 @@ def main():
     ProxyHandler.searxng_capabilities = capabilities
     ProxyHandler.searxng_base_url = args.searxng_base_url or policy.get("searxng_base") or capabilities.get("base")
     ProxyHandler.searxng_timeout = args.searxng_timeout
+
+    try:
+        if catalog.selected is not None:
+            url = args.upstream.rstrip("/") + "/models/load"
+            body = json.dumps({"model": catalog.selected["key"]}).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=body,
+                method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                resp.read()
+    except Exception:
+        pass
 
     server = ThreadingHTTPServer((args.listen, args.port), ProxyHandler)
     print(

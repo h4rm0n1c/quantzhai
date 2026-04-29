@@ -1,0 +1,19 @@
+{
+  "default_key": "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M.gguf",
+  "models": {
+    "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M.gguf": {
+      "default": true,
+      "label": "Qwen3.6 35B A3B baseline",
+      "server_alias": "QwenZhai",
+      "notes": "Current QuantZhai baseline model."
+    },
+    "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ4_NL.gguf": {
+      "label": "Qwen3.6 35B A3B aggressive iq4",
+      "notes": "Tighter VRAM fit with slightly lower quant pressure."
+    },
+    "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact.gguf": {
+      "label": "Qwen3.6 35B A3B apex compact",
+      "notes": "Reasoning-focused compact variant."
+    }
+  }
+}
