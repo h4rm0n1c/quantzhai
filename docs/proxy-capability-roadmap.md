@@ -14,8 +14,8 @@ The proxy sits between Codex and a local llama.cpp-compatible server. Its job is
 
 It currently covers:
 
-- OpenAI-ish chat completions.
 - OpenAI Responses-style requests.
+- Legacy Chat Completions proxying.
 - Local model aliases and reasoning budgets.
 - Basic Ollama-compatible discovery endpoints used by Codex setup paths.
 - Streaming adaptation.
@@ -33,9 +33,10 @@ Current endpoints:
 
 - `GET /health`
 - `GET /v1/models`
-- `POST /v1/chat/completions`
 - `POST /v1/responses`
 - `POST /v1/responses/compact`
+- legacy `POST /v1/chat/completions`
+- legacy `POST /chat/completions`
 - Ollama compatibility probes such as `/api/tags`, `/api/version`, `/api/ps`, `/api/pull`, and `/api/show`
 - Raw fallback proxying for other GET/POST paths
 
@@ -52,6 +53,15 @@ What is weak:
 - Ollama support is a shim, not full Ollama behavior.
 
 Maturity: working beta.
+
+Current API direction:
+
+- Responses is the primary compatibility target for Codex/OpenAI-style agent
+  clients.
+- Chat Completions routes are deprecated compatibility shims and pending
+  removal after local clients are confirmed not to need them.
+- New streaming/tool work should target Responses SSE, not legacy completion
+  expansion.
 
 ## Model Aliases And Reasoning Budgets
 

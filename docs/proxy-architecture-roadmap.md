@@ -11,7 +11,8 @@ The near-term target is not a rewrite. It is to break `proxy/quantzhai_proxy.py`
 ## Current Shape
 
 - `proxy/quantzhai_proxy.py` is the working implementation.
-- It owns HTTP handling, OpenAI/Responses adaptation, upstream calls, streaming, tool handling, logging, and runtime configuration in one file.
+- It owns HTTP handling, OpenAI/Responses adaptation, upstream calls, streaming, tool handling, logging, and most runtime behavior in one file.
+- `proxy/qz_proxy_config.py` now holds the first extracted runtime constants and API contract metadata.
 - This is acceptable for the first working stack, but it makes regression testing and future backend work harder than necessary.
 
 ## Phase 1: Python Package Restructure
@@ -35,6 +36,13 @@ proxy/
 ```
 
 Keep `proxy/quantzhai_proxy.py` as a compatibility entrypoint at first, so existing scripts continue to work.
+
+First extraction landed:
+
+- model budget constants
+- local Codex rate-limit metadata
+- current API endpoint contract
+- legacy endpoint deprecation metadata
 
 ## Phase 2: Extract Testable Core Units
 
@@ -115,3 +123,24 @@ Do not start with Rust. Use the Python restructure to discover the real boundari
 - Do not break `scripts/qz-proxy` or `scripts/qz-up`.
 - Do not require Docker, Codex, or a live model for normal unit tests.
 - Do not add a build system until tests need it.
+
+## API Contract Direction
+
+QuantZhai should target current OpenAI-style agent clients through Responses.
+
+Current endpoints:
+
+- `/v1/responses`
+- `/v1/responses/compact`
+
+Legacy compatibility:
+
+- `/v1/chat/completions`
+- `/chat/completions`
+
+The Chat Completions routes are still proxied for compatibility, but they are
+now flagged as deprecated at runtime through headers and health metadata. They
+should remain only until local clients are confirmed not to depend on them.
+
+The next streaming architecture work should focus on real Responses SSE with
+local tool-call continuation, not expanding legacy Chat Completions behavior.

@@ -12,6 +12,14 @@ from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from qz_proxy_config import (
+    CURRENT_API_ENDPOINTS,
+    LEGACY_API_ENDPOINTS,
+    LOCAL_CODEX_RATE_LIMITS,
+    MODEL_BUDGETS,
+    api_contract_payload,
+)
+
 
 def _quantzhai_var_dir() -> Path:
     return Path(os.environ.get("QZ_VAR_DIR") or Path(__file__).resolve().parents[1] / "var")
@@ -40,46 +48,6 @@ def _write_capture(name: str, payload, mode: str = "text"):
 def _append_capture(name: str, text: str):
     with _capture_path(name).open("a", encoding="utf-8") as handle:
         handle.write(text)
-
-MODEL_BUDGETS = {
-    "QwenZhai-low": 0,
-    "QwenZhai-medium": 256,
-    "QwenZhai-high": 512,
-    "QwenZhai-max": -1,
-    "QwenZhai-caveman": 256,
-    "QwenZhai": 256,
-    "Qwen3.6Turbo-low": 0,
-    "Qwen3.6Turbo-medium": 256,
-    "Qwen3.6Turbo-high": 512,
-    "Qwen3.6Turbo-max": -1,
-    "Qwen3.6Turbo-caveman": 256,
-    "Qwen3.6Turbo": 256,
-}
-
-LOCAL_CODEX_RATE_LIMITS = {
-    "limit_id": "codex",
-    "limit_name": "local",
-    "primary": {
-        "used_percent": 0.0,
-        "window_minutes": 300,
-        "resets_in_seconds": 300 * 60,
-        "resets_at": 4102444800,
-    },
-    "secondary": {
-        "used_percent": 0.0,
-        "window_minutes": 10080,
-        "resets_in_seconds": 10080 * 60,
-        "resets_at": 4102444800,
-    },
-    "credits": {
-        "has_credits": True,
-        "unlimited": True,
-        "balance": None,
-    },
-    "plan_type": "local",
-    "rate_limit_reached_type": None,
-}
-
 
 LOCAL_COMPACTION_PREFIX = "localcmp:v1:"
 COMPACTION_CONFIG = {
@@ -1573,6 +1541,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
     searxng_capabilities = {}
     web_search_cache = {}
     opened_page_cache = {}
+    active_deprecation = None
 
     def log_message(self, fmt, *args):
         return
@@ -1605,6 +1574,31 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.send_header("x-codex-secondary-resets-at", str(secondary["resets_at"]))
         self.send_header("x-codex-credits-has-credits", "true" if credits["has_credits"] else "false")
         self.send_header("x-codex-credits-unlimited", "true" if credits["unlimited"] else "false")
+        self._send_deprecation_headers()
+
+    def _send_deprecation_headers(self):
+        info = self.active_deprecation
+        if not isinstance(info, dict):
+            return
+        reason = info.get("reason") or "Endpoint is deprecated."
+        replacement = info.get("replacement") or "/v1/responses"
+        self.send_header("Deprecation", "true")
+        self.send_header("X-QuantZhai-Deprecated", "true")
+        self.send_header("X-QuantZhai-Replacement", replacement)
+        self.send_header("Warning", f'299 QuantZhai "{reason}"')
+
+    def _mark_deprecated_endpoint(self, path: str):
+        self.active_deprecation = LEGACY_API_ENDPOINTS.get(path)
+        if not self.active_deprecation:
+            return
+        try:
+            import time
+            _append_capture(
+                "latest-deprecated-api.log",
+                f"{time.time():.3f} {path} replacement={self.active_deprecation.get('replacement')} removal={self.active_deprecation.get('removal')}\n",
+            )
+        except Exception:
+            pass
 
     def _codex_rate_limits_payload(self):
         payload = {
@@ -1886,6 +1880,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             pass
 
     def do_GET(self):
+        self.active_deprecation = None
         self._log_request_path("GET")
         if self._handle_ollama_get():
             return
@@ -1896,7 +1891,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 "proxy": "Qwen3.6Turbo",
                 "upstream": self.upstream,
                 "models": MODEL_BUDGETS,
-                "supports": ["/v1/chat/completions", "/v1/responses", "/v1/responses/compact"],
+                "supports": list(CURRENT_API_ENDPOINTS),
+                "api_contract": api_contract_payload(),
             })
             return
 
@@ -1913,12 +1909,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self._proxy_raw("GET")
 
     def do_POST(self):
+        self.active_deprecation = None
         self._log_request_path("POST")
 
         if self._handle_ollama_post():
             return
 
-        if self.path in ("/chat/completions", "/v1/chat/completions"):
+        if self.path in LEGACY_API_ENDPOINTS:
+            self._mark_deprecated_endpoint(self.path)
             self._proxy_json_api("/v1/chat/completions")
             return
 
