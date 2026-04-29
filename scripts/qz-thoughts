@@ -23,7 +23,9 @@ import textwrap
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Tuple
+
+MAX_LOG_LINES = 200
 
 
 @dataclass
@@ -54,7 +56,7 @@ def docker_cmd() -> List[str]:
 
 def read_backend_logs(lines: int) -> Tuple[List[Tuple[str, str]], str]:
     container = os.environ.get("QZ_CONTAINER", "qwen36turbo")
-    lines = max(1, min(lines, 200))
+    lines = max(1, min(lines, MAX_LOG_LINES))
     try:
         out = subprocess.check_output(
             docker_cmd() + ["logs", f"--tail={lines}", container],
@@ -87,7 +89,7 @@ def read_backend_logs(lines: int) -> Tuple[List[Tuple[str, str]], str]:
             rows.append(("request", re.sub(r"^.*?done request:", "done request:", line).strip()))
         elif "processing task" in line:
             rows.append(("task", line.strip()))
-    return rows[-12:], ""
+    return rows[-24:], ""
 
 
 def clean(text: str) -> str:
@@ -211,7 +213,7 @@ def parse_sse(raw: str, path: Path) -> ThoughtState:
             data_lines.append(line.split(":", 1)[1].lstrip())
 
     flush()
-    state.activity = state.activity[-12:]
+    state.activity = state.activity[-40:]
     return state
 
 
@@ -248,71 +250,168 @@ class UI:
         self.path = path
         self.interval = interval
         self.log_lines = log_lines
-        curses.curs_set(0)
         self.stdscr.nodelay(True)
+        curses.curs_set(0)
+        self.setup_colours()
+
+    def setup_colours(self):
+        curses.start_color()
         curses.use_default_colors()
-        self.dim = curses.color_pair(0) | curses.A_DIM
-        self.bold = curses.color_pair(0) | curses.A_BOLD
+        pairs = [
+            (1, curses.COLOR_GREEN),
+            (2, curses.COLOR_YELLOW),
+            (3, curses.COLOR_RED),
+            (4, curses.COLOR_CYAN),
+            (5, curses.COLOR_BLUE),
+            (6, curses.COLOR_MAGENTA),
+            (7, curses.COLOR_WHITE),
+        ]
+        for pair, colour in pairs:
+            try:
+                curses.init_pair(pair, colour, -1)
+            except Exception:
+                pass
+
+        self.green = curses.color_pair(1)
+        self.yellow = curses.color_pair(2)
+        self.red = curses.color_pair(3)
+        self.cyan = curses.color_pair(4)
+        self.blue = curses.color_pair(5)
+        self.magenta = curses.color_pair(6)
+        self.white = curses.color_pair(7)
+        self.bold = curses.A_BOLD
+        self.dim = curses.A_DIM
+
+    def status_attr(self, status: str):
+        if status == "completed":
+            return self.green | self.bold
+        if status in ("done", "in_progress"):
+            return self.cyan | self.bold
+        if status in ("failed", "error", "cancelled"):
+            return self.red | self.bold
+        return self.yellow | self.bold
+
+    def kind_attr(self, kind: str):
+        if kind in ("error", "failed", "OOM"):
+            return self.red | self.bold
+        if kind in ("thought", "reasoning", "budget"):
+            return self.magenta | self.bold
+        if kind in ("answer", "message", "completed", "done"):
+            return self.green | self.bold
+        if kind in ("prompt", "generate", "total", "request"):
+            return self.cyan | self.bold
+        if kind in ("restore", "checkpoint", "tool"):
+            return self.yellow | self.bold
+        return self.white
 
     def add(self, y: int, x: int, text: str, attr=0):
         h, w = self.stdscr.getmaxyx()
         if y < 0 or y >= h or x >= w:
             return
-        self.stdscr.addnstr(y, x, text, max(0, w - x - 1), attr)
+        try:
+            self.stdscr.addstr(y, x, clip(text, max(0, w - x - 1)), attr)
+        except curses.error:
+            pass
 
     def box(self, y: int, x: int, h: int, w: int, title: str):
-        if h <= 1 or w <= 2:
+        max_h, max_w = self.stdscr.getmaxyx()
+        if y >= max_h or x >= max_w:
             return
-        self.stdscr.hline(y, x + 1, curses.ACS_HLINE, max(0, w - 2))
-        self.stdscr.hline(y + h - 1, x + 1, curses.ACS_HLINE, max(0, w - 2))
-        self.stdscr.vline(y + 1, x, curses.ACS_VLINE, max(0, h - 2))
-        self.stdscr.vline(y + 1, x + w - 1, curses.ACS_VLINE, max(0, h - 2))
-        self.stdscr.addch(y, x, curses.ACS_ULCORNER)
-        self.stdscr.addch(y, x + w - 1, curses.ACS_URCORNER)
-        self.stdscr.addch(y + h - 1, x, curses.ACS_LLCORNER)
-        self.stdscr.addch(y + h - 1, x + w - 1, curses.ACS_LRCORNER)
-        self.add(y, x + 2, f" {title} ", self.bold)
+        h = min(h, max_h - y)
+        w = min(w, max_w - x)
+        if h < 3 or w < 8:
+            return
 
-    def draw_text_panel(self, y: int, x: int, h: int, w: int, title: str, text: str):
+        top = "┌" + "─" * (w - 2) + "┐"
+        mid = "│" + " " * (w - 2) + "│"
+        bot = "└" + "─" * (w - 2) + "┘"
+
+        self.add(y, x, top, self.dim)
+        for row in range(1, h - 1):
+            self.add(y + row, x, mid, self.dim)
+        self.add(y + h - 1, x, bot, self.dim)
+
+        label = f" {title} "
+        if len(label) < w - 4:
+            self.add(y, x + 2, label, self.cyan | self.bold)
+
+    def draw_text_panel(self, y: int, x: int, h: int, w: int, title: str, text: str, attr=0):
         self.box(y, x, h, w, title)
         lines = wrap_lines(text, max(10, w - 4), max(0, h - 2))
+        if not text.strip():
+            self.add(y + 1, x + 2, "(empty)", self.dim)
+            return
         for i, line in enumerate(lines[-max(0, h - 2):]):
-            self.add(y + 1 + i, x + 2, clip(line, w - 4))
+            self.add(y + 1 + i, x + 2, clip(line, w - 4), attr)
 
     def draw_activity(self, y: int, x: int, h: int, w: int, state: ThoughtState):
         self.box(y, x, h, w, "ACTIVITY")
-        rows = (state.backend + state.activity)[-max(0, h - 2):]
+        self.add(y + 1, x + 2, f"{'TYPE':<11} MESSAGE", self.dim | self.bold)
+        rows = (state.backend + state.activity)[-max(0, h - 3):]
         for i, (kind, message) in enumerate(rows):
-            self.add(y + 1 + i, x + 2, f"{kind:<9} {clip(message, w - 14)}")
+            row = y + 2 + i
+            self.add(row, x + 2, f"{clip(kind, 10):<11}", self.kind_attr(kind))
+            self.add(row, x + 14, clip(message, max(10, w - 16)), self.white)
+
+    def draw_header(self, state: ThoughtState):
+        h, w = self.stdscr.getmaxyx()
+        age = max(0.0, time.time() - state.mtime) if state.mtime else 0.0
+        status = state.status or "?"
+        self.add(0, 0, " QZ-THOUGHTS ", self.cyan | self.bold)
+        self.add(0, 14, time.strftime("%Y-%m-%d %H:%M:%S"), self.bold)
+        self.add(0, 36, "status=", self.dim)
+        self.add(0, 43, status, self.status_attr(status))
+        self.add(0, 55, f"events={state.events}", self.dim)
+        self.add(0, 68, f"age={age:.1f}s", self.yellow | self.bold if age > 30 else self.dim)
+        self.add(0, 82, f"bytes={state.bytes_read}", self.dim)
+        self.add(1, 0, "─" * max(1, w - 1), self.dim)
+
+    def draw_meta(self, y: int, state: ThoughtState):
+        _, w = self.stdscr.getmaxyx()
+        path_text = str(state.path)
+        home = str(Path.home())
+        if path_text.startswith(home + "/"):
+            path_text = "~/" + path_text[len(home) + 1 :]
+
+        left = f"model={state.model or '?'}"
+        mid = f"response={state.response_id or '?'}"
+        right = f"source={path_text}"
+        self.add(y, 0, clip(left, 34), self.white)
+        self.add(y, 36, clip(mid, 48), self.dim)
+        self.add(y, 86, clip(right, max(10, w - 87)), self.dim)
+
+        warnings = []
+        if state.parse_error:
+            warnings.append(f"parse={state.parse_error}")
+        if state.backend_error:
+            warnings.append(f"backend={state.backend_error}")
+        if warnings:
+            self.add(y + 1, 0, clip("  ".join(warnings), w - 1), self.red | self.bold)
 
     def draw(self, state: ThoughtState):
         self.stdscr.erase()
         h, w = self.stdscr.getmaxyx()
-        age = max(0.0, time.time() - state.mtime) if state.mtime else 0.0
-        header = (
-            f"QZ-THOUGHTS  {time.strftime('%Y-%m-%d %H:%M:%S')}  "
-            f"status={state.status or '?'} events={state.events} age={age:.1f}s bytes={state.bytes_read}"
-        )
-        self.add(0, 0, clip(header, w - 1), self.bold)
-        self.add(1, 0, "─" * max(0, w - 1), self.dim)
-        meta = f"model={state.model or '?'} response={state.response_id or '?'} source={state.path}"
-        if state.parse_error:
-            meta += f" error={state.parse_error}"
-        if state.backend_error:
-            meta += f" backend_error={state.backend_error}"
-        self.add(2, 0, clip(meta, w - 1), self.dim)
+        self.draw_header(state)
 
-        body_y = 3
-        body_h = max(5, h - 5)
-        activity_w = min(52, max(30, w // 3))
-        thought_w = max(20, w - activity_w)
-        answer_h = max(4, min(8, body_h // 4))
-        thought_h = max(3, body_h - answer_h)
+        if h < 22 or w < 100:
+            self.add(3, 2, "Terminal too small. Need roughly 100x22.", self.red | self.bold)
+            self.stdscr.refresh()
+            return
 
-        self.draw_text_panel(body_y, 0, thought_h, thought_w, "THOUGHT", state.thought)
-        self.draw_activity(body_y, thought_w, thought_h, activity_w, state)
-        self.draw_text_panel(body_y + thought_h, 0, answer_h, w, "ANSWER", state.answer)
-        self.add(h - 1, 0, " q quit  Ctrl-C quit", self.dim)
+        self.draw_meta(2, state)
+
+        body_y = 4
+        body_h = max(8, h - body_y - 2)
+        full_w = max(98, w - 2)
+        activity_w = min(62, max(40, full_w // 3))
+        thought_w = max(36, full_w - activity_w - 1)
+        answer_h = max(5, min(9, body_h // 4))
+        thought_h = max(7, body_h - answer_h)
+
+        self.draw_text_panel(body_y, 0, thought_h, thought_w, "THOUGHT", state.thought, self.white)
+        self.draw_activity(body_y, thought_w + 1, thought_h, activity_w, state)
+        self.draw_text_panel(body_y + thought_h, 0, answer_h, full_w, "ANSWER", state.answer, self.green | self.bold)
+        self.add(h - 1, 0, " q quit  Ctrl-C quit ", self.dim | self.bold)
         self.stdscr.refresh()
 
     def loop(self):
@@ -360,10 +459,10 @@ def main():
     parser = argparse.ArgumentParser(description="Monitor QuantZhai streamed reasoning/thought output")
     parser.add_argument("--once", "-1", action="store_true", help="print one snapshot and exit")
     parser.add_argument("-i", "--interval", type=float, default=0.5, help="refresh interval in seconds")
-    parser.add_argument("-n", "--lines", type=int, default=120, help="backend log lines to scan, capped at 200")
+    parser.add_argument("-n", "--lines", type=int, default=120, help=f"backend log lines to scan, capped at {MAX_LOG_LINES}")
     parser.add_argument("--file", default=str(capture_path("latest-synthetic-sse.raw")), help="SSE capture file to monitor")
     args = parser.parse_args()
-    args.lines = max(1, min(args.lines, 200))
+    args.lines = max(1, min(args.lines, MAX_LOG_LINES))
 
     path = Path(args.file)
     if args.once:
