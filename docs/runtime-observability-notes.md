@@ -8,11 +8,23 @@ Date: 2026-04-29
   for more log lines than the helper allows. The helper boundary is
   `docker logs --tail <= 1000`, so monitor defaults need to stay inside that
   limit.
+- Codex sandbox networking can produce false negatives for local proxy tests:
+  a proxy started inside the sandbox may not be reachable from host curls, and
+  host services may not be visible from sandboxed curls. Live stack validation
+  should run `qz-proxy`, curl probes, `qz-top --once`, and `qz-thoughts --once`
+  on the host network.
 - The current local `/v1/responses` tool/search path uses a buffered upstream
   request and then emits synthetic Responses SSE from the completed response.
 - Because of that buffering, `qz-thoughts` can show live backend activity from
   logs, but thought/reasoning text from Responses captures is not token-live
   yet.
+- The proxy telemetry path works for synthetic Responses SSE: a streamed
+  `/v1/responses` request emits `sse_event` telemetry, `qz-top` reports the
+  resulting throughput, and `qz-thoughts` can reconstruct the latest thought and
+  answer without reading capture files.
+- Small `max_output_tokens` caps can produce reasoning-only responses on this
+  profile. That is model/profile tuning behavior, not a monitor failure, and it
+  should be measured when comparing grug/caveman prompt variants.
 - Real live thought viewing needs a streamed Responses runtime that can pause
   at tool calls, execute local tools, append tool results, and continue with
   another streamed upstream request.
@@ -31,6 +43,9 @@ Date: 2026-04-29
     profile.
 - `scripts/qz-thoughts` was added as a curses-style monitor for synthetic
   thought/output captures and live backend activity.
+- `scripts/qz-thoughts` now uses proxy telemetry first, isolates the latest
+  response window, and filters health/telemetry poll noise from its activity
+  view.
 - `README.md` documents the new launcher and monitor entry points.
 
 ## Roadmap Impact

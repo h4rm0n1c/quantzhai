@@ -251,28 +251,55 @@ def load_telemetry_state(limit: int = 200) -> Optional[ThoughtState]:
     if not isinstance(data, dict):
         return None
 
+    events = [event for event in (data.get("events") or []) if isinstance(event, dict)]
+    latest_response_seq = None
+    request_floor_seq = None
+    for event in events:
+        ev_type = event.get("type")
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        seq = event.get("seq")
+        if ev_type == "request_started" and payload.get("method") == "POST" and payload.get("path") == "/v1/responses":
+            request_floor_seq = seq
+        if ev_type == "sse_event":
+            event_type = payload.get("event_type") or "event"
+            if event_type == "response.created":
+                latest_response_seq = seq
+
     raw_parts: List[str] = []
     prefix_rows: List[Tuple[str, str]] = []
     latest_ts = 0.0
-    for event in data.get("events") or []:
-        if not isinstance(event, dict):
-            continue
-        try:
-            latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
-        except Exception:
-            pass
+    for event in events:
+        seq = event.get("seq")
         ev_type = event.get("type")
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         if ev_type == "sse_event":
+            if latest_response_seq is not None and seq is not None and seq < latest_response_seq:
+                continue
+            try:
+                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
+            except Exception:
+                pass
             event_type = payload.get("event_type") or "event"
             sse_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
             raw_parts.append(f"event: {event_type}\n")
             raw_parts.append("data: " + json.dumps(sse_payload, separators=(",", ":")) + "\n\n")
         elif ev_type == "request_started":
+            if request_floor_seq is not None and seq is not None and seq < request_floor_seq:
+                continue
             path = payload.get("path", "")
-            if not str(path).startswith("/qz/telemetry"):
+            if path == "/health" or str(path).startswith("/qz/telemetry"):
+                continue
+            try:
+                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
+            except Exception:
+                pass
+            if path:
                 prefix_rows.append(("request", f"{payload.get('method', '')} {path}".strip()))
         elif ev_type == "deprecated_endpoint":
+            try:
+                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
+            except Exception:
+                pass
             prefix_rows.append(("deprecated", str(payload.get("path", ""))))
 
     if not raw_parts:
