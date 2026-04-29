@@ -33,6 +33,7 @@ Examples:
 
 - request started
 - request completed
+- status snapshot
 - model selected
 - prompt/generation token counts
 - reasoning delta
@@ -102,6 +103,10 @@ Meanings:
 - `/qz/telemetry/state`: current counters and status snapshot for `qz-top`
 - `/qz/telemetry/recent`: JSON ring buffer for reconnects and debugging
 - `/qz/telemetry/events`: SSE stream of structured telemetry events
+
+The proxy should also emit a fresh `status_snapshot` event on readiness checks
+and request boundaries so monitors can show current model/router state without
+waiting for the next request completion.
 
 This keeps the transport simple, works over loopback, and fits the existing
 proxy process.

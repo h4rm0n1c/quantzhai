@@ -180,11 +180,11 @@ max
 These aliases currently map to these Codex model names:
 
 ```text
-Qwen3.6Turbo-low
-Qwen3.6Turbo-medium
-Qwen3.6Turbo-caveman
-Qwen3.6Turbo-high
-Qwen3.6Turbo-max
+low -> Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ4_NL
+medium -> Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M
+caveman -> Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M
+high -> Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact
+max -> Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact
 ```
 
 `caveman` is an experimental compact-instructions profile. `scripts/qz-codex caveman`
@@ -265,6 +265,9 @@ The current defaults came from the working two-GPU Qwen3.6 setup. They are not u
 writes `var/model-inventory.json`, and feeds the proxy's `/v1/models`,
 `/qz/models`, and model-load paths.
 
+`scripts/qz-codex` also refreshes its local Codex model catalog from that live
+inventory, so the model picker tracks the actual `var/models/*.gguf` files.
+
 ## Local Search
 
 QuantZhai can expose one local `web_search` tool to Codex when `SEARXNG_BASE_URL` points at a running SearXNG instance.
@@ -323,6 +326,10 @@ Start server and proxy:
 ```bash
 scripts/qz-up
 ```
+
+For live testing, keep that command running in a detached/background terminal
+and probe the stack from a separate shell. The sandbox is not a reliable host
+launcher for long-running live checks.
 
 If a terminal window is configured to close when its command finishes, use:
 

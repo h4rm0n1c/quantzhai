@@ -17,6 +17,7 @@ class TelemetryBusTests(unittest.TestCase):
         self.assertEqual(state["event_count"], 2)
         self.assertEqual(state["counters"]["request_started"], 1)
         self.assertEqual(state["latest"]["type"], "request_completed")
+        self.assertEqual(state["latest_completed"]["type"], "request_completed")
 
     def test_recent_honors_capacity_and_limit(self):
         bus = TelemetryBus(capacity=2)

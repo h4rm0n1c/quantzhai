@@ -207,6 +207,14 @@ def vram_summary(gpus: List[GpuRow]) -> Tuple[float, float, float]:
     return used, available, total
 
 
+def gpu_summary(gpus: List[GpuRow]) -> Tuple[float, float, float, float, float, float]:
+    used, available, total = vram_summary(gpus)
+    util = sum(max(0.0, gpu.util) for gpu in gpus) / len(gpus) if gpus else 0.0
+    power = sum(max(0.0, gpu.power) for gpu in gpus)
+    temp = sum(max(0.0, gpu.temp) for gpu in gpus) / len(gpus) if gpus else 0.0
+    return util, used, available, total, power, temp
+
+
 def parse_gpus() -> List[GpuRow]:
     query = (
         "index,name,utilization.gpu,memory.used,memory.total,"
@@ -363,6 +371,16 @@ def telemetry_row(event: dict) -> Optional[Tuple[str, str]]:
         path = payload.get("path", "")
         error = payload.get("error", "")
         return ("error", f"{path} {error}".strip())
+    if ev_type == "status_snapshot":
+        selected = payload.get("selected_key") or payload.get("selected") or ""
+        load_state = payload.get("load_state") or ""
+        ready = "ready" if payload.get("ready") else "not ready"
+        parts = [ready]
+        if selected:
+            parts.append(str(selected))
+        if load_state:
+            parts.append(str(load_state))
+        return ("status", " ".join(parts).strip())
     if ev_type in {"model_selected", "model_load_started", "model_load_pending", "model_load_ready", "model_load_failed"}:
         requested = payload.get("requested") or payload.get("model") or ""
         selected = payload.get("selected") or payload.get("backend_id") or ""
@@ -395,6 +413,58 @@ def telemetry_row(event: dict) -> Optional[Tuple[str, str]]:
     return None
 
 
+def _apply_request_completed_telemetry(rates: Rates, payload: dict):
+    if not isinstance(payload, dict):
+        return rates
+
+    elapsed = payload.get("elapsed_ms")
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    prompt_ms = payload.get("prompt_ms")
+    gen_ms = payload.get("gen_ms")
+    try:
+        prompt_tokens = int(usage.get("input_tokens") or 0)
+    except Exception:
+        prompt_tokens = 0
+    try:
+        gen_tokens = int(usage.get("output_tokens") or 0)
+    except Exception:
+        gen_tokens = 0
+    try:
+        total_tokens = int(usage.get("total_tokens") or usage.get("output_tokens") or 0)
+    except Exception:
+        total_tokens = 0
+    if prompt_tokens > 0 and isinstance(prompt_ms, (int, float)) and prompt_ms > 0:
+        try:
+            prompt_rate = prompt_tokens * 1000.0 / float(prompt_ms)
+            rates.prompt_ms = max(rates.prompt_ms, float(prompt_ms))
+            rates.prompt_tokens = max(rates.prompt_tokens, prompt_tokens)
+            rates.prompt_latest = max(rates.prompt_latest, prompt_rate)
+            rates.prompt_max = max(rates.prompt_max, prompt_rate)
+        except Exception:
+            pass
+    if gen_tokens > 0 and isinstance(gen_ms, (int, float)) and gen_ms > 0:
+        try:
+            gen_rate = gen_tokens * 1000.0 / float(gen_ms)
+            rates.gen_ms = max(rates.gen_ms, float(gen_ms))
+            rates.gen_tokens = max(rates.gen_tokens, gen_tokens)
+            rates.gen_latest = max(rates.gen_latest, gen_rate)
+            rates.gen_max = max(rates.gen_max, gen_rate)
+        except Exception:
+            pass
+    if elapsed:
+        try:
+            elapsed = float(elapsed)
+            rates.total_ms = max(rates.total_ms, elapsed)
+            rates.total_tokens = max(rates.total_tokens, total_tokens)
+            if elapsed > 0 and total_tokens > 0:
+                latest_rate = total_tokens * 1000.0 / elapsed
+                rates.total_latest = max(rates.total_latest, latest_rate)
+                rates.total_max = max(rates.total_max, latest_rate)
+        except Exception:
+            pass
+    return rates
+
+
 def merge_telemetry(rates: Rates, telemetry: Optional[dict]) -> Rates:
     if not isinstance(telemetry, dict):
         return rates
@@ -412,23 +482,12 @@ def merge_telemetry(rates: Rates, telemetry: Optional[dict]) -> Rates:
             rows.append(row)
         if event.get("type") == "request_completed":
             payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-            elapsed = payload.get("elapsed_ms")
-            usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
-            try:
-                total_tokens = int(usage.get("total_tokens") or usage.get("output_tokens") or 0)
-            except Exception:
-                total_tokens = 0
-            if elapsed:
-                try:
-                    elapsed = float(elapsed)
-                    rates.total_ms = max(rates.total_ms, elapsed)
-                    rates.total_tokens = max(rates.total_tokens, total_tokens)
-                    if elapsed > 0 and total_tokens > 0:
-                        latest_rate = total_tokens * 1000.0 / elapsed
-                        rates.total_latest = max(rates.total_latest, latest_rate)
-                        rates.total_max = max(rates.total_max, latest_rate)
-                except Exception:
-                    pass
+            _apply_request_completed_telemetry(rates, payload)
+
+    latest_completed = state.get("latest_completed")
+    if isinstance(latest_completed, dict):
+        payload = latest_completed.get("payload") if isinstance(latest_completed.get("payload"), dict) else {}
+        _apply_request_completed_telemetry(rates, payload)
     rates.recent = rows[-9:]
     return rates
 
@@ -655,7 +714,8 @@ class UI:
     def draw_gpu(self, y: int, x: int, h: int, w: int, gpus: List[GpuRow]):
         self.box(y, x, h, w, "GPU")
         self.add(y + 1, x + 2, f"{'ID':<5} {'NAME':<27} {'UTIL':>5}  {'MODEL USE':>11} {'AVAILABLE':>11} {'TOTAL VRAM':>11} {'POWER':>8} {'TEMP':>6} {'PCIE':>8}", self.dim | self.bold)
-        for i, gpu in enumerate(gpus[: max(0, h - 3)]):
+        rows = gpus[: max(0, h - 4)]
+        for i, gpu in enumerate(rows):
             row = y + 2 + i
             name = clip(gpu.name, 27)
             used = human_bytes_from_mib(gpu.mem_used)
@@ -667,6 +727,15 @@ class UI:
                 f"{gpu.power:>6.1f}W {gpu.temp:>5.0f}C g{gpu.gen}x{gpu.width}"
             )
             self.add(row, x + 2, row_text, self.colour_for_util(gpu.util))
+        if gpus and len(rows) < h - 3:
+            util, used, available, total, power, temp = gpu_summary(gpus)
+            row = y + 2 + len(rows)
+            total_text = (
+                f"{'TOTAL':<5} {'':<27} {util:>4.0f}%  "
+                f"{human_bytes_from_mib(used):>11} {human_bytes_from_mib(available):>11} {human_bytes_from_mib(total):>11} "
+                f"{power:>6.1f}W {temp:>5.0f}C {'-':>8}"
+            )
+            self.add(row, x + 2, total_text, self.cyan | self.bold)
 
     def draw_throughput(self, y: int, x: int, h: int, w: int, rates: Rates, benchmark: Optional[BenchmarkSummary]):
         self.box(y, x, h, w, "THROUGHPUT")
@@ -802,11 +871,18 @@ def once(log_lines: int):
     print()
     print("GPU")
     for gpu in gpus:
-        avail = max(0.0, gpu.mem_total - gpu.mem_used)
+            avail = max(0.0, gpu.mem_total - gpu.mem_used)
+            print(
+                f"  GPU{gpu.index} {gpu.name:<26} util={gpu.util:3.0f}% "
+                f"model={human_bytes_from_mib(gpu.mem_used)} avail={human_bytes_from_mib(avail)} total={human_bytes_from_mib(gpu.mem_total)} "
+                f"pwr={gpu.power:.1f}W temp={gpu.temp:.0f}C PCIe=g{gpu.gen}x{gpu.width}"
+            )
+    if gpus:
+        util, used, available, total, power, temp = gpu_summary(gpus)
         print(
-            f"  GPU{gpu.index} {gpu.name:<26} util={gpu.util:3.0f}% "
-            f"model={human_bytes_from_mib(gpu.mem_used)} avail={human_bytes_from_mib(avail)} total={human_bytes_from_mib(gpu.mem_total)} "
-            f"pwr={gpu.power:.1f}W temp={gpu.temp:.0f}C PCIe=g{gpu.gen}x{gpu.width}"
+            f"  TOTAL {'':<26} util={util:3.0f}% "
+            f"model={human_bytes_from_mib(used)} avail={human_bytes_from_mib(available)} total={human_bytes_from_mib(total)} "
+            f"pwr={power:.1f}W temp={temp:.0f}C PCIe=-"
         )
     print()
     print("THROUGHPUT")

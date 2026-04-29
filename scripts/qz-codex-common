@@ -18,46 +18,112 @@ qz_prepare_codex_home() {
     cp "$QZ_ROOT/config/codex-config.example.toml" "$QZ_ROOT/var/codex-home/config.toml"
   fi
 
-  local catalog_src="$QZ_ROOT/config/qwenzhai-models.example.json"
   local catalog_dst="$QZ_ROOT/var/codex-home/model-catalogs/qwenzhai-models.json"
-  if [[ ! -f "$catalog_dst" ]]; then
-    cp "$catalog_src" "$catalog_dst"
-  else
-    python3 - "$catalog_src" "$catalog_dst" <<'PY'
+  python3 "$QZ_ROOT/proxy/qz_model_catalog.py" scan >/dev/null 2>&1 || true
+  python3 - "$QZ_ROOT/config/qwenzhai-models.example.json" "$QZ_MODEL_INVENTORY_CACHE" "$catalog_dst" "$QZ_ROOT/config/codex-config.example.toml" "$QZ_ROOT/var/codex-home/config.toml" <<'PY'
 import json
+import re
 import sys
+from copy import deepcopy
 from pathlib import Path
 
-src_path = Path(sys.argv[1])
-dst_path = Path(sys.argv[2])
+catalog_src = Path(sys.argv[1])
+inventory_path = Path(sys.argv[2])
+catalog_dst = Path(sys.argv[3])
+config_src = Path(sys.argv[4])
+config_dst = Path(sys.argv[5])
 
-src = json.loads(src_path.read_text(encoding="utf-8"))
-dst = json.loads(dst_path.read_text(encoding="utf-8"))
+catalog = json.loads(catalog_src.read_text(encoding="utf-8"))
+inventory = json.loads(inventory_path.read_text(encoding="utf-8")) if inventory_path.is_file() else {}
+models = [model for model in catalog.get("models", []) if isinstance(model, dict)]
+model_by_slug = {model.get("slug"): model for model in models if model.get("slug")}
+template = model_by_slug.get("Qwen3.6Turbo-medium") or (models[0] if models else {})
 
-dst_models = dst.setdefault("models", [])
-dst_slugs = {model.get("slug") for model in dst_models if isinstance(model, dict)}
-dst_index = {model.get("slug"): index for index, model in enumerate(dst_models) if isinstance(model, dict)}
-refresh_slugs = {"Qwen3.6Turbo-caveman"}
-changed = False
+def reasoning_level(entry):
+    text = " ".join(
+        str(value).lower()
+        for value in (
+            entry.get("label"),
+            entry.get("name"),
+            entry.get("notes"),
+            entry.get("stem"),
+            entry.get("backend_id"),
+        )
+        if value
+    )
+    if "apex" in text or "reasoning" in text:
+        return "high"
+    if "iq4" in text or "aggressive" in text or "fast" in text:
+        return "low"
+    return "medium"
 
-for model in src.get("models", []):
-    slug = model.get("slug") if isinstance(model, dict) else None
+def build_live_model(entry, priority):
+    slug = entry.get("backend_id") or entry.get("stem") or entry.get("filename") or entry.get("key")
     if not slug:
-        continue
-    if slug in refresh_slugs and slug in dst_index:
-        if dst_models[dst_index[slug]] != model:
-            dst_models[dst_index[slug]] = model
-            changed = True
-    elif slug not in dst_slugs:
-        dst_models.append(model)
-        dst_slugs.add(slug)
-        dst_index[slug] = len(dst_models) - 1
-        changed = True
+        return None
+    model = deepcopy(template)
+    model["slug"] = slug
+    label = entry.get("label") or entry.get("name") or slug
+    model["display_name"] = label
+    notes = entry.get("notes") or entry.get("overrides", {}).get("notes")
+    model["description"] = notes or f"Local GGUF model: {label}"
+    model["default_reasoning_level"] = reasoning_level(entry)
+    model["priority"] = entry.get("priority") if entry.get("priority") is not None else priority
+    model["context_window"] = entry.get("context_length") or model.get("context_window")
+    model["max_context_window"] = entry.get("context_length") or model.get("max_context_window")
+    model["supported_in_api"] = True
+    model["visibility"] = "list"
+    return model
 
-if changed:
-    dst_path.write_text(json.dumps(dst, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+live_models = []
+for index, entry in enumerate(inventory.get("models", [])):
+    if not isinstance(entry, dict):
+        continue
+    live_model = build_live_model(entry, 1500 + index)
+    if live_model:
+        live_models.append(live_model)
+
+catalog["models"] = live_models if live_models else models
+catalog_dst.write_text(json.dumps(catalog, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+example_config = config_src.read_text(encoding="utf-8").rstrip("\n") + "\n"
+existing_config = config_dst.read_text(encoding="utf-8") if config_dst.is_file() else ""
+tail = ""
+if existing_config:
+    lines = existing_config.splitlines(keepends=True)
+    keep_block = False
+    current_block = []
+    tail_blocks = []
+    for index, line in enumerate(lines):
+        if line.startswith("["):
+            if current_block:
+                header = current_block[0].strip()
+                if not header.startswith("[model_providers.") and not header.startswith("[profiles."):
+                    tail_blocks.append("".join(current_block))
+            current_block = [line]
+        elif current_block:
+            current_block.append(line)
+    if current_block:
+        header = current_block[0].strip()
+        if not header.startswith("[model_providers.") and not header.startswith("[profiles."):
+            tail_blocks.append("".join(current_block))
+    tail = "".join(tail_blocks)
+
+merged_config = example_config
+if tail:
+    merged_config += "\n" + tail.lstrip("\n")
+
+merged_config = re.sub(
+    r'(?m)^model_catalog_json\s*=\s*".*"$',
+    f'model_catalog_json = "{catalog_dst}"',
+    merged_config,
+    count=1,
+)
+if not re.search(r'(?m)^model_catalog_json\s*=', merged_config):
+    merged_config = f'model_catalog_json = "{catalog_dst}"\n' + merged_config
+
+config_dst.write_text(merged_config.rstrip("\n") + "\n", encoding="utf-8")
 PY
-  fi
 
   local tmp_config="$QZ_ROOT/var/codex-home/config.toml.tmp"
   local catalog_line="model_catalog_json = \"$QZ_ROOT/var/codex-home/model-catalogs/qwenzhai-models.json\""
@@ -90,6 +156,55 @@ PY
   export QZ_CODEX_MODEL_PROVIDER
 }
 
+qz_codex_profile_model() {
+  local profile="${1:-}"
+  python3 - "$QZ_MODEL_OVERRIDES" "$profile" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+override_path = Path(sys.argv[1])
+profile = sys.argv[2].strip()
+
+alias_map = {
+    "QwenZhai-low": "low",
+    "QwenZhai-medium": "medium",
+    "QwenZhai-high": "high",
+    "QwenZhai-max": "max",
+    "QwenZhai-caveman": "caveman",
+    "Qwen3.6Turbo-low": "low",
+    "Qwen3.6Turbo-medium": "medium",
+    "Qwen3.6Turbo-high": "high",
+    "Qwen3.6Turbo-max": "max",
+    "Qwen3.6Turbo-caveman": "caveman",
+}
+fallback = {
+    "low": "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ4_NL",
+    "medium": "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M",
+    "high": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact",
+    "max": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact",
+    "caveman": "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M",
+}
+
+profile_key = alias_map.get(profile, profile)
+manifest = {}
+if override_path.is_file():
+    try:
+        manifest = json.loads(override_path.read_text(encoding="utf-8"))
+    except Exception:
+        manifest = {}
+
+profile_models = manifest.get("profile_models", {})
+if isinstance(profile_models, dict):
+    target = profile_models.get(profile_key) or profile_models.get(profile)
+    if isinstance(target, str) and target:
+        print(target)
+        raise SystemExit(0)
+
+print(fallback.get(profile_key, profile))
+PY
+}
+
 qz_resolve_codex_profile() {
   local profile="${1:-high}"
   QZ_CODEX_MODEL=""
@@ -99,12 +214,20 @@ qz_resolve_codex_profile() {
   fi
 
   case "$profile" in
-    low|QwenZhai-low) QZ_CODEX_MODEL="Qwen3.6Turbo-low" ;;
-    medium|QwenZhai-medium) QZ_CODEX_MODEL="Qwen3.6Turbo-medium" ;;
-    high|QwenZhai-high) QZ_CODEX_MODEL="Qwen3.6Turbo-high" ;;
-    max|QwenZhai-max) QZ_CODEX_MODEL="Qwen3.6Turbo-max" ;;
+    low|QwenZhai-low|Qwen3.6Turbo-low)
+      QZ_CODEX_MODEL="$(qz_codex_profile_model low)"
+      ;;
+    medium|QwenZhai-medium|Qwen3.6Turbo-medium)
+      QZ_CODEX_MODEL="$(qz_codex_profile_model medium)"
+      ;;
+    high|QwenZhai-high|Qwen3.6Turbo-high)
+      QZ_CODEX_MODEL="$(qz_codex_profile_model high)"
+      ;;
+    max|QwenZhai-max|Qwen3.6Turbo-max)
+      QZ_CODEX_MODEL="$(qz_codex_profile_model max)"
+      ;;
     caveman|QwenZhai-caveman|Qwen3.6Turbo-caveman)
-      QZ_CODEX_MODEL="Qwen3.6Turbo-caveman"
+      QZ_CODEX_MODEL="$(qz_codex_profile_model caveman)"
       QZ_CODEX_EXTRA_ARGS+=(
         -c "model_instructions_file=\"$QZ_ROOT/docs/qz-caveman-codex-model-instructions-v2.md\""
         -c "model_max_output_tokens=2048"

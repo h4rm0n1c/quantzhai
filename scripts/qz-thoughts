@@ -22,6 +22,7 @@ import signal
 import textwrap
 import time
 import urllib.request
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -237,6 +238,186 @@ def parse_sse(raw: str, path: Path) -> ThoughtState:
     return state
 
 
+def _append_activity(state: ThoughtState, kind: str, message: str, limit: int = 40):
+    state.activity.append((kind, message))
+    state.activity = state.activity[-limit:]
+
+
+def _append_backend(state: ThoughtState, kind: str, message: str, limit: int = 24):
+    state.backend.append((kind, message))
+    state.backend = state.backend[-limit:]
+
+
+def _apply_response_event(state: ThoughtState, ev_type: str, payload: dict):
+    if ev_type == "response.created":
+        response = payload.get("response") or {}
+        state.response_id = response.get("id", state.response_id)
+        state.model = response.get("model", state.model)
+        state.status = response.get("status", state.status)
+        _append_activity(state, "created", f"{state.model} {state.response_id}".strip())
+        return
+
+    if ev_type in ("response.in_progress", "response.completed"):
+        response = payload.get("response") or {}
+        state.status = response.get("status", state.status)
+        if response.get("model"):
+            state.model = response["model"]
+        if response.get("id"):
+            state.response_id = response["id"]
+        _append_activity(state, ev_type.rsplit(".", 1)[-1], state.status or ev_type)
+        return
+
+    if ev_type == "response.output_item.added":
+        item = payload.get("item") or {}
+        label = item.get("type", "item")
+        _append_activity(state, "add", f"{label} {item.get('id', '')}".strip())
+        return
+
+    if ev_type == "response.output_item.done":
+        item = payload.get("item") or {}
+        label = item.get("type", "item")
+        _append_activity(state, "done", f"{label} {item.get('status', '')}".strip())
+        return
+
+    if ev_type in ("response.reasoning_text.delta", "response.reasoning_summary_text.delta"):
+        state.thought += payload.get("delta") or ""
+        _append_activity(state, "thought", f"+{len(payload.get('delta') or '')} chars")
+        return
+
+    if ev_type in ("response.reasoning_text.done", "response.reasoning_summary_text.done"):
+        text = payload.get("text") or ""
+        if text and len(text) > len(state.thought):
+            state.thought = text
+        _append_activity(state, "thought", "done")
+        return
+
+    if ev_type == "response.output_text.delta":
+        state.answer += payload.get("delta") or ""
+        _append_activity(state, "answer", f"+{len(payload.get('delta') or '')} chars")
+        return
+
+    if ev_type == "response.output_text.done":
+        text = payload.get("text") or ""
+        if text and len(text) > len(state.answer):
+            state.answer = text
+        _append_activity(state, "answer", "done")
+        return
+
+    if ev_type == "response.function_call_arguments.delta":
+        _append_activity(state, "tool", clip(payload.get("delta", ""), 80))
+        return
+
+    _append_activity(state, "event", ev_type)
+
+
+def _apply_telemetry_event(state: ThoughtState, event: dict, prefix_rows: List[Tuple[str, str]], latest_ts: float) -> float:
+    ev_type = event.get("type")
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    seq = event.get("seq")
+
+    try:
+        latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
+    except Exception:
+        pass
+
+    if ev_type == "sse_event":
+        event_type = payload.get("event_type") or "event"
+        sse_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+        _apply_response_event(state, event_type, sse_payload)
+        return latest_ts
+
+    if ev_type == "request_started":
+        path = payload.get("path", "")
+        if path == "/health" or str(path).startswith("/qz/telemetry"):
+            return latest_ts
+        if path:
+            state.response_id = ""
+            state.model = ""
+            state.status = ""
+            state.thought = ""
+            state.answer = ""
+            state.activity = []
+            state.backend_error = ""
+            prefix_rows.append(("request", f"{payload.get('method', '')} {path}".strip()))
+        return latest_ts
+
+    if ev_type == "request_completed":
+        path = payload.get("path", "")
+        model = payload.get("backend_model") or payload.get("model") or ""
+        elapsed = payload.get("elapsed_ms")
+        bits = [f"{payload.get('method', '')} {path}".strip()]
+        if model:
+            bits.append(f"model={model}")
+        if elapsed is not None:
+            try:
+                bits.append(f"{float(elapsed):.0f}ms")
+            except Exception:
+                pass
+        _append_backend(state, "request", " ".join(bit for bit in bits if bit).strip() or "request completed")
+        return latest_ts
+
+    if ev_type == "request_failed":
+        path = payload.get("path", "")
+        error = payload.get("error") or payload.get("reason") or "request failed"
+        bits = [f"{payload.get('method', '')} {path}".strip()]
+        if payload.get("phase"):
+            bits.append(f"phase={payload.get('phase')}")
+        if error:
+            bits.append(str(error))
+        message = " ".join(bit for bit in bits if bit).strip() or "request failed"
+        _append_backend(state, "error", message)
+        state.backend_error = str(error)
+        return latest_ts
+
+    if ev_type == "model_selected":
+        requested = payload.get("requested") or "default"
+        selected = payload.get("selected") or payload.get("backend_id") or "?"
+        reason = payload.get("reason") or ""
+        message = f"{requested} -> {selected} {reason}".strip()
+        _append_backend(state, "model", message)
+        return latest_ts
+
+    if ev_type in ("model_load_started", "model_load_pending", "model_load_ready", "model_load_failed"):
+        model = payload.get("model") or "?"
+        detail = payload.get("error") or payload.get("health_status") or payload.get("wait")
+        message = f"{model} {ev_type}"
+        if detail not in (None, "", False):
+            message = f"{message} {detail}"
+        _append_backend(state, "model", message)
+        if ev_type == "model_load_failed" and payload.get("error"):
+            state.backend_error = str(payload.get("error"))
+        return latest_ts
+
+    if ev_type == "tool_call_started":
+        _append_backend(state, "tool", f"start {payload.get('tool', payload.get('name', 'tool'))}")
+        return latest_ts
+
+    if ev_type == "tool_call_completed":
+        _append_backend(state, "tool", f"done {payload.get('tool', payload.get('name', 'tool'))}")
+        return latest_ts
+
+    if ev_type == "web_search_route":
+        _append_backend(state, "web", str(payload.get("query", payload.get("route", "web_search"))))
+        return latest_ts
+
+    if ev_type == "upstream_request":
+        _append_backend(state, "upstream", f"{payload.get('method', '')} {payload.get('path', '')}".strip())
+        return latest_ts
+
+    if ev_type in ("stream_started", "stream_completed", "stream_failed"):
+        detail = payload.get("error") or payload.get("fallback") or ""
+        _append_backend(state, "stream", f"{ev_type} {detail}".strip())
+        return latest_ts
+
+    if ev_type == "deprecated_endpoint":
+        _append_backend(state, "deprecated", str(payload.get("path", "")))
+        return latest_ts
+
+    if ev_type:
+        _append_backend(state, "event", str(ev_type))
+    return latest_ts
+
+
 def load_state(path: Path) -> ThoughtState:
     if not path.exists():
         state = ThoughtState(path=path)
@@ -257,150 +438,24 @@ def load_telemetry_state(limit: int = 200) -> Optional[ThoughtState]:
         return None
 
     events = [event for event in (data.get("events") or []) if isinstance(event, dict)]
-    latest_response_seq = None
     request_floor_seq = None
+    state = ThoughtState(path=Path("proxy-telemetry"))
+    state.status = str((data.get("state") or {}).get("status") or "ok")
+    prefix_rows: List[Tuple[str, str]] = []
+    latest_ts = 0.0
     for event in events:
         ev_type = event.get("type")
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         seq = event.get("seq")
         if ev_type == "request_started" and payload.get("method") == "POST" and payload.get("path") == "/v1/responses":
             request_floor_seq = seq
-        if ev_type == "sse_event":
-            event_type = payload.get("event_type") or "event"
-            if event_type == "response.created":
-                latest_response_seq = seq
+        if request_floor_seq is not None and seq is not None and ev_type == "request_started" and seq < request_floor_seq:
+            continue
+        latest_ts = _apply_telemetry_event(state, event, prefix_rows, latest_ts)
 
-    raw_parts: List[str] = []
-    prefix_rows: List[Tuple[str, str]] = []
-    latest_ts = 0.0
-    for event in events:
-        seq = event.get("seq")
-        ev_type = event.get("type")
-        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-        if ev_type == "sse_event":
-            if latest_response_seq is not None and seq is not None and seq < latest_response_seq:
-                continue
-            try:
-                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
-            except Exception:
-                pass
-            event_type = payload.get("event_type") or "event"
-            sse_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
-            raw_parts.append(f"event: {event_type}\n")
-            raw_parts.append("data: " + json.dumps(sse_payload, separators=(",", ":")) + "\n\n")
-        elif ev_type == "request_started":
-            if request_floor_seq is not None and seq is not None and seq < request_floor_seq:
-                continue
-            path = payload.get("path", "")
-            if path == "/health" or str(path).startswith("/qz/telemetry"):
-                continue
-            try:
-                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
-            except Exception:
-                pass
-            if path:
-                prefix_rows.append(("request", f"{payload.get('method', '')} {path}".strip()))
-        elif ev_type == "request_completed":
-            try:
-                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
-            except Exception:
-                pass
-            path = payload.get("path", "")
-            model = payload.get("backend_model") or payload.get("model") or ""
-            elapsed = payload.get("elapsed_ms")
-            bits = [f"{payload.get('method', '')} {path}".strip()]
-            if model:
-                bits.append(f"model={model}")
-            if elapsed is not None:
-                try:
-                    bits.append(f"{float(elapsed):.0f}ms")
-                except Exception:
-                    pass
-            prefix_rows.append(("request", " ".join(bit for bit in bits if bit).strip() or "request completed"))
-        elif ev_type == "request_failed":
-            try:
-                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
-            except Exception:
-                pass
-            path = payload.get("path", "")
-            error = payload.get("error") or payload.get("reason") or "request failed"
-            bits = [f"{payload.get('method', '')} {path}".strip()]
-            if payload.get("phase"):
-                bits.append(f"phase={payload.get('phase')}")
-            if error:
-                bits.append(str(error))
-            message = " ".join(bit for bit in bits if bit).strip() or "request failed"
-            prefix_rows.append(("error", message))
-            state.backend_error = str(error)
-        elif ev_type == "model_selected":
-            try:
-                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
-            except Exception:
-                pass
-            requested = payload.get("requested") or "default"
-            selected = payload.get("selected") or payload.get("backend_id") or "?"
-            reason = payload.get("reason") or ""
-            message = f"{requested} -> {selected} {reason}".strip()
-            prefix_rows.append(("model", message))
-        elif ev_type in ("model_load_started", "model_load_pending", "model_load_ready", "model_load_failed"):
-            try:
-                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
-            except Exception:
-                pass
-            model = payload.get("model") or "?"
-            detail = payload.get("error") or payload.get("health_status") or payload.get("wait")
-            message = f"{model} {ev_type}"
-            if detail not in (None, "", False):
-                message = f"{message} {detail}"
-            prefix_rows.append(("model", message))
-            if ev_type == "model_load_failed" and payload.get("error"):
-                state.backend_error = str(payload.get("error"))
-        elif ev_type == "tool_call_started":
-            try:
-                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
-            except Exception:
-                pass
-            prefix_rows.append(("tool", f"start {payload.get('tool', payload.get('name', 'tool'))}"))
-        elif ev_type == "tool_call_completed":
-            try:
-                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
-            except Exception:
-                pass
-            prefix_rows.append(("tool", f"done {payload.get('tool', payload.get('name', 'tool'))}"))
-        elif ev_type == "web_search_route":
-            try:
-                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
-            except Exception:
-                pass
-            prefix_rows.append(("web", str(payload.get("query", payload.get("route", "web_search")))))
-        elif ev_type == "upstream_request":
-            try:
-                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
-            except Exception:
-                pass
-            prefix_rows.append(("upstream", f"{payload.get('method', '')} {payload.get('path', '')}".strip()))
-        elif ev_type in ("stream_started", "stream_completed", "stream_failed"):
-            try:
-                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
-            except Exception:
-                pass
-            detail = payload.get("error") or payload.get("fallback") or ""
-            prefix_rows.append(("stream", f"{ev_type} {detail}".strip()))
-        elif ev_type == "deprecated_endpoint":
-            try:
-                latest_ts = max(latest_ts, float(event.get("ts") or 0.0))
-            except Exception:
-                pass
-            prefix_rows.append(("deprecated", str(payload.get("path", ""))))
-
-    if not raw_parts:
-        return None
-
-    raw = "".join(raw_parts)
-    state = parse_sse(raw, Path("proxy-telemetry"))
-    state.mtime = latest_ts or time.time()
-    state.bytes_read = len(raw.encode("utf-8"))
     state.activity = (prefix_rows + state.activity)[-40:]
+    state.mtime = latest_ts or time.time()
+    state.bytes_read = 0 if not events else len(json.dumps(events).encode("utf-8"))
     return state
 
 
@@ -409,6 +464,90 @@ def load_live_state(path: Path) -> ThoughtState:
     if state is not None:
         return state
     return load_state(path)
+
+
+class TelemetryFeed:
+    def __init__(self, path: Path):
+        self.path = path
+        self.state = load_live_state(path)
+        self.lock = threading.Lock()
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def snapshot(self) -> ThoughtState:
+        with self.lock:
+            return ThoughtState(
+                path=self.state.path,
+                mtime=self.state.mtime,
+                response_id=self.state.response_id,
+                model=self.state.model,
+                status=self.state.status,
+                thought=self.state.thought,
+                answer=self.state.answer,
+                activity=list(self.state.activity),
+                backend=list(self.state.backend),
+                events=self.state.events,
+                bytes_read=self.state.bytes_read,
+                parse_error=self.state.parse_error,
+                backend_error=self.state.backend_error,
+            )
+
+    def _apply_event(self, event: dict):
+        prefix_rows: List[Tuple[str, str]] = []
+        latest_ts = _apply_telemetry_event(self.state, event, prefix_rows, self.state.mtime or 0.0)
+        if prefix_rows:
+            self.state.activity = (self.state.activity + prefix_rows)[-40:]
+        if latest_ts:
+            self.state.mtime = latest_ts
+        self.state.bytes_read = max(self.state.bytes_read, 0)
+
+    def _iter_sse_events(self):
+        url = f"{proxy_base_url()}/qz/telemetry/events"
+        while not self.stop_event.is_set():
+            try:
+                req = urllib.request.Request(url, headers={"Accept": "text/event-stream"})
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    event_name = ""
+                    data_lines: List[str] = []
+                    while not self.stop_event.is_set():
+                        chunk = resp.readline()
+                        if not chunk:
+                            break
+                        line = chunk.decode("utf-8", "replace").rstrip("\r\n")
+                        if not line:
+                            if not data_lines:
+                                event_name = ""
+                                continue
+                            data = "\n".join(data_lines).strip()
+                            data_lines = []
+                            if data and data != "[DONE]":
+                                try:
+                                    payload = json.loads(data)
+                                except Exception:
+                                    payload = {}
+                                if isinstance(payload, dict):
+                                    yield payload
+                            event_name = ""
+                            continue
+                        if line.startswith("event:"):
+                            event_name = line.split(":", 1)[1].strip()
+                        elif line.startswith("data:"):
+                            data_lines.append(line.split(":", 1)[1].lstrip())
+            except Exception:
+                if self.stop_event.wait(1.0):
+                    break
+
+    def _run(self):
+        for event in self._iter_sse_events():
+            with self.lock:
+                self._apply_event(event)
+            if self.stop_event.is_set():
+                break
+
+    def close(self):
+        self.stop_event.set()
+
 
 
 def wrap_lines(text: str, width: int, limit: int) -> List[str]:
@@ -430,9 +569,14 @@ class UI:
         self.path = path
         self.interval = interval
         self.log_lines = log_lines
+        self.feed = None
         self.stdscr.nodelay(True)
         curses.curs_set(0)
         self.setup_colours()
+
+    def ensure_feed(self):
+        if self.feed is None:
+            self.feed = TelemetryFeed(self.path)
 
     def setup_colours(self):
         curses.start_color()
@@ -598,7 +742,17 @@ class UI:
 
     def loop(self):
         while True:
-            state = load_live_state(self.path)
+            h, w = self.stdscr.getmaxyx()
+            if h < 22 or w < 100:
+                self.stdscr.erase()
+                self.add(3, 2, "Terminal too small. Need roughly 100x22.", self.red | self.bold)
+                self.add(5, 2, "qz-thoughts will not open a live telemetry stream in this terminal.", self.yellow | self.bold)
+                self.stdscr.refresh()
+                time.sleep(self.interval)
+                return
+
+            self.ensure_feed()
+            state = self.feed.snapshot()
             if monitor_log_fallback_enabled():
                 state.backend, state.backend_error = read_backend_logs(self.log_lines)
             else:
@@ -611,6 +765,8 @@ class UI:
                 except KeyboardInterrupt:
                     return
                 if key in (ord("q"), ord("Q"), 3):
+                    if self.feed is not None:
+                        self.feed.close()
                     return
                 time.sleep(0.05)
 

@@ -15,6 +15,9 @@ Date: 2026-04-29
   on the host network.
 - Host live tests need the proxy and model server kept alive in background
   sessions; one-shot sandbox commands can die before probe commands finish.
+- When validating live telemetry or throughput, keep `qz-up` running in a
+  detached/background terminal and probe it from a separate shell. Do not rely
+  on a one-shot sandbox launch to stay alive long enough for real requests.
 - The local `/v1/responses` tool/search path now uses streamed upstream SSE for
   streaming requests. The non-stream path still buffers by design.
 - Because the stream is now real on the streaming path, `qz-thoughts` can show
@@ -24,6 +27,12 @@ Date: 2026-04-29
   `/v1/responses` request emits `sse_event` telemetry, `qz-top` reports the
   resulting throughput, and `qz-thoughts` can reconstruct the latest thought
   and answer without reading capture files.
+- The proxy now emits a fresh `status_snapshot` telemetry event on `/ready`,
+  `/qz/status`, and new `/v1/responses` requests, so monitors can see the
+  current load/ready state without depending on stale request state.
+- Startup model warmup should target the selected backend model id, not the
+  raw catalog filename, and skip a reload when the router already reports that
+  model as `loaded` or `loading`.
 - Small `max_output_tokens` caps can produce reasoning-only responses on this
   profile. That is model/profile tuning behavior, not a monitor failure, and it
   should be measured when comparing grug/caveman prompt variants.

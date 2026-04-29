@@ -145,6 +145,10 @@ def main():
         assert snapshot["router_mode"] is True, snapshot
         assert snapshot["selected"]["key"] == "model-a.gguf", snapshot
 
+        status, _, telemetry = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/recent?limit=5")
+        assert status == 200, telemetry
+        assert any(event.get("type") == "status_snapshot" for event in telemetry.get("events", [])), telemetry
+
         status, _, out = _request_json(
             f"http://127.0.0.1:{proxy.server_port}/v1/responses",
             {
@@ -159,13 +163,12 @@ def main():
         )
         assert status == 200, out
         assert out["model"] == "QwenZhai-high", out
-        assert len(FakeBackendHandler.requests) >= 2, FakeBackendHandler.requests
-        assert FakeBackendHandler.requests[0]["path"] == "/models/load", FakeBackendHandler.requests
+        assert len(FakeBackendHandler.requests) >= 1, FakeBackendHandler.requests
         assert FakeBackendHandler.requests[-1]["path"] == "/v1/responses", FakeBackendHandler.requests
         sent = FakeBackendHandler.requests[-1]["body"]
         assert sent["instructions"].startswith("<QZSTATE"), sent
         assert sent["metadata"]["qz_runtime"]["ready"] is True, sent
-        assert sent["metadata"]["qz_runtime"]["load_state"] == "loading", sent
+        assert sent["metadata"]["qz_runtime"]["load_state"] == "ready", sent
     finally:
         if proxy is not None:
             proxy.shutdown()

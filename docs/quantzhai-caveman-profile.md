@@ -1,7 +1,7 @@
 # QuantZhai Caveman Codex Profile
 
-`Qwen3.6Turbo-caveman` is an experimental Codex model option for testing compact
-agent instructions without changing the proven low, medium, high, and max slugs.
+`caveman` is an experimental Codex launcher profile for testing compact agent
+instructions without changing the live model inventory.
 
 Use:
 
@@ -11,7 +11,7 @@ scripts/qz-codex caveman
 
 Runtime behavior:
 
-- Uses the same local TurboQuant backend as the other Qwen3.6Turbo profiles.
+- Uses the same local TurboQuant backend as the other QuantZhai Codex profiles.
 - Maps to a medium `thinking_budget_tokens` value in the proxy.
 - Loads `docs/qz-caveman-codex-model-instructions-v2.md` through
   `model_instructions_file` when launched by `scripts/qz-codex caveman`.

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import sys
+import time
 import threading
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -96,7 +97,11 @@ class FakeWebUpstreamHandler(BaseHTTPRequestHandler):
                             "role": "assistant",
                             "content": [{"type": "output_text", "text": "searched.", "annotations": []}],
                         }],
-                        "usage": {},
+                        "usage": {
+                            "input_tokens": 24,
+                            "output_tokens": 8,
+                            "total_tokens": 32,
+                        },
                     },
                 }),
                 b"data: [DONE]\n\n",
@@ -149,6 +154,8 @@ class FakeWebUpstreamHandler(BaseHTTPRequestHandler):
         for chunk in chunks:
             self.wfile.write(chunk)
             self.wfile.flush()
+            if chunk != b"data: [DONE]\n\n":
+                time.sleep(0.01)
 
 
 def _free_server(handler):
@@ -180,6 +187,11 @@ def _post_json_stream(url, payload):
             if b"data: [DONE]" in b"".join(chunks):
                 break
         return resp.status, resp.headers.get("Content-Type", ""), b"".join(chunks)
+
+
+def _get_json(url):
+    with urllib.request.urlopen(url, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 def main():
@@ -219,6 +231,20 @@ def main():
         assert FakeWebUpstreamHandler.requests[2]["path"] == "/v1/responses", FakeWebUpstreamHandler.requests
         second_body = FakeWebUpstreamHandler.requests[2]["body"]
         assert any(item.get("type") == "function_call_output" for item in second_body.get("input") or []), second_body
+
+        telemetry = _get_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/recent?limit=100")
+        request_completed = next(
+            event
+            for event in telemetry["events"]
+            if event.get("type") == "request_completed" and event.get("payload", {}).get("path") == "/v1/responses"
+        )
+        payload = request_completed.get("payload") or {}
+        usage = payload.get("usage") or {}
+        assert int(usage.get("total_tokens") or 0) > 0, request_completed
+        assert int(usage.get("input_tokens") or 0) > 0, request_completed
+        assert int(usage.get("output_tokens") or 0) > 0, request_completed
+        assert float(payload.get("prompt_ms") or 0) > 0.0, request_completed
+        assert float(payload.get("gen_ms") or 0) > 0.0, request_completed
 
         print("ok web stream proxy smoke")
         print(f"proxy_port={proxy.server_port}")

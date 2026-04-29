@@ -15,10 +15,12 @@ The near-term target is not a rewrite. It is to break `proxy/quantzhai_proxy.py`
 - `proxy/qz_proxy_config.py` now holds the first extracted runtime constants and API contract metadata.
 - `proxy/qz_sse.py` now holds pure SSE event formatting, test-only synthetic Responses stream helpers, reasoning visibility transforms, and response usage normalization.
 - `proxy/qz_telemetry.py` now holds the first in-memory telemetry bus and subscriber ring buffer.
+- `proxy/qz_telemetry.py` now also keeps the latest completed request so throughput counters survive noisy polling.
 - `proxy/qz_runtime_io.py` now holds runtime `var/captures` path helpers and capture writes.
 - `proxy/qz_backend.py` now holds the upstream/backend HTTP client helpers for model load/list and JSON forwarding.
 - `proxy/qz_model_catalog.py` now holds GGUF scanning, metadata extraction, override merging, and the proxy-facing model catalog.
 - `proxy/qz_model_router.py` now holds the model-selection, backend-load, readiness/status snapshots, compact runtime-state injection, and Ollama-compatibility route handling.
+- `proxy/qz_model_router.py` now emits fresh status snapshots on `/ready`, `/qz/status`, and request boundaries, so monitors can see current load state without stale caches.
 - `proxy/qz_responses.py` now holds pure Responses normalization, apply_patch translation, tool declaration adaptation, and local compaction helpers.
 - `proxy/qz_tools.py` now defines the first tool adapter/registry API.
 - `proxy/qz_tool_apply_patch.py` now holds the apply_patch tool adapter and compatibility helpers.

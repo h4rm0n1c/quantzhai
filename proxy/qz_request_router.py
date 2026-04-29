@@ -257,7 +257,7 @@ class RequestRouter:
             chunk_writer=self._write_sse_chunk,
             telemetry=self.handler.telemetry,
         )
-        runtime.run(body, requested_model, apply_patch_output_style)
+        return runtime.run(body, requested_model, apply_patch_output_style)
 
     def _run_responses_locally(self, body: dict, requested_model: str, apply_patch_output_style: str = "native"):
         url = self.handler.upstream + "/v1/responses"
@@ -351,6 +351,14 @@ class RequestRouter:
         except Exception:
             pass
 
+        try:
+            self.handler.telemetry.emit(
+                "status_snapshot",
+                self.handler._model_router().status_summary(self.handler.path),
+            )
+        except Exception:
+            pass
+
         client_wants_stream = (
             body.get("stream") is True
             or "text/event-stream" in self.handler.headers.get("Accept", "")
@@ -395,8 +403,9 @@ class RequestRouter:
                 self.handler._send_codex_rate_limit_headers()
                 self.handler.end_headers()
                 self.handler._write_codex_rate_limits_event()
+                stream_result = None
                 try:
-                    self._run_responses_streaming_locally(
+                    stream_result = self._run_responses_streaming_locally(
                         body,
                         client_model,
                         apply_patch_output_style,
@@ -409,6 +418,10 @@ class RequestRouter:
                         backend_model=backend_model,
                         stream=True,
                         status=200,
+                        usage=stream_result.get("usage") if isinstance(stream_result, dict) else None,
+                        prompt_ms=stream_result.get("prompt_ms") if isinstance(stream_result, dict) else None,
+                        gen_ms=stream_result.get("gen_ms") if isinstance(stream_result, dict) else None,
+                        output_items=stream_result.get("output_items") if isinstance(stream_result, dict) else None,
                     )
                 except (BrokenPipeError, ConnectionResetError):
                     self._emit_request_telemetry(
@@ -480,6 +493,7 @@ class RequestRouter:
                         stream=False,
                         status=status,
                         content_type=content_type,
+                        usage=out.get("usage"),
                     )
                     return
 
@@ -493,6 +507,7 @@ class RequestRouter:
                     stream=False,
                     status=status,
                     content_type=content_type,
+                    usage=out.get("usage"),
                 )
                 return
             except Exception as e:
@@ -566,6 +581,7 @@ class RequestRouter:
             self.handler._send_codex_rate_limit_headers()
             self.handler.end_headers()
             self.handler._write_codex_rate_limits_event()
+            stream_result = None
 
             try:
                 if capture_enabled():
@@ -582,7 +598,7 @@ class RequestRouter:
                 raw_log = None
 
             try:
-                self.handler._write_transformed_sse_stream(resp, raw_log)
+                stream_result = self.handler._write_transformed_sse_stream(resp, raw_log, started_at=started_at)
             except (BrokenPipeError, ConnectionResetError):
                 self._emit_request_telemetry(
                     "request_failed",
@@ -607,6 +623,10 @@ class RequestRouter:
                 stream=True,
                 status=status,
                 content_type=content_type,
+                usage=stream_result.get("usage") if isinstance(stream_result, dict) else None,
+                prompt_ms=stream_result.get("prompt_ms") if isinstance(stream_result, dict) else None,
+                gen_ms=stream_result.get("gen_ms") if isinstance(stream_result, dict) else None,
+                output_items=stream_result.get("output_items") if isinstance(stream_result, dict) else None,
             )
             self.handler.close_connection = True
             return
@@ -639,6 +659,7 @@ class RequestRouter:
                 stream=bool(body.get("stream")),
                 status=status,
                 content_type=content_type,
+                usage=out.get("usage"),
             )
         except Exception:
             self.handler.send_response(status)

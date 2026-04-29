@@ -149,7 +149,7 @@ class ResponsesStreamRuntime:
             self._write_chunk(out_chunk)
         return sequence
 
-    def _emit_completed(self, requested_model: str, output: list, summary_started: set):
+    def _emit_completed(self, requested_model: str, output: list, summary_started: set, usage=None):
         completed_payload = {
             "type": "response.completed",
             "response": {
@@ -159,7 +159,7 @@ class ResponsesStreamRuntime:
                 "status": "completed",
                 "model": requested_model,
                 "output": output,
-                "usage": _normalize_response_usage({}),
+                "usage": _normalize_response_usage(usage),
             },
         }
         for out_chunk in transform_sse_event(
@@ -183,6 +183,9 @@ class ResponsesStreamRuntime:
         working_body["stream"] = True
 
         started_at = time.time()
+        first_output_at = None
+        completed_at = None
+        final_usage = _normalize_response_usage({})
         public_trace = []
         counters = {"search": 0, "open_page": 0}
         seen_signatures = set()
@@ -226,10 +229,16 @@ class ResponsesStreamRuntime:
                             continue
 
                         event_type, payload = parse_sse_event_lines(event_lines)
+                        if first_output_at is None and event_type not in {"response.created", "response.in_progress"}:
+                            first_output_at = time.time()
                         if isinstance(payload, dict) and isinstance(payload.get("output_index"), int):
                             max_output_index = max(max_output_index, payload["output_index"])
                         if isinstance(payload, dict) and isinstance(payload.get("sequence_number"), int):
                             sequence = max(sequence, payload["sequence_number"])
+                        if event_type == "response.completed":
+                            response = payload.get("response") if isinstance(payload, dict) else {}
+                            if isinstance(response, dict):
+                                final_usage = _normalize_response_usage(response.get("usage"))
 
                         completed = assembler.observe(event_type, payload)
                         if completed:
@@ -255,8 +264,16 @@ class ResponsesStreamRuntime:
                             public_trace.append(public_item)
                             sequence = self._emit_public_tool_item(public_item, public_index, sequence)
                             self._emit_stream_completed(requested_model, len(public_trace), started_at)
-                            self._emit_completed(requested_model, public_trace, summary_started)
-                            return
+                            completed_at = time.time()
+                            self._emit_completed(requested_model, public_trace, summary_started, usage=final_usage)
+                            return self._build_result(
+                                requested_model,
+                                started_at,
+                                first_output_at,
+                                completed_at,
+                                final_usage,
+                                len(public_trace),
+                            )
 
                         if is_function_call_stream_event(event_type, payload):
                             event_lines = []
@@ -307,7 +324,15 @@ class ResponsesStreamRuntime:
                     working_body["input"] = next_input
                     continue
 
-                return
+                completed_at = time.time()
+                return self._build_result(
+                    requested_model,
+                    started_at,
+                    first_output_at,
+                    completed_at,
+                    final_usage,
+                    len(public_trace),
+                )
         except Exception as exc:
             self._emit("stream_failed", {
                 "model": requested_model,
@@ -316,6 +341,7 @@ class ResponsesStreamRuntime:
             })
             raise
 
+        completed_at = time.time()
         fallback_output = public_trace + [{
             "id": f"msg_local_{_now_ts()}",
             "type": "message",
@@ -328,4 +354,41 @@ class ResponsesStreamRuntime:
             }],
         }]
         self._emit_stream_completed(requested_model, len(fallback_output), started_at, fallback=True)
-        self._emit_completed(requested_model, fallback_output, summary_started)
+        self._emit_completed(requested_model, fallback_output, summary_started, usage=final_usage)
+        return self._build_result(
+            requested_model,
+            started_at,
+            first_output_at,
+            completed_at,
+            final_usage,
+            len(fallback_output),
+            fallback=True,
+        )
+
+    def _build_result(
+        self,
+        requested_model: str,
+        started_at: float,
+        first_output_at: float | None,
+        completed_at: float,
+        usage: dict,
+        output_items: int,
+        fallback: bool = False,
+    ) -> dict:
+        prompt_ms = 0.0
+        gen_ms = 0.0
+        if isinstance(first_output_at, (int, float)) and first_output_at >= started_at:
+            prompt_ms = max(0.0, (first_output_at - started_at) * 1000.0)
+            gen_ms = max(0.0, (completed_at - first_output_at) * 1000.0)
+        return {
+            "model": requested_model,
+            "usage": _normalize_response_usage(usage),
+            "started_at": started_at,
+            "first_output_at": first_output_at,
+            "completed_at": completed_at,
+            "elapsed_ms": max(0.0, (completed_at - started_at) * 1000.0),
+            "prompt_ms": prompt_ms,
+            "gen_ms": gen_ms,
+            "output_items": output_items,
+            "fallback": bool(fallback),
+        }

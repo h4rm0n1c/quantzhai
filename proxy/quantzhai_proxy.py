@@ -167,7 +167,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         if isinstance(response, dict):
             compact["response"] = {
                 key: response.get(key)
-                for key in ("id", "model", "status", "created_at")
+                for key in ("id", "model", "status", "created_at", "usage")
                 if response.get(key) is not None
             }
         item = compact.get("item")
@@ -324,21 +324,33 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self._send_json(200, out)
 
 
-    def _write_transformed_sse_stream(self, resp, raw_log=None):
+    def _write_transformed_sse_stream(self, resp, raw_log=None, started_at=None):
         summary_started = set()
         function_calls = StreamedFunctionCallAssembler()
         event_lines = []
+        stream_started_at = started_at if isinstance(started_at, (int, float)) else time.time()
+        first_output_at = None
+        completed_at = None
+        final_usage = _normalize_response_usage({})
+        output_items = 0
 
         while True:
             chunk = resp.readline()
             if not chunk:
                 if event_lines:
                     event_type, payload = parse_sse_event_lines(event_lines)
+                    if first_output_at is None and event_type not in {"response.created", "response.in_progress"}:
+                        first_output_at = time.time()
+                    if event_type == "response.completed" and isinstance(payload, dict):
+                        response = payload.get("response")
+                        if isinstance(response, dict):
+                            final_usage = _normalize_response_usage(response.get("usage"))
                     function_calls.observe(event_type, payload)
                     for out_chunk in transform_sse_event(event_lines, summary_started, self.reasoning_stream_format):
                         self._emit_sse_telemetry(out_chunk)
                         self.wfile.write(out_chunk)
                         self.wfile.flush()
+                    completed_at = time.time()
                 break
 
             if raw_log is not None:
@@ -348,12 +360,38 @@ class ProxyHandler(BaseHTTPRequestHandler):
             event_lines.append(chunk)
             if chunk in (b"\n", b"\r\n"):
                 event_type, payload = parse_sse_event_lines(event_lines)
+                if first_output_at is None and event_type not in {"response.created", "response.in_progress"}:
+                    first_output_at = time.time()
+                if event_type == "response.completed" and isinstance(payload, dict):
+                    response = payload.get("response")
+                    if isinstance(response, dict):
+                        final_usage = _normalize_response_usage(response.get("usage"))
+                if event_type == "response.output_item.done":
+                    output_items += 1
                 function_calls.observe(event_type, payload)
                 for out_chunk in transform_sse_event(event_lines, summary_started, self.reasoning_stream_format):
                     self._emit_sse_telemetry(out_chunk)
                     self.wfile.write(out_chunk)
                     self.wfile.flush()
                 event_lines = []
+                if event_type == "response.completed":
+                    completed_at = time.time()
+
+        if completed_at is None:
+            completed_at = time.time()
+        prompt_ms = 0.0
+        gen_ms = 0.0
+        if isinstance(first_output_at, (int, float)) and first_output_at >= stream_started_at:
+            prompt_ms = max(0.0, (first_output_at - stream_started_at) * 1000.0)
+            gen_ms = max(0.0, (completed_at - first_output_at) * 1000.0)
+        return {
+            "usage": final_usage,
+            "prompt_ms": prompt_ms,
+            "gen_ms": gen_ms,
+            "first_output_at": first_output_at,
+            "completed_at": completed_at,
+            "output_items": output_items,
+        }
 
 
     def _model_catalog(self):
@@ -443,7 +481,14 @@ def main():
 
     try:
         if catalog.selected is not None:
-            BackendClient(args.upstream).load_model(catalog.selected["key"], timeout=120)
+            startup_model_id = catalog.selected.get("backend_id") or catalog.selected.get("key")
+            if startup_model_id:
+                backend = BackendClient(args.upstream)
+                entry = backend.get_model_entry(startup_model_id, timeout=15)
+                status = entry.get("status") or {}
+                state = status.get("value") if isinstance(status, dict) else ""
+                if state not in {"loaded", "loading"}:
+                    backend.load_model(startup_model_id, timeout=120)
     except Exception:
         pass
 

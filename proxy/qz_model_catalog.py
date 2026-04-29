@@ -235,14 +235,17 @@ def build_entry(path: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
         filename,
         stem,
         name,
+        backend_id := stem,
         architecture,
         str(path),
     }
+    if backend_id:
+        base_aliases.add(backend_id)
     entry = {
         "key": filename,
         "filename": filename,
         "stem": stem,
-        "backend_id": stem,
+        "backend_id": backend_id,
         "path": str(path.resolve()),
         "size_bytes": stat.st_size,
         "mtime": int(stat.st_mtime),
@@ -290,6 +293,7 @@ def match_model(entries: List[Dict[str, Any]], query: str) -> Optional[Dict[str,
             entry["key"],
             entry["filename"],
             entry["stem"],
+            entry.get("backend_id"),
             entry["name"],
             entry["label"],
             entry.get("server_alias"),
