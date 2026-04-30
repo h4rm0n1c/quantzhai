@@ -208,15 +208,22 @@ def keep_metadata_key(key: str, architecture: str) -> bool:
     return False
 
 
+def _truthy_env(name: str) -> bool:
+    return (os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def load_manifest(root: Path, overrides_path: Optional[Path] = None) -> Dict[str, Any]:
     manifest = {
         "default_key": None,
         "models": {},
     }
-    base_path = root / "config" / "qz-model-overrides.example.json"
     runtime_path = overrides_path or Path(os.environ.get("QZ_MODEL_OVERRIDES", str(root / "var" / "model-overrides.json")))
-    for path in (base_path, runtime_path):
-        loaded = load_json(path)
+    loaded = load_json(runtime_path)
+    if loaded:
+        manifest = deep_merge(manifest, loaded)
+    elif _truthy_env("QZ_LOAD_EXAMPLE_MODEL_OVERRIDES"):
+        base_path = root / "config" / "qz-model-overrides.example.json"
+        loaded = load_json(base_path)
         if loaded:
             manifest = deep_merge(manifest, loaded)
     if not isinstance(manifest.get("models"), dict):
