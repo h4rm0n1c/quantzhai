@@ -206,6 +206,8 @@ class ResponsesStreamRuntime:
                 hop_body["stream"] = True
                 hop_body = normalize_responses_input_for_qwen(hop_body)
                 hop_body = normalize_tools_for_llamacpp(hop_body)
+                resp = None
+                raw_log = None
                 try:
                     resp = self.stream_opener(hop_body)
                     raw_log = self._open_raw_log()
@@ -316,7 +318,8 @@ class ResponsesStreamRuntime:
                 finally:
                     if raw_log is not None:
                         raw_log.close()
-                    resp.close()
+                    if resp is not None:
+                        resp.close()
 
                 if completed_call and completed_call.get("name") == "web_search":
                     if max_output_index >= 0:
