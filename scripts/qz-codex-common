@@ -154,10 +154,6 @@ def catalog_defaults():
         "default_verbosity": "low",
         "apply_patch_tool_type": "freeform",
         "web_search_tool_type": "text",
-        "truncation_policy": {
-            "mode": "tokens",
-            "limit": 10000,
-        },
         "supports_parallel_tool_calls": True,
         "supports_image_detail_original": False,
         "effective_context_window_percent": 95,
@@ -175,6 +171,36 @@ def override_value(overrides, *keys):
         if value is not None:
             return value
     return None
+
+
+def int_override(overrides, *keys):
+    value = override_value(overrides, *keys)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def truncation_limit(entry, overrides, runtime_context):
+    explicit = int_override(
+        overrides,
+        "codex_truncation_limit",
+        "truncation_limit",
+        "codex_truncation_tokens",
+        "truncation_tokens",
+    )
+    if explicit is not None and explicit > 0:
+        return explicit
+
+    if isinstance(runtime_context, int) and runtime_context > 0:
+        # Codex uses this catalog value as its client-side context/truncation
+        # budget. A stale 10k default makes 128k/196k local contexts behave as
+        # if they were tiny and can trigger pathological compaction/replay.
+        return max(10000, int(runtime_context * 0.95))
+
+    return 10000
 
 
 def build_live_model(entry, priority):
@@ -213,8 +239,17 @@ def build_live_model(entry, priority):
     if runtime_context is None:
         runtime_context = entry.get("context_length")
     if runtime_context is not None:
+        try:
+            runtime_context = int(runtime_context)
+        except Exception:
+            runtime_context = None
+    if runtime_context is not None:
         model["context_window"] = runtime_context
         model["max_context_window"] = runtime_context
+    model["truncation_policy"] = {
+        "mode": "tokens",
+        "limit": truncation_limit(entry, overrides, runtime_context),
+    }
     model["backend_id"] = slug
     model["supported_in_api"] = True
     model["visibility"] = "list"
