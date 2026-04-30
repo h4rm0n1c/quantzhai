@@ -527,6 +527,13 @@ class RequestRouter:
 
             backend_model = selected_model.get("backend_id") or selected_identity or client_model
             runtime_metrics = self._runtime_metrics(client_model)
+            upstream_instructions = body.get("instructions")
+            upstream_instructions_present = isinstance(upstream_instructions, str) and bool(upstream_instructions.strip())
+            metadata = body.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["qz_upstream_instructions_present"] = upstream_instructions_present
+            body["metadata"] = metadata
             body["model"] = backend_model
             body = self.handler._model_router().apply_reasoning_policy(body, selected_model)
 

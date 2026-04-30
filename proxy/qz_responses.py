@@ -134,7 +134,10 @@ def normalize_responses_input_for_qwen(body: dict) -> dict:
         return body
 
     clean_input = []
-    have_base_instructions = isinstance(body.get("instructions"), str) and body["instructions"].strip()
+    metadata = body.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    have_base_instructions = bool(metadata.get("qz_upstream_instructions_present"))
     fallback_instructions = []
 
     def extract_text(content):
