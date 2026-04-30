@@ -567,7 +567,7 @@ class ModelRouter:
         existing = body.get("instructions")
         if isinstance(existing, str) and existing.strip():
             if block not in existing:
-                body["instructions"] = block + "\n\n" + existing.strip()
+                body["instructions"] = existing.strip() + "\n\n" + block
         else:
             body["instructions"] = block
         return body

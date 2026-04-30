@@ -247,12 +247,12 @@ def normalize_responses_input_for_qwen(body: dict) -> dict:
         if _is_local_checkpoint_prompt(item):
             continue
 
-        if looks_like_meta(role, item_text):
+        if role in ("system", "developer"):
+            if item_text.strip():
+                fallback_instructions.append(item_text.strip())
             continue
 
-        if role in ("system", "developer"):
-            if not have_base_instructions and item_text.strip():
-                fallback_instructions.append(item_text.strip())
+        if looks_like_meta(role, item_text):
             continue
 
         if item_type == "message" or role in ("user", "assistant", "tool"):

@@ -156,7 +156,7 @@ def apply_reasoning_policy(body: Dict[str, Any], level: str | None, mode: str | 
     existing = body.get("instructions")
     if isinstance(existing, str) and existing.strip():
         if block not in existing:
-            body["instructions"] = block + "\n\n" + existing.strip()
+            body["instructions"] = existing.strip() + "\n\n" + block
     else:
         body["instructions"] = block
 
