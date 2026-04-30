@@ -16,6 +16,13 @@ DEFAULT_PROMPT_POLICY = {
 }
 
 
+def _root_dir() -> Path:
+    raw = os.environ.get("QZ_ROOT")
+    if isinstance(raw, str) and raw.strip():
+        return Path(raw).expanduser().resolve()
+    return Path(__file__).resolve().parents[1]
+
+
 def _load_json(path):
     if not isinstance(path, Path) or not path.is_file():
         return {}
@@ -67,6 +74,57 @@ def _blocks(value):
                 out.append(text)
         return out
     return []
+
+
+def _path_values(value):
+    if isinstance(value, (str, Path)):
+        text = str(value).strip()
+        return [text] if text else []
+    if isinstance(value, list):
+        out = []
+        for item in value:
+            if isinstance(item, (str, Path)):
+                text = str(item).strip()
+                if text:
+                    out.append(text)
+        return out
+    return []
+
+
+def _resolve_prompt_path(value) -> Path:
+    path = Path(str(value)).expanduser()
+    if path.is_absolute():
+        return path
+    return _root_dir() / path
+
+
+def _file_blocks(value, report=None, report_key="prompt_files"):
+    blocks = []
+    missing = []
+    failed = []
+    loaded = []
+
+    for item in _path_values(value):
+        path = _resolve_prompt_path(item)
+        display = str(path)
+        if not path.is_file():
+            missing.append(display)
+            continue
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+        except Exception as exc:
+            failed.append({"path": display, "error": str(exc)})
+            continue
+        if text:
+            blocks.append(text)
+            loaded.append(display)
+
+    if isinstance(report, dict):
+        report.setdefault(f"{report_key}_loaded", []).extend(loaded)
+        report.setdefault(f"{report_key}_missing", []).extend(missing)
+        report.setdefault(f"{report_key}_failed", []).extend(failed)
+
+    return blocks
 
 
 def _entry_keys(entry):
@@ -122,6 +180,14 @@ def _first_block(*values):
     return ""
 
 
+def _first_file_block(report, *values):
+    for value in values:
+        blocks = _file_blocks(value, report=report, report_key="replacement_files")
+        if blocks:
+            return blocks[0]
+    return ""
+
+
 def _dedupe_preserve_order(blocks):
     seen = set()
     out = []
@@ -164,19 +230,55 @@ def assemble_instruction_stack(existing_instructions="", client_blocks=None, sel
     allow_replace = bool(policy.get("allow_replace"))
     allow_prepend_before_client = bool(policy.get("allow_prepend_before_client"))
 
+    report = {
+        "mode": mode,
+        "allow_replace": allow_replace,
+        "allow_prepend_before_client": allow_prepend_before_client,
+        "prompt_files_loaded": [],
+        "prompt_files_missing": [],
+        "prompt_files_failed": [],
+        "replacement_files_loaded": [],
+        "replacement_files_missing": [],
+        "replacement_files_failed": [],
+    }
+
     client_blocks = _blocks(client_blocks or [])
     existing_blocks = _blocks(existing_instructions)
 
-    global_prepend = _blocks(policy.get("global_prepend")) + _blocks(policy.get("prompt_prepend"))
-    global_append = _blocks(policy.get("global_append")) + _blocks(policy.get("prompt_append"))
+    global_prepend = (
+        _blocks(policy.get("global_prepend"))
+        + _blocks(policy.get("prompt_prepend"))
+        + _file_blocks(policy.get("global_prepend_files"), report=report)
+        + _file_blocks(policy.get("prompt_prepend_files"), report=report)
+    )
+    global_append = (
+        _blocks(policy.get("global_append"))
+        + _blocks(policy.get("prompt_append"))
+        + _file_blocks(policy.get("global_append_files"), report=report)
+        + _file_blocks(policy.get("prompt_append_files"), report=report)
+    )
 
-    model_prepend = _blocks(model_overrides.get("prompt_prepend"))
-    model_append = _blocks(model_overrides.get("prompt_append"))
+    model_prepend = (
+        _blocks(model_overrides.get("prompt_prepend"))
+        + _file_blocks(model_overrides.get("prompt_prepend_files"), report=report)
+    )
+    model_append = (
+        _blocks(model_overrides.get("prompt_append"))
+        + _file_blocks(model_overrides.get("prompt_append_files"), report=report)
+    )
 
     replacement = _first_block(
         model_overrides.get("prompt_replace"),
         policy.get("prompt_replace"),
         policy.get("global_replace"),
+    ) or _first_file_block(
+        report,
+        model_overrides.get("prompt_replace_files"),
+        model_overrides.get("prompt_replace_file"),
+        policy.get("prompt_replace_files"),
+        policy.get("prompt_replace_file"),
+        policy.get("global_replace_files"),
+        policy.get("global_replace_file"),
     )
 
     replaced_client = False
@@ -208,19 +310,20 @@ def assemble_instruction_stack(existing_instructions="", client_blocks=None, sel
     else:
         # No extracted Codex system/developer blocks. Preserve existing order
         # because existing may already contain client instructions plus QZ hints.
+        if allow_prepend_before_client:
+            stack.extend(global_prepend)
+            stack.extend(model_prepend)
         stack.extend(existing_blocks)
-        stack.extend(global_prepend)
-        stack.extend(model_prepend)
+        if not allow_prepend_before_client:
+            stack.extend(global_prepend)
+            stack.extend(model_prepend)
         stack.extend(global_append)
         stack.extend(model_append)
 
     final_blocks = _dedupe_preserve_order(stack)
     final_text = "\n\n".join(final_blocks)
 
-    report = {
-        "mode": mode,
-        "allow_replace": allow_replace,
-        "allow_prepend_before_client": allow_prepend_before_client,
+    report.update({
         "client_blocks": len(client_blocks),
         "existing_blocks": len(existing_blocks),
         "global_prepend_blocks": len(global_prepend),
@@ -229,6 +332,6 @@ def assemble_instruction_stack(existing_instructions="", client_blocks=None, sel
         "model_append_blocks": len(model_append),
         "replaced_client": replaced_client,
         "ignored_replace": ignored_replace,
-    }
+    })
 
     return final_text, report
