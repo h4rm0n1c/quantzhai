@@ -217,6 +217,11 @@ def load_manifest(root: Path, overrides_path: Optional[Path] = None) -> Dict[str
         "default_key": None,
         "models": {},
     }
+    default_path = root / "config" / "qz-model-overrides.default.json"
+    loaded = load_json(default_path)
+    if loaded:
+        manifest = deep_merge(manifest, loaded)
+
     runtime_path = overrides_path or Path(os.environ.get("QZ_MODEL_OVERRIDES", str(root / "var" / "model-overrides.json")))
     loaded = load_json(runtime_path)
     if loaded:
@@ -581,7 +586,6 @@ def main() -> int:
     selected, reason = (direct_selected, "direct path") if direct_selected else catalog.resolve(query=query)
     payload = cache_payload(root, model_dir, manifest, catalog.entries, selected, reason, catalog.errors)
     cache_path = write_cache(root, payload)
-    payload["cache_path"] = str(cache_path)
 
     if args.command == "list":
         print(plain_listing(catalog.entries, selected, reason))
