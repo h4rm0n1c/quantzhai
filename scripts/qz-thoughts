@@ -29,6 +29,7 @@ from typing import List, Optional, Tuple
 class ThoughtState:
     path: Path
     mtime: float = 0.0
+    last_seq: int = 0
     response_id: str = ""
     model: str = ""
     status: str = ""
@@ -271,6 +272,7 @@ def _apply_telemetry_event(state: ThoughtState, event: dict, prefix_rows: List[T
     if ev_type == "sse_event":
         event_type = payload.get("event_type") or "event"
         sse_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+        state.events += 1
         _apply_response_event(state, event_type, sse_payload)
         return latest_ts
 
@@ -400,6 +402,13 @@ def load_telemetry_state(limit: int = 200) -> Optional[ThoughtState]:
         if request_floor_seq is not None and seq is not None and ev_type == "request_started" and seq < request_floor_seq:
             continue
         latest_ts = _apply_telemetry_event(state, event, prefix_rows, latest_ts)
+        try:
+            if isinstance(seq, int):
+                state.last_seq = max(state.last_seq, seq)
+            elif seq is not None:
+                state.last_seq = max(state.last_seq, int(seq))
+        except Exception:
+            pass
 
     state.activity = (prefix_rows + state.activity)[-40:]
     state.mtime = latest_ts or time.time()
@@ -428,6 +437,7 @@ class TelemetryFeed:
             return ThoughtState(
                 path=self.state.path,
                 mtime=self.state.mtime,
+                last_seq=self.state.last_seq,
                 response_id=self.state.response_id,
                 model=self.state.model,
                 status=self.state.status,
@@ -442,8 +452,19 @@ class TelemetryFeed:
             )
 
     def _apply_event(self, event: dict):
+        seq = event.get("seq") if isinstance(event, dict) else None
+        try:
+            seq_int = int(seq)
+        except Exception:
+            seq_int = None
+
+        if seq_int is not None and seq_int <= self.state.last_seq:
+            return
+
         prefix_rows: List[Tuple[str, str]] = []
         latest_ts = _apply_telemetry_event(self.state, event, prefix_rows, self.state.mtime or 0.0)
+        if seq_int is not None:
+            self.state.last_seq = max(self.state.last_seq, seq_int)
         if prefix_rows:
             self.state.activity = (self.state.activity + prefix_rows)[-40:]
         if latest_ts:
