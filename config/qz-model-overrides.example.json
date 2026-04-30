@@ -1,13 +1,6 @@
 {
   "default_key": "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M.gguf",
-  "prompt_policy": {
-    "mode": "preserve_client",
-    "allow_replace": false,
-    "allow_prepend_before_client": true,
-    "global_prepend_files": [
-      "prompts/codex-core.md"
-    ]
-  },
+  "system_prompt_file": "prompts/codex-core.md",
   "models": {
     "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M.gguf": {
       "default": true,
@@ -17,11 +10,13 @@
     },
     "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ4_NL.gguf": {
       "label": "Qwen3.6 35B A3B aggressive iq4",
-      "notes": "Tighter VRAM fit with slightly lower quant pressure."
+      "notes": "Tighter VRAM fit with slightly lower quant pressure.",
+      "system_prompt_file": "prompts/models/qwen36-aggressive.md"
     },
     "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact.gguf": {
       "label": "Qwen3.6 35B A3B apex compact",
-      "notes": "Reasoning-focused compact variant."
+      "notes": "Reasoning-focused compact variant.",
+      "system_prompt": "Optional inline per-model system prompt override. Prefer system_prompt_file for long prompts."
     }
   }
 }
