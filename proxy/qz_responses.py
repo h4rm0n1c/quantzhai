@@ -264,9 +264,9 @@ def normalize_responses_input_for_qwen(body: dict) -> dict:
     if fallback_instructions:
         existing = body.get("instructions")
         merged = []
+        merged.extend(text.strip() for text in fallback_instructions if isinstance(text, str) and text.strip())
         if isinstance(existing, str) and existing.strip():
             merged.append(existing.strip())
-        merged.extend(fallback_instructions)
         body["instructions"] = "\n\n".join(merged)
 
     body["input"] = clean_input
