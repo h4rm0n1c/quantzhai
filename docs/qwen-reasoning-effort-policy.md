@@ -41,8 +41,8 @@ of these policies.
 
 | Effort | Intent | Sampling | Prompt guidance |
 | --- | --- | --- | --- |
-| `low` | Fast/shallow effort. Good for simple prompts. | `temperature=0.7`, `top_p=0.8`, `top_k=20`, `min_p=0`, `presence_penalty=1.5`, `repetition_penalty=1.0` | `Use low reasoning effort. Think briefly.` |
-| `medium` | Default coding-agent balance. | `temperature=0.6`, `top_p=0.95`, `top_k=20`, `min_p=0`, `presence_penalty=0`, `repetition_penalty=1.0` | `Use medium reasoning effort. Balance speed and correctness.` |
+| `low` | Fast/shallow effort. Good for simple prompts. | `temperature=0.7`, `top_p=0.8`, `top_k=20`, `min_p=0`, `presence_penalty=1.5`, `repeat_penalty=1.0` | `Use low reasoning effort. Think briefly.` |
+| `medium` | Default coding-agent balance. | `temperature=0.6`, `top_p=0.95`, `top_k=20`, `min_p=0`, `presence_penalty=0`, `repeat_penalty=1.0` | `Use medium reasoning effort. Balance speed and correctness.` |
 | `high` | Careful reasoning for complex coding work. | Same as `medium` | `Use high reasoning effort. Reason carefully before acting.` |
 | `xhigh` | Deep effort when complexity warrants it. | Same as `medium` | `Use extra-high reasoning effort. Explore deeply when complexity warrants it.` |
 
@@ -55,8 +55,8 @@ Optional future general/research policy:
 
 | Mode | Sampling |
 | --- | --- |
-| Thinking/general | `temperature=1.0`, `top_p=0.95`, `top_k=20`, `min_p=0`, `presence_penalty=1.5`, `repetition_penalty=1.0` |
-| Non-thinking/reasoning | `temperature=1.0`, `top_p=1.0`, `top_k=40`, `min_p=0`, `presence_penalty=2.0`, `repetition_penalty=1.0` |
+| Thinking/general | `temperature=1.0`, `top_p=0.95`, `top_k=20`, `min_p=0`, `presence_penalty=1.5`, `repeat_penalty=1.0` |
+| Non-thinking/reasoning | `temperature=1.0`, `top_p=1.0`, `top_k=40`, `min_p=0`, `presence_penalty=2.0`, `repeat_penalty=1.0` |
 
 ## Hard Budget Policy
 
@@ -88,7 +88,10 @@ For each `/v1/responses` request:
 4. Preserve existing tool, SSE, and Responses normalization behavior.
 
 Prompt injection should be system/developer-style context, not appended to the
-user's text.
+user's text. Use plain natural instruction text such as
+`Use high reasoning effort. Reason carefully before acting.` rather than
+XML-like tags or duplicated machine labels. Machine-readable state belongs in
+request metadata and telemetry, not model-visible prompt syntax.
 
 ## Status And Telemetry
 

@@ -6,9 +6,25 @@ from pathlib import Path
 
 try:
     from .qz_proxy_config import MODEL_BUDGETS
+    from .qz_reasoning_policy import (
+        HARD_BUDGET_POLICY_MODE,
+        apply_reasoning_policy,
+        hard_budget_for_level,
+        normalize_reasoning_level,
+        reasoning_policy_for_level,
+        reasoning_policy_mode,
+    )
     from .qz_runtime_io import read_json, runtime_state_path, write_json
 except ImportError:
     from qz_proxy_config import MODEL_BUDGETS
+    from qz_reasoning_policy import (
+        HARD_BUDGET_POLICY_MODE,
+        apply_reasoning_policy,
+        hard_budget_for_level,
+        normalize_reasoning_level,
+        reasoning_policy_for_level,
+        reasoning_policy_mode,
+    )
     from qz_runtime_io import read_json, runtime_state_path, write_json
 
 
@@ -25,14 +41,6 @@ PROFILE_ALIASES = {
     "Qwen3.6Turbo-caveman": "caveman",
 }
 
-REASONING_BUDGETS = {
-    "low": 0,
-    "medium": 256,
-    "high": 512,
-    "xhigh": -1,
-}
-
-
 def entry_identity(entry: dict | None) -> str:
     entry = entry if isinstance(entry, dict) else {}
     for field in ("slug", "key", "backend_id", "filename", "stem"):
@@ -42,19 +50,8 @@ def entry_identity(entry: dict | None) -> str:
     return ""
 
 
-def normalize_reasoning_level(level: str | None) -> str:
-    if not isinstance(level, str):
-        return "medium"
-    value = level.strip().lower()
-    if value == "max":
-        return "xhigh"
-    if value in REASONING_BUDGETS:
-        return value
-    return "medium"
-
-
 def reasoning_budget_for_level(level: str | None) -> int:
-    return REASONING_BUDGETS.get(normalize_reasoning_level(level), 256)
+    return hard_budget_for_level(level)
 
 
 def reasoning_budget_map_for_entry(entry: dict | None):
@@ -66,17 +63,17 @@ def reasoning_budget_map_for_entry(entry: dict | None):
             if not isinstance(item, dict):
                 continue
             effort = normalize_reasoning_level(item.get("effort"))
-            if effort not in REASONING_BUDGETS:
+            if effort not in {"low", "medium", "high", "xhigh"}:
                 continue
             budget = item.get("budget_tokens")
             if budget is None:
                 budget = item.get("thinking_budget_tokens")
             if budget is None:
-                budget = REASONING_BUDGETS.get(effort, 256)
+                budget = hard_budget_for_level(effort)
             try:
                 budgets[effort] = int(budget)
             except Exception:
-                budgets[effort] = REASONING_BUDGETS.get(effort, 256)
+                budgets[effort] = hard_budget_for_level(effort)
     return budgets
 
 
@@ -123,7 +120,11 @@ class ModelRouter:
             pass
 
     def backend_models(self):
-        payload = self.handler._backend().get_models()
+        try:
+            payload = self.handler._backend().get_models()
+        except Exception as exc:
+            self._emit("model_inventory_failed", {"error": str(exc)})
+            return {}
 
         backend = {}
         for item in payload.get("data") or []:
@@ -140,6 +141,17 @@ class ModelRouter:
                 "quantization_level": item.get("quantization_level") or item.get("quant") or item.get("type"),
             }
         return backend
+
+    def backend_model_control_available(self, backend_models=None):
+        backend_models = backend_models if isinstance(backend_models, dict) else self.backend_models()
+        for entry in backend_models.values():
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("state") and entry.get("state") != "unknown":
+                return True
+            if entry.get("path") or entry.get("quantization_level"):
+                return True
+        return False
 
     def backend_model_entry(self, model_id: str):
         if not model_id:
@@ -262,7 +274,7 @@ class ModelRouter:
             for item in supported:
                 if isinstance(item, dict):
                     effort = normalize_reasoning_level(item.get("effort"))
-                    if effort in REASONING_BUDGETS:
+                    if effort in {"low", "medium", "high", "xhigh"}:
                         return effort
         text = " ".join(
             str(value).lower()
@@ -292,6 +304,36 @@ class ModelRouter:
                 if fallback in budgets:
                     return budgets[fallback]
         return reasoning_budget_for_level(level)
+
+    def selected_reasoning_policy(self, selected: dict | None = None, body: dict | None = None):
+        selected = selected if isinstance(selected, dict) else self.selected_model_entry()
+        default_level = self.selected_reasoning_level(selected)
+        level = default_level
+        if isinstance(body, dict):
+            reasoning = body.get("reasoning")
+            if isinstance(reasoning, dict) and reasoning.get("effort"):
+                level = normalize_reasoning_level(reasoning.get("effort"))
+            elif body.get("reasoning_effort"):
+                level = normalize_reasoning_level(body.get("reasoning_effort"))
+        policy = reasoning_policy_for_level(level)
+        policy["mode"] = reasoning_policy_mode()
+        if policy["mode"] == HARD_BUDGET_POLICY_MODE:
+            policy["thinking_budget_tokens"] = hard_budget_for_level(level, selected)
+        else:
+            policy["thinking_budget_tokens"] = None
+        return policy
+
+    def apply_reasoning_policy(self, body: dict, selected: dict | None = None):
+        policy = self.selected_reasoning_policy(selected, body)
+        result = apply_reasoning_policy(body, policy.get("effort"), policy.get("mode"))
+        metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+        qz_reasoning = metadata.get("qz_reasoning") if isinstance(metadata.get("qz_reasoning"), dict) else {}
+        qz_reasoning["thinking_budget_tokens"] = policy.get("thinking_budget_tokens")
+        metadata["qz_reasoning"] = qz_reasoning
+        result["metadata"] = metadata
+        if policy.get("mode") == HARD_BUDGET_POLICY_MODE:
+            result["thinking_budget_tokens"] = policy.get("thinking_budget_tokens")
+        return result
 
     def profile_model_entry(self, requested_model: str):
         catalog = self.handler._model_catalog()
@@ -340,7 +382,7 @@ class ModelRouter:
             load_state = backend_state
         ready = health_status == 200 and backend_state == "loaded"
         reasoning_level = self.selected_reasoning_level(selected)
-        reasoning_budget = self.selected_thinking_budget_tokens(selected)
+        reasoning_policy = self.selected_reasoning_policy(selected)
         return {
             "status": "ok" if ready else "loading",
             "router_mode": True,
@@ -356,7 +398,10 @@ class ModelRouter:
                 "selected_state": backend_state,
                 "selected_path": backend_entry.get("path"),
                 "selected_reasoning_level": reasoning_level,
-                "selected_thinking_budget_tokens": reasoning_budget,
+                "selected_reasoning_policy": reasoning_policy.get("mode"),
+                "selected_reasoning_prompt": reasoning_policy.get("prompt"),
+                "selected_sampling_params": reasoning_policy.get("sampling"),
+                "selected_thinking_budget_tokens": reasoning_policy.get("thinking_budget_tokens"),
                 "loaded_model": loaded_model,
                 "loaded_count": len(loaded_models),
                 "loaded_models": loaded_models,
@@ -393,6 +438,9 @@ class ModelRouter:
             "selected_key": backend.get("selected_key") or entry_identity(selected),
             "selected_state": backend.get("selected_state") or "unknown",
             "selected_reasoning_level": backend.get("selected_reasoning_level") or "medium",
+            "reasoning_policy": backend.get("selected_reasoning_policy") or reasoning_policy_mode(),
+            "reasoning_prompt": backend.get("selected_reasoning_prompt"),
+            "sampling": backend.get("selected_sampling_params") or {},
             "thinking_budget_tokens": backend.get("selected_thinking_budget_tokens"),
             "loaded": loaded_ids,
             "loaded_model": loaded_model,
@@ -415,6 +463,7 @@ class ModelRouter:
             "profile": profile,
             "selected": selected_key,
             "reasoning_level": backend.get("selected_reasoning_level") or "medium",
+            "reasoning_policy": backend.get("selected_reasoning_policy") or reasoning_policy_mode(),
         }
 
     def runtime_state_block(self, requested_model: str = ""):
@@ -583,30 +632,37 @@ class ModelRouter:
         if selected is None:
             return None, reason
         target_backend_id = selected.get("backend_id") or entry_identity(selected)
-        current_backend_id = self.selected_backend_id()
-        if current_backend_id and current_backend_id != target_backend_id:
-            current_state = self.backend_model_state(current_backend_id)
-            if current_state in ("loaded", "loading"):
-                self.unload_backend_model(current_backend_id, wait=True)
-                current_state = self.backend_model_state(current_backend_id)
-                if current_state not in ("unloaded", "unknown"):
-                    self._emit("model_load_failed", {
-                        "model": current_backend_id,
-                        "error": f"current model not unloaded: {current_state}",
-                        "wait": True,
-                    })
-                    return None, f"{reason}; current {current_backend_id} not unloaded ({current_state})"
+        backend_inventory = self.backend_models()
+        if self.backend_model_control_available(backend_inventory):
+            current_backend_id = self.selected_backend_id()
+            if current_backend_id and current_backend_id != target_backend_id:
+                current_state = backend_inventory.get(current_backend_id, {}).get("state") or self.backend_model_state(current_backend_id)
+                if current_state in ("loaded", "loading"):
+                    self.unload_backend_model(current_backend_id, wait=True)
+                    current_state = self.backend_model_state(current_backend_id)
+                    if current_state not in ("unloaded", "unknown"):
+                        self._emit("model_load_failed", {
+                            "model": current_backend_id,
+                            "error": f"current model not unloaded: {current_state}",
+                            "wait": True,
+                        })
+                        return None, f"{reason}; current {current_backend_id} not unloaded ({current_state})"
 
-        self.load_backend_model(target_backend_id, wait=True)
+            self.load_backend_model(target_backend_id, wait=True)
 
-        backend_state = self.backend_model_state(target_backend_id)
-        if backend_state != "loaded":
-            self._emit("model_load_failed", {
+            backend_state = self.backend_model_state(target_backend_id)
+            if backend_state != "loaded":
+                self._emit("model_load_failed", {
+                    "model": target_backend_id,
+                    "error": f"target model not ready: {backend_state}",
+                    "wait": True,
+                })
+                return None, f"{reason}; target {target_backend_id} not ready ({backend_state})"
+        else:
+            self._emit("model_load_skipped", {
                 "model": target_backend_id,
-                "error": f"target model not ready: {backend_state}",
-                "wait": True,
+                "reason": "backend model inventory unavailable",
             })
-            return None, f"{reason}; target {target_backend_id} not ready ({backend_state})"
 
         catalog.selected = selected
         catalog.reason = reason
@@ -618,7 +674,7 @@ class ModelRouter:
             "target_backend_id": target_backend_id,
             "reason": reason,
             "reasoning_level": self.selected_reasoning_level(selected),
-            "budget": self.selected_thinking_budget_tokens(selected),
+            "reasoning_policy": self.selected_reasoning_policy(selected).get("mode"),
         })
         return selected, reason
 

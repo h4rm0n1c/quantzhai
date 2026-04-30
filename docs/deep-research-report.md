@@ -52,7 +52,9 @@ Respond terse like a smart caveman.  All technical substance stays; fluff dies. 
   # in var/codex-home/config.toml
   model_instructions_file = "docs/qz-caveman-codex-model-instructions-v2.md"
   ```
-  (Place the prompt text there.)  This overrides the default instructions.
+  (Place the prompt text there.)  This appends the caveman behavior harness to
+  the active Codex/QuantZhai base instructions; it should not be treated as a
+  replacement system prompt.
 - **Clamp output tokens:** Lower `model_max_output_tokens` for high/medium profiles (e.g. to ~1024) in `config.toml`【10†L18-L22】. Also in the proxy (`quantzhai_proxy.py`) set `n_predict`, `max_tokens` to ≤512 or ≤1024 as hard caps (we did this earlier). For example:
   ```diff
   - model_max_output_tokens = 4096
@@ -87,7 +89,7 @@ If any test fails (e.g. agent still spawns multiple curls or ignores timeouts), 
 
 ## 6. Rollback Plan
 If issues arise (e.g. agent too constrained or non-compliant):
-- Restore original `model_instructions_file` (or remove that line) in `config.toml`.
+- Restore original `model_instructions_file` behavior (or remove that line) in `config.toml`.
 - Restore original `AGENTS.md` (keep a backup as `AGENTS.md.bak`).
 - Undo token cap changes (reset `model_max_output_tokens` and proxy caps to previous values).
 - Restart Codex.

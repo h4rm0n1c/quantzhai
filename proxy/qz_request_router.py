@@ -488,12 +488,10 @@ class RequestRouter:
                 return
 
             selected_identity = selected_model.get("slug") or selected_model.get("key") or selected_model.get("backend_id") or ""
-            budget = self.handler._model_router().selected_thinking_budget_tokens(selected_model)
 
             backend_model = selected_model.get("backend_id") or selected_identity or client_model
             body["model"] = backend_model
-            body["thinking_budget_tokens"] = budget
-            body.setdefault("temperature", 0.1)
+            body = self.handler._model_router().apply_reasoning_policy(body, selected_model)
 
             if upstream_path == "/v1/responses":
                 body = self.handler._model_router().inject_runtime_state(body, client_model)

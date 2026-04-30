@@ -204,6 +204,7 @@ def main():
             {
                 "model": "model-a.gguf",
                 "stream": False,
+                "reasoning": {"effort": "high"},
                 "input": [{
                     "type": "message",
                     "role": "user",
@@ -221,8 +222,18 @@ def main():
         sent = FakeBackendHandler.requests[-1]["body"]
         assert sent["model"] == "model-a.gguf", sent
         assert sent["instructions"].startswith("<QZSTATE"), sent
+        assert "Use high reasoning effort." in sent["instructions"], sent
+        assert sent["temperature"] == 0.6, sent
+        assert sent["top_p"] == 0.95, sent
+        assert sent["top_k"] == 20, sent
+        assert sent["min_p"] == 0, sent
+        assert sent["presence_penalty"] == 0, sent
+        assert sent["repeat_penalty"] == 1.0, sent
+        assert "thinking_budget_tokens" not in sent, sent
         assert sent["metadata"]["qz_runtime"]["ready"] is True, sent
         assert sent["metadata"]["qz_runtime"]["load_state"] == "ready", sent
+        assert sent["metadata"]["qz_reasoning"]["level"] == "high", sent
+        assert sent["metadata"]["qz_reasoning"]["policy"] == "prompt", sent
 
         status, _, ready = _request_json(f"http://127.0.0.1:{proxy.server_port}/ready")
         assert status == 200, ready

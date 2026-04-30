@@ -14,11 +14,13 @@ Runtime behavior:
 - Uses the same local TurboQuant backend as the other QuantZhai Codex profiles.
 - The Codex model picker now lists the actual GGUF models from `var/models`,
   and the per-model reasoning screen is generated from that same inventory.
-- Low/medium/high/max now map to reasoning budget through the selected profile
-  metadata; the proxy reads per-entry reasoning levels and budget tokens
-  instead of the raw backend name.
+- Low/medium/high/max now map to Qwen reasoning policy metadata. The proxy
+  injects effort guidance and sampler params, while hard thinking budgets stay
+  off unless `QZ_REASONING_POLICY=hard_budget` is explicitly enabled.
 - Loads `docs/qz-caveman-codex-model-instructions-v2.md` through
-  `model_instructions_file` when launched by `scripts/qz-codex caveman`.
+  `model_instructions_file` when launched by `scripts/qz-codex caveman`. This
+  appends the caveman behavior harness to the selected model's generated
+  `base_instructions`; it is not a replacement system prompt.
 - Sets `model_max_output_tokens=2048` for that launcher session.
 - Starts each session with caveman chat mode on; the user can say `normal mode`
   or `caveman off` to switch back during the session.
@@ -39,12 +41,23 @@ Response-size knobs:
 
 - `model_max_output_tokens` in the Codex config or launcher override controls
   how much Codex asks the model to emit.
-- `thinking_budget_tokens` in the proxy now comes from the selected profile's
-  own reasoning metadata, with a backend-aware fallback only when the entry
-  does not declare per-level budgets.
+- Reasoning effort in the proxy now comes from the selected profile's policy
+  metadata: prompt guidance plus sampler params. `thinking_budget_tokens` is
+  reserved for explicit diagnostic hard-budget mode.
 - `COMPACTION_CONFIG["target_output_tokens"]` controls local compaction summary
   size, not ordinary chat responses.
 
 Current defaults now separate model choice from answer length: low/medium/high/max
 all use the same generous output cap, while caveman stays intentionally smaller
 at 2048.
+
+Prompt-chain contract:
+
+- The generated Codex model catalog provides the selected model's
+  `base_instructions`.
+- The caveman launcher adds `model_instructions_file` as a compression and style
+  harness on top of that base.
+- Proxy-side reasoning policy may prepend small effort guidance and sampler
+  metadata for the active reasoning level.
+- The harness must preserve Codex tool behavior, AGENTS compliance, escalation,
+  patch discipline, and validation rules.

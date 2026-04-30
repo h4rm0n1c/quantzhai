@@ -43,6 +43,14 @@ class FakeCodexUpstreamHandler(BaseHTTPRequestHandler):
     def log_message(self, _fmt, *_args):
         return
 
+    def _send_json(self, payload, status=200):
+        data = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_GET(self):
         if self.path in ("/v1/models", "/models"):
             payload = {

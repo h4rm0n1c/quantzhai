@@ -72,6 +72,72 @@ def reasoning_level(entry):
     return "medium"
 
 
+REASONING_POLICIES = {
+    "low": {
+        "description": "Fast/shallow effort for simple prompts.",
+        "prompt": "Use low reasoning effort. Think briefly.",
+        "sampling": {
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "top_k": 20,
+            "min_p": 0,
+            "presence_penalty": 1.5,
+            "repeat_penalty": 1.0,
+        },
+    },
+    "medium": {
+        "description": "Default coding-agent balance.",
+        "prompt": "Use medium reasoning effort. Balance speed and correctness.",
+        "sampling": {
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "top_k": 20,
+            "min_p": 0,
+            "presence_penalty": 0,
+            "repeat_penalty": 1.0,
+        },
+    },
+    "high": {
+        "description": "Careful reasoning for complex coding work.",
+        "prompt": "Use high reasoning effort. Reason carefully before acting.",
+        "sampling": {
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "top_k": 20,
+            "min_p": 0,
+            "presence_penalty": 0,
+            "repeat_penalty": 1.0,
+        },
+    },
+    "xhigh": {
+        "description": "Deep effort when complexity warrants it.",
+        "prompt": "Use extra-high reasoning effort. Explore deeply when complexity warrants it.",
+        "sampling": {
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "top_k": 20,
+            "min_p": 0,
+            "presence_penalty": 0,
+            "repeat_penalty": 1.0,
+        },
+    },
+}
+
+
+def supported_reasoning_levels(default_level):
+    supported = []
+    for effort, policy in REASONING_POLICIES.items():
+        item = {
+            "effort": effort,
+            "description": policy["description"],
+            "prompt": policy["prompt"],
+            "sampling": policy["sampling"],
+            "default": effort == default_level,
+        }
+        supported.append(item)
+    return supported
+
+
 def update_from_inventory(model, live):
     if not isinstance(live, dict):
         return model
@@ -100,28 +166,7 @@ def build_live_model(entry, priority):
     if isinstance(supported, list) and supported:
         model["supported_reasoning_levels"] = supported
     else:
-        model["supported_reasoning_levels"] = [
-            {
-                "effort": "low",
-                "budget_tokens": 0,
-                "description": "Balances speed with some reasoning; useful for straightforward queries and short explanations",
-            },
-            {
-                "effort": "medium",
-                "budget_tokens": 256,
-                "description": "Provides a solid balance of reasoning depth and latency for general-purpose tasks",
-            },
-            {
-                "effort": "high",
-                "budget_tokens": 512,
-                "description": "Maximizes reasoning depth for complex or ambiguous problems",
-            },
-            {
-                "effort": "xhigh",
-                "budget_tokens": -1,
-                "description": "Extra high reasoning for complex problems",
-            },
-        ]
+        model["supported_reasoning_levels"] = supported_reasoning_levels(model["default_reasoning_level"])
     model["priority"] = entry.get("priority") if entry.get("priority") is not None else priority
     model["context_window"] = entry.get("context_length") or model.get("context_window")
     model["max_context_window"] = entry.get("context_length") or model.get("max_context_window")

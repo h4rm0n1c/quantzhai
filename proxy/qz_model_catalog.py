@@ -8,6 +8,11 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    from .qz_reasoning_policy import supported_reasoning_levels
+except ImportError:
+    from qz_reasoning_policy import supported_reasoning_levels
+
 
 GGUF_VALUE_TYPES = {
     0: ("uint8", "B"),
@@ -24,14 +29,6 @@ GGUF_VALUE_TYPES = {
     11: ("int64", "q"),
     12: ("float64", "d"),
 }
-
-REASONING_LEVELS = (
-    ("low", 0, "Balances speed with some reasoning; useful for straightforward queries and short explanations"),
-    ("medium", 256, "Provides a solid balance of reasoning depth and latency for general-purpose tasks"),
-    ("high", 512, "Maximizes reasoning depth for complex or ambiguous problems"),
-    ("xhigh", -1, "Extra high reasoning for complex problems"),
-)
-
 
 def load_json(path: Path) -> Dict[str, Any]:
     if not path.is_file():
@@ -181,17 +178,6 @@ def infer_reasoning_level(entry: Dict[str, Any]) -> str:
     if "iq4" in text or "aggressive" in text or "fast" in text:
         return "low"
     return "medium"
-
-
-def supported_reasoning_levels(default_level: str) -> List[Dict[str, Any]]:
-    supported = []
-    for effort, budget_tokens, description in REASONING_LEVELS:
-        supported.append({
-            "effort": effort,
-            "budget_tokens": budget_tokens,
-            "description": description,
-        })
-    return supported
 
 
 def keep_metadata_key(key: str, architecture: str) -> bool:
