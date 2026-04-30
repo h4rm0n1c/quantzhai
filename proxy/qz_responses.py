@@ -17,6 +17,7 @@ try:
     )
     from .qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
     from .qz_runtime_io import capture_enabled, capture_path, write_capture
+    from .qz_prompt_policy import assemble_instruction_stack
     from .qz_tools import ToolRegistry
 except ImportError:
     from qz_tool_apply_patch import (
@@ -32,6 +33,7 @@ except ImportError:
     )
     from qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
     from qz_runtime_io import capture_enabled, capture_path, write_capture
+    from qz_prompt_policy import assemble_instruction_stack
     from qz_tools import ToolRegistry
 
 LOCAL_COMPACTION_PREFIX = "localcmp:v1:"
@@ -118,7 +120,7 @@ def clean_content(text: str) -> str:
     return text.strip()
 
 
-def normalize_responses_input_for_qwen(body: dict) -> dict:
+def normalize_responses_input_for_qwen(body: dict, selected_model: dict | None = None) -> dict:
     """
     Canonicalize replayed Codex Responses history for the local llama.cpp/Qwen bridge.
 
@@ -261,13 +263,19 @@ def normalize_responses_input_for_qwen(body: dict) -> dict:
 
         clean_input.append(item)
 
-    if fallback_instructions:
-        existing = body.get("instructions")
-        merged = []
-        merged.extend(text.strip() for text in fallback_instructions if isinstance(text, str) and text.strip())
-        if isinstance(existing, str) and existing.strip():
-            merged.append(existing.strip())
-        body["instructions"] = "\n\n".join(merged)
+    assembled_instructions, prompt_policy_report = assemble_instruction_stack(
+        existing_instructions=body.get("instructions"),
+        client_blocks=fallback_instructions,
+        selected_model=selected_model,
+    )
+    if assembled_instructions:
+        body["instructions"] = assembled_instructions
+
+    metadata = body.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata["qz_prompt_policy"] = prompt_policy_report
+    body["metadata"] = metadata
 
     body["input"] = clean_input
     return body

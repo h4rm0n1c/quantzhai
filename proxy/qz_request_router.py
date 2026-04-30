@@ -543,7 +543,7 @@ class RequestRouter:
                 input_items = body.get("input")
                 if isinstance(input_items, list):
                     body["input"] = _microcompact_old_tool_results(_expand_local_compaction_items(input_items))
-                body = normalize_responses_input_for_qwen(body)
+                body = normalize_responses_input_for_qwen(body, selected_model=selected_model)
                 body = normalize_tools_for_llamacpp(body)
                 try:
                     write_capture("latest-normalized-request.json", body)
