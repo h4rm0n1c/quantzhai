@@ -27,9 +27,23 @@ Date: 2026-04-29
   `/v1/responses` request emits `sse_event` telemetry, `qz-top` reports the
   resulting throughput, and `qz-thoughts` can reconstruct the latest thought
   and answer without reading capture files.
+- `qz-top` live throughput now comes from a dedicated `throughput_sample`
+  telemetry event and the proxy's `latest_throughput` state, not from the
+  recent request window. That keeps the dashboard stable when health/status
+  polling is noisy.
 - The proxy now emits a fresh `status_snapshot` telemetry event on `/ready`,
   `/qz/status`, and new `/v1/responses` requests, so monitors can see the
   current load/ready state without depending on stale request state.
+- `qz-codex` now prefers the model already loaded by the proxy at launch, then
+  syncs Codex to that loaded backend model so startup does not clobber the
+  current server state. If nothing is loaded yet, it falls back to the profile
+  target.
+- The proxy now persists the last selected model in `var/model-state.json` and
+  uses it on startup to preload the most recent llama.cpp model before the next
+  session arrives.
+- Model switching now uses `QZ_MODEL_LOAD_TIMEOUT` end to end, so larger GGUF
+  loads can finish before the launcher gives up and starts a session on the
+  wrong backend.
 - Startup model warmup should target the selected backend model id, not the
   raw catalog filename, and skip a reload when the router already reports that
   model as `loaded` or `loading`.

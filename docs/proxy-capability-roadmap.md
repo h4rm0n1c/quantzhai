@@ -16,7 +16,8 @@ It currently covers:
 
 - OpenAI Responses-style requests.
 - Legacy Chat Completions proxying.
-- Local model aliases and reasoning budgets.
+- Local model aliases and reasoning budgets, with profile metadata driving
+  `thinking_budget_tokens` and per-profile budget caps.
 - Basic Ollama-compatible discovery endpoints used by Codex setup paths.
 - Streaming adaptation.
 - Local compaction.
@@ -69,7 +70,9 @@ Current behavior:
 
 - Provides `QwenZhai-*` aliases.
 - Keeps older `Qwen3.6Turbo-*` aliases for compatibility.
-- Maps low, medium, high, and max profiles to `thinking_budget_tokens`.
+- Keeps low, medium, high, and max profile reasoning budgets aligned with the
+  selected catalog entry's own reasoning metadata rather than the backend
+  model filename.
 - Applies practical defaults such as low temperature.
 
 What works well:
@@ -79,8 +82,8 @@ What works well:
 
 What is weak:
 
-- Model catalog and budget metadata are still mostly hardcoded.
-- There is no formal config schema yet.
+- Model catalog and budget metadata still need a formal schema.
+- There is no per-backend override contract yet.
 
 Maturity: stable enough for the current stack.
 

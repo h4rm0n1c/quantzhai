@@ -16,8 +16,6 @@ import curses
 import json
 import os
 import re
-import shlex
-import subprocess
 import signal
 import textwrap
 import time
@@ -26,9 +24,6 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
-
-MAX_LOG_LINES = 200
-
 
 @dataclass
 class ThoughtState:
@@ -64,53 +59,6 @@ def fetch_json(url: str, timeout: float = 0.5) -> Optional[dict]:
             return json.loads(resp.read().decode("utf-8"))
     except Exception:
         return None
-
-
-def docker_cmd() -> List[str]:
-    return shlex.split(os.environ.get("QZ_DOCKER_CMD", "docker"))
-
-
-def monitor_log_fallback_enabled() -> bool:
-    raw = str(os.environ.get("QZ_MONITOR_LOG_FALLBACK", "")).strip().lower()
-    return raw in {"1", "true", "yes", "on", "latest", "full"}
-
-
-def read_backend_logs(lines: int) -> Tuple[List[Tuple[str, str]], str]:
-    container = os.environ.get("QZ_CONTAINER", "qwen36turbo")
-    lines = max(1, min(lines, MAX_LOG_LINES))
-    try:
-        out = subprocess.check_output(
-            docker_cmd() + ["logs", f"--tail={lines}", container],
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=2.0,
-        )
-    except subprocess.CalledProcessError as exc:
-        return [], (exc.output or str(exc)).strip()
-    except Exception as exc:
-        return [], str(exc)
-
-    rows: List[Tuple[str, str]] = []
-    for line in clean(out).splitlines():
-        if "prompt processing progress" in line:
-            rows.append(("prompt", re.sub(r"^.*?prompt processing progress,?\s*", "", line).strip()))
-        elif "created context checkpoint" in line:
-            rows.append(("checkpoint", re.sub(r"^.*?created context checkpoint", "created context checkpoint", line).strip()))
-        elif "restored context checkpoint" in line:
-            rows.append(("restore", re.sub(r"^.*?restored context checkpoint", "restored context checkpoint", line).strip()))
-        elif "reasoning-budget:" in line:
-            rows.append(("budget", line.strip()))
-        elif "prompt eval time =" in line:
-            rows.append(("prompt", line.strip()))
-        elif re.search(r"^\s*eval time\s*=", line):
-            rows.append(("generate", line.strip()))
-        elif "total time =" in line:
-            rows.append(("total", line.strip()))
-        elif "done request:" in line:
-            rows.append(("request", re.sub(r"^.*?done request:", "done request:", line).strip()))
-        elif "processing task" in line:
-            rows.append(("task", line.strip()))
-    return rows[-24:], ""
 
 
 def clean(text: str) -> str:
@@ -564,11 +512,10 @@ def wrap_lines(text: str, width: int, limit: int) -> List[str]:
 
 
 class UI:
-    def __init__(self, stdscr, path: Path, interval: float, log_lines: int):
+    def __init__(self, stdscr, path: Path, interval: float):
         self.stdscr = stdscr
         self.path = path
         self.interval = interval
-        self.log_lines = log_lines
         self.feed = None
         self.stdscr.nodelay(True)
         curses.curs_set(0)
@@ -753,10 +700,6 @@ class UI:
 
             self.ensure_feed()
             state = self.feed.snapshot()
-            if monitor_log_fallback_enabled():
-                state.backend, state.backend_error = read_backend_logs(self.log_lines)
-            else:
-                state.backend = []
             self.draw(state)
             deadline = time.time() + self.interval
             while time.time() < deadline:
@@ -771,12 +714,8 @@ class UI:
                 time.sleep(0.05)
 
 
-def print_once(path: Path, log_lines: int):
+def print_once(path: Path):
     state = load_live_state(path)
-    if monitor_log_fallback_enabled():
-        state.backend, state.backend_error = read_backend_logs(log_lines)
-    else:
-        state.backend = []
     age = max(0.0, time.time() - state.mtime) if state.mtime else 0.0
     print(f"QZ-THOUGHTS {time.strftime('%Y-%m-%d %H:%M:%S')} status={state.status or '?'} events={state.events} age={age:.1f}s bytes={state.bytes_read}")
     print(f"source={state.path}")
@@ -803,14 +742,12 @@ def main():
     parser = argparse.ArgumentParser(description="Monitor QuantZhai streamed reasoning/thought output")
     parser.add_argument("--once", "-1", action="store_true", help="print one snapshot and exit")
     parser.add_argument("-i", "--interval", type=float, default=0.5, help="refresh interval in seconds")
-    parser.add_argument("-n", "--lines", type=int, default=120, help=f"backend log lines to scan, capped at {MAX_LOG_LINES}")
     parser.add_argument("--file", default=str(capture_path("latest-synthetic-sse.raw")), help="SSE capture file to monitor")
     args = parser.parse_args()
-    args.lines = max(1, min(args.lines, MAX_LOG_LINES))
 
     path = Path(args.file)
     if args.once:
-        print_once(path, args.lines)
+        print_once(path)
         return
 
     def handle_signal(signum, frame):
@@ -820,7 +757,7 @@ def main():
     signal.signal(signal.SIGTERM, handle_signal)
 
     try:
-        curses.wrapper(lambda stdscr: UI(stdscr, path, args.interval, args.lines).loop())
+        curses.wrapper(lambda stdscr: UI(stdscr, path, args.interval).loop())
     except KeyboardInterrupt:
         pass
 

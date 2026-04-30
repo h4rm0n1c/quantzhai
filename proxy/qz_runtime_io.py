@@ -25,6 +25,10 @@ def quantzhai_var_dir() -> Path:
     return Path(os.environ.get("QZ_VAR_DIR") or Path(__file__).resolve().parents[1] / "var")
 
 
+def runtime_state_path(name: str) -> Path:
+    return quantzhai_var_dir() / name
+
+
 def capture_dir() -> Path:
     return quantzhai_var_dir() / "captures"
 
@@ -62,3 +66,17 @@ def append_capture(name: str, text: str):
 
 def runtime_log(name: str, payload):
     write_capture(name, payload)
+
+
+def read_json(path: Path, default=None):
+    if not path.is_file():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def write_json(path: Path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

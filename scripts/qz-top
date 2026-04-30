@@ -25,9 +25,6 @@ import urllib.request
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-MAX_LOG_LINES = 1000
-
-
 @dataclass
 class GpuRow:
     index: str
@@ -66,10 +63,27 @@ class Rates:
 class BenchmarkSummary:
     run_id: str = ""
     baseline: str = ""
-    profile: str = ""
-    input_ratio: float = 0.0
-    input_savings: float = 0.0
+    profiles: int = 0
     cases: int = 0
+    prompt_count: int = 0
+    best_profile: str = ""
+    best_input_ratio: float = 0.0
+    best_input_savings: float = 0.0
+    best_instructions_ratio: float = 0.0
+    best_final_ratio: float = 0.0
+    best_total_ratio: float = 0.0
+    best_wall_ratio: float = 0.0
+
+
+@dataclass
+class ModelStatus:
+    ready: bool = False
+    selected: str = ""
+    selected_state: str = ""
+    loaded: str = ""
+    loaded_count: int = 0
+    load_state: str = ""
+    error: str = ""
 
 
 def run_cmd(args, timeout=2.0) -> str:
@@ -126,18 +140,41 @@ def telemetry_recent(limit: int = 30) -> Optional[dict]:
     return fetch_json(f"{proxy_base_url()}/qz/telemetry/recent?limit={limit}")
 
 
-def monitor_log_fallback_enabled() -> bool:
-    raw = str(os.environ.get("QZ_MONITOR_LOG_FALLBACK", "")).strip().lower()
-    return raw in {"1", "true", "yes", "on", "latest", "full"}
+def proxy_status() -> Optional[dict]:
+    return fetch_json(f"{proxy_base_url()}/qz/status")
 
 
-def get_logs(lines: int) -> str:
-    container = os.environ.get("QZ_CONTAINER", "qwen36turbo")
-    lines = max(1, min(lines, MAX_LOG_LINES))
-    out = docker(["logs", f"--tail={lines}", container], timeout=2.5)
-    out = out.replace("\r", "\n")
-    out = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", out)
-    return out
+def model_status_from_proxy(status: Optional[dict]) -> ModelStatus:
+    if not isinstance(status, dict):
+        return ModelStatus()
+    backend = status.get("backend") if isinstance(status.get("backend"), dict) else {}
+    load = status.get("load") if isinstance(status.get("load"), dict) else {}
+    loaded_model = backend.get("loaded_model") if isinstance(backend.get("loaded_model"), str) else ""
+    loaded_models = backend.get("loaded_models") if isinstance(backend.get("loaded_models"), list) else []
+    loaded_ids = [
+        str(model.get("id"))
+        for model in loaded_models
+        if isinstance(model, dict) and model.get("id")
+    ]
+    if not loaded_ids:
+        backend_models = backend.get("models") if isinstance(backend.get("models"), dict) else {}
+        loaded_ids = [
+            str(model_id)
+            for model_id, entry in backend_models.items()
+            if isinstance(entry, dict) and entry.get("state") == "loaded"
+        ]
+    if not loaded_model and loaded_ids:
+        loaded_model = loaded_ids[0]
+    selected = backend.get("selected_backend_id") or backend.get("selected_key") or ""
+    return ModelStatus(
+        ready=bool(status.get("ready")),
+        selected=str(selected),
+        selected_state=str(backend.get("selected_state") or ""),
+        loaded=str(loaded_model or ""),
+        loaded_count=int(backend.get("loaded_count") or len(loaded_ids) or 0),
+        load_state=str(load.get("state") or ""),
+        error=str(load.get("error") or ""),
+    )
 
 
 def parse_num(text: str) -> float:
@@ -251,90 +288,6 @@ def parse_gpus() -> List[GpuRow]:
     return rows
 
 
-def extract_rate(line: str) -> float:
-    match = re.search(r",\s*([0-9.]+)\s+tokens per second", line)
-    return float(match.group(1)) if match else 0.0
-
-
-def extract_ms_tokens(line: str) -> Tuple[float, int]:
-    match = re.search(r"=\s*([0-9.]+)\s+ms\s*/\s*([0-9]+)\s+tokens", line)
-    if not match:
-        return 0.0, 0
-    return float(match.group(1)), int(match.group(2))
-
-
-def recent_kind(line: str) -> str:
-    if "prompt eval time" in line:
-        return "prompt"
-    if re.search(r"^\s*eval time\s*=", line):
-        return "gen"
-    if "total time =" in line:
-        return "total"
-    if "restored context checkpoint" in line:
-        return "restore"
-    if "created context checkpoint" in line:
-        return "checkpoint"
-    if "CUDA error: out of memory" in line:
-        return "OOM"
-    if "done request:" in line:
-        return "request"
-    return "log"
-
-
-def clean_recent(line: str) -> str:
-    line = re.sub(r"\s+", " ", line).strip()
-    line = re.sub(r"172\.17\.0\.1\s+", "", line)
-    line = line.replace("srv log_server_r: ", "")
-    line = line.replace("slot update_slots: ", "")
-    line = line.replace("slot create_check: ", "")
-    return line
-
-
-def parse_rates(logs: str) -> Rates:
-    rates = Rates(recent=[])
-    for line in logs.splitlines():
-        if "done request:" in line:
-            rates.requests += 1
-        if "created context checkpoint" in line:
-            rates.checkpoints += 1
-        if "restored context checkpoint" in line:
-            rates.restores += 1
-        if "CUDA error: out of memory" in line:
-            rates.oom += 1
-
-        if "prompt eval time =" in line:
-            rates.prompt_latest = extract_rate(line)
-            rates.prompt_ms, rates.prompt_tokens = extract_ms_tokens(line)
-            rates.prompt_max = max(rates.prompt_max, rates.prompt_latest)
-
-        elif re.search(r"^\s*eval time\s*=", line):
-            rates.gen_latest = extract_rate(line)
-            rates.gen_ms, rates.gen_tokens = extract_ms_tokens(line)
-            rates.gen_max = max(rates.gen_max, rates.gen_latest)
-
-        elif "total time =" in line:
-            rates.total_ms, rates.total_tokens = extract_ms_tokens(line)
-            if rates.total_ms > 0:
-                rates.total_latest = rates.total_tokens * 1000.0 / rates.total_ms
-                rates.total_max = max(rates.total_max, rates.total_latest)
-
-        if re.search(
-            r"prompt eval time|^\s*eval time\s*=|total time =|"
-            r"restored context checkpoint|created context checkpoint|"
-            r"CUDA error: out of memory|done request:",
-            line,
-        ):
-            rates.recent.append((recent_kind(line), clean_recent(line)))
-
-    if not rates.recent:
-        for line in logs.splitlines():
-            if re.search(r"qz-docker-root-helper|returned non-zero|permission denied|Cannot connect|denied:", line, re.I):
-                rates.recent.append(("error", clean_recent(line)))
-
-    rates.recent = rates.recent[-9:]
-    return rates
-
-
 def telemetry_row(event: dict) -> Optional[Tuple[str, str]]:
     payload = event.get("payload") if isinstance(event, dict) else {}
     if not isinstance(payload, dict):
@@ -367,6 +320,22 @@ def telemetry_row(event: dict) -> Optional[Tuple[str, str]]:
         if total_tokens:
             msg += f" {total_tokens}t"
         return ("request", msg.strip())
+    if ev_type == "throughput_sample":
+        path = payload.get("path", "")
+        prompt_rate = payload.get("prompt_rate")
+        gen_rate = payload.get("gen_rate")
+        total_rate = payload.get("total_rate")
+        msg = f"{path}".strip()
+        parts = []
+        if prompt_rate:
+            parts.append(f"prompt={human_si(prompt_rate, '/s', precision=2)}")
+        if gen_rate:
+            parts.append(f"gen={human_si(gen_rate, '/s', precision=2)}")
+        if total_rate:
+            parts.append(f"total={human_si(total_rate, '/s', precision=2)}")
+        if parts:
+            msg = f"{msg} {' '.join(parts)}".strip()
+        return ("throughput", msg.strip())
     if ev_type == "request_failed":
         path = payload.get("path", "")
         error = payload.get("error", "")
@@ -465,6 +434,64 @@ def _apply_request_completed_telemetry(rates: Rates, payload: dict):
     return rates
 
 
+def _apply_throughput_sample_telemetry(rates: Rates, payload: dict):
+    if not isinstance(payload, dict):
+        return rates
+
+    try:
+        prompt_rate = float(payload.get("prompt_rate") or 0.0)
+    except Exception:
+        prompt_rate = 0.0
+    try:
+        gen_rate = float(payload.get("gen_rate") or 0.0)
+    except Exception:
+        gen_rate = 0.0
+    try:
+        total_rate = float(payload.get("total_rate") or 0.0)
+    except Exception:
+        total_rate = 0.0
+
+    try:
+        prompt_tokens = int(payload.get("prompt_tokens") or 0)
+    except Exception:
+        prompt_tokens = 0
+    try:
+        gen_tokens = int(payload.get("gen_tokens") or 0)
+    except Exception:
+        gen_tokens = 0
+    try:
+        total_tokens = int(payload.get("total_tokens") or 0)
+    except Exception:
+        total_tokens = 0
+
+    prompt_ms = payload.get("prompt_ms")
+    gen_ms = payload.get("gen_ms")
+    elapsed_ms = payload.get("elapsed_ms")
+
+    if prompt_rate > 0:
+        rates.prompt_latest = max(rates.prompt_latest, prompt_rate)
+        rates.prompt_max = max(rates.prompt_max, prompt_rate)
+    if gen_rate > 0:
+        rates.gen_latest = max(rates.gen_latest, gen_rate)
+        rates.gen_max = max(rates.gen_max, gen_rate)
+    if total_rate > 0:
+        rates.total_latest = max(rates.total_latest, total_rate)
+        rates.total_max = max(rates.total_max, total_rate)
+    if prompt_tokens > 0:
+        rates.prompt_tokens = max(rates.prompt_tokens, prompt_tokens)
+    if gen_tokens > 0:
+        rates.gen_tokens = max(rates.gen_tokens, gen_tokens)
+    if total_tokens > 0:
+        rates.total_tokens = max(rates.total_tokens, total_tokens)
+    if isinstance(prompt_ms, (int, float)) and prompt_ms > 0:
+        rates.prompt_ms = max(rates.prompt_ms, float(prompt_ms))
+    if isinstance(gen_ms, (int, float)) and gen_ms > 0:
+        rates.gen_ms = max(rates.gen_ms, float(gen_ms))
+    if isinstance(elapsed_ms, (int, float)) and elapsed_ms > 0:
+        rates.total_ms = max(rates.total_ms, float(elapsed_ms))
+    return rates
+
+
 def merge_telemetry(rates: Rates, telemetry: Optional[dict]) -> Rates:
     if not isinstance(telemetry, dict):
         return rates
@@ -475,25 +502,23 @@ def merge_telemetry(rates: Rates, telemetry: Optional[dict]) -> Rates:
     except Exception:
         pass
 
+    latest_throughput = state.get("latest_throughput") if isinstance(state.get("latest_throughput"), dict) else None
+    if latest_throughput:
+        _apply_throughput_sample_telemetry(rates, latest_throughput.get("payload") if isinstance(latest_throughput.get("payload"), dict) else latest_throughput)
+
     rows = list(rates.recent or [])
     for event in telemetry.get("events") or []:
         row = telemetry_row(event)
         if row:
             rows.append(row)
-        if event.get("type") == "request_completed":
+        if event.get("type") == "throughput_sample":
+            payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+            _apply_throughput_sample_telemetry(rates, payload)
+        elif event.get("type") == "request_completed":
             payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
             _apply_request_completed_telemetry(rates, payload)
-
-    latest_completed = state.get("latest_completed")
-    if isinstance(latest_completed, dict):
-        payload = latest_completed.get("payload") if isinstance(latest_completed.get("payload"), dict) else {}
-        _apply_request_completed_telemetry(rates, payload)
     rates.recent = rows[-9:]
     return rates
-
-
-def normalize_log_lines(lines: int) -> int:
-    return max(1, min(lines, MAX_LOG_LINES))
 
 
 def latest_benchmark() -> Optional[BenchmarkSummary]:
@@ -513,6 +538,9 @@ def latest_benchmark() -> Optional[BenchmarkSummary]:
     for profile, row in aggregate.items():
         if not isinstance(row, dict):
             continue
+        cases = int(row.get("cases") or 0)
+        if cases <= 0:
+            continue
         ratio = row.get("avg_input_ratio")
         if ratio is None:
             ratio = row.get("avg_output_ratio")
@@ -531,10 +559,16 @@ def latest_benchmark() -> Optional[BenchmarkSummary]:
     return BenchmarkSummary(
         run_id=str(data.get("run_id", "")),
         baseline=str(data.get("baseline_profile", "")),
-        profile=best_profile,
-        input_ratio=float(best_row.get("avg_input_ratio", best_row.get("avg_output_ratio")) or 0.0),
-        input_savings=float(best_row.get("avg_input_savings", best_row.get("avg_output_savings")) or 0.0),
-        cases=int(best_row.get("cases") or 0),
+        profiles=len(data.get("profiles") or []),
+        cases=int(data.get("case_count") or 0),
+        prompt_count=int(data.get("prompt_count") or 0),
+        best_profile=best_profile,
+        best_input_ratio=float(best_row.get("avg_input_ratio", best_row.get("avg_output_ratio")) or 0.0),
+        best_input_savings=float(best_row.get("avg_input_savings", best_row.get("avg_output_savings")) or 0.0),
+        best_instructions_ratio=float(best_row.get("avg_instructions_ratio") or 0.0),
+        best_final_ratio=float(best_row.get("avg_final_ratio") or 0.0),
+        best_total_ratio=float(best_row.get("avg_total_ratio") or 0.0),
+        best_wall_ratio=float(best_row.get("avg_wall_ratio") or 0.0),
     )
 
 
@@ -550,10 +584,9 @@ def clip(text: str, width: int) -> str:
 
 
 class UI:
-    def __init__(self, stdscr, interval: float, log_lines: int):
+    def __init__(self, stdscr, interval: float):
         self.stdscr = stdscr
         self.interval = interval
-        self.log_lines = log_lines
         self.running = True
         self.setup_colours()
 
@@ -639,6 +672,20 @@ class UI:
         filled = max(0, min(width, filled))
         return "█" * filled + "░" * (width - filled), pct
 
+    def draw_status_tile(self, y: int, x: int, label: str, ok: bool) -> int:
+        light_attr = self.green | self.bold if ok else self.red | self.bold
+        tile_attr = self.green if ok else self.red | self.bold
+        text = f"╭─ {label} ● ─╮"
+        light_x = x + len(f"╭─ {label} ")
+        self.add(y, x, text, tile_attr)
+        self.add(y, light_x, "●", light_attr)
+        return len(text)
+
+    def draw_status_bar(self, y: int, x: int, backend_ok: bool, proxy_ok: bool):
+        cursor = x
+        cursor += self.draw_status_tile(y, cursor, "BACKEND", backend_ok) + 2
+        self.draw_status_tile(y, cursor, "PROXY", proxy_ok)
+
     def draw_header(self, backend_ok: bool, proxy_ok: bool, gpus: Optional[List[GpuRow]] = None):
         h, w = self.stdscr.getmaxyx()
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -646,23 +693,19 @@ class UI:
         self.add(0, 9, ts, self.bold)
 
         bx = 31
-        self.add(0, bx, "backend=", self.dim)
-        self.add(0, bx + 8, "ok" if backend_ok else "fail", self.green | self.bold if backend_ok else self.red | self.bold)
-        self.add(0, bx + 13, "proxy=", self.dim)
-        self.add(0, bx + 19, "ok" if proxy_ok else "fail", self.green | self.bold if proxy_ok else self.red | self.bold)
-        self.add(0, bx + 25, f"refresh={self.interval:g}s", self.dim)
-        self.add(0, bx + 37, f"logs={self.log_lines}", self.dim)
+        self.add(0, bx, f"refresh={self.interval:g}s", self.dim)
         if gpus:
             used, available, total = vram_summary(gpus)
             self.add(
                 0,
-                bx + 48,
+                bx + 23,
                 f"vram={human_bytes_from_mib(used, compact=True)}/{human_bytes_from_mib(available, compact=True)}/{human_bytes_from_mib(total, compact=True)}",
                 self.dim,
             )
-        self.add(1, 0, "─" * max(1, w - 1), self.dim)
+        self.draw_status_bar(1, 1, backend_ok, proxy_ok)
+        self.add(2, 0, "─" * max(1, w - 1), self.dim)
 
-    def draw_profile(self, y: int, x: int, h: int, w: int):
+    def draw_profile(self, y: int, x: int, h: int, w: int, model_status: ModelStatus):
         self.box(y, x, h, w, "PROFILE")
         labels = ["CTX", "NP", "SPLIT", "BATCH", "UBATCH", "CACHE", "REUSE", "KV"]
         values = [
@@ -686,6 +729,23 @@ class UI:
         for value, width in zip(values, widths):
             self.add(y + 2, cx, f"{clip(value, width):<{width}}", self.white)
             cx += width + 1
+
+        loaded = model_status.loaded or "none"
+        loaded_suffix = f" ({model_status.loaded_count})" if model_status.loaded_count > 1 else ""
+        state = model_status.selected_state or model_status.load_state or "unknown"
+        state_attr = self.green | self.bold if model_status.ready else self.yellow | self.bold
+        if model_status.error:
+            state_attr = self.red | self.bold
+        self.add(y + 3, x + 2, "MODEL", self.dim | self.bold)
+        self.add(y + 4, x + 2, "SELECTED", self.dim | self.bold)
+        self.add(y + 4, x + 12, clip(model_status.selected or "?", w - 14), self.white)
+        self.add(y + 5, x + 2, "LOADED", self.dim | self.bold)
+        self.add(y + 5, x + 12, clip(f"{loaded}{loaded_suffix}", w - 14), self.white)
+        self.add(y + 6, x + 2, "STATE", self.dim | self.bold)
+        state_text = state
+        if model_status.error:
+            state_text += f" error={model_status.error}"
+        self.add(y + 6, x + 12, clip(state_text, w - 14), state_attr)
 
     def draw_container(self, y: int, x: int, h: int, w: int):
         self.box(y, x, h, w, "CONTAINER")
@@ -737,8 +797,8 @@ class UI:
             )
             self.add(row, x + 2, total_text, self.cyan | self.bold)
 
-    def draw_throughput(self, y: int, x: int, h: int, w: int, rates: Rates, benchmark: Optional[BenchmarkSummary]):
-        self.box(y, x, h, w, "THROUGHPUT")
+    def draw_throughput(self, y: int, x: int, h: int, w: int, rates: Rates):
+        self.box(y, x, h, w, "LIVE THROUGHPUT")
         self.add(y + 1, x + 2, f"{'METRIC':<12} {'LATEST':>10} {'MAX':>10} {'TOKENS':>10} {'TIME':>9}", self.dim | self.bold)
 
         rows = [
@@ -767,13 +827,21 @@ class UI:
         oom_attr = self.green | self.bold if rates.oom == 0 else self.red | self.bold
         self.add(y + 6, x + 60, human_si(rates.oom, precision=1), oom_attr)
 
-        if benchmark is not None:
-            bench_text = (
-                f"bench={clip(benchmark.run_id, 18)} base={benchmark.baseline} "
-                f"{benchmark.profile} input={benchmark.input_ratio:.2f} save={benchmark.input_savings * 100:.0f}% "
-                f"cases={benchmark.cases}"
-            )
-            self.add(y + 7, x + 2, clip(bench_text, w - 4), self.cyan | self.bold)
+    def draw_benchmark(self, y: int, x: int, h: int, w: int, benchmark: Optional[BenchmarkSummary]):
+        if benchmark is None:
+            return
+        self.box(y, x, h, w, "BENCHMARK")
+        line1 = (
+            f"run={clip(benchmark.run_id, 16)} base={benchmark.baseline} "
+            f"prompts={benchmark.prompt_count} cases={benchmark.cases} profiles={benchmark.profiles}"
+        )
+        line2 = (
+            f"best={benchmark.best_profile} input={benchmark.best_input_ratio:.2f} "
+            f"save={benchmark.best_input_savings * 100:.0f}% instr={benchmark.best_instructions_ratio:.2f} "
+            f"final={benchmark.best_final_ratio:.2f} total={benchmark.best_total_ratio:.2f} wall={benchmark.best_wall_ratio:.2f}"
+        )
+        self.add(y + 1, x + 2, clip(line1, w - 4), self.cyan | self.bold)
+        self.add(y + 2, x + 2, clip(line2, w - 4), self.cyan | self.bold)
 
     def draw_recent(self, y: int, x: int, h: int, w: int, rates: Rates):
         self.box(y, x, h, w, "RECENT")
@@ -786,7 +854,7 @@ class UI:
                 attr = self.red | self.bold
             elif kind in ("restore", "checkpoint"):
                 attr = self.cyan
-            elif kind in ("prompt", "gen", "total"):
+            elif kind in ("prompt", "gen", "total", "throughput"):
                 attr = self.green
             self.add(row, x + 2, f"{kind:<11}", attr | self.bold)
             self.add(row, x + 14, clip(msg, max_msg), self.white)
@@ -805,27 +873,31 @@ class UI:
         )
         gpus = parse_gpus()
 
-        logs = get_logs(self.log_lines) if monitor_log_fallback_enabled() else ""
-        rates = parse_rates(logs)
+        rates = Rates(recent=[])
+        status = proxy_status() if proxy_ok else None
+        model_status = model_status_from_proxy(status)
         if proxy_ok:
             rates = merge_telemetry(rates, telemetry_recent())
         benchmark = latest_benchmark()
 
         self.draw_header(backend_ok, proxy_ok, gpus)
 
-        if h < 24 or w < 100:
-            self.add(3, 2, "Terminal too small. Need roughly 100x24.", self.red | self.bold)
+        if h < 25 or w < 100:
+            self.add(4, 2, "Terminal too small. Need roughly 100x25.", self.red | self.bold)
             self.stdscr.refresh()
             return
 
         full_w = w - 2
-        self.draw_profile(2, 0, 5, full_w)
-        self.draw_container(7, 0, 5, full_w)
-        self.draw_gpu(12, 0, 5 + min(2, len(gpus)), full_w, gpus)
-        throughput_y = 17 + min(2, len(gpus))
-        self.draw_throughput(throughput_y, 0, 9, full_w, rates, benchmark)
+        self.draw_profile(3, 0, 8, full_w, model_status)
+        self.draw_container(11, 0, 5, full_w)
+        self.draw_gpu(16, 0, 5 + min(2, len(gpus)), full_w, gpus)
+        throughput_y = 21 + min(2, len(gpus))
+        self.draw_throughput(throughput_y, 0, 9, full_w, rates)
+        benchmark_h = 5 if benchmark is not None else 0
+        if benchmark is not None:
+            self.draw_benchmark(throughput_y + 9, 0, 5, full_w, benchmark)
 
-        recent_y = throughput_y + 9
+        recent_y = throughput_y + 9 + benchmark_h
         recent_h = max(6, h - recent_y - 2)
         self.draw_recent(recent_y, 0, recent_h, full_w, rates)
 
@@ -850,21 +922,31 @@ class UI:
                 time.sleep(0.05)
 
 
-def once(log_lines: int):
-    log_lines = normalize_log_lines(log_lines)
+def once():
     backend = curl_health(os.environ.get("QZ_SERVER_HOST", "127.0.0.1"), os.environ.get("QZ_SERVER_PORT", "18084"))
     proxy = curl_health(os.environ.get("QZ_PROXY_HOST", "127.0.0.1"), os.environ.get("QZ_PROXY_PORT", "18180"))
     gpus = parse_gpus()
-    logs = get_logs(log_lines) if monitor_log_fallback_enabled() else ""
-    rates = parse_rates(logs)
+    rates = Rates(recent=[])
+    status = proxy_status() if proxy else None
+    model_status = model_status_from_proxy(status)
     if proxy:
         rates = merge_telemetry(rates, telemetry_recent())
     benchmark = latest_benchmark()
 
-    print(f"QZ-TOP {time.strftime('%Y-%m-%d %H:%M:%S')} backend={'ok' if backend else 'fail'} proxy={'ok' if proxy else 'fail'}")
+    backend_light = "●" if backend else "○"
+    proxy_light = "●" if proxy else "○"
+    print(f"QZ-TOP {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  ╭─ BACKEND {backend_light} ─╮  ╭─ PROXY {proxy_light} ─╮")
     print()
     print("PROFILE")
     print(f"  ctx={os.environ.get('QZ_CONTEXT', '?')} np={os.environ.get('QZ_PARALLEL', '?')} split={os.environ.get('QZ_TENSOR_SPLIT', '?')} batch={os.environ.get('QZ_BATCH', '?')} ubatch={os.environ.get('QZ_UBATCH', '?')} cache={human_bytes_from_mib(parse_num(os.environ.get('QZ_CACHE_RAM', '0')))} reuse={os.environ.get('QZ_CACHE_REUSE', '?')} kv={os.environ.get('QZ_KV_KEY', '?')}/{os.environ.get('QZ_KV_VALUE', '?')}")
+    loaded_suffix = f" ({model_status.loaded_count})" if model_status.loaded_count > 1 else ""
+    state = model_status.selected_state or model_status.load_state or "unknown"
+    print(f"  selected : {model_status.selected or '?'}")
+    print(f"  loaded   : {model_status.loaded or 'none'}{loaded_suffix}")
+    print(f"  state    : {state}")
+    if model_status.error:
+        print(f"  error    : {model_status.error}")
     if gpus:
         used, available, total = vram_summary(gpus)
         print(f"  vram=model={human_bytes_from_mib(used)} available={human_bytes_from_mib(available)} total={human_bytes_from_mib(total)}")
@@ -885,7 +967,7 @@ def once(log_lines: int):
             f"pwr={power:.1f}W temp={temp:.0f}C PCIe=-"
         )
     print()
-    print("THROUGHPUT")
+    print("LIVE THROUGHPUT")
     print(f"  prompt   latest={human_si(rates.prompt_latest, '/s', precision=2)} max={human_si(rates.prompt_max, '/s', precision=2)} tokens={human_si(rates.prompt_tokens, precision=1)} time={human_duration_ms(rates.prompt_ms)}")
     print(f"  generate latest={human_si(rates.gen_latest, '/s', precision=2)} max={human_si(rates.gen_max, '/s', precision=2)} tokens={human_si(rates.gen_tokens, precision=1)} time={human_duration_ms(rates.gen_ms)}")
     print(f"  total    latest={human_si(rates.total_latest, '/s', precision=2)} max={human_si(rates.total_max, '/s', precision=2)} tokens={human_si(rates.total_tokens, precision=1)} time={human_duration_ms(rates.total_ms)}")
@@ -893,19 +975,18 @@ def once(log_lines: int):
     if benchmark is not None:
         print()
         print("BENCHMARK")
-        print(f"  run={benchmark.run_id} baseline={benchmark.baseline} profile={benchmark.profile} input_ratio={benchmark.input_ratio:.2f} input_savings={benchmark.input_savings * 100:.0f}% cases={benchmark.cases}")
+        print(f"  run={benchmark.run_id} baseline={benchmark.baseline} prompts={benchmark.prompt_count} cases={benchmark.cases} profiles={benchmark.profiles}")
+        print(f"  best={benchmark.best_profile} input_ratio={benchmark.best_input_ratio:.2f} input_savings={benchmark.best_input_savings * 100:.0f}% instr_ratio={benchmark.best_instructions_ratio:.2f} final_ratio={benchmark.best_final_ratio:.2f} total_ratio={benchmark.best_total_ratio:.2f} wall_ratio={benchmark.best_wall_ratio:.2f}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="QuantZhai top-style monitor")
     parser.add_argument("--once", "-1", action="store_true", help="print one snapshot and exit")
     parser.add_argument("-i", "--interval", type=float, default=1.0, help="refresh interval in seconds")
-    parser.add_argument("-n", "--lines", type=int, default=int(os.environ.get("QZ_TOP_LOG_LINES", str(MAX_LOG_LINES))), help=f"container log lines to scan, capped at {MAX_LOG_LINES}")
     args = parser.parse_args()
-    args.lines = normalize_log_lines(args.lines)
 
     if args.once:
-        once(args.lines)
+        once()
         return
 
     def handle_signal(signum, frame):
@@ -915,7 +996,7 @@ def main():
     signal.signal(signal.SIGTERM, handle_signal)
 
     try:
-        curses.wrapper(lambda stdscr: UI(stdscr, args.interval, args.lines).loop())
+        curses.wrapper(lambda stdscr: UI(stdscr, args.interval).loop())
     except KeyboardInterrupt:
         pass
 

@@ -4,7 +4,7 @@ model_provider = "quantzhai"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 model_context_window = 131072
-model_max_output_tokens = 4096
+model_max_output_tokens = 12000
 oss_provider = "ollama"
 
 [model_providers.quantzhai]
@@ -22,7 +22,7 @@ model_provider = "quantzhai"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 model_context_window = 131072
-model_max_output_tokens = 2048
+model_max_output_tokens = 12000
 
 [profiles.quantzhai-medium]
 model = "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M"
@@ -30,7 +30,7 @@ model_provider = "quantzhai"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 model_context_window = 131072
-model_max_output_tokens = 4096
+model_max_output_tokens = 12000
 
 [profiles.quantzhai-caveman]
 model = "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M"
@@ -47,7 +47,7 @@ model_provider = "quantzhai"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 model_context_window = 131072
-model_max_output_tokens = 8192
+model_max_output_tokens = 12000
 
 [profiles.quantzhai-max]
 model = "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact"

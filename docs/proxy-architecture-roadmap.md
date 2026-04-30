@@ -18,7 +18,7 @@ The near-term target is not a rewrite. It is to break `proxy/quantzhai_proxy.py`
 - `proxy/qz_telemetry.py` now also keeps the latest completed request so throughput counters survive noisy polling.
 - `proxy/qz_runtime_io.py` now holds runtime `var/captures` path helpers and capture writes.
 - `proxy/qz_backend.py` now holds the upstream/backend HTTP client helpers for model load/list and JSON forwarding.
-- `proxy/qz_model_catalog.py` now holds GGUF scanning, metadata extraction, override merging, and the proxy-facing model catalog.
+- `proxy/qz_model_catalog.py` now holds GGUF scanning, metadata extraction, override merging, per-model reasoning metadata, and the proxy-facing model catalog.
 - `proxy/qz_model_router.py` now holds the model-selection, backend-load, readiness/status snapshots, compact runtime-state injection, and Ollama-compatibility route handling.
 - `proxy/qz_model_router.py` now emits fresh status snapshots on `/ready`, `/qz/status`, and request boundaries, so monitors can see current load state without stale caches.
 - Requests that target a model now wait on that model instead of falling back to some other already-loaded model, and `/v1/responses` plus model load/select calls are serialized behind a small request gate so model switches apply before the next request is admitted.

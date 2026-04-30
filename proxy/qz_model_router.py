@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 import json
+import os
 import time
+from pathlib import Path
 
 try:
     from .qz_proxy_config import MODEL_BUDGETS
+    from .qz_runtime_io import read_json, runtime_state_path, write_json
 except ImportError:
     from qz_proxy_config import MODEL_BUDGETS
+    from qz_runtime_io import read_json, runtime_state_path, write_json
 
 
 PROFILE_ALIASES = {
@@ -21,10 +25,93 @@ PROFILE_ALIASES = {
     "Qwen3.6Turbo-caveman": "caveman",
 }
 
+REASONING_BUDGETS = {
+    "low": 0,
+    "medium": 256,
+    "high": 512,
+    "xhigh": -1,
+}
+
+
+def entry_identity(entry: dict | None) -> str:
+    entry = entry if isinstance(entry, dict) else {}
+    for field in ("slug", "key", "backend_id", "filename", "stem"):
+        value = entry.get(field)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def normalize_reasoning_level(level: str | None) -> str:
+    if not isinstance(level, str):
+        return "medium"
+    value = level.strip().lower()
+    if value == "max":
+        return "xhigh"
+    if value in REASONING_BUDGETS:
+        return value
+    return "medium"
+
+
+def reasoning_budget_for_level(level: str | None) -> int:
+    return REASONING_BUDGETS.get(normalize_reasoning_level(level), 256)
+
+
+def reasoning_budget_map_for_entry(entry: dict | None):
+    entry = entry if isinstance(entry, dict) else {}
+    budgets = {}
+    supported = entry.get("supported_reasoning_levels")
+    if isinstance(supported, list):
+        for item in supported:
+            if not isinstance(item, dict):
+                continue
+            effort = normalize_reasoning_level(item.get("effort"))
+            if effort not in REASONING_BUDGETS:
+                continue
+            budget = item.get("budget_tokens")
+            if budget is None:
+                budget = item.get("thinking_budget_tokens")
+            if budget is None:
+                budget = REASONING_BUDGETS.get(effort, 256)
+            try:
+                budgets[effort] = int(budget)
+            except Exception:
+                budgets[effort] = REASONING_BUDGETS.get(effort, 256)
+    return budgets
+
 
 class ModelRouter:
     def __init__(self, handler):
         self.handler = handler
+
+    def model_state_path(self):
+        cls_path = getattr(self.handler.__class__, "model_state_path", None)
+        if isinstance(cls_path, str) and cls_path:
+            return Path(cls_path).expanduser() if os.path.isabs(cls_path) else runtime_state_path(cls_path)
+        env_path = os.environ.get("QZ_MODEL_STATE_PATH")
+        if isinstance(env_path, str) and env_path:
+            return Path(env_path).expanduser() if os.path.isabs(env_path) else runtime_state_path(env_path)
+        return runtime_state_path("model-state.json")
+
+    def _persist_model_state(self, selected: dict | None = None, reason: str = "", source: str = ""):
+        selected = selected if isinstance(selected, dict) else {}
+        payload = {
+            "selected_key": entry_identity(selected),
+            "selected_backend_id": selected.get("backend_id") or entry_identity(selected),
+            "selected_label": selected.get("label") or "",
+            "selected_path": selected.get("path") or "",
+            "selected_reason": reason or "",
+            "source": source or "",
+            "updated_at": time.time(),
+        }
+        try:
+            write_json(self.model_state_path(), payload)
+        except Exception:
+            pass
+
+    def load_runtime_model_state(self):
+        payload = read_json(self.model_state_path(), default={})
+        return payload if isinstance(payload, dict) else {}
 
     def _emit(self, event_type: str, payload: dict | None = None):
         telemetry = getattr(self.handler, "telemetry", None)
@@ -63,6 +150,20 @@ class ModelRouter:
         entry = self.backend_model_entry(model_id)
         return entry.get("state") or "unknown"
 
+    def loaded_backend_models(self, backend_models=None):
+        backend_models = backend_models if isinstance(backend_models, dict) else self.backend_models()
+        loaded = []
+        for model_id, entry in backend_models.items():
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("state") == "loaded":
+                loaded.append({
+                    "id": model_id,
+                    "path": entry.get("path"),
+                    "quantization_level": entry.get("quantization_level"),
+                })
+        return loaded
+
     def backend_health(self):
         resp = self.handler._backend().get_health(timeout=10)
         try:
@@ -71,7 +172,9 @@ class ModelRouter:
             body = {}
         return resp.status, body
 
-    def unload_backend_model(self, model_id: str, wait: bool = False, timeout: float = 120):
+    def unload_backend_model(self, model_id: str, wait: bool = False, timeout: float | None = None):
+        if timeout is None:
+            timeout = float(getattr(self.handler.__class__, "model_load_timeout", 600.0))
         if not model_id:
             return
         cls = self.handler.__class__
@@ -145,13 +248,69 @@ class ModelRouter:
         selected = self.selected_model_entry()
         if not selected:
             return ""
-        return selected.get("backend_id") or selected.get("key") or ""
+        return selected.get("backend_id") or entry_identity(selected)
+
+    def selected_reasoning_level(self, selected: dict | None = None):
+        selected = selected if isinstance(selected, dict) else self.selected_model_entry()
+        if not isinstance(selected, dict):
+            return "medium"
+        level = normalize_reasoning_level(selected.get("default_reasoning_level"))
+        if level != "medium" or selected.get("default_reasoning_level"):
+            return level
+        supported = selected.get("supported_reasoning_levels")
+        if isinstance(supported, list):
+            for item in supported:
+                if isinstance(item, dict):
+                    effort = normalize_reasoning_level(item.get("effort"))
+                    if effort in REASONING_BUDGETS:
+                        return effort
+        text = " ".join(
+            str(value).lower()
+            for value in (
+                selected.get("label"),
+                selected.get("name"),
+                selected.get("notes"),
+                selected.get("slug"),
+                selected.get("backend_id"),
+            )
+            if value
+        )
+        if "apex" in text or "reasoning" in text:
+            return "high"
+        if "iq4" in text or "aggressive" in text or "fast" in text:
+            return "low"
+        return "medium"
+
+    def selected_thinking_budget_tokens(self, selected: dict | None = None):
+        selected = selected if isinstance(selected, dict) else self.selected_model_entry()
+        level = self.selected_reasoning_level(selected)
+        budgets = reasoning_budget_map_for_entry(selected)
+        if level in budgets:
+            return budgets[level]
+        if selected is not None:
+            for fallback in ("medium", "high", "low", "xhigh"):
+                if fallback in budgets:
+                    return budgets[fallback]
+        return reasoning_budget_for_level(level)
 
     def profile_model_entry(self, requested_model: str):
         catalog = self.handler._model_catalog()
         profile_key = PROFILE_ALIASES.get(requested_model, requested_model)
         if not isinstance(profile_key, str) or not profile_key:
             return None, ""
+
+        profile_candidates = [
+            requested_model,
+            f"Qwen3.6Turbo-{profile_key}",
+            f"QwenZhai-{profile_key}",
+        ]
+        for candidate in profile_candidates:
+            if not isinstance(candidate, str) or not candidate:
+                continue
+            selected, reason = catalog.resolve(query=candidate)
+            if selected is not None:
+                return selected, f"profile {requested_model} -> {entry_identity(selected)}"
+
         manifest = getattr(catalog, "manifest", {})
         if not isinstance(manifest, dict):
             manifest = {}
@@ -170,14 +329,18 @@ class ModelRouter:
         selected = self.selected_model_entry()
         backend_models = self.backend_models()
         health_status, health_body = self.backend_health()
-        selected_key = selected["key"] if selected else None
+        selected_key = entry_identity(selected)
         selected_backend_id = self.selected_backend_id()
         backend_entry = backend_models.get(selected_backend_id or selected_key or "", {})
         backend_state = backend_entry.get("state") or "unknown"
+        loaded_models = self.loaded_backend_models(backend_models)
+        loaded_model = loaded_models[0]["id"] if loaded_models else ""
         load_state = getattr(self.handler, "model_load_state", None)
         if load_state in (None, "", "idle"):
             load_state = backend_state
         ready = health_status == 200 and backend_state == "loaded"
+        reasoning_level = self.selected_reasoning_level(selected)
+        reasoning_budget = self.selected_thinking_budget_tokens(selected)
         return {
             "status": "ok" if ready else "loading",
             "router_mode": True,
@@ -192,6 +355,11 @@ class ModelRouter:
                 "selected_backend_id": selected_backend_id,
                 "selected_state": backend_state,
                 "selected_path": backend_entry.get("path"),
+                "selected_reasoning_level": reasoning_level,
+                "selected_thinking_budget_tokens": reasoning_budget,
+                "loaded_model": loaded_model,
+                "loaded_count": len(loaded_models),
+                "loaded_models": loaded_models,
                 "models": backend_models,
             },
             "load": {
@@ -210,13 +378,25 @@ class ModelRouter:
         backend = snapshot.get("backend") or {}
         load = snapshot.get("load") or {}
         health = snapshot.get("health") or {}
+        loaded_models = backend.get("loaded_models") or []
+        loaded_ids = [
+            model.get("id")
+            for model in loaded_models
+            if isinstance(model, dict) and model.get("id")
+        ]
+        loaded_model = backend.get("loaded_model") or (loaded_ids[0] if loaded_ids else "")
         return {
             "reason": reason,
             "ready": snapshot.get("ready", False),
             "router_mode": snapshot.get("router_mode", False),
-            "selected": backend.get("selected_backend_id") or selected.get("key") or "",
-            "selected_key": backend.get("selected_key") or selected.get("key") or "",
+            "selected": backend.get("selected_backend_id") or backend.get("selected_key") or "",
+            "selected_key": backend.get("selected_key") or entry_identity(selected),
             "selected_state": backend.get("selected_state") or "unknown",
+            "selected_reasoning_level": backend.get("selected_reasoning_level") or "medium",
+            "thinking_budget_tokens": backend.get("selected_thinking_budget_tokens"),
+            "loaded": loaded_ids,
+            "loaded_model": loaded_model,
+            "loaded_count": backend.get("loaded_count") or len(loaded_ids),
             "load_state": load.get("state") or "unknown",
             "health_status": health.get("status"),
             "timestamp": snapshot.get("timestamp"),
@@ -227,13 +407,14 @@ class ModelRouter:
         selected = snapshot.get("selected") or {}
         backend = snapshot.get("backend") or {}
         load = snapshot.get("load") or {}
-        profile = requested_model or selected.get("label") or selected.get("key") or ""
-        selected_key = backend.get("selected_key") or selected.get("key") or ""
+        profile = requested_model or selected.get("label") or selected.get("slug") or selected.get("key") or ""
+        selected_key = backend.get("selected_key") or entry_identity(selected)
         return {
             "ready": snapshot["ready"],
             "load_state": load.get("state") or "unknown",
             "profile": profile,
             "selected": selected_key,
+            "reasoning_level": backend.get("selected_reasoning_level") or "medium",
         }
 
     def runtime_state_block(self, requested_model: str = ""):
@@ -266,7 +447,9 @@ class ModelRouter:
             body["instructions"] = block
         return body
 
-    def load_backend_model(self, model_id: str, wait: bool = False, timeout: float = 120):
+    def load_backend_model(self, model_id: str, wait: bool = False, timeout: float | None = None):
+        if timeout is None:
+            timeout = float(getattr(self.handler.__class__, "model_load_timeout", 600.0))
         if not model_id:
             return
         cls = self.handler.__class__
@@ -279,6 +462,14 @@ class ModelRouter:
         if existing_state == "loaded":
             cls.model_load_state = "ready"
             cls.model_load_finished_at = time.time()
+            self._persist_model_state(
+                {
+                    "key": model_id,
+                    "backend_id": model_id,
+                },
+                reason="cached loaded model",
+                source="load_backend_model",
+            )
             self._emit("model_load_ready", {
                 "model": model_id,
                 "health_status": 200,
@@ -299,6 +490,14 @@ class ModelRouter:
             if ok:
                 cls.model_load_state = "ready"
                 cls.model_load_error = None
+                self._persist_model_state(
+                    {
+                        "key": model_id,
+                        "backend_id": model_id,
+                    },
+                    reason="loaded model",
+                    source="load_backend_model",
+                )
                 self._emit("model_load_ready", {
                     "model": model_id,
                     "health_status": snapshot.get("health_status"),
@@ -346,6 +545,14 @@ class ModelRouter:
         if ok:
             cls.model_load_state = "ready"
             cls.model_load_error = None
+            self._persist_model_state(
+                {
+                    "key": model_id,
+                    "backend_id": model_id,
+                },
+                reason="loaded model",
+                source="load_backend_model",
+            )
             self._emit("model_load_ready", {
                 "model": model_id,
                 "health_status": snapshot.get("health_status"),
@@ -375,7 +582,7 @@ class ModelRouter:
             reason = reason or "catalog fallback"
         if selected is None:
             return None, reason
-        target_backend_id = selected.get("backend_id") or selected.get("key")
+        target_backend_id = selected.get("backend_id") or entry_identity(selected)
         current_backend_id = self.selected_backend_id()
         if current_backend_id and current_backend_id != target_backend_id:
             current_state = self.backend_model_state(current_backend_id)
@@ -403,13 +610,15 @@ class ModelRouter:
 
         catalog.selected = selected
         catalog.reason = reason
+        self._persist_model_state(selected, reason=reason, source="resolve_model_selection")
         self._emit("model_selected", {
             "requested": requested_model,
-            "selected": selected.get("key"),
-            "backend_id": selected.get("backend_id") or selected.get("key"),
+            "selected": entry_identity(selected),
+            "backend_id": selected.get("backend_id") or entry_identity(selected),
             "target_backend_id": target_backend_id,
             "reason": reason,
-            "budget": MODEL_BUDGETS.get(requested_model, MODEL_BUDGETS.get("Qwen3.6Turbo", 256)),
+            "reasoning_level": self.selected_reasoning_level(selected),
+            "budget": self.selected_thinking_budget_tokens(selected),
         })
         return selected, reason
 

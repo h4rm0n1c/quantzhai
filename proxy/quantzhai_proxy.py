@@ -2,8 +2,10 @@
 import argparse
 import json
 import os
+import time
 import threading
 import urllib.parse
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -51,7 +53,7 @@ try:
     from .qz_streaming import StreamedFunctionCallAssembler, parse_sse_event_lines
     from .qz_telemetry import DEFAULT_TELEMETRY
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
-    from .qz_runtime_io import append_capture, capture_path, runtime_log, write_capture
+    from .qz_runtime_io import append_capture, capture_path, read_json, runtime_log, write_capture
 except ImportError:
     from qz_backend import BackendClient
     from qz_proxy_config import (
@@ -96,12 +98,13 @@ except ImportError:
     from qz_streaming import StreamedFunctionCallAssembler, parse_sse_event_lines
     from qz_telemetry import DEFAULT_TELEMETRY
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
-    from qz_runtime_io import append_capture, capture_path, runtime_log, write_capture
+    from qz_runtime_io import append_capture, capture_path, read_json, runtime_log, write_capture
 
 class ProxyHandler(BaseHTTPRequestHandler):
     upstream = "http://127.0.0.1:18084"
     reasoning_stream_format = "raw"
     runtime_state_enabled = False
+    model_load_timeout = 120.0
     request_gate = threading.Lock()
     model_catalog = None
     model_catalog_path = None
@@ -122,6 +125,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
     model_load_finished_at = None
     model_load_model = None
     model_load_health = None
+    model_state_path = None
 
     def log_message(self, fmt, *args):
         return
@@ -415,8 +419,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
     def _backend_models(self):
         return self._model_router().backend_models()
 
-    def _load_backend_model(self, model_id: str):
-        self._model_router().load_backend_model(model_id)
+    def _load_backend_model(self, model_id: str, wait: bool = False, timeout: float | None = None):
+        self._model_router().load_backend_model(model_id, wait=wait, timeout=timeout)
 
     def _resolve_model_selection(self, requested_model):
         return self._model_router().resolve_model_selection(requested_model)
@@ -451,6 +455,7 @@ def main():
     ap.add_argument("--listen", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=18180)
     ap.add_argument("--upstream", default="http://127.0.0.1:18084")
+    ap.add_argument("--model-load-timeout", type=float, default=float(os.environ.get("QZ_MODEL_LOAD_TIMEOUT", "120")))
     ap.add_argument("--reasoning-stream-format", choices=("raw", "summary", "hidden"), default="raw")
     ap.add_argument("--searxng-base-url", default=os.environ.get("SEARXNG_BASE_URL"))
     ap.add_argument("--searxng-timeout", type=float, default=float(os.environ.get("SEARXNG_TIMEOUT", "15")))
@@ -461,6 +466,7 @@ def main():
     args = ap.parse_args()
 
     ProxyHandler.upstream = args.upstream.rstrip("/")
+    ProxyHandler.model_load_timeout = float(args.model_load_timeout)
     ProxyHandler.reasoning_stream_format = args.reasoning_stream_format
     ProxyHandler.runtime_state_enabled = args.runtime_state_enabled
 
@@ -473,6 +479,7 @@ def main():
     catalog = ModelCatalog.from_env(root)
     ProxyHandler.model_catalog = catalog
     ProxyHandler.model_catalog_path = str(catalog.cache_path)
+    ProxyHandler.model_state_path = str(Path(os.environ.get("QZ_MODEL_STATE_PATH", str(root / "var" / "model-state.json"))).expanduser())
 
     ProxyHandler.searxng_policy_path = str(policy_path)
     ProxyHandler.searxng_capabilities_path = str(capabilities_path)
@@ -481,23 +488,44 @@ def main():
     ProxyHandler.searxng_base_url = args.searxng_base_url or policy.get("searxng_base") or capabilities.get("base")
     ProxyHandler.searxng_timeout = args.searxng_timeout
 
-    try:
-        if catalog.selected is not None:
-            startup_model_id = catalog.selected.get("backend_id") or catalog.selected.get("key")
-            if startup_model_id:
-                backend = BackendClient(args.upstream)
-                entry = backend.get_model_entry(startup_model_id, timeout=15)
-                status = entry.get("status") or {}
-                state = status.get("value") if isinstance(status, dict) else ""
-                if state not in {"loaded", "loading"}:
-                    backend.load_model(startup_model_id, timeout=120)
-                    backend.wait_for_model_ready(startup_model_id, timeout=120)
-                elif state == "loading":
-                    backend.wait_for_model_ready(startup_model_id, timeout=120)
-    except Exception:
-        pass
-
     server = ThreadingHTTPServer((args.listen, args.port), ProxyHandler)
+
+    def _preload_last_model():
+        state = read_json(Path(ProxyHandler.model_state_path), default={})
+        if not isinstance(state, dict):
+            return
+        requested = state.get("selected_backend_id") or state.get("selected_key") or ""
+        catalog = getattr(ProxyHandler, "model_catalog", None)
+        if not isinstance(requested, str) or not requested.strip():
+            selected = getattr(catalog, "selected", None)
+            if isinstance(selected, dict):
+                requested = selected.get("backend_id") or selected.get("key") or ""
+        if isinstance(requested, str) and requested.strip() and isinstance(catalog, ModelCatalog):
+            selected, _ = catalog.resolve(query=requested)
+            if selected is None:
+                fallback = getattr(catalog, "selected", None)
+                if isinstance(fallback, dict):
+                    requested = fallback.get("backend_id") or fallback.get("key") or requested
+        if not isinstance(requested, str) or not requested.strip():
+            return
+        url = f"http://{args.listen}:{args.port}/qz/models/select"
+        body = json.dumps({"model": requested}).encode("utf-8")
+        deadline = time.time() + max(5.0, float(args.model_load_timeout))
+        while time.time() < deadline:
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=body,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=max(5.0, float(args.model_load_timeout))) as response:
+                    response.read()
+                break
+            except Exception:
+                time.sleep(0.5)
+
+    threading.Thread(target=_preload_last_model, daemon=True).start()
     print(
         f"Qwen3.6Turbo proxy listening on {args.listen}:{args.port} -> {ProxyHandler.upstream}, reasoning_stream_format={ProxyHandler.reasoning_stream_format}, searxng_base={ProxyHandler.searxng_base_url}",
         flush=True,

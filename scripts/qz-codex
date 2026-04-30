@@ -26,4 +26,11 @@ fi
 qz_prepare_codex_home
 qz_resolve_codex_profile "$profile"
 
+loaded_model="$(qz_proxy_loaded_model)"
+if [[ -n "$loaded_model" ]]; then
+  QZ_CODEX_MODEL="$loaded_model"
+fi
+
+qz_sync_codex_model "$QZ_CODEX_MODEL"
+
 exec codex "${QZ_CODEX_EXTRA_ARGS[@]}" -m "$QZ_CODEX_MODEL" "$@"

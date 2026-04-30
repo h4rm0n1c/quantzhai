@@ -25,11 +25,26 @@ GGUF_VALUE_TYPES = {
     12: ("float64", "d"),
 }
 
+REASONING_LEVELS = (
+    ("low", 0, "Balances speed with some reasoning; useful for straightforward queries and short explanations"),
+    ("medium", 256, "Provides a solid balance of reasoning depth and latency for general-purpose tasks"),
+    ("high", 512, "Maximizes reasoning depth for complex or ambiguous problems"),
+    ("xhigh", -1, "Extra high reasoning for complex problems"),
+)
+
 
 def load_json(path: Path) -> Dict[str, Any]:
     if not path.is_file():
         return {}
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def entry_identity(entry: Dict[str, Any]) -> str:
+    for field in ("slug", "key", "filename", "stem", "backend_id"):
+        value = entry.get(field)
+        if isinstance(value, str) and value:
+            return value
+    return ""
 
 
 def deep_merge(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
@@ -149,6 +164,36 @@ def infer_model_name(metadata: Dict[str, Any], stem: str) -> str:
     return stem
 
 
+def infer_reasoning_level(entry: Dict[str, Any]) -> str:
+    text = " ".join(
+        str(value).lower()
+        for value in (
+            entry.get("label"),
+            entry.get("name"),
+            entry.get("notes"),
+            entry.get("stem"),
+            entry.get("backend_id"),
+        )
+        if value
+    )
+    if "apex" in text or "reasoning" in text:
+        return "high"
+    if "iq4" in text or "aggressive" in text or "fast" in text:
+        return "low"
+    return "medium"
+
+
+def supported_reasoning_levels(default_level: str) -> List[Dict[str, Any]]:
+    supported = []
+    for effort, budget_tokens, description in REASONING_LEVELS:
+        supported.append({
+            "effort": effort,
+            "budget_tokens": budget_tokens,
+            "description": description,
+        })
+    return supported
+
+
 def keep_metadata_key(key: str, architecture: str) -> bool:
     if key == "tokenizer.chat_template":
         return False
@@ -266,6 +311,8 @@ def build_entry(path: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
     entry["launch_args"] = list(launch_args) if isinstance(launch_args, list) else []
     entry["notes"] = overrides.get("notes")
     entry["priority"] = overrides.get("priority")
+    entry["default_reasoning_level"] = infer_reasoning_level(entry)
+    entry["supported_reasoning_levels"] = supported_reasoning_levels(entry["default_reasoning_level"])
     entry["selected"] = False
     return entry
 
@@ -289,16 +336,18 @@ def match_model(entries: List[Dict[str, Any]], query: str) -> Optional[Dict[str,
     if not q:
         return None
     for entry in entries:
+        identity = entry_identity(entry)
         haystack = {
-            entry["key"],
-            entry["filename"],
-            entry["stem"],
+            identity,
+            entry.get("key"),
+            entry.get("filename"),
+            entry.get("stem"),
             entry.get("backend_id"),
-            entry["name"],
-            entry["label"],
+            entry.get("name"),
+            entry.get("label"),
             entry.get("server_alias"),
-            entry["architecture"],
-            str(entry["path"]),
+            entry.get("architecture"),
+            str(entry.get("path")),
         }
         haystack.update(entry.get("aliases", []))
         for value in haystack:
@@ -325,7 +374,7 @@ def choose_default(entries: List[Dict[str, Any]], manifest: Dict[str, Any], quer
 
     for entry in entries:
         if entry.get("default"):
-            return entry, f"default flag on {entry['key']}"
+            return entry, f"default flag on {entry_identity(entry)}"
 
     if len(entries) == 1:
         return entries[0], "single model"
@@ -363,7 +412,7 @@ def shell_assignments(selected: Dict[str, Any], cache_path: Path, reason: str) -
     lines = [
         f"QZ_MODEL_RESOLVED_SRC={format_shell_value(selected['path'])}",
         f"QZ_MODEL_RESOLVED_NAME={format_shell_value(selected['filename'])}",
-        f"QZ_MODEL_RESOLVED_KEY={format_shell_value(selected['key'])}",
+        f"QZ_MODEL_RESOLVED_KEY={format_shell_value(entry_identity(selected))}",
         f"QZ_MODEL_RESOLVED_LABEL={format_shell_value(selected['label'])}",
         f"QZ_MODEL_RESOLVED_ARCHITECTURE={format_shell_value(selected.get('architecture'))}",
         f"QZ_MODEL_RESOLVED_CONTEXT={format_shell_value(selected.get('context_length'))}",
@@ -378,17 +427,17 @@ def shell_assignments(selected: Dict[str, Any], cache_path: Path, reason: str) -
 def plain_listing(entries: List[Dict[str, Any]], selected: Optional[Dict[str, Any]], reason: str) -> str:
     lines = []
     for entry in entries:
-        marker = "*" if selected and entry["key"] == selected["key"] else " "
+        marker = "*" if selected and entry_identity(entry) == entry_identity(selected) else " "
         label = entry["label"]
         arch = entry.get("architecture") or "unknown"
         context = entry.get("context_length")
         context_text = str(context) if context is not None else "?"
         launch = len(entry.get("launch_args", [])) if isinstance(entry.get("launch_args"), list) else 0
         lines.append(
-            f"{marker} {entry['key']} | {label} | {arch} | ctx={context_text} | launch_args={launch}"
+            f"{marker} {entry_identity(entry)} | {label} | {arch} | ctx={context_text} | launch_args={launch}"
         )
     if selected:
-        lines.append(f"selected: {selected['key']} ({reason})")
+        lines.append(f"selected: {entry_identity(selected)} ({reason})")
     return "\n".join(lines)
 
 
@@ -437,9 +486,10 @@ class ModelCatalog:
         data = []
         backend_models = backend_models or {}
         for entry in self.entries:
-            backend = backend_models.get(entry.get("backend_id") or entry["key"], backend_models.get(entry["key"], {}))
+            entry_key = entry_identity(entry)
+            backend = backend_models.get(entry.get("backend_id") or entry_key, backend_models.get(entry_key, {}))
             data.append({
-                "id": entry["key"],
+                "id": entry_key,
                 "object": "model",
                 "owned_by": "local",
                 "label": entry["label"],
@@ -458,19 +508,20 @@ class ModelCatalog:
         backend_models = backend_models or {}
         models = []
         for entry in self.entries:
-            backend = backend_models.get(entry.get("backend_id") or entry["key"], backend_models.get(entry["key"], {}))
+            entry_key = entry_identity(entry)
+            backend = backend_models.get(entry.get("backend_id") or entry_key, backend_models.get(entry_key, {}))
             models.append({
-                "name": entry.get("backend_id") or entry["key"],
-                "model": entry.get("backend_id") or entry["key"],
+                "name": entry.get("backend_id") or entry_key,
+                "model": entry.get("backend_id") or entry_key,
                 "modified_at": now,
                 "size": entry.get("size_bytes", 1),
-                "digest": f"local-{entry.get('backend_id') or entry['key']}",
+                "digest": f"local-{entry.get('backend_id') or entry_key}",
                 "details": {
                     "parent_model": "",
                     "format": "gguf",
                     "family": entry.get("architecture") or "unknown",
                     "families": [entry.get("architecture") or "unknown"],
-                    "parameter_size": entry.get("label") or entry.get("backend_id") or entry["key"],
+                    "parameter_size": entry.get("label") or entry.get("backend_id") or entry_key,
                     "quantization_level": backend.get("quantization_level") or "unknown",
                 }
             })

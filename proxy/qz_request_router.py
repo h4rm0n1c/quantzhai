@@ -203,9 +203,14 @@ class RequestRouter:
             if selected is None:
                 self.handler._send_json(404, {"error": "no model selected", "reason": reason, "catalog": catalog.to_payload()})
                 return
-            with self._request_gate(self.handler.path, requested or selected.get("key"), False):
+            selected_identity = selected.get("slug") or selected.get("key") or selected.get("backend_id") or ""
+            with self._request_gate(self.handler.path, requested or selected_identity, False):
                 try:
-                    self.handler._load_backend_model(selected.get("backend_id") or selected["key"], wait=True)
+                    self.handler._load_backend_model(
+                        selected.get("backend_id") or selected_identity,
+                        wait=True,
+                        timeout=getattr(self.handler.__class__, "model_load_timeout", 600.0),
+                    )
                 except Exception as exc:
                     self.handler._send_json(502, {"error": f"backend model load failed: {exc}", "selected": selected, "reason": reason})
                     return
@@ -244,6 +249,69 @@ class RequestRouter:
             payload.update(extra)
         try:
             self.handler.telemetry.emit(event_type, payload)
+        except Exception:
+            pass
+        if event_type == "request_completed":
+            self._emit_throughput_sample(payload)
+
+    def _emit_throughput_sample(self, payload: dict):
+        if not isinstance(payload, dict):
+            return
+
+        usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+        try:
+            prompt_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+        except Exception:
+            prompt_tokens = 0
+        try:
+            gen_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+        except Exception:
+            gen_tokens = 0
+        try:
+            total_tokens = int(usage.get("total_tokens") or (prompt_tokens + gen_tokens) or gen_tokens or 0)
+        except Exception:
+            total_tokens = 0
+
+        prompt_ms = payload.get("prompt_ms")
+        gen_ms = payload.get("gen_ms")
+        elapsed_ms = payload.get("elapsed_ms")
+
+        def _rate(tokens: int, ms):
+            try:
+                tokens = int(tokens)
+                ms = float(ms)
+            except Exception:
+                return 0.0
+            if tokens <= 0 or ms <= 0:
+                return 0.0
+            return tokens * 1000.0 / ms
+
+        prompt_rate = _rate(prompt_tokens, prompt_ms)
+        gen_rate = _rate(gen_tokens, gen_ms)
+        total_rate = _rate(total_tokens, elapsed_ms)
+
+        if not any(rate > 0 for rate in (prompt_rate, gen_rate, total_rate)):
+            return
+
+        sample = {
+            "path": payload.get("path", ""),
+            "upstream_path": payload.get("upstream_path", ""),
+            "model": payload.get("model", ""),
+            "backend_model": payload.get("backend_model", ""),
+            "stream": bool(payload.get("stream")),
+            "status": payload.get("status"),
+            "prompt_tokens": prompt_tokens,
+            "gen_tokens": gen_tokens,
+            "total_tokens": total_tokens,
+            "prompt_ms": prompt_ms,
+            "gen_ms": gen_ms,
+            "elapsed_ms": elapsed_ms,
+            "prompt_rate": round(prompt_rate, 2) if prompt_rate > 0 else 0.0,
+            "gen_rate": round(gen_rate, 2) if gen_rate > 0 else 0.0,
+            "total_rate": round(total_rate, 2) if total_rate > 0 else 0.0,
+        }
+        try:
+            self.handler.telemetry.emit("throughput_sample", sample)
         except Exception:
             pass
 
@@ -419,9 +487,10 @@ class RequestRouter:
                 })
                 return
 
-            backend_model = selected_model.get("backend_id") or selected_model["key"]
-            budget = MODEL_BUDGETS.get(client_model, MODEL_BUDGETS.get("Qwen3.6Turbo", 256))
+            selected_identity = selected_model.get("slug") or selected_model.get("key") or selected_model.get("backend_id") or ""
+            budget = self.handler._model_router().selected_thinking_budget_tokens(selected_model)
 
+            backend_model = selected_model.get("backend_id") or selected_identity or client_model
             body["model"] = backend_model
             body["thinking_budget_tokens"] = budget
             body.setdefault("temperature", 0.1)

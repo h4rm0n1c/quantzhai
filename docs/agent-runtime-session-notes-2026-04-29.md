@@ -24,6 +24,10 @@ Important behavior:
   UI text, config, or other artifacts unless explicitly requested.
 - First-turn behavior matters. A profile that only starts compressing after the
   user corrects it is not good enough.
+- Codex launch should follow the model already loaded by QuantZhai's proxy on
+  startup. The session profile can still control instructions and reasoning
+  style, but it should not force a different backend model at launch unless no
+  model is loaded yet.
 
 Naming direction:
 

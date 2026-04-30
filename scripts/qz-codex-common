@@ -19,25 +19,39 @@ qz_prepare_codex_home() {
   fi
 
   local catalog_dst="$QZ_ROOT/var/codex-home/model-catalogs/qwenzhai-models.json"
-  python3 "$QZ_ROOT/proxy/qz_model_catalog.py" scan >/dev/null 2>&1 || true
   python3 - "$QZ_ROOT/config/qwenzhai-models.example.json" "$QZ_MODEL_INVENTORY_CACHE" "$catalog_dst" "$QZ_ROOT/config/codex-config.example.toml" "$QZ_ROOT/var/codex-home/config.toml" <<'PY'
 import json
 import re
 import sys
-from copy import deepcopy
 from pathlib import Path
 
-catalog_src = Path(sys.argv[1])
+schema_path = Path(sys.argv[1])
 inventory_path = Path(sys.argv[2])
 catalog_dst = Path(sys.argv[3])
 config_src = Path(sys.argv[4])
 config_dst = Path(sys.argv[5])
 
-catalog = json.loads(catalog_src.read_text(encoding="utf-8"))
-inventory = json.loads(inventory_path.read_text(encoding="utf-8")) if inventory_path.is_file() else {}
-models = [model for model in catalog.get("models", []) if isinstance(model, dict)]
-model_by_slug = {model.get("slug"): model for model in models if model.get("slug")}
-template = model_by_slug.get("Qwen3.6Turbo-medium") or (models[0] if models else {})
+
+def load_json(path):
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+inventory = load_json(inventory_path)
+inventory_models = [entry for entry in inventory.get("models", []) if isinstance(entry, dict)]
+schema = load_json(schema_path)
+schema_defaults = {}
+if isinstance(schema, dict):
+    schema_models = schema.get("models", [])
+    if isinstance(schema_models, list):
+        for item in schema_models:
+            if isinstance(item, dict):
+                schema_defaults = dict(item)
+                break
+
 
 def reasoning_level(entry):
     text = " ".join(
@@ -57,33 +71,76 @@ def reasoning_level(entry):
         return "low"
     return "medium"
 
+
+def update_from_inventory(model, live):
+    if not isinstance(live, dict):
+        return model
+    context = live.get("context_length")
+    if context is not None:
+        model["context_window"] = context
+        model["max_context_window"] = context
+    notes = live.get("notes") or live.get("overrides", {}).get("notes")
+    if notes:
+        model["description"] = notes
+    return model
+
+
 def build_live_model(entry, priority):
     slug = entry.get("backend_id") or entry.get("stem") or entry.get("filename") or entry.get("key")
     if not slug:
         return None
-    model = deepcopy(template)
+    model = dict(schema_defaults)
     model["slug"] = slug
     label = entry.get("label") or entry.get("name") or slug
     model["display_name"] = label
     notes = entry.get("notes") or entry.get("overrides", {}).get("notes")
     model["description"] = notes or f"Local GGUF model: {label}"
-    model["default_reasoning_level"] = reasoning_level(entry)
+    model["default_reasoning_level"] = entry.get("default_reasoning_level") or reasoning_level(entry)
+    supported = entry.get("supported_reasoning_levels")
+    if isinstance(supported, list) and supported:
+        model["supported_reasoning_levels"] = supported
+    else:
+        model["supported_reasoning_levels"] = [
+            {
+                "effort": "low",
+                "budget_tokens": 0,
+                "description": "Balances speed with some reasoning; useful for straightforward queries and short explanations",
+            },
+            {
+                "effort": "medium",
+                "budget_tokens": 256,
+                "description": "Provides a solid balance of reasoning depth and latency for general-purpose tasks",
+            },
+            {
+                "effort": "high",
+                "budget_tokens": 512,
+                "description": "Maximizes reasoning depth for complex or ambiguous problems",
+            },
+            {
+                "effort": "xhigh",
+                "budget_tokens": -1,
+                "description": "Extra high reasoning for complex problems",
+            },
+        ]
     model["priority"] = entry.get("priority") if entry.get("priority") is not None else priority
     model["context_window"] = entry.get("context_length") or model.get("context_window")
     model["max_context_window"] = entry.get("context_length") or model.get("max_context_window")
+    model["backend_id"] = slug
     model["supported_in_api"] = True
     model["visibility"] = "list"
     return model
 
-live_models = []
-for index, entry in enumerate(inventory.get("models", [])):
-    if not isinstance(entry, dict):
+
+merged_models = []
+for index, entry in enumerate(inventory_models):
+    backend_id = str(entry.get("backend_id") or entry.get("stem") or entry.get("key") or "")
+    if not backend_id:
         continue
     live_model = build_live_model(entry, 1500 + index)
     if live_model:
-        live_models.append(live_model)
+        merged_models.append(update_from_inventory(live_model, entry))
 
-catalog["models"] = live_models if live_models else models
+catalog = {"models": merged_models}
 catalog_dst.write_text(json.dumps(catalog, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 example_config = config_src.read_text(encoding="utf-8").rstrip("\n") + "\n"
@@ -125,14 +182,21 @@ if not re.search(r'(?m)^model_catalog_json\s*=', merged_config):
 config_dst.write_text(merged_config.rstrip("\n") + "\n", encoding="utf-8")
 PY
 
-  local tmp_config="$QZ_ROOT/var/codex-home/config.toml.tmp"
-  local catalog_line="model_catalog_json = \"$QZ_ROOT/var/codex-home/model-catalogs/qwenzhai-models.json\""
-  if grep -q '^model_catalog_json' "$QZ_ROOT/var/codex-home/config.toml"; then
-    sed "s|^model_catalog_json = .*|$catalog_line|" "$QZ_ROOT/var/codex-home/config.toml" > "$tmp_config"
-  else
-    { printf '%s\n' "$catalog_line"; cat "$QZ_ROOT/var/codex-home/config.toml"; } > "$tmp_config"
-  fi
-  mv "$tmp_config" "$QZ_ROOT/var/codex-home/config.toml"
+  python3 - "$QZ_ROOT/var/codex-home/config.toml" "$catalog_dst" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+config_path = Path(sys.argv[1])
+catalog_dst = Path(sys.argv[2])
+text = config_path.read_text(encoding="utf-8")
+catalog_line = f'model_catalog_json = "{catalog_dst}"'
+if re.search(r'(?m)^model_catalog_json\s*=\s*".*"$', text):
+    text = re.sub(r'(?m)^model_catalog_json\s*=\s*".*"$', catalog_line, text, count=1)
+else:
+    text = catalog_line + "\n" + text
+config_path.write_text(text.rstrip("\n") + "\n", encoding="utf-8")
+PY
 
   export CODEX_HOME="$QZ_ROOT/var/codex-home"
   export CODEX_SQLITE_HOME="$CODEX_HOME/sqlite"
@@ -158,50 +222,91 @@ PY
 
 qz_codex_profile_model() {
   local profile="${1:-}"
-  python3 - "$QZ_MODEL_OVERRIDES" "$profile" <<'PY'
+  python3 - "$QZ_MODEL_INVENTORY_CACHE" "$QZ_ROOT/config/qz-model-overrides.example.json" "$QZ_MODEL_OVERRIDES" "$profile" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-override_path = Path(sys.argv[1])
-profile = sys.argv[2].strip()
+inventory_path = Path(sys.argv[1])
+base_path = Path(sys.argv[2])
+override_path = Path(sys.argv[3])
+profile = sys.argv[4].strip()
 
-alias_map = {
-    "QwenZhai-low": "low",
-    "QwenZhai-medium": "medium",
-    "QwenZhai-high": "high",
-    "QwenZhai-max": "max",
-    "QwenZhai-caveman": "caveman",
-    "Qwen3.6Turbo-low": "low",
-    "Qwen3.6Turbo-medium": "medium",
-    "Qwen3.6Turbo-high": "high",
-    "Qwen3.6Turbo-max": "max",
-    "Qwen3.6Turbo-caveman": "caveman",
-}
-fallback = {
-    "low": "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ4_NL",
-    "medium": "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M",
-    "high": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact",
-    "max": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact",
-    "caveman": "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M",
-}
-
-profile_key = alias_map.get(profile, profile)
-manifest = {}
-if override_path.is_file():
+def load_json(path):
+    if not path.is_file():
+        return {}
     try:
-        manifest = json.loads(override_path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        manifest = {}
+        return {}
+
+
+def deep_merge(base, overlay):
+    if not isinstance(base, dict) or not isinstance(overlay, dict):
+        return overlay if isinstance(overlay, dict) else base
+    result = dict(base)
+    for key, value in overlay.items():
+        existing = result.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            result[key] = deep_merge(existing, value)
+        else:
+            result[key] = value
+    return result
+
+
+def add_lookup(index, value, entry):
+    if isinstance(value, str) and value.strip():
+        index.setdefault(value.strip().lower(), entry)
+
+
+inventory = load_json(inventory_path)
+entries = [entry for entry in inventory.get("models", []) if isinstance(entry, dict)]
+index = {}
+for entry in entries:
+    for key in (
+        entry.get("backend_id"),
+        entry.get("stem"),
+        entry.get("filename"),
+        entry.get("key"),
+        entry.get("name"),
+        entry.get("label"),
+    ):
+        add_lookup(index, key, entry)
+    for alias in entry.get("aliases", []):
+        add_lookup(index, alias, entry)
+
+manifest = {}
+for path in (base_path, override_path):
+    manifest = deep_merge(manifest, load_json(path))
 
 profile_models = manifest.get("profile_models", {})
 if isinstance(profile_models, dict):
-    target = profile_models.get(profile_key) or profile_models.get(profile)
-    if isinstance(target, str) and target:
-        print(target)
+    target = profile_models.get(profile)
+    if isinstance(target, str) and target.strip():
+        resolved = index.get(target.strip().lower())
+        if resolved:
+            backend_id = resolved.get("backend_id") or resolved.get("stem") or resolved.get("filename") or resolved.get("key")
+            if isinstance(backend_id, str) and backend_id.strip():
+                print(backend_id.strip())
+                raise SystemExit(0)
+
+default_key = manifest.get("default_key")
+if isinstance(default_key, str) and default_key.strip():
+    resolved = index.get(default_key.strip().lower())
+    if resolved:
+        backend_id = resolved.get("backend_id") or resolved.get("stem") or resolved.get("filename") or resolved.get("key")
+        if isinstance(backend_id, str) and backend_id.strip():
+            print(backend_id.strip())
+            raise SystemExit(0)
+
+direct = index.get(profile.lower())
+if direct:
+    backend_id = direct.get("backend_id") or direct.get("stem") or direct.get("filename") or direct.get("key")
+    if isinstance(backend_id, str) and backend_id.strip():
+        print(backend_id.strip())
         raise SystemExit(0)
 
-print(fallback.get(profile_key, profile))
+print(profile)
 PY
 }
 
@@ -214,19 +319,19 @@ qz_resolve_codex_profile() {
   fi
 
   case "$profile" in
-    low|QwenZhai-low|Qwen3.6Turbo-low)
+    low)
       QZ_CODEX_MODEL="$(qz_codex_profile_model low)"
       ;;
-    medium|QwenZhai-medium|Qwen3.6Turbo-medium)
+    medium)
       QZ_CODEX_MODEL="$(qz_codex_profile_model medium)"
       ;;
-    high|QwenZhai-high|Qwen3.6Turbo-high)
+    high)
       QZ_CODEX_MODEL="$(qz_codex_profile_model high)"
       ;;
-    max|QwenZhai-max|Qwen3.6Turbo-max)
+    max)
       QZ_CODEX_MODEL="$(qz_codex_profile_model max)"
       ;;
-    caveman|QwenZhai-caveman|Qwen3.6Turbo-caveman)
+    caveman)
       QZ_CODEX_MODEL="$(qz_codex_profile_model caveman)"
       QZ_CODEX_EXTRA_ARGS+=(
         -c "model_instructions_file=\"$QZ_ROOT/docs/qz-caveman-codex-model-instructions-v2.md\""
@@ -237,4 +342,87 @@ qz_resolve_codex_profile() {
   esac
 
   export QZ_CODEX_MODEL
+}
+
+qz_proxy_loaded_model() {
+  python3 - "$QZ_PROXY_HOST" "$QZ_PROXY_PORT" <<'PY'
+import json
+import sys
+import urllib.request
+
+host, port = sys.argv[1:]
+url = f"http://{host}:{port}/qz/status"
+try:
+    with urllib.request.urlopen(url, timeout=2.0) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+except Exception:
+    sys.exit(0)
+
+backend = payload.get("backend") if isinstance(payload, dict) else {}
+if not isinstance(backend, dict):
+    sys.exit(0)
+
+for key in ("selected_key", "selected_backend_id", "loaded_model"):
+    value = backend.get(key)
+    if isinstance(value, str) and value.strip():
+        print(value.strip())
+        break
+PY
+}
+
+qz_sync_codex_model() {
+  local model="${1:-}"
+  [[ -z "$model" ]] && return 0
+  local timeout="${QZ_MODEL_LOAD_TIMEOUT:-120}"
+
+  python3 - "$QZ_PROXY_HOST" "$QZ_PROXY_PORT" "$model" "$timeout" <<'PY'
+import json
+import sys
+import time
+import urllib.error
+import urllib.request
+
+host, port, model, timeout_s = sys.argv[1:]
+timeout = float(timeout_s)
+health_url = f"http://{host}:{port}/health"
+url = f"http://{host}:{port}/qz/models/select"
+body = json.dumps({"model": model}).encode("utf-8")
+
+deadline = time.time() + timeout
+while time.time() < deadline:
+    try:
+        with urllib.request.urlopen(health_url, timeout=5) as response:
+            if response.status == 200:
+                break
+    except Exception:
+        time.sleep(1)
+else:
+    print(f"qz-codex: model sync skipped: proxy not ready at {health_url}", file=sys.stderr)
+    sys.exit(0)
+
+try:
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        raw = response.read().decode("utf-8", "replace")
+    payload = json.loads(raw) if raw else {}
+    backend = payload.get("backend") if isinstance(payload, dict) else {}
+    loaded_model = ""
+    if isinstance(backend, dict):
+        loaded_model = backend.get("selected_key") or backend.get("selected_backend_id") or backend.get("loaded_model") or ""
+    if loaded_model:
+        print(f"qz-codex: synced backend model {loaded_model}", file=sys.stderr)
+except urllib.error.HTTPError as exc:
+    detail = exc.read().decode("utf-8", "replace").strip()
+    if detail:
+        print(f"qz-codex: model sync skipped ({exc.code}): {detail}", file=sys.stderr)
+    else:
+        print(f"qz-codex: model sync skipped ({exc.code})", file=sys.stderr)
+except Exception as exc:
+    print(f"qz-codex: model sync skipped: {exc}", file=sys.stderr)
+PY
 }

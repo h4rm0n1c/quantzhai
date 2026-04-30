@@ -8,18 +8,22 @@
       "supported_reasoning_levels": [
         {
           "effort": "low",
+          "budget_tokens": 0,
           "description": "Balances speed with some reasoning; useful for straightforward queries and short explanations"
         },
         {
           "effort": "medium",
+          "budget_tokens": 256,
           "description": "Provides a solid balance of reasoning depth and latency for general-purpose tasks"
         },
         {
           "effort": "high",
+          "budget_tokens": 512,
           "description": "Maximizes reasoning depth for complex or ambiguous problems"
         },
         {
           "effort": "xhigh",
+          "budget_tokens": -1,
           "description": "Extra high reasoning for complex problems"
         }
       ],
@@ -34,7 +38,7 @@
       "supports_reasoning_summaries": true,
       "default_reasoning_summary": "auto",
       "support_verbosity": true,
-      "default_verbosity": "low",
+      "default_verbosity": "medium",
       "apply_patch_tool_type": "freeform",
       "web_search_tool_type": "text",
       "truncation_policy": {
@@ -61,18 +65,22 @@
       "supported_reasoning_levels": [
         {
           "effort": "low",
+          "budget_tokens": 0,
           "description": "Balances speed with some reasoning; useful for straightforward queries and short explanations"
         },
         {
           "effort": "medium",
+          "budget_tokens": 256,
           "description": "Provides a solid balance of reasoning depth and latency for general-purpose tasks"
         },
         {
           "effort": "high",
+          "budget_tokens": 512,
           "description": "Maximizes reasoning depth for complex or ambiguous problems"
         },
         {
           "effort": "xhigh",
+          "budget_tokens": -1,
           "description": "Extra high reasoning for complex problems"
         }
       ],
@@ -87,7 +95,7 @@
       "supports_reasoning_summaries": true,
       "default_reasoning_summary": "auto",
       "support_verbosity": true,
-      "default_verbosity": "low",
+      "default_verbosity": "medium",
       "apply_patch_tool_type": "freeform",
       "web_search_tool_type": "text",
       "truncation_policy": {
@@ -114,18 +122,22 @@
       "supported_reasoning_levels": [
         {
           "effort": "low",
+          "budget_tokens": 0,
           "description": "Balances speed with some reasoning; useful for straightforward queries and short explanations"
         },
         {
           "effort": "medium",
+          "budget_tokens": 256,
           "description": "Provides a solid balance of reasoning depth and latency for general-purpose tasks"
         },
         {
           "effort": "high",
+          "budget_tokens": 512,
           "description": "Maximizes reasoning depth for complex or ambiguous problems"
         },
         {
           "effort": "xhigh",
+          "budget_tokens": -1,
           "description": "Extra high reasoning for complex problems"
         }
       ],
@@ -140,7 +152,7 @@
       "supports_reasoning_summaries": true,
       "default_reasoning_summary": "auto",
       "support_verbosity": true,
-      "default_verbosity": "low",
+      "default_verbosity": "medium",
       "apply_patch_tool_type": "freeform",
       "web_search_tool_type": "text",
       "truncation_policy": {
@@ -167,18 +179,22 @@
       "supported_reasoning_levels": [
         {
           "effort": "low",
+          "budget_tokens": 0,
           "description": "Balances speed with some reasoning; useful for straightforward queries and short explanations"
         },
         {
           "effort": "medium",
+          "budget_tokens": 256,
           "description": "Provides a solid balance of reasoning depth and latency for general-purpose tasks"
         },
         {
           "effort": "high",
+          "budget_tokens": 512,
           "description": "Maximizes reasoning depth for complex or ambiguous problems"
         },
         {
           "effort": "xhigh",
+          "budget_tokens": -1,
           "description": "Extra high reasoning for complex problems"
         }
       ],
@@ -193,7 +209,7 @@
       "supports_reasoning_summaries": true,
       "default_reasoning_summary": "auto",
       "support_verbosity": true,
-      "default_verbosity": "low",
+      "default_verbosity": "medium",
       "apply_patch_tool_type": "freeform",
       "web_search_tool_type": "text",
       "truncation_policy": {
@@ -220,18 +236,22 @@
       "supported_reasoning_levels": [
         {
           "effort": "low",
+          "budget_tokens": 0,
           "description": "Balances speed with some reasoning; useful for straightforward queries and short explanations"
         },
         {
           "effort": "medium",
+          "budget_tokens": 256,
           "description": "Provides a solid balance of reasoning depth and latency for general-purpose tasks"
         },
         {
           "effort": "high",
+          "budget_tokens": 512,
           "description": "Maximizes reasoning depth for complex or ambiguous problems"
         },
         {
           "effort": "xhigh",
+          "budget_tokens": -1,
           "description": "Extra high reasoning for complex problems"
         }
       ],
@@ -246,7 +266,7 @@
       "supports_reasoning_summaries": true,
       "default_reasoning_summary": "auto",
       "support_verbosity": true,
-      "default_verbosity": "low",
+      "default_verbosity": "medium",
       "apply_patch_tool_type": "freeform",
       "web_search_tool_type": "text",
       "truncation_policy": {
@@ -273,18 +293,22 @@
       "supported_reasoning_levels": [
         {
           "effort": "low",
+          "budget_tokens": 0,
           "description": "Balances speed with some reasoning; useful for straightforward queries and short explanations"
         },
         {
           "effort": "medium",
+          "budget_tokens": 256,
           "description": "Provides a solid balance of reasoning depth and latency for general-purpose tasks"
         },
         {
           "effort": "high",
+          "budget_tokens": 512,
           "description": "Maximizes reasoning depth for complex or ambiguous problems"
         },
         {
           "effort": "xhigh",
+          "budget_tokens": -1,
           "description": "Extra high reasoning for complex problems"
         }
       ],
@@ -299,7 +323,7 @@
       "supports_reasoning_summaries": true,
       "default_reasoning_summary": "auto",
       "support_verbosity": true,
-      "default_verbosity": "low",
+      "default_verbosity": "medium",
       "apply_patch_tool_type": "freeform",
       "web_search_tool_type": "text",
       "truncation_policy": {

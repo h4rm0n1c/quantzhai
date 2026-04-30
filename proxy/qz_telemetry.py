@@ -18,6 +18,7 @@ class TelemetryBus:
         self._lock = Lock()
         self.started_at = time.time()
         self._latest_completed = None
+        self._latest_throughput = None
 
     def emit(self, event_type: str, payload: dict | None = None) -> dict:
         now = time.time()
@@ -33,6 +34,8 @@ class TelemetryBus:
             self._counters[event["type"]] += 1
             if event["type"] == "request_completed":
                 self._latest_completed = event
+            if event["type"] == "throughput_sample":
+                self._latest_throughput = event
             subscribers = list(self._subscribers)
 
         for subscriber in subscribers:
@@ -61,6 +64,7 @@ class TelemetryBus:
         with self._lock:
             latest = self._events[-1] if self._events else None
             latest_completed = self._latest_completed
+            latest_throughput = self._latest_throughput
             event_count = len(self._events)
             counters = dict(self._counters)
 
@@ -74,6 +78,7 @@ class TelemetryBus:
             "counters": counters,
             "latest": latest,
             "latest_completed": latest_completed,
+            "latest_throughput": latest_throughput,
         }
 
     @contextmanager
