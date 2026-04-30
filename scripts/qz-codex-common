@@ -33,15 +33,125 @@ from pathlib import Path
 inventory_path = Path(sys.argv[1])
 catalog_dst = Path(sys.argv[2])
 config_dst = Path(sys.argv[3])
+root_dir = inventory_path.parent.parent
 
 
 def load_json(path):
     if not path.is_file():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
+    return data if isinstance(data, dict) else {}
+
+
+def deep_merge(base, overlay):
+    result = dict(base) if isinstance(base, dict) else {}
+    if not isinstance(overlay, dict):
+        return result
+    for key, value in overlay.items():
+        if isinstance(result.get(key), dict) and isinstance(value, dict):
+            result[key] = deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def load_override_manifest():
+    manifest = {}
+    for path in (
+        root_dir / "config" / "qz-model-overrides.default.json",
+        root_dir / "var" / "model-overrides.json",
+    ):
+        data = load_json(path)
+        if data:
+            manifest = deep_merge(manifest, data)
+    if not isinstance(manifest.get("models"), dict):
+        manifest["models"] = {}
+    return manifest
+
+
+OVERRIDE_MANIFEST = load_override_manifest()
+
+
+def _resolve_repo_path(value):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    path = Path(value.strip()).expanduser()
+    if not path.is_absolute():
+        path = root_dir / path
+    return path
+
+
+def _read_prompt_file(value):
+    path = _resolve_repo_path(value)
+    if path is None or not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+
+def override_value(overrides, *keys):
+    if not isinstance(overrides, dict):
+        return None
+    for key in keys:
+        value = overrides.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def system_prompt_for_model(overrides):
+    """Return the Codex catalog base_instructions for one generated model."""
+    if not isinstance(overrides, dict):
+        overrides = {}
+
+    # Per-model inline override wins when intentionally set.
+    inline = override_value(
+        overrides,
+        "system_prompt",
+        "codex_base_instructions",
+        "base_instructions",
+    )
+    if isinstance(inline, str) and inline.strip():
+        return inline.strip()
+
+    # Per-model file override is preferred for long prompts.
+    file_value = override_value(
+        overrides,
+        "system_prompt_file",
+        "codex_base_instructions_file",
+        "base_instructions_file",
+    )
+    file_text = _read_prompt_file(file_value) if isinstance(file_value, str) else ""
+    if file_text:
+        return file_text
+
+    # Global default, shipped through config/qz-model-overrides.default.json and
+    # optionally overridden in var/model-overrides.json.
+    inline = override_value(
+        OVERRIDE_MANIFEST,
+        "system_prompt",
+        "codex_base_instructions",
+        "base_instructions",
+    )
+    if isinstance(inline, str) and inline.strip():
+        return inline.strip()
+
+    file_value = override_value(
+        OVERRIDE_MANIFEST,
+        "system_prompt_file",
+        "codex_base_instructions_file",
+        "base_instructions_file",
+    )
+    file_text = _read_prompt_file(file_value) if isinstance(file_value, str) else ""
+    if file_text:
+        return file_text
+
+    return ""
 
 
 def reasoning_level(entry):
@@ -163,16 +273,6 @@ def catalog_defaults():
     }
 
 
-def override_value(overrides, *keys):
-    if not isinstance(overrides, dict):
-        return None
-    for key in keys:
-        value = overrides.get(key)
-        if value is not None:
-            return value
-    return None
-
-
 def int_override(overrides, *keys):
     value = override_value(overrides, *keys)
     if value is None:
@@ -219,9 +319,7 @@ def build_live_model(entry, priority):
     notes = entry.get("notes") or overrides.get("notes")
     model["description"] = notes or f"Local GGUF model: {label}"
 
-    base_instructions = override_value(overrides, "codex_base_instructions", "base_instructions")
-    if isinstance(base_instructions, str):
-        model["base_instructions"] = base_instructions
+    model["base_instructions"] = system_prompt_for_model(overrides)
 
     model_messages = override_value(overrides, "codex_model_messages", "model_messages")
     if isinstance(model_messages, dict):
