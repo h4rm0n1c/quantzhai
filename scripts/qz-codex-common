@@ -18,6 +18,11 @@ qz_prepare_codex_home() {
     cp "$QZ_ROOT/config/codex-config.example.toml" "$QZ_ROOT/var/codex-home/config.toml"
   fi
 
+  # Refresh the live GGUF inventory first. The Codex model catalog below is a
+  # generated view over var/model-inventory.json; using a stale inventory can
+  # leak old overrides or deleted prompt paths back into Codex.
+  python3 "$QZ_ROOT/proxy/qz_model_catalog.py" scan >/dev/null
+
   local catalog_dst="$QZ_ROOT/var/codex-home/model-catalogs/qwenzhai-models.json"
   python3 - "$QZ_MODEL_INVENTORY_CACHE" "$catalog_dst" "$QZ_ROOT/var/codex-home/config.toml" <<'PY'
 import json
