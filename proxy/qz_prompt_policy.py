@@ -40,10 +40,6 @@ def _model_overrides_path():
     return runtime_state_path("model-overrides.json")
 
 
-def _load_manifest():
-    return _load_json(_model_overrides_path())
-
-
 def _deep_merge(base, overlay):
     result = dict(base) if isinstance(base, dict) else {}
     if not isinstance(overlay, dict):
@@ -54,6 +50,22 @@ def _deep_merge(base, overlay):
         else:
             result[key] = value
     return result
+
+
+def _load_manifest():
+    manifest = {}
+    default_path = _root_dir() / "config" / "qz-model-overrides.default.json"
+    default_manifest = _load_json(default_path)
+    if default_manifest:
+        manifest = _deep_merge(manifest, default_manifest)
+
+    runtime_manifest = _load_json(_model_overrides_path())
+    if runtime_manifest:
+        manifest = _deep_merge(manifest, runtime_manifest)
+
+    if not isinstance(manifest.get("models"), dict):
+        manifest["models"] = {}
+    return manifest
 
 
 def _clean_text(value):
@@ -208,7 +220,7 @@ def assemble_instruction_stack(existing_instructions="", client_blocks=None, sel
 
     Ordering:
     1. Client/Codex system+developer harness, unless explicitly replaced.
-    2. Optional QuantZhai prompt additions from var/model-overrides.json.
+    2. Optional QuantZhai prompt additions from default/runtime overrides.
     3. Existing proxy-added instructions, such as reasoning hint and QZSTATE.
     """
     manifest = _load_manifest()
