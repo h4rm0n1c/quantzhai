@@ -1,11 +1,25 @@
 {
   "default_key": "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M.gguf",
+  "prompt_policy": {
+    "mode": "preserve_client",
+    "allow_replace": false,
+    "allow_prepend_before_client": true,
+    "global_prepend_files": [
+      "var/prompts/codex-core.md"
+    ],
+    "global_append_files": [
+      "var/prompts/quantzhai-global.md"
+    ]
+  },
   "models": {
     "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M.gguf": {
       "default": true,
       "label": "Qwen3.6 35B A3B baseline",
       "server_alias": "QwenZhai",
-      "notes": "Current QuantZhai baseline model."
+      "notes": "Current QuantZhai baseline model.",
+      "prompt_append_files": [
+        "var/prompts/models/qwen36-baseline.md"
+      ]
     },
     "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ4_NL.gguf": {
       "label": "Qwen3.6 35B A3B aggressive iq4",
