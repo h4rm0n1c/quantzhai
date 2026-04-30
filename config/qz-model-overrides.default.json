@@ -1,0 +1,11 @@
+{
+  "prompt_policy": {
+    "mode": "preserve_client",
+    "allow_replace": false,
+    "allow_prepend_before_client": true,
+    "global_prepend_files": [
+      "prompts/codex-core.md"
+    ]
+  },
+  "models": {}
+}
