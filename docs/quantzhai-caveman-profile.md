@@ -19,8 +19,8 @@ Runtime behavior:
   off unless `QZ_REASONING_POLICY=hard_budget` is explicitly enabled.
 - Loads `docs/qz-caveman-codex-model-instructions-v2.md` through
   `model_instructions_file` when launched by `scripts/qz-codex caveman`. This
-  appends the caveman behavior harness to the selected model's generated
-  `base_instructions`; it is not a replacement system prompt.
+  appends the caveman behavior harness to the active Codex instruction stack;
+  it is not a replacement system prompt.
 - Sets `model_max_output_tokens=2048` for that launcher session.
 - Starts each session with caveman chat mode on; the user can say `normal mode`
   or `caveman off` to switch back during the session.
@@ -53,10 +53,10 @@ at 2048.
 
 Prompt-chain contract:
 
-- The generated Codex model catalog provides the selected model's
-  `base_instructions`.
-- The caveman launcher adds `model_instructions_file` as a compression and style
-  harness on top of that base.
+- The generated Codex model catalog provides model selection metadata and
+  reasoning policy defaults.
+- The caveman launcher adds `model_instructions_file` as a compression and
+  style harness on top of the active Codex instructions.
 - Proxy-side reasoning policy may prepend small effort guidance and sampler
   metadata for the active reasoning level.
 - The harness must preserve Codex tool behavior, AGENTS compliance, escalation,

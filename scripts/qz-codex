@@ -31,6 +31,11 @@ if [[ -n "$loaded_model" ]]; then
   QZ_CODEX_MODEL="$loaded_model"
 fi
 
+model_context_window="$(qz_codex_model_context_window "$QZ_CODEX_MODEL")"
+if [[ -n "$model_context_window" ]]; then
+  QZ_CODEX_EXTRA_ARGS+=(-c "model_context_window=$model_context_window")
+fi
+
 qz_sync_codex_model "$QZ_CODEX_MODEL"
 
 exec codex "${QZ_CODEX_EXTRA_ARGS[@]}" -m "$QZ_CODEX_MODEL" "$@"

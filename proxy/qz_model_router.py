@@ -28,19 +28,6 @@ except ImportError:
     from qz_runtime_io import read_json, runtime_state_path, write_json
 
 
-PROFILE_ALIASES = {
-    "QwenZhai-low": "low",
-    "QwenZhai-medium": "medium",
-    "QwenZhai-high": "high",
-    "QwenZhai-max": "max",
-    "QwenZhai-caveman": "caveman",
-    "Qwen3.6Turbo-low": "low",
-    "Qwen3.6Turbo-medium": "medium",
-    "Qwen3.6Turbo-high": "high",
-    "Qwen3.6Turbo-max": "max",
-    "Qwen3.6Turbo-caveman": "caveman",
-}
-
 def entry_identity(entry: dict | None) -> str:
     entry = entry if isinstance(entry, dict) else {}
     for field in ("slug", "key", "backend_id", "filename", "stem"):
@@ -81,6 +68,38 @@ class ModelRouter:
     def __init__(self, handler):
         self.handler = handler
 
+    def _parse_context_length(self, value, default=None):
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return default
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            text = value.strip().lower()
+            if not text:
+                return default
+            multiplier = 1
+            if text.endswith("k"):
+                multiplier = 1024
+                text = text[:-1]
+            elif text.endswith("m"):
+                multiplier = 1024 * 1024
+                text = text[:-1]
+            elif text.endswith("g"):
+                multiplier = 1024 * 1024 * 1024
+                text = text[:-1]
+            try:
+                return int(float(text) * multiplier)
+            except Exception:
+                return default
+        try:
+            return int(value)
+        except Exception:
+            return default
+
     def model_state_path(self):
         cls_path = getattr(self.handler.__class__, "model_state_path", None)
         if isinstance(cls_path, str) and cls_path:
@@ -109,6 +128,57 @@ class ModelRouter:
     def load_runtime_model_state(self):
         payload = read_json(self.model_state_path(), default={})
         return payload if isinstance(payload, dict) else {}
+
+    def backend_state_path(self):
+        cls_path = getattr(self.handler.__class__, "backend_state_path", None)
+        if isinstance(cls_path, str) and cls_path:
+            return Path(cls_path).expanduser() if os.path.isabs(cls_path) else runtime_state_path(cls_path)
+        env_path = os.environ.get("QZ_BACKEND_STATE_PATH")
+        if isinstance(env_path, str) and env_path:
+            return Path(env_path).expanduser() if os.path.isabs(env_path) else runtime_state_path(env_path)
+        return runtime_state_path("backend-state.json")
+
+    def _persist_backend_state(self, selected: dict | None = None, context_length=None, reason: str = "", source: str = "", state: str = "", loaded_model: str = "", error: str = "", health_status=None, restarted: bool | None = None):
+        selected = selected if isinstance(selected, dict) else {}
+        payload = {
+            "selected_key": entry_identity(selected),
+            "selected_backend_id": selected.get("backend_id") or entry_identity(selected),
+            "selected_label": selected.get("label") or "",
+            "selected_path": selected.get("path") or "",
+            "selected_context_length": self.selected_context_length(selected),
+            "backend_context_length": self._parse_context_length(context_length, self.backend_context_length()),
+            "state": state or "",
+            "loaded_model": loaded_model or "",
+            "selected_reason": reason or "",
+            "source": source or "",
+            "error": error or "",
+            "health_status": health_status,
+            "restarted": restarted,
+            "updated_at": time.time(),
+        }
+        try:
+            write_json(self.backend_state_path(), payload)
+        except Exception:
+            pass
+
+    def load_backend_state(self):
+        payload = read_json(self.backend_state_path(), default={})
+        return payload if isinstance(payload, dict) else {}
+
+    def backend_context_length(self):
+        state = self.load_backend_state()
+        context = self._parse_context_length(state.get("backend_context_length"), None)
+        if context is not None:
+            return context
+        return self._parse_context_length(os.environ.get("QZ_CONTEXT"), 131072)
+
+    def selected_context_length(self, selected: dict | None = None):
+        selected = selected if isinstance(selected, dict) else self.selected_model_entry()
+        if isinstance(selected, dict):
+            runtime_context = self._parse_context_length(selected.get("runtime_context_length"), None)
+            if runtime_context is not None:
+                return runtime_context
+        return self._parse_context_length(os.environ.get("QZ_CONTEXT"), 131072)
 
     def _emit(self, event_type: str, payload: dict | None = None):
         telemetry = getattr(self.handler, "telemetry", None)
@@ -199,6 +269,16 @@ class ModelRouter:
         if existing_state in ("unloaded", "unknown"):
             cls.model_load_state = "idle"
             cls.model_load_finished_at = time.time()
+            self._persist_backend_state(
+                selected={"backend_id": model_id, "key": model_id},
+                context_length=self.backend_context_length(),
+                reason="cached unloaded model",
+                source="unload_backend_model",
+                state="idle",
+                loaded_model="",
+                health_status=200,
+                restarted=False,
+            )
             self._emit("model_unload_ready", {
                 "model": model_id,
                 "cached": True,
@@ -234,6 +314,16 @@ class ModelRouter:
         if ok:
             cls.model_load_state = "idle"
             cls.model_load_error = None
+            self._persist_backend_state(
+                selected={"backend_id": model_id, "key": model_id},
+                context_length=self.backend_context_length(),
+                reason="unloaded model",
+                source="unload_backend_model",
+                state="idle",
+                loaded_model="",
+                health_status=snapshot.get("health_status"),
+                restarted=False,
+            )
             self._emit("model_unload_ready", {
                 "model": model_id,
                 "health_status": snapshot.get("health_status"),
@@ -337,35 +427,12 @@ class ModelRouter:
 
     def profile_model_entry(self, requested_model: str):
         catalog = self.handler._model_catalog()
-        profile_key = PROFILE_ALIASES.get(requested_model, requested_model)
-        if not isinstance(profile_key, str) or not profile_key:
+        if not isinstance(requested_model, str) or not requested_model.strip():
             return None, ""
-
-        profile_candidates = [
-            requested_model,
-            f"Qwen3.6Turbo-{profile_key}",
-            f"QwenZhai-{profile_key}",
-        ]
-        for candidate in profile_candidates:
-            if not isinstance(candidate, str) or not candidate:
-                continue
-            selected, reason = catalog.resolve(query=candidate)
-            if selected is not None:
-                return selected, f"profile {requested_model} -> {entry_identity(selected)}"
-
-        manifest = getattr(catalog, "manifest", {})
-        if not isinstance(manifest, dict):
-            manifest = {}
-        profile_models = manifest.get("profile_models", {})
-        if not isinstance(profile_models, dict):
-            return None, ""
-        target = profile_models.get(profile_key) or profile_models.get(requested_model)
-        if not isinstance(target, str) or not target:
-            return None, ""
-        selected, reason = catalog.resolve(query=target)
+        selected, reason = catalog.resolve(query=requested_model)
         if selected is None:
-            return None, f"profile {requested_model} -> {target} (missing)"
-        return selected, f"profile {requested_model} -> {target}"
+            return None, ""
+        return selected, reason
 
     def status_snapshot(self):
         selected = self.selected_model_entry()
@@ -383,6 +450,8 @@ class ModelRouter:
         ready = health_status == 200 and backend_state == "loaded"
         reasoning_level = self.selected_reasoning_level(selected)
         reasoning_policy = self.selected_reasoning_policy(selected)
+        selected_context_length = self.selected_context_length(selected)
+        backend_context_length = self.backend_context_length()
         return {
             "status": "ok" if ready else "loading",
             "router_mode": True,
@@ -402,6 +471,9 @@ class ModelRouter:
                 "selected_reasoning_prompt": reasoning_policy.get("prompt"),
                 "selected_sampling_params": reasoning_policy.get("sampling"),
                 "selected_thinking_budget_tokens": reasoning_policy.get("thinking_budget_tokens"),
+                "selected_context_length": selected_context_length,
+                "backend_context_length": backend_context_length,
+                "restart_required": selected_context_length != backend_context_length,
                 "loaded_model": loaded_model,
                 "loaded_count": len(loaded_models),
                 "loaded_models": loaded_models,
@@ -442,6 +514,8 @@ class ModelRouter:
             "reasoning_prompt": backend.get("selected_reasoning_prompt"),
             "sampling": backend.get("selected_sampling_params") or {},
             "thinking_budget_tokens": backend.get("selected_thinking_budget_tokens"),
+            "selected_context_length": backend.get("selected_context_length"),
+            "backend_context_length": backend.get("backend_context_length"),
             "loaded": loaded_ids,
             "loaded_model": loaded_model,
             "loaded_count": backend.get("loaded_count") or len(loaded_ids),
@@ -462,6 +536,8 @@ class ModelRouter:
             "load_state": load.get("state") or "unknown",
             "profile": profile,
             "selected": selected_key,
+            "context_length": backend.get("selected_context_length"),
+            "backend_context_length": backend.get("backend_context_length"),
             "reasoning_level": backend.get("selected_reasoning_level") or "medium",
             "reasoning_policy": backend.get("selected_reasoning_policy") or reasoning_policy_mode(),
         }
@@ -471,8 +547,8 @@ class ModelRouter:
         ready = "1" if state["ready"] else "0"
         return (
             f'<QZSTATE v=1 ready={ready} '
-            f'load={state["load_state"]} prof={state["profile"]} '
-            f'sel={state["selected"]}>'
+            f'load={state["load_state"]} ctx={state["context_length"]} '
+            f'prof={state["profile"]} sel={state["selected"]}>'
         )
 
     def inject_runtime_state(self, body: dict, requested_model: str = ""):
@@ -511,6 +587,16 @@ class ModelRouter:
         if existing_state == "loaded":
             cls.model_load_state = "ready"
             cls.model_load_finished_at = time.time()
+            self._persist_backend_state(
+                selected={"backend_id": model_id, "key": model_id},
+                context_length=self.backend_context_length(),
+                reason="cached loaded model",
+                source="load_backend_model",
+                state="loaded",
+                loaded_model=model_id,
+                health_status=200,
+                restarted=False,
+            )
             self._persist_model_state(
                 {
                     "key": model_id,
@@ -539,6 +625,16 @@ class ModelRouter:
             if ok:
                 cls.model_load_state = "ready"
                 cls.model_load_error = None
+                self._persist_backend_state(
+                    selected={"backend_id": model_id, "key": model_id},
+                    context_length=self.backend_context_length(),
+                    reason="loaded model",
+                    source="load_backend_model",
+                    state="loaded",
+                    loaded_model=model_id,
+                    health_status=snapshot.get("health_status"),
+                    restarted=False,
+                )
                 self._persist_model_state(
                     {
                         "key": model_id,
@@ -594,6 +690,16 @@ class ModelRouter:
         if ok:
             cls.model_load_state = "ready"
             cls.model_load_error = None
+            self._persist_backend_state(
+                selected={"backend_id": model_id, "key": model_id},
+                context_length=self.backend_context_length(),
+                reason="loaded model",
+                source="load_backend_model",
+                state="loaded",
+                loaded_model=model_id,
+                health_status=snapshot.get("health_status"),
+                restarted=False,
+            )
             self._persist_model_state(
                 {
                     "key": model_id,
@@ -617,6 +723,95 @@ class ModelRouter:
                 "wait": True,
             })
 
+    def restart_backend_for_context(self, context_length, selected: dict | None = None, reason: str = "", timeout: float | None = None):
+        timeout = timeout if timeout is not None else float(getattr(self.handler.__class__, "model_load_timeout", 600.0))
+        desired_context = self._parse_context_length(context_length, self.backend_context_length())
+        current_context = self.backend_context_length()
+        selected = selected if isinstance(selected, dict) else self.selected_model_entry()
+        if desired_context == current_context:
+            self._persist_backend_state(
+                selected=selected,
+                context_length=current_context,
+                reason=reason or "backend context unchanged",
+                source="restart_backend_for_context",
+                state="ready",
+                loaded_model=self.selected_backend_id(),
+                health_status=200,
+                restarted=False,
+            )
+            return {
+                "restarted": False,
+                "context_length": current_context,
+                "health_status": 200,
+            }
+
+        self._emit("backend_restart_started", {
+            "selected": entry_identity(selected),
+            "current_context_length": current_context,
+            "desired_context_length": desired_context,
+            "reason": reason,
+        })
+        self._persist_backend_state(
+            selected=selected,
+            context_length=current_context,
+            reason=reason or "backend restart requested",
+            source="restart_backend_for_context",
+            state="restarting",
+            loaded_model=self.selected_backend_id(),
+            health_status=None,
+            restarted=False,
+        )
+        try:
+            result = self.handler._backend().restart_container(desired_context, timeout=timeout)
+        except Exception as exc:
+            error = str(exc)
+            cls = self.handler.__class__
+            cls.model_load_state = "failed"
+            cls.model_load_error = error
+            cls.model_load_finished_at = time.time()
+            self._persist_backend_state(
+                selected=selected,
+                context_length=current_context,
+                reason=reason or "backend restart failed",
+                source="restart_backend_for_context",
+                state="failed",
+                loaded_model="",
+                error=error,
+                health_status=None,
+                restarted=False,
+            )
+            self._emit("backend_restart_failed", {
+                "selected": entry_identity(selected),
+                "current_context_length": current_context,
+                "desired_context_length": desired_context,
+                "error": error,
+                "reason": reason,
+            })
+            raise
+
+        cls = self.handler.__class__
+        cls.model_load_state = "idle"
+        cls.model_load_error = None
+        cls.model_load_finished_at = time.time()
+        self._persist_backend_state(
+            selected=selected,
+            context_length=desired_context,
+            reason=reason or "backend restarted",
+            source="restart_backend_for_context",
+            state="idle",
+            loaded_model="",
+            health_status=result.get("health_status"),
+            restarted=True,
+        )
+        self._emit("backend_restart_ready", {
+            "selected": entry_identity(selected),
+            "current_context_length": current_context,
+            "desired_context_length": desired_context,
+            "health_status": result.get("health_status"),
+            "reason": reason,
+        })
+        return result
+
     def resolve_model_selection(self, requested_model):
         catalog = self.handler._model_catalog()
         if not requested_model or requested_model in MODEL_BUDGETS:
@@ -633,8 +828,23 @@ class ModelRouter:
             return None, reason
         target_backend_id = selected.get("backend_id") or entry_identity(selected)
         backend_inventory = self.backend_models()
+        desired_context_length = self.selected_context_length(selected)
         if self.backend_model_control_available(backend_inventory):
             current_backend_id = self.selected_backend_id()
+            current_context_length = self.backend_context_length()
+            if desired_context_length != current_context_length:
+                try:
+                    backend_timeout = float(getattr(self.handler.__class__, "model_load_timeout", 600.0))
+                    self.restart_backend_for_context(desired_context_length, selected=selected, reason=reason, timeout=backend_timeout)
+                except Exception as exc:
+                    self._emit("model_load_failed", {
+                        "model": target_backend_id,
+                        "error": f"backend restart failed: {exc}",
+                        "wait": True,
+                    })
+                    return None, f"{reason}; backend restart failed ({exc})"
+                backend_inventory = self.backend_models()
+                current_backend_id = ""
             if current_backend_id and current_backend_id != target_backend_id:
                 current_state = backend_inventory.get(current_backend_id, {}).get("state") or self.backend_model_state(current_backend_id)
                 if current_state in ("loaded", "loading"):
@@ -667,6 +877,15 @@ class ModelRouter:
         catalog.selected = selected
         catalog.reason = reason
         self._persist_model_state(selected, reason=reason, source="resolve_model_selection")
+        self._persist_backend_state(
+            selected=selected,
+            context_length=desired_context_length,
+            reason=reason,
+            source="resolve_model_selection",
+            state=self.backend_model_state(target_backend_id) if self.backend_model_control_available(backend_inventory) else "unknown",
+            loaded_model=target_backend_id,
+            restarted=False,
+        )
         self._emit("model_selected", {
             "requested": requested_model,
             "selected": entry_identity(selected),
@@ -675,6 +894,7 @@ class ModelRouter:
             "reason": reason,
             "reasoning_level": self.selected_reasoning_level(selected),
             "reasoning_policy": self.selected_reasoning_policy(selected).get("mode"),
+            "selected_context_length": desired_context_length,
         })
         return selected, reason
 

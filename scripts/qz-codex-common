@@ -45,12 +45,16 @@ inventory_models = [entry for entry in inventory.get("models", []) if isinstance
 schema = load_json(schema_path)
 schema_defaults = {}
 if isinstance(schema, dict):
-    schema_models = schema.get("models", [])
-    if isinstance(schema_models, list):
-        for item in schema_models:
-            if isinstance(item, dict):
-                schema_defaults = dict(item)
-                break
+    catalog_defaults = schema.get("catalog_defaults")
+    if isinstance(catalog_defaults, dict):
+        schema_defaults = dict(catalog_defaults)
+    else:
+        schema_models = schema.get("models", [])
+        if isinstance(schema_models, list):
+            for item in schema_models:
+                if isinstance(item, dict):
+                    schema_defaults = dict(item)
+                    break
 
 
 def reasoning_level(entry):
@@ -141,7 +145,9 @@ def supported_reasoning_levels(default_level):
 def update_from_inventory(model, live):
     if not isinstance(live, dict):
         return model
-    context = live.get("context_length")
+    context = live.get("runtime_context_length")
+    if context is None:
+        context = live.get("context_length")
     if context is not None:
         model["context_window"] = context
         model["max_context_window"] = context
@@ -168,8 +174,11 @@ def build_live_model(entry, priority):
     else:
         model["supported_reasoning_levels"] = supported_reasoning_levels(model["default_reasoning_level"])
     model["priority"] = entry.get("priority") if entry.get("priority") is not None else priority
-    model["context_window"] = entry.get("context_length") or model.get("context_window")
-    model["max_context_window"] = entry.get("context_length") or model.get("max_context_window")
+    runtime_context = entry.get("runtime_context_length")
+    if runtime_context is None:
+        runtime_context = entry.get("context_length")
+    model["context_window"] = runtime_context or model.get("context_window")
+    model["max_context_window"] = runtime_context or model.get("max_context_window")
     model["backend_id"] = slug
     model["supported_in_api"] = True
     model["visibility"] = "list"
@@ -324,17 +333,6 @@ manifest = {}
 for path in (base_path, override_path):
     manifest = deep_merge(manifest, load_json(path))
 
-profile_models = manifest.get("profile_models", {})
-if isinstance(profile_models, dict):
-    target = profile_models.get(profile)
-    if isinstance(target, str) and target.strip():
-        resolved = index.get(target.strip().lower())
-        if resolved:
-            backend_id = resolved.get("backend_id") or resolved.get("stem") or resolved.get("filename") or resolved.get("key")
-            if isinstance(backend_id, str) and backend_id.strip():
-                print(backend_id.strip())
-                raise SystemExit(0)
-
 default_key = manifest.get("default_key")
 if isinstance(default_key, str) and default_key.strip():
     resolved = index.get(default_key.strip().lower())
@@ -352,6 +350,78 @@ if direct:
         raise SystemExit(0)
 
 print(profile)
+PY
+}
+
+qz_codex_model_context_window() {
+  local model="${1:-}"
+  [[ -z "$model" ]] && return 0
+  python3 - "$QZ_MODEL_INVENTORY_CACHE" "$QZ_ROOT/config/qz-model-overrides.example.json" "$QZ_MODEL_OVERRIDES" "$model" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+inventory_path = Path(sys.argv[1])
+base_path = Path(sys.argv[2])
+override_path = Path(sys.argv[3])
+query = sys.argv[4].strip().lower()
+
+def load_json(path):
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+def deep_merge(base, overlay):
+    if not isinstance(base, dict) or not isinstance(overlay, dict):
+        return overlay if isinstance(overlay, dict) else base
+    result = dict(base)
+    for key, value in overlay.items():
+        existing = result.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            result[key] = deep_merge(existing, value)
+        else:
+            result[key] = value
+    return result
+
+inventory = load_json(inventory_path)
+entries = [entry for entry in inventory.get("models", []) if isinstance(entry, dict)]
+manifest = {}
+for path in (base_path, override_path):
+    manifest = deep_merge(manifest, load_json(path))
+models = manifest.get("models") if isinstance(manifest.get("models"), dict) else {}
+
+for entry in entries:
+    keys = [
+        entry.get("backend_id"),
+        entry.get("stem"),
+        entry.get("filename"),
+        entry.get("key"),
+        entry.get("name"),
+        entry.get("label"),
+    ]
+    keys.extend(entry.get("aliases", []))
+    if not any(isinstance(key, str) and key.strip().lower() == query for key in keys):
+        continue
+    runtime_context = None
+    if isinstance(models, dict):
+        for key in keys:
+            if isinstance(key, str) and key in models and isinstance(models[key], dict):
+                overrides = models[key]
+                runtime_context = overrides.get("runtime_context_length") or overrides.get("context_length")
+                if runtime_context is not None:
+                    break
+    if runtime_context is None:
+        runtime_context = entry.get("runtime_context_length") or entry.get("context_length")
+    if runtime_context is None:
+        raise SystemExit(0)
+    try:
+        print(int(runtime_context))
+    except Exception:
+        pass
+    raise SystemExit(0)
 PY
 }
 
@@ -385,6 +455,12 @@ qz_resolve_codex_profile() {
       ;;
     *) QZ_CODEX_MODEL="$profile" ;;
   esac
+
+  local model_context_window
+  model_context_window="$(qz_codex_model_context_window "$QZ_CODEX_MODEL")"
+  if [[ -n "$model_context_window" ]]; then
+    QZ_CODEX_EXTRA_ARGS+=(-c "model_context_window=$model_context_window")
+  fi
 
   export QZ_CODEX_MODEL
 }

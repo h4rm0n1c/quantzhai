@@ -52,9 +52,8 @@ Respond terse like a smart caveman.  All technical substance stays; fluff dies. 
   # in var/codex-home/config.toml
   model_instructions_file = "docs/qz-caveman-codex-model-instructions-v2.md"
   ```
-  (Place the prompt text there.)  This appends the caveman behavior harness to
-  the active Codex/QuantZhai base instructions; it should not be treated as a
-  replacement system prompt.
+  This appends the caveman behavior harness to the active Codex/QuantZhai
+  instruction stack; it should not be treated as a replacement system prompt.
 - **Clamp output tokens:** Lower `model_max_output_tokens` for high/medium profiles (e.g. to ~1024) in `config.toml`【10†L18-L22】. Also in the proxy (`quantzhai_proxy.py`) set `n_predict`, `max_tokens` to ≤512 or ≤1024 as hard caps (we did this earlier). For example:
   ```diff
   - model_max_output_tokens = 4096

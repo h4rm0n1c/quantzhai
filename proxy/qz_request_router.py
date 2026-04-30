@@ -126,7 +126,12 @@ class RequestRouter:
             return
 
         if self.handler.path == "/qz/telemetry/state":
-            self.handler._send_json(200, self.handler.telemetry.state())
+            state = self.handler.telemetry.state()
+            try:
+                state["runtime"] = self.handler._model_router().status_summary(self.handler.path)
+            except Exception:
+                state["runtime"] = {}
+            self.handler._send_json(200, state)
             return
 
         if self.handler.path.startswith("/qz/telemetry/recent"):
@@ -199,21 +204,11 @@ class RequestRouter:
                 return
             requested = body.get("model") or body.get("key") or body.get("name")
             catalog = self.handler._model_catalog()
-            selected, reason = catalog.select(requested)
+            with self._request_gate(self.handler.path, requested or "", False):
+                selected, reason = self.handler._resolve_model_selection(requested)
             if selected is None:
                 self.handler._send_json(404, {"error": "no model selected", "reason": reason, "catalog": catalog.to_payload()})
                 return
-            selected_identity = selected.get("slug") or selected.get("key") or selected.get("backend_id") or ""
-            with self._request_gate(self.handler.path, requested or selected_identity, False):
-                try:
-                    self.handler._load_backend_model(
-                        selected.get("backend_id") or selected_identity,
-                        wait=True,
-                        timeout=getattr(self.handler.__class__, "model_load_timeout", 600.0),
-                    )
-                except Exception as exc:
-                    self.handler._send_json(502, {"error": f"backend model load failed: {exc}", "selected": selected, "reason": reason})
-                    return
             self.handler._send_json(200, {
                 "selected": selected,
                 "reason": reason,
@@ -234,6 +229,35 @@ class RequestRouter:
             opened_page_cache=self.handler.opened_page_cache,
             telemetry=self.handler.telemetry,
         )
+
+    def _runtime_metrics(self, selected_model=None):
+        try:
+            snapshot = self.handler._model_router().status_snapshot()
+        except Exception:
+            snapshot = {}
+        selected = snapshot.get("selected") if isinstance(snapshot, dict) else {}
+        backend = snapshot.get("backend") if isinstance(snapshot, dict) else {}
+        load = snapshot.get("load") if isinstance(snapshot, dict) else {}
+        if not isinstance(selected, dict):
+            selected = {}
+        if not isinstance(backend, dict):
+            backend = {}
+        if not isinstance(load, dict):
+            load = {}
+        return {
+            "ready": bool(snapshot.get("ready")) if isinstance(snapshot, dict) else False,
+            "load_state": load.get("state") or "unknown",
+            "selected_model": selected_model or selected.get("label") or selected.get("slug") or selected.get("key") or "",
+            "selected_key": backend.get("selected_key") or "",
+            "selected_backend_id": backend.get("selected_backend_id") or "",
+            "selected_context_length": backend.get("selected_context_length"),
+            "backend_context_length": backend.get("backend_context_length"),
+            "restart_required": bool(backend.get("restart_required")),
+            "reasoning_level": backend.get("selected_reasoning_level") or "medium",
+            "reasoning_policy": backend.get("selected_reasoning_policy") or "prompt",
+            "thinking_budget_tokens": backend.get("selected_thinking_budget_tokens"),
+            "sampling": backend.get("selected_sampling_params") or {},
+        }
 
     def _emit_request_telemetry(self, event_type: str, started_at: float, upstream_path: str, client_model: str, backend_model: str = "", **extra):
         payload = {
@@ -310,6 +334,15 @@ class RequestRouter:
             "gen_rate": round(gen_rate, 2) if gen_rate > 0 else 0.0,
             "total_rate": round(total_rate, 2) if total_rate > 0 else 0.0,
         }
+        runtime = payload.get("runtime_metrics") if isinstance(payload.get("runtime_metrics"), dict) else {}
+        if runtime:
+            sample["runtime_metrics"] = runtime
+            sample["selected_context_length"] = runtime.get("selected_context_length")
+            sample["backend_context_length"] = runtime.get("backend_context_length")
+            sample["reasoning_level"] = runtime.get("reasoning_level")
+            sample["reasoning_policy"] = runtime.get("reasoning_policy")
+            sample["thinking_budget_tokens"] = runtime.get("thinking_budget_tokens")
+            sample["restart_required"] = runtime.get("restart_required")
         try:
             self.handler.telemetry.emit("throughput_sample", sample)
         except Exception:
@@ -463,10 +496,13 @@ class RequestRouter:
             pass
 
         try:
-            self.handler.telemetry.emit(
-                "status_snapshot",
-                self.handler._model_router().status_summary(self.handler.path),
-            )
+            status_summary = self.handler._model_router().status_summary(self.handler.path)
+            self.handler.telemetry.emit("status_snapshot", status_summary)
+            self.handler.telemetry.emit("runtime_snapshot", {
+                "path": self.handler.path,
+                "telemetry": self.handler.telemetry.state(),
+                "runtime": status_summary,
+            })
         except Exception:
             pass
 
@@ -490,6 +526,7 @@ class RequestRouter:
             selected_identity = selected_model.get("slug") or selected_model.get("key") or selected_model.get("backend_id") or ""
 
             backend_model = selected_model.get("backend_id") or selected_identity or client_model
+            runtime_metrics = self._runtime_metrics(client_model)
             body["model"] = backend_model
             body = self.handler._model_router().apply_reasoning_policy(body, selected_model)
 
@@ -533,6 +570,7 @@ class RequestRouter:
                             prompt_ms=stream_result.get("prompt_ms") if isinstance(stream_result, dict) else None,
                             gen_ms=stream_result.get("gen_ms") if isinstance(stream_result, dict) else None,
                             output_items=stream_result.get("output_items") if isinstance(stream_result, dict) else None,
+                            runtime_metrics=runtime_metrics,
                         )
                     except (BrokenPipeError, ConnectionResetError):
                         self._emit_request_telemetry(
@@ -544,6 +582,7 @@ class RequestRouter:
                             stream=True,
                             error="client disconnected",
                             phase="stream",
+                            runtime_metrics=runtime_metrics,
                         )
                         pass
                     except Exception as e:
@@ -561,6 +600,7 @@ class RequestRouter:
                             stream=True,
                             error=str(e),
                             phase="stream",
+                            runtime_metrics=runtime_metrics,
                         )
                         error_payload = {
                             "type": "response.failed",
@@ -605,6 +645,7 @@ class RequestRouter:
                             status=status,
                             content_type=content_type,
                             usage=out.get("usage"),
+                            runtime_metrics=runtime_metrics,
                         )
                         return
 
@@ -619,6 +660,7 @@ class RequestRouter:
                         status=status,
                         content_type=content_type,
                         usage=out.get("usage"),
+                        runtime_metrics=runtime_metrics,
                     )
                     return
                 except Exception as e:
@@ -636,6 +678,7 @@ class RequestRouter:
                         stream=False,
                         error=str(e),
                         phase="local_web_runtime",
+                        runtime_metrics=runtime_metrics,
                     )
                     self.handler._send_json(502, {"error": f"local web runtime error: {e}"})
                     return
@@ -677,6 +720,7 @@ class RequestRouter:
                 stream=bool(body.get("stream")),
                 error=str(e),
                 phase="upstream_request",
+                runtime_metrics=runtime_metrics,
             )
             self.handler._send_json(502, {"error": f"upstream error: {e}"})
             return
@@ -720,6 +764,7 @@ class RequestRouter:
                     stream=True,
                     error="client disconnected",
                     phase="upstream_stream",
+                    runtime_metrics=runtime_metrics,
                 )
                 pass
             finally:
@@ -738,6 +783,7 @@ class RequestRouter:
                 prompt_ms=stream_result.get("prompt_ms") if isinstance(stream_result, dict) else None,
                 gen_ms=stream_result.get("gen_ms") if isinstance(stream_result, dict) else None,
                 output_items=stream_result.get("output_items") if isinstance(stream_result, dict) else None,
+                runtime_metrics=runtime_metrics,
             )
             self.handler.close_connection = True
             return
@@ -771,6 +817,7 @@ class RequestRouter:
                 status=status,
                 content_type=content_type,
                 usage=out.get("usage"),
+                runtime_metrics=runtime_metrics,
             )
         except Exception:
             self.handler.send_response(status)
@@ -788,6 +835,7 @@ class RequestRouter:
                 stream=bool(body.get("stream")),
                 status=status,
                 content_type=content_type,
+                runtime_metrics=runtime_metrics,
             )
 
     def proxy_raw(self, method):

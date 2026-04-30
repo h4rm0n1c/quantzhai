@@ -126,6 +126,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
     model_load_model = None
     model_load_health = None
     model_state_path = None
+    backend_state_path = None
 
     def log_message(self, fmt, *args):
         return
@@ -176,6 +177,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 for key in ("id", "model", "status", "created_at", "usage")
                 if response.get(key) is not None
             }
+            if event_type == "response.completed":
+                try:
+                    compact["qz_runtime"] = self._model_router().runtime_state_payload(response.get("model") or "")
+                except Exception:
+                    pass
         item = compact.get("item")
         if isinstance(item, dict):
             compact["item"] = {
@@ -480,6 +486,7 @@ def main():
     ProxyHandler.model_catalog = catalog
     ProxyHandler.model_catalog_path = str(catalog.cache_path)
     ProxyHandler.model_state_path = str(Path(os.environ.get("QZ_MODEL_STATE_PATH", str(root / "var" / "model-state.json"))).expanduser())
+    ProxyHandler.backend_state_path = str(Path(os.environ.get("QZ_BACKEND_STATE_PATH", str(root / "var" / "backend-state.json"))).expanduser())
 
     ProxyHandler.searxng_policy_path = str(policy_path)
     ProxyHandler.searxng_capabilities_path = str(capabilities_path)

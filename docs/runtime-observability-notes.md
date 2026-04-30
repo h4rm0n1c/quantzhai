@@ -92,6 +92,15 @@ Date: 2026-04-29
   compare the selected override to the running backend, restart the container
   only when the requested context changes, wait for `/health`, then send the
   model load request and drain any queued work.
+- `QZ_CONTEXT` stays the base default for the backend process start. The proxy
+  now reads per-model `runtime_context_length` from the live model catalog or
+  override file, persists the current backend context in
+  `var/backend-state.json` via `QZ_BACKEND_STATE_PATH`, and uses that state as
+  the live source of truth when deciding whether a restart is needed.
+- The restart decision belongs in the proxy, not in `llama.cpp` model loading.
+  When the selected model's runtime context differs from the running backend,
+  the proxy should stop the container, relaunch it with the chosen `-c` value,
+  wait for health, then load the model and release queued work.
 - Backend restarts must not be blind retries. If a startup fails, the proxy
   should surface the cause and stop rather than looping restarts on the same
   broken state.

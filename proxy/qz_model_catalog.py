@@ -249,6 +249,20 @@ def model_overrides(manifest: Dict[str, Any], entry: Dict[str, Any]) -> Dict[str
     return {}
 
 
+def override_context_length(overrides: Dict[str, Any]) -> Optional[int]:
+    if not isinstance(overrides, dict):
+        return None
+    for key in ("runtime_context_length", "context_length"):
+        value = overrides.get(key)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except Exception:
+            continue
+    return None
+
+
 def build_entry(path: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
     stat = path.stat()
     tensor_count, metadata = read_gguf_metadata(path)
@@ -293,6 +307,7 @@ def build_entry(path: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
     entry["label"] = overrides.get("label") or name or stem
     entry["default"] = bool(overrides.get("default"))
     entry["server_alias"] = overrides.get("server_alias")
+    entry["runtime_context_length"] = override_context_length(overrides)
     launch_args = overrides.get("launch_args", [])
     entry["launch_args"] = list(launch_args) if isinstance(launch_args, list) else []
     entry["notes"] = overrides.get("notes")
@@ -402,6 +417,7 @@ def shell_assignments(selected: Dict[str, Any], cache_path: Path, reason: str) -
         f"QZ_MODEL_RESOLVED_LABEL={format_shell_value(selected['label'])}",
         f"QZ_MODEL_RESOLVED_ARCHITECTURE={format_shell_value(selected.get('architecture'))}",
         f"QZ_MODEL_RESOLVED_CONTEXT={format_shell_value(selected.get('context_length'))}",
+        f"QZ_MODEL_RESOLVED_RUNTIME_CONTEXT={format_shell_value(selected.get('runtime_context_length'))}",
         f"QZ_MODEL_RESOLVED_REASON={format_shell_value(reason)}",
         f"QZ_MODEL_INVENTORY_CACHE={format_shell_value(str(cache_path))}",
         f"QZ_MODEL_RESOLVED_SERVER_ALIAS={format_shell_value(selected.get('server_alias'))}",
@@ -416,7 +432,9 @@ def plain_listing(entries: List[Dict[str, Any]], selected: Optional[Dict[str, An
         marker = "*" if selected and entry_identity(entry) == entry_identity(selected) else " "
         label = entry["label"]
         arch = entry.get("architecture") or "unknown"
-        context = entry.get("context_length")
+        context = entry.get("runtime_context_length")
+        if context is None:
+            context = entry.get("context_length")
         context_text = str(context) if context is not None else "?"
         launch = len(entry.get("launch_args", [])) if isinstance(entry.get("launch_args"), list) else 0
         lines.append(
@@ -481,6 +499,7 @@ class ModelCatalog:
                 "label": entry["label"],
                 "architecture": entry.get("architecture"),
                 "context_length": entry.get("context_length"),
+                "runtime_context_length": entry.get("runtime_context_length"),
                 "backend_id": entry.get("backend_id"),
                 "server_alias": entry.get("server_alias"),
                 "state": backend.get("state", "unloaded"),

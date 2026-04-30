@@ -80,6 +80,8 @@ class ModelStatus:
     ready: bool = False
     selected: str = ""
     selected_state: str = ""
+    selected_context_length: int = 0
+    backend_context_length: int = 0
     loaded: str = ""
     loaded_count: int = 0
     load_state: str = ""
@@ -170,6 +172,8 @@ def model_status_from_proxy(status: Optional[dict]) -> ModelStatus:
         ready=bool(status.get("ready")),
         selected=str(selected),
         selected_state=str(backend.get("selected_state") or ""),
+        selected_context_length=int(backend.get("selected_context_length") or 0),
+        backend_context_length=int(backend.get("backend_context_length") or 0),
         loaded=str(loaded_model or ""),
         loaded_count=int(backend.get("loaded_count") or len(loaded_ids) or 0),
         load_state=str(load.get("state") or ""),
@@ -218,6 +222,14 @@ def human_bytes_from_mib(value: float, compact: bool = False) -> str:
     text = f"{value:.0f}" if idx == 0 else f"{value:.1f}"
     sep = "" if compact else " "
     return f"{text}{sep}{units[idx]}"
+
+
+def context_display(model_status: ModelStatus) -> str:
+    if model_status.backend_context_length > 0:
+        return str(model_status.backend_context_length)
+    if model_status.selected_context_length > 0:
+        return str(model_status.selected_context_length)
+    return os.environ.get("QZ_CONTEXT", "?")
 
 
 def human_duration_ms(ms: float) -> str:
@@ -709,7 +721,7 @@ class UI:
         self.box(y, x, h, w, "PROFILE")
         labels = ["CTX", "NP", "SPLIT", "BATCH", "UBATCH", "CACHE", "REUSE", "KV"]
         values = [
-            os.environ.get("QZ_CONTEXT", "?"),
+            context_display(model_status),
             os.environ.get("QZ_PARALLEL", "?"),
             os.environ.get("QZ_TENSOR_SPLIT", "?"),
             os.environ.get("QZ_BATCH", "?"),
@@ -939,7 +951,8 @@ def once():
     print(f"  ╭─ BACKEND {backend_light} ─╮  ╭─ PROXY {proxy_light} ─╮")
     print()
     print("PROFILE")
-    print(f"  ctx={os.environ.get('QZ_CONTEXT', '?')} np={os.environ.get('QZ_PARALLEL', '?')} split={os.environ.get('QZ_TENSOR_SPLIT', '?')} batch={os.environ.get('QZ_BATCH', '?')} ubatch={os.environ.get('QZ_UBATCH', '?')} cache={human_bytes_from_mib(parse_num(os.environ.get('QZ_CACHE_RAM', '0')))} reuse={os.environ.get('QZ_CACHE_REUSE', '?')} kv={os.environ.get('QZ_KV_KEY', '?')}/{os.environ.get('QZ_KV_VALUE', '?')}")
+    live_ctx = context_display(model_status)
+    print(f"  ctx={live_ctx} np={os.environ.get('QZ_PARALLEL', '?')} split={os.environ.get('QZ_TENSOR_SPLIT', '?')} batch={os.environ.get('QZ_BATCH', '?')} ubatch={os.environ.get('QZ_UBATCH', '?')} cache={human_bytes_from_mib(parse_num(os.environ.get('QZ_CACHE_RAM', '0')))} reuse={os.environ.get('QZ_CACHE_REUSE', '?')} kv={os.environ.get('QZ_KV_KEY', '?')}/{os.environ.get('QZ_KV_VALUE', '?')}")
     loaded_suffix = f" ({model_status.loaded_count})" if model_status.loaded_count > 1 else ""
     state = model_status.selected_state or model_status.load_state or "unknown"
     print(f"  selected : {model_status.selected or '?'}")

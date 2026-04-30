@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 import json
+import os
+import shlex
+import subprocess
 import urllib.error
 import urllib.request
 import time
@@ -129,3 +132,135 @@ class BackendClient:
 
     def unload_model(self, model_id: str, timeout: float = 120) -> BackendResponse:
         return self.post_json("/models/unload", {"model": model_id}, timeout=timeout)
+
+    def _docker_command(self) -> list[str]:
+        raw = os.environ.get("QZ_DOCKER_CMD", "docker")
+        return shlex.split(raw)
+
+    def _backend_launch_args(self, context_size: int) -> list[str]:
+        container = os.environ.get("QZ_CONTAINER", "qwen36turbo")
+        image = os.environ.get("QZ_IMAGE", "thetom-llama-cpp-turboquant:cuda-server")
+        model_dir = os.environ.get("QZ_MODEL_DIR") or os.path.join(os.environ.get("QZ_ROOT", ""), "var", "models")
+        server_port = os.environ.get("QZ_SERVER_PORT", "18084")
+        parallel = os.environ.get("QZ_PARALLEL", "1")
+        batch = os.environ.get("QZ_BATCH", "4096")
+        ubatch = os.environ.get("QZ_UBATCH", "512")
+        threads = os.environ.get("QZ_THREADS", "12")
+        thread_batch = os.environ.get("QZ_THREAD_BATCH", "12")
+        tensor_split = os.environ.get("QZ_TENSOR_SPLIT", "9,17")
+        main_gpu = os.environ.get("QZ_MAIN_GPU", "0")
+        cache_ram = os.environ.get("QZ_CACHE_RAM", "8192")
+        cache_reuse = os.environ.get("QZ_CACHE_REUSE", "256")
+        kv_key = os.environ.get("QZ_KV_KEY", "q8_0")
+        kv_value = os.environ.get("QZ_KV_VALUE", "turbo3")
+
+        return [
+            "run",
+            "-d",
+            "--name",
+            container,
+            "--gpus",
+            "all",
+            "--cap-add",
+            "IPC_LOCK",
+            "--ulimit",
+            "memlock=-1:-1",
+            "-p",
+            f"{server_port}:8080",
+            "--mount",
+            f"type=bind,src={model_dir},dst=/models,readonly",
+            image,
+            "--models-dir",
+            "/models",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8080",
+            "-ngl",
+            "999",
+            "-c",
+            str(int(context_size)),
+            "-np",
+            parallel,
+            "-b",
+            batch,
+            "-ub",
+            ubatch,
+            "-t",
+            threads,
+            "-tb",
+            thread_batch,
+            "-fa",
+            "on",
+            "--split-mode",
+            "layer",
+            "--tensor-split",
+            tensor_split,
+            "--main-gpu",
+            main_gpu,
+            "--kv-unified",
+            "--reasoning",
+            "on",
+            "--reasoning-budget",
+            "-1",
+            "--cache-ram",
+            cache_ram,
+            "--cache-reuse",
+            cache_reuse,
+            "--mlock",
+            "-ctk",
+            kv_key,
+            "-ctv",
+            kv_value,
+            "--metrics",
+            "--reasoning-format",
+            "deepseek",
+        ]
+
+    def _docker_logs(self, container: str, tail: int = 160) -> str:
+        cmd = self._docker_command() + ["logs", "--tail", str(int(tail)), container]
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        output = (proc.stdout or "") + (proc.stderr or "")
+        return output.strip()
+
+    def restart_container(self, context_size: int, timeout: float = 120, health_timeout: float | None = None) -> Dict[str, Any]:
+        timeout = max(1.0, float(timeout))
+        health_timeout = timeout if health_timeout is None else max(1.0, float(health_timeout))
+        container = os.environ.get("QZ_CONTAINER", "qwen36turbo")
+        docker = self._docker_command()
+        model_dir = os.environ.get("QZ_MODEL_DIR") or os.path.join(os.environ.get("QZ_ROOT", ""), "var", "models")
+        if model_dir:
+            os.makedirs(model_dir, exist_ok=True)
+
+        rm_cmd = docker + ["rm", "-f", container]
+        subprocess.run(rm_cmd, check=False, capture_output=True, text=True)
+
+        run_cmd = docker + self._backend_launch_args(context_size)
+        run_proc = subprocess.run(run_cmd, check=False, capture_output=True, text=True)
+        if run_proc.returncode != 0:
+            stderr = (run_proc.stderr or "").strip()
+            stdout = (run_proc.stdout or "").strip()
+            detail = "; ".join(part for part in (stderr, stdout) if part)
+            if not detail:
+                detail = f"docker run exited {run_proc.returncode}"
+            raise RuntimeError(f"backend restart failed: {detail}")
+
+        deadline = time.time() + health_timeout
+        last_health = None
+        while time.time() < deadline:
+            last_health = self.get_health(timeout=min(10.0, max(0.1, deadline - time.time())))
+            if last_health.status == 200:
+                return {
+                    "container": container,
+                    "context_length": int(context_size),
+                    "health_status": last_health.status,
+                    "health_body": json.loads(last_health.data.decode("utf-8")) if last_health.data else {},
+                    "stdout": (run_proc.stdout or "").strip(),
+                }
+            time.sleep(min(1.0, max(0.1, deadline - time.time())))
+
+        logs = self._docker_logs(container)
+        raise RuntimeError(
+            f"backend restart timed out waiting for health after launching context {int(context_size)}; "
+            f"health_status={(last_health.status if last_health else 'unknown')}; logs={logs}"
+        )

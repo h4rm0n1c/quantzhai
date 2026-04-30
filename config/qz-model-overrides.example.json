@@ -1,12 +1,5 @@
 {
   "default_key": "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M.gguf",
-  "profile_models": {
-    "low": "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ4_NL",
-    "medium": "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M",
-    "high": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact",
-    "max": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact",
-    "caveman": "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M"
-  },
   "models": {
     "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M.gguf": {
       "default": true,

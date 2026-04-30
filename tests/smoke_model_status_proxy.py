@@ -199,6 +199,12 @@ def main():
         assert status == 200, telemetry
         assert any(event.get("type") == "status_snapshot" for event in telemetry.get("events", [])), telemetry
 
+        status, _, telemetry_state = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/state")
+        assert status == 200, telemetry_state
+        assert telemetry_state["runtime"]["selected_context_length"] == 131072, telemetry_state
+        assert telemetry_state["runtime"]["backend_context_length"] >= 131072, telemetry_state
+        assert telemetry_state["runtime"]["selected_reasoning_level"] == "medium", telemetry_state
+
         status, _, out = _request_json(
             f"http://127.0.0.1:{proxy.server_port}/v1/responses",
             {
@@ -234,6 +240,14 @@ def main():
         assert sent["metadata"]["qz_runtime"]["load_state"] == "ready", sent
         assert sent["metadata"]["qz_reasoning"]["level"] == "high", sent
         assert sent["metadata"]["qz_reasoning"]["policy"] == "prompt", sent
+
+        status, _, telemetry_recent = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/recent?limit=50")
+        assert status == 200, telemetry_recent
+        assert any(
+            event.get("type") == "request_completed"
+            and (event.get("payload") or {}).get("runtime_metrics", {}).get("selected_context_length") == 131072
+            for event in telemetry_recent.get("events", [])
+        ), telemetry_recent
 
         status, _, ready = _request_json(f"http://127.0.0.1:{proxy.server_port}/ready")
         assert status == 200, ready
