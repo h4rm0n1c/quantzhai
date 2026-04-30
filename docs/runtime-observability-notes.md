@@ -44,6 +44,9 @@ Date: 2026-04-29
 - Model switching now uses `QZ_MODEL_LOAD_TIMEOUT` end to end, so larger GGUF
   loads can finish before the launcher gives up and starts a session on the
   wrong backend.
+- `QZ_CONTEXT` stays the base default for the backend process start. The proxy
+  should treat per-model context as an exact override chosen before launch, not
+  as a live `/models/load` setting.
 - Startup model warmup should target the selected backend model id, not the
   raw catalog filename, and skip a reload when the router already reports that
   model as `loaded` or `loading`.
@@ -85,6 +88,13 @@ Date: 2026-04-29
   buffered fallback, malformed events, and cancellation.
 - Runtime monitors should eventually display search budget use, pages fetched,
   returned search tokens, cache hits, and exact run timestamps.
+- Per-model context window support should live in the proxy orchestration path:
+  compare the selected override to the running backend, restart the container
+  only when the requested context changes, wait for `/health`, then send the
+  model load request and drain any queued work.
+- Backend restarts must not be blind retries. If a startup fails, the proxy
+  should surface the cause and stop rather than looping restarts on the same
+  broken state.
 - Agents should receive a stable current date/timezone anchor, with exact clock
   time fetched only when the task needs it, so time-aware work is grounded
   without destroying prompt-cache reuse.
