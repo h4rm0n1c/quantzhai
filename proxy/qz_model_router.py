@@ -71,6 +71,69 @@ class ModelRouter:
             body = {}
         return resp.status, body
 
+    def unload_backend_model(self, model_id: str, wait: bool = False, timeout: float = 120):
+        if not model_id:
+            return
+        cls = self.handler.__class__
+        cls.model_load_model = model_id
+        cls.model_load_started_at = time.time()
+        cls.model_load_finished_at = None
+        cls.model_load_error = None
+
+        existing_state = self.backend_model_state(model_id)
+        if existing_state in ("unloaded", "unknown"):
+            cls.model_load_state = "idle"
+            cls.model_load_finished_at = time.time()
+            self._emit("model_unload_ready", {
+                "model": model_id,
+                "cached": True,
+            })
+            return
+
+        self._emit("model_unload_started", {
+            "model": model_id,
+            "wait": bool(wait),
+            "timeout": timeout,
+        })
+        resp = self.handler._backend().unload_model(model_id, timeout=timeout)
+        if resp.status >= 400:
+            cls.model_load_state = "failed"
+            cls.model_load_error = f"unload failed: HTTP {resp.status}"
+            cls.model_load_finished_at = time.time()
+            self._emit("model_unload_failed", {
+                "model": model_id,
+                "status": resp.status,
+                "error": cls.model_load_error,
+                "wait": bool(wait),
+            })
+            return
+        cls.model_load_state = "unloading"
+        if not wait:
+            self._emit("model_unload_pending", {
+                "model": model_id,
+                "wait": False,
+            })
+            return
+        ok, snapshot = self.handler._backend().wait_for_model_state(model_id, {"unloaded", "unknown"}, timeout=timeout)
+        cls.model_load_finished_at = time.time()
+        if ok:
+            cls.model_load_state = "idle"
+            cls.model_load_error = None
+            self._emit("model_unload_ready", {
+                "model": model_id,
+                "health_status": snapshot.get("health_status"),
+            })
+        else:
+            cls.model_load_state = "unloading"
+            cls.model_load_error = "timed out waiting for backend model unload"
+            cls.model_load_health = snapshot.get("health_status")
+            self._emit("model_unload_failed", {
+                "model": model_id,
+                "error": cls.model_load_error,
+                "health_status": cls.model_load_health,
+                "wait": True,
+            })
+
     def selected_model_entry(self):
         catalog = self.handler._model_catalog()
         selected = catalog.selected or (catalog.entries[0] if catalog.entries else None)
@@ -102,19 +165,6 @@ class ModelRouter:
         if selected is None:
             return None, f"profile {requested_model} -> {target} (missing)"
         return selected, f"profile {requested_model} -> {target}"
-
-    def loaded_model_entry(self, exclude_backend_id: str = ""):
-        catalog = self.handler._model_catalog()
-        backend_models = self.backend_models()
-        for backend_id, backend_entry in backend_models.items():
-            if backend_id == exclude_backend_id:
-                continue
-            if backend_entry.get("state") != "loaded":
-                continue
-            loaded_selected, _ = catalog.resolve(query=backend_id)
-            if loaded_selected is not None:
-                return loaded_selected, backend_id
-        return None, ""
 
     def status_snapshot(self):
         selected = self.selected_model_entry()
@@ -326,28 +376,42 @@ class ModelRouter:
         if selected is None:
             return None, reason
         target_backend_id = selected.get("backend_id") or selected.get("key")
-        self.load_backend_model(target_backend_id)
+        current_backend_id = self.selected_backend_id()
+        if current_backend_id and current_backend_id != target_backend_id:
+            current_state = self.backend_model_state(current_backend_id)
+            if current_state in ("loaded", "loading"):
+                self.unload_backend_model(current_backend_id, wait=True)
+                current_state = self.backend_model_state(current_backend_id)
+                if current_state not in ("unloaded", "unknown"):
+                    self._emit("model_load_failed", {
+                        "model": current_backend_id,
+                        "error": f"current model not unloaded: {current_state}",
+                        "wait": True,
+                    })
+                    return None, f"{reason}; current {current_backend_id} not unloaded ({current_state})"
 
-        serving_selected = selected
-        serving_reason = reason
+        self.load_backend_model(target_backend_id, wait=True)
+
         backend_state = self.backend_model_state(target_backend_id)
         if backend_state != "loaded":
-            loaded_selected, loaded_backend_id = self.loaded_model_entry(exclude_backend_id=target_backend_id)
-            if loaded_selected is not None:
-                serving_selected = loaded_selected
-                serving_reason = f"{reason}; serving loaded {loaded_backend_id} while {target_backend_id} loads"
+            self._emit("model_load_failed", {
+                "model": target_backend_id,
+                "error": f"target model not ready: {backend_state}",
+                "wait": True,
+            })
+            return None, f"{reason}; target {target_backend_id} not ready ({backend_state})"
 
-        catalog.selected = serving_selected
-        catalog.reason = serving_reason
+        catalog.selected = selected
+        catalog.reason = reason
         self._emit("model_selected", {
             "requested": requested_model,
-            "selected": serving_selected.get("key"),
-            "backend_id": serving_selected.get("backend_id") or serving_selected.get("key"),
+            "selected": selected.get("key"),
+            "backend_id": selected.get("backend_id") or selected.get("key"),
             "target_backend_id": target_backend_id,
-            "reason": serving_reason,
+            "reason": reason,
             "budget": MODEL_BUDGETS.get(requested_model, MODEL_BUDGETS.get("Qwen3.6Turbo", 256)),
         })
-        return serving_selected, serving_reason
+        return selected, reason
 
     def model_catalog_payload(self):
         catalog = self.handler._model_catalog()

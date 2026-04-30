@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import time
+from contextlib import contextmanager
 
 try:
     from .qz_proxy_config import CURRENT_API_ENDPOINTS, LEGACY_API_ENDPOINTS, MODEL_BUDGETS, api_contract_payload
@@ -45,6 +46,47 @@ except ImportError:
 class RequestRouter:
     def __init__(self, handler):
         self.handler = handler
+
+    def _request_gate(self, upstream_path: str, client_model: str = "", stream: bool = False):
+        gate = getattr(self.handler.__class__, "request_gate", None)
+
+        @contextmanager
+        def _ctx():
+            if gate is None:
+                yield
+                return
+            queued_at = time.time()
+            acquired = gate.acquire(blocking=False)
+            if not acquired:
+                try:
+                    self.handler.telemetry.emit("request_queued", {
+                        "method": "POST",
+                        "path": self.handler.path,
+                        "upstream_path": upstream_path,
+                        "model": client_model,
+                        "stream": bool(stream),
+                    })
+                except Exception:
+                    pass
+                gate.acquire()
+            wait_ms = round(max(0.0, time.time() - queued_at) * 1000.0, 2)
+            try:
+                self.handler.telemetry.emit("request_admitted", {
+                    "method": "POST",
+                    "path": self.handler.path,
+                    "upstream_path": upstream_path,
+                    "model": client_model,
+                    "stream": bool(stream),
+                    "wait_ms": wait_ms,
+                })
+            except Exception:
+                pass
+            try:
+                yield
+            finally:
+                gate.release()
+
+        return _ctx()
 
     def _log_request_path(self, method):
         if self.handler.path.startswith("/qz/telemetry"):
@@ -161,11 +203,12 @@ class RequestRouter:
             if selected is None:
                 self.handler._send_json(404, {"error": "no model selected", "reason": reason, "catalog": catalog.to_payload()})
                 return
-            try:
-                self.handler._load_backend_model(selected.get("backend_id") or selected["key"])
-            except Exception as exc:
-                self.handler._send_json(502, {"error": f"backend model load failed: {exc}", "selected": selected, "reason": reason})
-                return
+            with self._request_gate(self.handler.path, requested or selected.get("key"), False):
+                try:
+                    self.handler._load_backend_model(selected.get("backend_id") or selected["key"], wait=True)
+                except Exception as exc:
+                    self.handler._send_json(502, {"error": f"backend model load failed: {exc}", "selected": selected, "reason": reason})
+                    return
             self.handler._send_json(200, {
                 "selected": selected,
                 "reason": reason,
@@ -365,125 +408,140 @@ class RequestRouter:
         )
 
         client_model = body.get("model") or "Qwen3.6Turbo-medium"
-        selected_model, selection_reason = self.handler._resolve_model_selection(client_model)
-        if selected_model is None:
-            self._emit_request_telemetry("request_failed", started_at, upstream_path, client_model, error=selection_reason or "no model available", phase="select_model")
-            self.handler._send_json(404, {
-                "error": "no model available",
-                "reason": selection_reason,
-                "catalog": self.handler._model_catalog().to_payload(),
-            })
-            return
+        with self._request_gate(upstream_path, client_model, client_wants_stream):
+            selected_model, selection_reason = self.handler._resolve_model_selection(client_model)
+            if selected_model is None:
+                self._emit_request_telemetry("request_failed", started_at, upstream_path, client_model, error=selection_reason or "no model available", phase="select_model")
+                self.handler._send_json(503, {
+                    "error": "no model available",
+                    "reason": selection_reason,
+                    "catalog": self.handler._model_catalog().to_payload(),
+                })
+                return
 
-        backend_model = selected_model.get("backend_id") or selected_model["key"]
-        budget = MODEL_BUDGETS.get(client_model, MODEL_BUDGETS.get("Qwen3.6Turbo", 256))
+            backend_model = selected_model.get("backend_id") or selected_model["key"]
+            budget = MODEL_BUDGETS.get(client_model, MODEL_BUDGETS.get("Qwen3.6Turbo", 256))
 
-        body["model"] = backend_model
-        body["thinking_budget_tokens"] = budget
-        body.setdefault("temperature", 0.1)
+            body["model"] = backend_model
+            body["thinking_budget_tokens"] = budget
+            body.setdefault("temperature", 0.1)
 
-        if upstream_path == "/v1/responses":
-            body = self.handler._model_router().inject_runtime_state(body, client_model)
-            apply_patch_output_style = _apply_patch_output_style(body)
-            input_items = body.get("input")
-            if isinstance(input_items, list):
-                body["input"] = _microcompact_old_tool_results(_expand_local_compaction_items(input_items))
-            body = normalize_responses_input_for_qwen(body)
-            body = normalize_tools_for_llamacpp(body)
-            try:
-                write_capture("latest-normalized-request.json", body)
-            except Exception:
-                pass
-
-            if client_wants_stream:
-                self.handler.send_response(200)
-                self.handler.send_header("Content-Type", "text/event-stream")
-                self.handler.send_header("Cache-Control", "no-cache")
-                self.handler.send_header("Connection", "close")
-                self.handler._send_codex_rate_limit_headers()
-                self.handler.end_headers()
-                self.handler._write_codex_rate_limits_event()
-                stream_result = None
+            if upstream_path == "/v1/responses":
+                body = self.handler._model_router().inject_runtime_state(body, client_model)
+                apply_patch_output_style = _apply_patch_output_style(body)
+                input_items = body.get("input")
+                if isinstance(input_items, list):
+                    body["input"] = _microcompact_old_tool_results(_expand_local_compaction_items(input_items))
+                body = normalize_responses_input_for_qwen(body)
+                body = normalize_tools_for_llamacpp(body)
                 try:
-                    stream_result = self._run_responses_streaming_locally(
+                    write_capture("latest-normalized-request.json", body)
+                except Exception:
+                    pass
+
+                if client_wants_stream:
+                    self.handler.send_response(200)
+                    self.handler.send_header("Content-Type", "text/event-stream")
+                    self.handler.send_header("Cache-Control", "no-cache")
+                    self.handler.send_header("Connection", "close")
+                    self.handler._send_codex_rate_limit_headers()
+                    self.handler.end_headers()
+                    self.handler._write_codex_rate_limits_event()
+                    stream_result = None
+                    try:
+                        stream_result = self._run_responses_streaming_locally(
+                            body,
+                            client_model,
+                            apply_patch_output_style,
+                        )
+                        self._emit_request_telemetry(
+                            "request_completed",
+                            started_at,
+                            upstream_path,
+                            client_model,
+                            backend_model=backend_model,
+                            stream=True,
+                            status=200,
+                            usage=stream_result.get("usage") if isinstance(stream_result, dict) else None,
+                            prompt_ms=stream_result.get("prompt_ms") if isinstance(stream_result, dict) else None,
+                            gen_ms=stream_result.get("gen_ms") if isinstance(stream_result, dict) else None,
+                            output_items=stream_result.get("output_items") if isinstance(stream_result, dict) else None,
+                        )
+                    except (BrokenPipeError, ConnectionResetError):
+                        self._emit_request_telemetry(
+                            "request_failed",
+                            started_at,
+                            upstream_path,
+                            client_model,
+                            backend_model=backend_model,
+                            stream=True,
+                            error="client disconnected",
+                            phase="stream",
+                        )
+                        pass
+                    except Exception as e:
+                        try:
+                            import traceback
+                            runtime_log("latest-stream-runtime-error.txt", traceback.format_exc())
+                        except Exception:
+                            pass
+                        self._emit_request_telemetry(
+                            "request_failed",
+                            started_at,
+                            upstream_path,
+                            client_model,
+                            backend_model=backend_model,
+                            stream=True,
+                            error=str(e),
+                            phase="stream",
+                        )
+                        error_payload = {
+                            "type": "response.failed",
+                            "response": {
+                                "id": f"resp_local_{_now_ts()}",
+                                "object": "response",
+                                "created_at": _now_ts(),
+                                "status": "failed",
+                                "model": client_model,
+                                "error": {"message": f"local streaming runtime error: {e}"},
+                                "output": [],
+                                "usage": _normalize_response_usage({}),
+                            },
+                        }
+                        self._write_sse_chunk(make_sse_block("response.failed", error_payload))
+                        self._write_sse_chunk(b"data: [DONE]\n\n")
+                    self.handler.close_connection = True
+                    return
+
+                try:
+                    status, content_type, out = self._run_responses_locally(
                         body,
                         client_model,
                         apply_patch_output_style,
                     )
-                    self._emit_request_telemetry(
-                        "request_completed",
-                        started_at,
-                        upstream_path,
-                        client_model,
-                        backend_model=backend_model,
-                        stream=True,
-                        status=200,
-                        usage=stream_result.get("usage") if isinstance(stream_result, dict) else None,
-                        prompt_ms=stream_result.get("prompt_ms") if isinstance(stream_result, dict) else None,
-                        gen_ms=stream_result.get("gen_ms") if isinstance(stream_result, dict) else None,
-                        output_items=stream_result.get("output_items") if isinstance(stream_result, dict) else None,
-                    )
-                except (BrokenPipeError, ConnectionResetError):
-                    self._emit_request_telemetry(
-                        "request_failed",
-                        started_at,
-                        upstream_path,
-                        client_model,
-                        backend_model=backend_model,
-                        stream=True,
-                        error="client disconnected",
-                        phase="stream",
-                    )
-                    pass
-                except Exception as e:
-                    try:
-                        import traceback
-                        runtime_log("latest-stream-runtime-error.txt", traceback.format_exc())
-                    except Exception:
-                        pass
-                    self._emit_request_telemetry(
-                        "request_failed",
-                        started_at,
-                        upstream_path,
-                        client_model,
-                        backend_model=backend_model,
-                        stream=True,
-                        error=str(e),
-                        phase="stream",
-                    )
-                    error_payload = {
-                        "type": "response.failed",
-                        "response": {
-                            "id": f"resp_local_{_now_ts()}",
-                            "object": "response",
-                            "created_at": _now_ts(),
-                            "status": "failed",
-                            "model": client_model,
-                            "error": {"message": f"local streaming runtime error: {e}"},
-                            "output": [],
-                            "usage": _normalize_response_usage({}),
-                        },
-                    }
-                    self._write_sse_chunk(make_sse_block("response.failed", error_payload))
-                    self._write_sse_chunk(b"data: [DONE]\n\n")
-                self.handler.close_connection = True
-                return
+                    if status >= 400:
+                        try:
+                            self.handler._send_json(status, out)
+                        except Exception:
+                            self.handler.send_response(status)
+                            self.handler.send_header("Content-Type", "text/plain")
+                            self.handler._send_codex_rate_limit_headers()
+                            self.handler.end_headers()
+                            self.handler.wfile.write(json.dumps(out).encode("utf-8"))
+                        self._emit_request_telemetry(
+                            "request_completed",
+                            started_at,
+                            upstream_path,
+                            client_model,
+                            backend_model=backend_model,
+                            stream=False,
+                            status=status,
+                            content_type=content_type,
+                            usage=out.get("usage"),
+                        )
+                        return
 
-            try:
-                status, content_type, out = self._run_responses_locally(
-                    body,
-                    client_model,
-                    apply_patch_output_style,
-                )
-                if status >= 400:
-                    try:
-                        self.handler._send_json(status, out)
-                    except Exception:
-                        self.handler.send_response(status)
-                        self.handler.send_header("Content-Type", "text/plain")
-                        self.handler._send_codex_rate_limit_headers()
-                        self.handler.end_headers()
-                        self.handler.wfile.write(json.dumps(out).encode("utf-8"))
+                    self.handler._send_json(status, out)
                     self._emit_request_telemetry(
                         "request_completed",
                         started_at,
@@ -496,38 +554,24 @@ class RequestRouter:
                         usage=out.get("usage"),
                     )
                     return
-
-                self.handler._send_json(status, out)
-                self._emit_request_telemetry(
-                    "request_completed",
-                    started_at,
-                    upstream_path,
-                    client_model,
-                    backend_model=backend_model,
-                    stream=False,
-                    status=status,
-                    content_type=content_type,
-                    usage=out.get("usage"),
-                )
-                return
-            except Exception as e:
-                try:
-                    import traceback
-                    runtime_log("latest-web-runtime-error.txt", traceback.format_exc())
-                except Exception:
-                    pass
-                self._emit_request_telemetry(
-                    "request_failed",
-                    started_at,
-                    upstream_path,
-                    client_model,
-                    backend_model=backend_model,
-                    stream=False,
-                    error=str(e),
-                    phase="local_web_runtime",
-                )
-                self.handler._send_json(502, {"error": f"local web runtime error: {e}"})
-                return
+                except Exception as e:
+                    try:
+                        import traceback
+                        runtime_log("latest-web-runtime-error.txt", traceback.format_exc())
+                    except Exception:
+                        pass
+                    self._emit_request_telemetry(
+                        "request_failed",
+                        started_at,
+                        upstream_path,
+                        client_model,
+                        backend_model=backend_model,
+                        stream=False,
+                        error=str(e),
+                        phase="local_web_runtime",
+                    )
+                    self.handler._send_json(502, {"error": f"local web runtime error: {e}"})
+                    return
 
         try:
             append_capture("latest-json-api.log", f"{time.time():.3f} UPSTREAM url={self.handler.upstream + upstream_path} bytes={len(json.dumps(body).encode('utf-8'))} stream={body.get('stream')}\n")

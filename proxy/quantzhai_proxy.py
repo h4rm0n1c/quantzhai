@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -101,6 +102,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
     upstream = "http://127.0.0.1:18084"
     reasoning_stream_format = "raw"
     runtime_state_enabled = False
+    request_gate = threading.Lock()
     model_catalog = None
     model_catalog_path = None
     backend_client = None
@@ -489,6 +491,9 @@ def main():
                 state = status.get("value") if isinstance(status, dict) else ""
                 if state not in {"loaded", "loading"}:
                     backend.load_model(startup_model_id, timeout=120)
+                    backend.wait_for_model_ready(startup_model_id, timeout=120)
+                elif state == "loading":
+                    backend.wait_for_model_ready(startup_model_id, timeout=120)
     except Exception:
         pass
 

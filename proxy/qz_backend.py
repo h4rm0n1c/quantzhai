@@ -96,6 +96,10 @@ class BackendClient:
         return {}
 
     def wait_for_model_ready(self, model_id: str, timeout: float = 120, poll_interval: float = 0.5) -> Tuple[bool, Dict[str, Any]]:
+        return self.wait_for_model_state(model_id, {"loaded"}, timeout=timeout, poll_interval=poll_interval)
+
+    def wait_for_model_state(self, model_id: str, states, timeout: float = 120, poll_interval: float = 0.5) -> Tuple[bool, Dict[str, Any]]:
+        wanted = {str(state) for state in (states or []) if str(state)}
         deadline = time.time() + max(0.0, float(timeout))
         poll_interval = max(0.1, float(poll_interval))
         last_health = self.get_health(timeout=min(10.0, timeout))
@@ -105,7 +109,7 @@ class BackendClient:
             last_entry = self.get_model_entry(model_id, timeout=min(10.0, max(0.1, deadline - time.time())))
             status = last_entry.get("status") or {}
             state = status.get("value") if isinstance(status, dict) else None
-            if last_health.status == 200 and state == "loaded":
+            if state in wanted:
                 return True, {
                     "health_status": last_health.status,
                     "health_body": json.loads(last_health.data.decode("utf-8")) if last_health.data else {},
@@ -122,3 +126,6 @@ class BackendClient:
 
     def load_model(self, model_id: str, timeout: float = 120) -> BackendResponse:
         return self.post_json("/models/load", {"model": model_id}, timeout=timeout)
+
+    def unload_model(self, model_id: str, timeout: float = 120) -> BackendResponse:
+        return self.post_json("/models/unload", {"model": model_id}, timeout=timeout)

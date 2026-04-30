@@ -23,14 +23,70 @@ def _sse_block(event_type, payload):
 
 class FakeWebUpstreamHandler(BaseHTTPRequestHandler):
     requests = []
+    models = {}
 
     def log_message(self, _fmt, *_args):
         return
+
+    def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            payload = json.dumps({"status": "ok"}).encode("utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        if self.path == "/models":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            payload = json.dumps({
+                "data": [
+                    {
+                        "id": model_id,
+                        "status": {"value": entry.get("status", "unknown")},
+                        "path": entry.get("path"),
+                    }
+                    for model_id, entry in self.__class__.models.items()
+                ],
+            }).encode("utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        self.send_response(404)
+        self.send_header("Content-Type", "application/json")
+        payload = json.dumps({"error": "not found"}).encode("utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0") or "0")
         body = json.loads(self.rfile.read(length).decode("utf-8"))
         self.__class__.requests.append({"path": self.path, "body": body})
+        if self.path == "/models/unload":
+            model_id = body.get("model") or ""
+            self.__class__.models.setdefault(model_id, {"path": f"/models/{model_id}"})
+            self.__class__.models[model_id]["status"] = "unloaded"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            payload = json.dumps({"success": True}).encode("utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        if self.path == "/models/load":
+            model_id = body.get("model") or ""
+            self.__class__.models.setdefault(model_id, {"path": f"/models/{model_id}"})
+            self.__class__.models[model_id]["status"] = "loaded"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            payload = json.dumps({"success": True}).encode("utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
 
         has_tool_output = any(
             isinstance(item, dict)
@@ -199,6 +255,16 @@ def main():
     proxy = None
     try:
         FakeWebUpstreamHandler.requests = []
+        FakeWebUpstreamHandler.models = {
+            "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M": {
+                "status": "loaded",
+                "path": "/models/Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M",
+            },
+            "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact": {
+                "status": "unloaded",
+                "path": "/models/Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact",
+            },
+        }
         ProxyHandler.upstream = f"http://127.0.0.1:{upstream.server_port}"
         ProxyHandler.reasoning_stream_format = "raw"
         ProxyHandler.searxng_policy = {}
@@ -225,11 +291,12 @@ def main():
         assert "web_search_call" in stream_text, stream_text
         assert "function_call" not in stream_text, stream_text
         assert "searched." in stream_text, stream_text
-        assert len(FakeWebUpstreamHandler.requests) == 3, FakeWebUpstreamHandler.requests
-        assert FakeWebUpstreamHandler.requests[0]["path"] == "/models/load", FakeWebUpstreamHandler.requests
-        assert FakeWebUpstreamHandler.requests[1]["path"] == "/v1/responses", FakeWebUpstreamHandler.requests
+        assert len(FakeWebUpstreamHandler.requests) == 4, FakeWebUpstreamHandler.requests
+        assert FakeWebUpstreamHandler.requests[0]["path"] == "/models/unload", FakeWebUpstreamHandler.requests
+        assert FakeWebUpstreamHandler.requests[1]["path"] == "/models/load", FakeWebUpstreamHandler.requests
         assert FakeWebUpstreamHandler.requests[2]["path"] == "/v1/responses", FakeWebUpstreamHandler.requests
-        second_body = FakeWebUpstreamHandler.requests[2]["body"]
+        assert FakeWebUpstreamHandler.requests[3]["path"] == "/v1/responses", FakeWebUpstreamHandler.requests
+        second_body = FakeWebUpstreamHandler.requests[3]["body"]
         assert any(item.get("type") == "function_call_output" for item in second_body.get("input") or []), second_body
 
         telemetry = _get_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/recent?limit=100")

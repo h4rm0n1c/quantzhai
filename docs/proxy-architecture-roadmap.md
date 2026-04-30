@@ -21,6 +21,8 @@ The near-term target is not a rewrite. It is to break `proxy/quantzhai_proxy.py`
 - `proxy/qz_model_catalog.py` now holds GGUF scanning, metadata extraction, override merging, and the proxy-facing model catalog.
 - `proxy/qz_model_router.py` now holds the model-selection, backend-load, readiness/status snapshots, compact runtime-state injection, and Ollama-compatibility route handling.
 - `proxy/qz_model_router.py` now emits fresh status snapshots on `/ready`, `/qz/status`, and request boundaries, so monitors can see current load state without stale caches.
+- Requests that target a model now wait on that model instead of falling back to some other already-loaded model, and `/v1/responses` plus model load/select calls are serialized behind a small request gate so model switches apply before the next request is admitted.
+- When the requested model differs from the resident backend model, the router now unloads the resident model first, waits for that unload to finish, then loads the new target before admitting the request. Startup warmup follows the same selected-backend-id path.
 - `proxy/qz_responses.py` now holds pure Responses normalization, apply_patch translation, tool declaration adaptation, and local compaction helpers.
 - `proxy/qz_tools.py` now defines the first tool adapter/registry API.
 - `proxy/qz_tool_apply_patch.py` now holds the apply_patch tool adapter and compatibility helpers.
