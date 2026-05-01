@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-set -euo pipefail
+
+# This file is sourced by both QuantZhai scripts and humans during diagnostics.
+# Do not set -e/-u/-o pipefail here: shell options leak into the caller when a
+# file is sourced, and can make an interactive terminal exit after later benign
+# command failures. Entrypoint scripts should set their own strict mode.
 
 QZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export QZ_ROOT
