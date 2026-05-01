@@ -105,26 +105,43 @@ class BackendClient:
         wanted = {str(state) for state in (states or []) if str(state)}
         deadline = time.time() + max(0.0, float(timeout))
         poll_interval = max(0.1, float(poll_interval))
-        last_health = self.get_health(timeout=min(10.0, timeout))
+        last_health = BackendResponse(status=0, content_type="application/json", data=b"{}")
         last_entry: Dict[str, Any] = {}
+        last_error = ""
 
         while time.time() <= deadline:
-            last_entry = self.get_model_entry(model_id, timeout=min(10.0, max(0.1, deadline - time.time())))
-            status = last_entry.get("status") or {}
-            state = status.get("value") if isinstance(status, dict) else None
-            if state in wanted:
-                return True, {
-                    "health_status": last_health.status,
-                    "health_body": json.loads(last_health.data.decode("utf-8")) if last_health.data else {},
-                    "model_entry": last_entry,
-                }
+            remaining = max(0.1, deadline - time.time())
+            try:
+                last_entry = self.get_model_entry(model_id, timeout=min(10.0, remaining))
+                status = last_entry.get("status") or {}
+                state = status.get("value") if isinstance(status, dict) else None
+                if state in wanted:
+                    try:
+                        last_health = self.get_health(timeout=min(10.0, max(0.1, deadline - time.time())))
+                    except Exception as exc:
+                        last_error = str(exc)
+                    return True, {
+                        "health_status": last_health.status,
+                        "health_body": json.loads(last_health.data.decode("utf-8")) if last_health.data else {},
+                        "model_entry": last_entry,
+                        "last_error": last_error,
+                    }
+            except Exception as exc:
+                # Loading/unloading can briefly close existing HTTP connections.
+                # Treat that as a transient poll failure instead of a model-load failure.
+                last_error = str(exc)
+
             time.sleep(min(poll_interval, max(0.1, deadline - time.time())))
-            last_health = self.get_health(timeout=min(10.0, max(0.1, deadline - time.time())))
+            try:
+                last_health = self.get_health(timeout=min(10.0, max(0.1, deadline - time.time())))
+            except Exception as exc:
+                last_error = str(exc)
 
         return False, {
             "health_status": last_health.status,
             "health_body": json.loads(last_health.data.decode("utf-8")) if last_health.data else {},
             "model_entry": last_entry,
+            "last_error": last_error,
         }
 
     def load_model(self, model_id: str, timeout: float = 120) -> BackendResponse:
@@ -247,8 +264,18 @@ class BackendClient:
 
         deadline = time.time() + health_timeout
         last_health = None
+        last_error = ""
         while time.time() < deadline:
-            last_health = self.get_health(timeout=min(10.0, max(0.1, deadline - time.time())))
+            try:
+                last_health = self.get_health(timeout=min(10.0, max(0.1, deadline - time.time())))
+            except Exception as exc:
+                # During container replacement llama.cpp can accept and then reset
+                # a TCP connection before the HTTP server is fully ready. Poll
+                # through this transient state instead of marking the restart dead.
+                last_error = str(exc)
+                last_health = None
+                time.sleep(min(1.0, max(0.1, deadline - time.time())))
+                continue
             if last_health.status == 200:
                 return {
                     "container": container,
@@ -256,11 +283,13 @@ class BackendClient:
                     "health_status": last_health.status,
                     "health_body": json.loads(last_health.data.decode("utf-8")) if last_health.data else {},
                     "stdout": (run_proc.stdout or "").strip(),
+                    "last_error": last_error,
                 }
             time.sleep(min(1.0, max(0.1, deadline - time.time())))
 
         logs = self._docker_logs(container)
         raise RuntimeError(
             f"backend restart timed out waiting for health after launching context {int(context_size)}; "
-            f"health_status={(last_health.status if last_health else 'unknown')}; logs={logs}"
+            f"health_status={(last_health.status if last_health else 'unknown')}; "
+            f"last_error={last_error or 'none'}; logs={logs}"
         )
