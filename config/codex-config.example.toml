@@ -1,11 +1,15 @@
+# QuantZhai Codex CLI config template.
+#
+# qz-codex copies this file to var/codex-home/config.toml on first run, then
+# regenerates model_catalog_json on every launch. Model metadata, context
+# windows, truncation limits, reasoning levels, and system prompts belong in the
+# generated catalog, not in deprecated static profile blocks here.
+
 model_catalog_json = "var/codex-home/model-catalogs/qwenzhai-models.json"
 model = "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M"
 model_provider = "quantzhai"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
-model_context_window = 131072
-model_max_output_tokens = 12000
-oss_provider = "ollama"
 
 [model_providers.quantzhai]
 name = "QuantZhai"
@@ -15,44 +19,3 @@ env_key = "LOCAL_QWEN_API_KEY"
 request_max_retries = 1
 stream_max_retries = 1
 stream_idle_timeout_ms = 600000
-
-[profiles.quantzhai-low]
-model = "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ4_NL"
-model_provider = "quantzhai"
-approval_policy = "on-request"
-sandbox_mode = "workspace-write"
-model_context_window = 131072
-model_max_output_tokens = 12000
-
-[profiles.quantzhai-medium]
-model = "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M"
-model_provider = "quantzhai"
-approval_policy = "on-request"
-sandbox_mode = "workspace-write"
-model_context_window = 131072
-model_max_output_tokens = 12000
-
-[profiles.quantzhai-caveman]
-model = "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M"
-model_provider = "quantzhai"
-approval_policy = "on-request"
-sandbox_mode = "workspace-write"
-model_context_window = 131072
-model_max_output_tokens = 2048
-model_instructions_file = "docs/qz-caveman-codex-model-instructions-v2.md"
-
-[profiles.quantzhai-high]
-model = "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact"
-model_provider = "quantzhai"
-approval_policy = "on-request"
-sandbox_mode = "workspace-write"
-model_context_window = 131072
-model_max_output_tokens = 12000
-
-[profiles.quantzhai-max]
-model = "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact"
-model_provider = "quantzhai"
-approval_policy = "on-request"
-sandbox_mode = "workspace-write"
-model_context_window = 131072
-model_max_output_tokens = 12000
