@@ -8,6 +8,10 @@ QuantZhai is a local Codex stack for running Qwen through a turboquant llama.cpp
 
 This directory is the cleaned seed, not the discovery dump. Runtime state lives under `var/` and stays out of git.
 
+## Documentation
+
+Start with the [documentation index](docs/README.md) for a browsable map of the repo docs, recommended reading paths, and task-oriented entry points.
+
 ## Status
 
 QuantZhai is early but has run locally in a useful Codex workflow. Treat it as a reproducible lab stack, not a polished installer.
@@ -441,12 +445,13 @@ These may contain local paths, prompts, tool output, secrets, request captures, 
 
 ## Roadmaps
 
+See the [documentation index](docs/README.md) for the current browsable document map.
+
 - `docs/search-roadmap.md`: profile-aware local search plan.
-- `docs/fox-roadmap.md`: future Fox backend evaluation and parity gate.
-- `docs/proxy-architecture-roadmap.md`: Python proxy restructure, test harness, and possible Rust port.
-- `docs/agent-runtime-session-notes-2026-04-29.md`: compact-profile,
-  benchmark, observability, streaming, search, and time-grounding notes from
-  the 2026-04-29 tuning session.
+- `docs/patch-tool-roadmap.md`: patch/edit tooling plans.
+- `docs/proxy-capability-roadmap.md`: proxy feature expansion and compatibility work.
+- `docs/runtime-observability-notes.md`: runtime logging, capture, and telemetry notes.
+- `docs/quantzhai-benchmark-harness.md`: profile benchmarking and compression metrics.
 
 ## Name
 
