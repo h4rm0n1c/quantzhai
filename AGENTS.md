@@ -36,6 +36,33 @@ Keep the repo small and reproducible. Runtime state belongs in `var/`; source, c
 - Do not rename `Qwen3.6Turbo-*` model slugs casually; `qz-codex` relies on the proven catalog names.
 - If changing proxy behavior, update or add docs under `docs/` that explain the runtime contract.
 
+## Proxy Policy Is the Source of Truth
+
+Codex-facing scripts and generated files must stay in sync with proxy behavior.
+
+Any script or generator that echoes proxy datapath information out to Codex for convenience, such as generated model catalogs, `config.toml` edits, model/profile aliases, context windows, prompt metadata, or `/status`-style summaries, must reflect the same routing and prompt policy enforced by the proxy.
+
+Do not create a second truth in scripts. In particular:
+
+- Profile/model aliases shown to Codex must remain the Codex-visible profile identity.
+- Backend routing must remain separate, for example through `server_alias` or the proxy-selected backend target.
+- Prompt selection must follow the proxy prompt policy and selected model/profile overrides.
+- If a helper script exports model names, context lengths, prompt sources, or status metadata to Codex, update it when proxy policy changes.
+- Generated Codex catalogs are a view of proxy policy, not an authority over prompt or backend routing.
+
+When changing proxy routing or prompt policy, audit at least:
+
+```bash
+rg -n "model_catalog|base_instructions|system_prompt|server_alias|backend_id|context_window|status|QZSTATE|prompt_policy" scripts proxy config docs AGENTS.md
+```
+
+Then verify with a capture from a real Codex request, not just generated config:
+
+```bash
+jq '{model, instructions_head:(.instructions|.[0:180]), policy:.metadata.qz_prompt_policy}' var/captures/latest-forwarded.json
+curl -s http://127.0.0.1:18180/qz/status | jq '.backend.selected_backend_id, .backend.loaded_model, .backend.selected_context_length'
+```
+
 ## Host Sudo Workflow
 
 This host may use `QZ_DOCKER_CMD="sudo docker"`. Codex sessions often cannot answer interactive sudo prompts, so simple Docker/sudo checks can fail even when the local setup is healthy.
