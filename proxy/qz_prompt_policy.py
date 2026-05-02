@@ -13,6 +13,7 @@ DEFAULT_PROMPT_POLICY = {
     "mode": "preserve_client",
     "allow_replace": False,
     "allow_prepend_before_client": False,
+    "synthesize_missing_client": True,
 }
 
 
@@ -214,13 +215,54 @@ def _dedupe_preserve_order(blocks):
     return out
 
 
-def assemble_instruction_stack(existing_instructions="", client_blocks=None, selected_model=None):
+def _replacement_prompt(report, manifest, policy, model_overrides):
+    inline = _first_block(
+        model_overrides.get("system_prompt"),
+        model_overrides.get("codex_base_instructions"),
+        model_overrides.get("base_instructions"),
+        model_overrides.get("prompt_replace"),
+        manifest.get("system_prompt"),
+        manifest.get("codex_base_instructions"),
+        manifest.get("base_instructions"),
+        manifest.get("prompt_replace"),
+        policy.get("system_prompt"),
+        policy.get("codex_base_instructions"),
+        policy.get("base_instructions"),
+        policy.get("prompt_replace"),
+        policy.get("global_replace"),
+    )
+    if inline:
+        return inline
+
+    return _first_file_block(
+        report,
+        model_overrides.get("system_prompt_file"),
+        model_overrides.get("codex_base_instructions_file"),
+        model_overrides.get("base_instructions_file"),
+        model_overrides.get("prompt_replace_files"),
+        model_overrides.get("prompt_replace_file"),
+        manifest.get("system_prompt_file"),
+        manifest.get("codex_base_instructions_file"),
+        manifest.get("base_instructions_file"),
+        manifest.get("prompt_replace_files"),
+        manifest.get("prompt_replace_file"),
+        policy.get("system_prompt_file"),
+        policy.get("codex_base_instructions_file"),
+        policy.get("base_instructions_file"),
+        policy.get("prompt_replace_files"),
+        policy.get("prompt_replace_file"),
+        policy.get("global_replace_files"),
+        policy.get("global_replace_file"),
+    )
+
+
+def assemble_instruction_stack(existing_instructions="", client_blocks=None, selected_model=None, synthesize_missing_client=None):
     """
     Build final upstream instructions.
 
     Ordering:
-    1. Client/Codex system+developer harness, unless explicitly replaced.
-    2. Optional QuantZhai prompt additions from default/runtime overrides.
+    1. Codex system/developer blocks when they exist and policy preserves them.
+    2. QuantZhai selected/global system_prompt_file when Codex sent no prompt.
     3. Existing proxy-added instructions, such as reasoning hint and QZSTATE.
     """
     manifest = _load_manifest()
@@ -241,11 +283,16 @@ def assemble_instruction_stack(existing_instructions="", client_blocks=None, sel
 
     allow_replace = bool(policy.get("allow_replace"))
     allow_prepend_before_client = bool(policy.get("allow_prepend_before_client"))
+    if synthesize_missing_client is None:
+        synthesize_missing_client = bool(policy.get("synthesize_missing_client", True))
+    else:
+        synthesize_missing_client = bool(synthesize_missing_client)
 
     report = {
         "mode": mode,
         "allow_replace": allow_replace,
         "allow_prepend_before_client": allow_prepend_before_client,
+        "synthesize_missing_client": synthesize_missing_client,
         "prompt_files_loaded": [],
         "prompt_files_missing": [],
         "prompt_files_failed": [],
@@ -279,26 +326,27 @@ def assemble_instruction_stack(existing_instructions="", client_blocks=None, sel
         + _file_blocks(model_overrides.get("prompt_append_files"), report=report)
     )
 
-    replacement = _first_block(
-        model_overrides.get("prompt_replace"),
-        policy.get("prompt_replace"),
-        policy.get("global_replace"),
-    ) or _first_file_block(
-        report,
-        model_overrides.get("prompt_replace_files"),
-        model_overrides.get("prompt_replace_file"),
-        policy.get("prompt_replace_files"),
-        policy.get("prompt_replace_file"),
-        policy.get("global_replace_files"),
-        policy.get("global_replace_file"),
-    )
+    replacement = _replacement_prompt(report, manifest, policy, model_overrides)
+    existing_text = "\n\n".join(existing_blocks)
+    replacement_already_present = bool(replacement and replacement in existing_text)
 
     replaced_client = False
+    synthesized_missing_client = False
+    reused_existing_replacement = False
     ignored_replace = False
+    append_existing_blocks = True
 
-    if mode == "replace_client" and allow_replace and replacement and client_blocks:
+    if replacement_already_present and not client_blocks:
+        base_blocks = list(existing_blocks)
+        append_existing_blocks = False
+        reused_existing_replacement = True
+    elif replacement and mode == "replace_client" and allow_replace:
         base_blocks = [replacement]
-        replaced_client = True
+        replaced_client = bool(client_blocks or existing_blocks)
+        append_existing_blocks = not client_blocks
+    elif replacement and synthesize_missing_client and not client_blocks:
+        base_blocks = [replacement]
+        synthesized_missing_client = True
     else:
         base_blocks = list(client_blocks)
         ignored_replace = bool(mode == "replace_client" and replacement and not replaced_client)
@@ -318,10 +366,9 @@ def assemble_instruction_stack(existing_instructions="", client_blocks=None, sel
 
         stack.extend(global_append)
         stack.extend(model_append)
-        stack.extend(existing_blocks)
+        if append_existing_blocks:
+            stack.extend(existing_blocks)
     else:
-        # No extracted Codex system/developer blocks. Preserve existing order
-        # because existing may already contain client instructions plus QZ hints.
         if allow_prepend_before_client:
             stack.extend(global_prepend)
             stack.extend(model_prepend)
@@ -342,7 +389,11 @@ def assemble_instruction_stack(existing_instructions="", client_blocks=None, sel
         "global_append_blocks": len(global_append),
         "model_prepend_blocks": len(model_prepend),
         "model_append_blocks": len(model_append),
+        "replacement_available": bool(replacement),
+        "replacement_already_present": replacement_already_present,
         "replaced_client": replaced_client,
+        "synthesized_missing_client": synthesized_missing_client,
+        "reused_existing_replacement": reused_existing_replacement,
         "ignored_replace": ignored_replace,
     })
 
