@@ -16,6 +16,10 @@ Options:
 EOF
 }
 
+write_runtime_state() {
+  python3 "$QZ_ROOT/scripts/qz-write-runtime-state" "$@" >/dev/null || true
+}
+
 hold=0
 codex_profile=""
 
@@ -48,7 +52,7 @@ done
 mkdir -p "$QZ_VAR_DIR/logs" "$QZ_VAR_DIR/run" "$QZ_VAR_DIR/captures"
 mkdir -p "$QZ_MODEL_DIR"
 
-"$QZ_ROOT/scripts/qz-write-runtime-state" --phase requested --source env >/dev/null || true
+write_runtime_state --phase requested --source env
 
 if qz_docker ps -a --format '{{.Names}}' | grep -qx "$QZ_CONTAINER"; then
   qz_docker rm -f "$QZ_CONTAINER" >/dev/null
@@ -117,14 +121,14 @@ if [[ "$backend_ok" != 1 ]]; then
 fi
 
 printf 'backend healthy: http://%s:%s\n' "$QZ_SERVER_HOST" "$QZ_SERVER_PORT"
-"$QZ_ROOT/scripts/qz-write-runtime-state" --phase backend-healthy --source env --backend-healthy >/dev/null || true
+write_runtime_state --phase backend-healthy --source env --backend-healthy
 
 "$QZ_ROOT/scripts/qz-proxy"
-"$QZ_ROOT/scripts/qz-write-runtime-state" --phase proxy-started --source env --backend-healthy --proxy-healthy --merge-proxy >/dev/null || true
+write_runtime_state --phase proxy-started --source env --backend-healthy --proxy-healthy --merge-proxy
 
 if [[ -n "$codex_profile" ]]; then
   export QZ_PROFILE="$codex_profile"
-  "$QZ_ROOT/scripts/qz-write-runtime-state" --phase codex-start --source profile --backend-healthy --proxy-healthy --merge-proxy >/dev/null || true
+  write_runtime_state --phase codex-start --source profile --backend-healthy --proxy-healthy --merge-proxy
   exec "$QZ_ROOT/scripts/qz-codex" "$codex_profile"
 fi
 
