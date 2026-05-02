@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import re
 from pathlib import Path
 
 try:
@@ -10,8 +11,8 @@ except ImportError:
 
 
 DEFAULT_PROMPT_POLICY = {
-    "mode": "preserve_client",
-    "allow_replace": False,
+    "mode": "replace_client",
+    "allow_replace": True,
     "allow_prepend_before_client": False,
     "synthesize_missing_client": True,
 }
@@ -256,14 +257,34 @@ def _replacement_prompt(report, manifest, policy, model_overrides):
     )
 
 
+def _proxy_added_instruction_blocks(existing_blocks):
+    """Keep proxy-added instruction crumbs while dropping Codex/client harness text."""
+    kept = []
+    for block in existing_blocks:
+        for part in re.split(r"\n{2,}", block):
+            text = part.strip()
+            if not text:
+                continue
+            if text.startswith("<QZSTATE "):
+                kept.append(text)
+                continue
+            if text.startswith("Use ") and "reasoning effort" in text:
+                kept.append(text)
+                continue
+    return kept
+
+
 def assemble_instruction_stack(existing_instructions="", client_blocks=None, selected_model=None, synthesize_missing_client=None):
     """
     Build final upstream instructions.
 
     Ordering:
-    1. Codex system/developer blocks when they exist and policy preserves them.
-    2. QuantZhai selected/global system_prompt_file when Codex sent no prompt.
+    1. QuantZhai selected/global system_prompt_file by default.
+    2. Optional prompt prepend/append blocks from selected/global overrides.
     3. Existing proxy-added instructions, such as reasoning hint and QZSTATE.
+
+    Codex/client instruction blocks are preserved only when policy opts out of
+    the default replace_client mode.
     """
     manifest = _load_manifest()
     model_overrides = _selected_overrides(selected_model, manifest)
@@ -277,9 +298,9 @@ def assemble_instruction_stack(existing_instructions="", client_blocks=None, sel
     if isinstance(model_policy, dict):
         policy = _deep_merge(policy, model_policy)
 
-    mode = str(policy.get("mode") or "preserve_client").strip().lower()
+    mode = str(policy.get("mode") or "replace_client").strip().lower()
     if mode not in {"preserve_client", "append_only", "replace_client", "debug_dump"}:
-        mode = "preserve_client"
+        mode = "replace_client"
 
     allow_replace = bool(policy.get("allow_replace"))
     allow_prepend_before_client = bool(policy.get("allow_prepend_before_client"))
@@ -342,8 +363,8 @@ def assemble_instruction_stack(existing_instructions="", client_blocks=None, sel
         reused_existing_replacement = True
     elif replacement and mode == "replace_client" and allow_replace:
         base_blocks = [replacement]
-        replaced_client = bool(client_blocks or existing_blocks)
-        append_existing_blocks = not client_blocks
+        existing_blocks = _proxy_added_instruction_blocks(existing_blocks)
+        replaced_client = bool(client_blocks or existing_text)
     elif replacement and synthesize_missing_client and not client_blocks:
         base_blocks = [replacement]
         synthesized_missing_client = True
