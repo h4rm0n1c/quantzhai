@@ -319,6 +319,11 @@ def build_entry(path: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
     entry["label"] = overrides.get("label") or name or stem
     entry["default"] = bool(overrides.get("default"))
     entry["server_alias"] = overrides.get("server_alias")
+    if isinstance(entry["server_alias"], str) and entry["server_alias"].strip():
+        entry["backend_id"] = entry["server_alias"].strip()
+        aliases = set(entry.get("aliases") or [])
+        aliases.add(entry["server_alias"].strip())
+        entry["aliases"] = sorted(x for x in aliases if isinstance(x, str) and x)
     entry["runtime_context_length"] = override_context_length(overrides)
     launch_args = overrides.get("launch_args", [])
     entry["launch_args"] = list(launch_args) if isinstance(launch_args, list) else []
