@@ -303,8 +303,23 @@ def truncation_limit(entry, overrides, runtime_context):
     return 10000
 
 
+def profile_slug(entry):
+    """Codex-visible model/profile id.
+
+    This must stay as the profile/symlink identity, not the backend server_alias.
+    The proxy maps the profile to entry["backend_id"] later.
+    """
+    for key in ("stem", "filename", "key", "label", "name", "backend_id"):
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            if key == "filename" and value.endswith(".gguf"):
+                return value[:-5]
+            return value.strip()
+    return ""
+
+
 def build_live_model(entry, priority):
-    slug = entry.get("backend_id") or entry.get("stem") or entry.get("filename") or entry.get("key")
+    slug = profile_slug(entry)
     if not slug:
         return None
 
@@ -348,7 +363,8 @@ def build_live_model(entry, priority):
         "mode": "tokens",
         "limit": truncation_limit(entry, overrides, runtime_context),
     }
-    model["backend_id"] = slug
+    model["backend_id"] = entry.get("backend_id") or slug
+    model["server_alias"] = entry.get("server_alias")
     model["supported_in_api"] = True
     model["visibility"] = "list"
     return model
