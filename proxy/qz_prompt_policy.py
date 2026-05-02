@@ -274,6 +274,21 @@ def _proxy_added_instruction_blocks(existing_blocks):
     return kept
 
 
+def _has_non_proxy_instruction_block(existing_blocks):
+    """True when instructions already contain a real selected/profile prompt."""
+    for block in existing_blocks:
+        for part in re.split(r"\n{2,}", block):
+            text = part.strip()
+            if not text:
+                continue
+            if text.startswith("<QZSTATE "):
+                continue
+            if text.startswith("Use ") and "reasoning effort" in text:
+                continue
+            return True
+    return False
+
+
 def assemble_instruction_stack(existing_instructions="", client_blocks=None, selected_model=None, synthesize_missing_client=None):
     """
     Build final upstream instructions.
@@ -324,6 +339,26 @@ def assemble_instruction_stack(existing_instructions="", client_blocks=None, sel
 
     client_blocks = _blocks(client_blocks or [])
     existing_blocks = _blocks(existing_instructions)
+
+    if selected_model is None and not client_blocks and _has_non_proxy_instruction_block(existing_blocks):
+        final_blocks = _dedupe_preserve_order(existing_blocks)
+        final_text = "\n\n".join(final_blocks)
+        report.update({
+            "client_blocks": len(client_blocks),
+            "existing_blocks": len(existing_blocks),
+            "global_prepend_blocks": 0,
+            "global_append_blocks": 0,
+            "model_prepend_blocks": 0,
+            "model_append_blocks": 0,
+            "replacement_available": False,
+            "replacement_already_present": True,
+            "replaced_client": False,
+            "synthesized_missing_client": False,
+            "reused_existing_replacement": True,
+            "reused_existing_without_selected_model": True,
+            "ignored_replace": False,
+        })
+        return final_text, report
 
     global_prepend = (
         _blocks(policy.get("global_prepend"))
