@@ -6,9 +6,10 @@ Start here when you want to understand the repo without spelunking through every
 
 1. [Project README](../README.md) — what QuantZhai is, how to start it, what ships, and the known-good local setup.
 2. [Agent instructions](../AGENTS.md) — rules for agents working inside this repo.
-3. [Benchmark harness](quantzhai-benchmark-harness.md) — how to compare profiles and prove whether changes help.
-4. [Runtime observability notes](runtime-observability-notes.md) — how to inspect live proxy/model behaviour.
-5. [Search roadmap](search-roadmap.md) — local web-search routing plan and policy direction.
+3. [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) — current focused TODO/review plan for `/status`, `qz-top`, `qz-thoughts`, profiles, and streaming.
+4. [Benchmark harness](quantzhai-benchmark-harness.md) — how to compare profiles and prove whether changes help.
+5. [Runtime observability notes](runtime-observability-notes.md) — how to inspect live proxy/model behaviour.
+6. [Search roadmap](search-roadmap.md) — local web-search routing plan and policy direction.
 
 ## Documentation by area
 
@@ -16,6 +17,7 @@ Start here when you want to understand the repo without spelunking through every
 | --- | --- | --- |
 | Project overview | [README](../README.md) | Main setup, architecture, quick start, configuration, troubleshooting, and repo hygiene. |
 | Agent workflow | [AGENTS](../AGENTS.md) | Instructions for Codex/agent contributors working in this tree. |
+| Current bugfix focus | [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) | Triage, review plan, proposed fixes, and acceptance checks for `/status`, monitor tools, profile tuning, and proxy streaming. |
 | Compact profiles | [Caveman Codex model instructions v2](qz-caveman-codex-model-instructions-v2.md) | The compact Codex prompt/profile instructions used by `scripts/qz-codex caveman`. |
 | Compact profiles | [QuantZhai caveman profile](quantzhai-caveman-profile.md) | Notes and design intent for the caveman/compact profile. |
 | Benchmarking | [QuantZhai benchmark harness](quantzhai-benchmark-harness.md) | Running fixed prompts, collecting artifacts, and comparing profile compression/results. |
@@ -65,6 +67,7 @@ scripts/qz-top
 
 Read:
 
+- [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md)
 - [Runtime observability notes](runtime-observability-notes.md)
 - [README: Troubleshooting](../README.md#troubleshooting)
 
@@ -108,6 +111,7 @@ README.md
 AGENTS.md
 docs/README.md
 docs/deep-research-report.md
+docs/observability-streaming-bugfix-agenda.md
 docs/patch-tool-roadmap.md
 docs/profiled-web-search-pickup-README.md
 docs/proxy-capability-roadmap.md
