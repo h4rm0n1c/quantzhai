@@ -6,11 +6,12 @@ Start here when you want to understand the repo without spelunking through every
 
 1. [Project README](../README.md) — what QuantZhai is, how to start it, what ships, and the known-good local setup.
 2. [Agent instructions](../AGENTS.md) — rules for agents working inside this repo.
-3. [Edge case and config contract plan](edge-case-config-contract-plan.md) — planned audit/refactor for edge cases, compact errors, profile safety, config layout, and script-sprawl reduction.
-4. [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) — current focused TODO/review plan for `/status`, `qz-top`, `qz-thoughts`, profiles, and streaming.
-5. [Benchmark harness](quantzhai-benchmark-harness.md) — how to compare profiles and prove whether changes help.
-6. [Runtime observability notes](runtime-observability-notes.md) — how to inspect live proxy/model behaviour.
-7. [Search roadmap](search-roadmap.md) — local web-search routing plan and policy direction.
+3. [Master stabilisation plan](master-stabilisation-plan.md) — controlling map for the current stabilisation work, bug relationships, and fix order.
+4. [Edge case and config contract plan](edge-case-config-contract-plan.md) — planned audit/refactor for edge cases, compact errors, profile safety, config layout, and script-sprawl reduction.
+5. [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) — current focused TODO/review plan for `/status`, `qz-top`, `qz-thoughts`, profiles, and streaming.
+6. [Benchmark harness](quantzhai-benchmark-harness.md) — how to compare profiles and prove whether changes help.
+7. [Runtime observability notes](runtime-observability-notes.md) — how to inspect live proxy/model behaviour.
+8. [Search roadmap](search-roadmap.md) — local web-search routing plan and policy direction.
 
 ## Documentation by area
 
@@ -18,6 +19,7 @@ Start here when you want to understand the repo without spelunking through every
 | --- | --- | --- |
 | Project overview | [README](../README.md) | Main setup, architecture, quick start, configuration, troubleshooting, and repo hygiene. |
 | Agent workflow | [AGENTS](../AGENTS.md) | Instructions for Codex/agent contributors working in this tree. |
+| Master plan | [Master stabilisation plan](master-stabilisation-plan.md) | Controlling map for current bugs, contracts, dependencies, and fix order. |
 | Config and error handling | [Edge case and config contract plan](edge-case-config-contract-plan.md) | Audit/refactor plan for edge cases, compact errors, profile safety, config layering, and reducing script sprawl. |
 | Current bugfix focus | [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) | Triage, review plan, proposed fixes, and acceptance checks for `/status`, monitor tools, profile tuning, and proxy streaming. |
 | Known bug | [Stale profile server_alias bug](bugs/stale-profile-server-alias.md) | Regression reminder for invalid profile aliases and missing backend GGUF targets. |
@@ -51,10 +53,29 @@ scripts/qz-codex high
 scripts/qz-down
 ```
 
+### I want to understand what needs fixing next
+
+Read:
+
+- [Master stabilisation plan](master-stabilisation-plan.md)
+- [Edge case and config contract plan](edge-case-config-contract-plan.md)
+- [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md)
+- [Known bug notes](bugs/)
+
+Focus:
+
+```text
+Fix stale server_alias validation and compact errors first.
+Then fix qz-thoughts delta coalescing.
+Then add stream timing telemetry.
+Do not start broad config movement before auditing data paths.
+```
+
 ### I want to work on edge cases, config layout, or profile safety
 
 Read:
 
+- [Master stabilisation plan](master-stabilisation-plan.md)
 - [Edge case and config contract plan](edge-case-config-contract-plan.md)
 - [Stale profile server_alias bug](bugs/stale-profile-server-alias.md)
 - [Runtime observability notes](runtime-observability-notes.md)
@@ -71,6 +92,7 @@ Do not add new one-off shell scripts unless there is a strong reason.
 
 Read:
 
+- [Master stabilisation plan](master-stabilisation-plan.md)
 - [Responses streaming and qz-thoughts bug](bugs/responses-streaming-and-qz-thoughts.md)
 - [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md)
 - [Runtime observability notes](runtime-observability-notes.md)
@@ -150,6 +172,7 @@ docs/bugs/responses-streaming-and-qz-thoughts.md
 docs/bugs/stale-profile-server-alias.md
 docs/deep-research-report.md
 docs/edge-case-config-contract-plan.md
+docs/master-stabilisation-plan.md
 docs/observability-streaming-bugfix-agenda.md
 docs/patch-tool-roadmap.md
 docs/profiled-web-search-pickup-README.md
