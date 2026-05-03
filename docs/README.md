@@ -20,6 +20,8 @@ Start here when you want to understand the repo without spelunking through every
 | Agent workflow | [AGENTS](../AGENTS.md) | Instructions for Codex/agent contributors working in this tree. |
 | Config and error handling | [Edge case and config contract plan](edge-case-config-contract-plan.md) | Audit/refactor plan for edge cases, compact errors, profile safety, config layering, and reducing script sprawl. |
 | Current bugfix focus | [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) | Triage, review plan, proposed fixes, and acceptance checks for `/status`, monitor tools, profile tuning, and proxy streaming. |
+| Known bug | [Stale profile server_alias bug](bugs/stale-profile-server-alias.md) | Regression reminder for invalid profile aliases and missing backend GGUF targets. |
+| Known bug | [Responses streaming and qz-thoughts bug](bugs/responses-streaming-and-qz-thoughts.md) | Audit plan for Responses SSE forwarding, summary transformation, and noisy live thought rendering. |
 | Compact profiles | [Caveman Codex model instructions v2](qz-caveman-codex-model-instructions-v2.md) | The compact Codex prompt/profile instructions used by `scripts/qz-codex caveman`. |
 | Compact profiles | [QuantZhai caveman profile](quantzhai-caveman-profile.md) | Notes and design intent for the caveman/compact profile. |
 | Benchmarking | [QuantZhai benchmark harness](quantzhai-benchmark-harness.md) | Running fixed prompts, collecting artifacts, and comparing profile compression/results. |
@@ -63,6 +65,22 @@ Focus:
 Audit before refactor.
 Fix compact errors and invalid-profile handling before broad config movement.
 Do not add new one-off shell scripts unless there is a strong reason.
+```
+
+### I want to fix streaming or qz-thoughts
+
+Read:
+
+- [Responses streaming and qz-thoughts bug](bugs/responses-streaming-and-qz-thoughts.md)
+- [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md)
+- [Runtime observability notes](runtime-observability-notes.md)
+
+Focus:
+
+```text
+Audit upstream SSE, transformed SSE, telemetry, qz-thoughts rendering, and Codex-visible behaviour before patching.
+Do not treat every tiny delta as a human activity event.
+Do not add another one-off shell monitor.
 ```
 
 ### I want to compare prompt/profile performance
@@ -128,6 +146,7 @@ Read:
 README.md
 AGENTS.md
 docs/README.md
+docs/bugs/responses-streaming-and-qz-thoughts.md
 docs/bugs/stale-profile-server-alias.md
 docs/deep-research-report.md
 docs/edge-case-config-contract-plan.md
