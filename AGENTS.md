@@ -26,6 +26,7 @@ Keep the repo small and reproducible. Runtime state belongs in `var/`; source, c
 - `config/`: publishable example config and model catalog.
 - `docs/`: design notes, pickup plans, and roadmap docs.
 - `docs/bugs/`: known bug notes and regression reminders. Check this before planning new proxy/catalog work.
+- `docs/edge-case-config-contract-plan.md`: planned audit/refactor for edge cases, errors, config layout, profile safety, and script-sprawl reduction.
 
 ## Development Rules
 
@@ -36,7 +37,7 @@ Keep the repo small and reproducible. Runtime state belongs in `var/`; source, c
 - Do not run long Docker builds, model launches, or network installs unless the user asks.
 - Do not rename `Qwen3.6Turbo-*` model slugs casually; `qz-codex` relies on the proven catalog names.
 - If changing proxy behavior, update or add docs under `docs/` that explain the runtime contract.
-- When the user asks what needs doing, review `docs/bugs/` and the active roadmap docs before answering.
+- When the user asks what needs doing, review `docs/bugs/`, `docs/edge-case-config-contract-plan.md`, and the active roadmap docs before answering.
 
 ## Proxy Policy Is the Source of Truth
 
@@ -66,6 +67,8 @@ curl -s http://127.0.0.1:18180/qz/status | jq '.backend.selected_backend_id, .ba
 ```
 
 Known bug reminder: stale profile aliases with dead `server_alias` targets must not be allowed to brick Codex sessions. See `docs/bugs/stale-profile-server-alias.md` before changing profile/catalog routing.
+
+Before broader error handling, profile routing, config layout, or script cleanup work, read `docs/edge-case-config-contract-plan.md`. It captures the current plan: audit first, improve compact errors and invalid-profile handling before large refactors, separate defaults/examples/user overrides, and reduce script sprawl without dumping shell logic into `qz-up`, `qz-down`, or `qz-codex`.
 
 ## Host Sudo Workflow
 
