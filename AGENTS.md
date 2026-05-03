@@ -25,6 +25,7 @@ Keep the repo small and reproducible. Runtime state belongs in `var/`; source, c
 - `scripts/qz-build-image`: builds the local TurboQuant Docker image.
 - `config/`: publishable example config and model catalog.
 - `docs/`: design notes, pickup plans, and roadmap docs.
+- `docs/master-stabilisation-plan.md`: controlling map for the current stabilisation work and fix order.
 - `docs/bugs/`: known bug notes and regression reminders. Check this before planning new proxy/catalog work.
 - `docs/edge-case-config-contract-plan.md`: planned audit/refactor for edge cases, errors, config layout, profile safety, and script-sprawl reduction.
 
@@ -37,7 +38,7 @@ Keep the repo small and reproducible. Runtime state belongs in `var/`; source, c
 - Do not run long Docker builds, model launches, or network installs unless the user asks.
 - Do not rename `Qwen3.6Turbo-*` model slugs casually; `qz-codex` relies on the proven catalog names.
 - If changing proxy behavior, update or add docs under `docs/` that explain the runtime contract.
-- When the user asks what needs doing, review `docs/bugs/`, `docs/edge-case-config-contract-plan.md`, and the active roadmap docs before answering.
+- When the user asks what needs doing, review `docs/master-stabilisation-plan.md`, `docs/bugs/`, `docs/edge-case-config-contract-plan.md`, and the active roadmap docs before answering.
 
 ## Proxy Policy Is the Source of Truth
 
@@ -70,7 +71,7 @@ Known bug reminder: stale profile aliases with dead `server_alias` targets must 
 
 Known streaming reminder: Responses SSE forwarding and `qz-thoughts` currently need an audit. See `docs/bugs/responses-streaming-and-qz-thoughts.md` before changing SSE transformation, telemetry, reasoning-summary handling, or monitor rendering.
 
-Before broader error handling, profile routing, config layout, or script cleanup work, read `docs/edge-case-config-contract-plan.md`. It captures the current plan: audit first, improve compact errors and invalid-profile handling before large refactors, separate defaults/examples/user overrides, and reduce script sprawl without dumping shell logic into `qz-up`, `qz-down`, or `qz-codex`.
+Before broader error handling, profile routing, config layout, or script cleanup work, read `docs/master-stabilisation-plan.md` and `docs/edge-case-config-contract-plan.md`. The master plan gives the fix order. The config contract plan gives the audit/refactor rules.
 
 ## Host Sudo Workflow
 
