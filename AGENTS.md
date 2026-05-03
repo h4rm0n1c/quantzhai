@@ -25,6 +25,7 @@ Keep the repo small and reproducible. Runtime state belongs in `var/`; source, c
 - `scripts/qz-build-image`: builds the local TurboQuant Docker image.
 - `config/`: publishable example config and model catalog.
 - `docs/`: design notes, pickup plans, and roadmap docs.
+- `docs/bugs/`: known bug notes and regression reminders. Check this before planning new proxy/catalog work.
 
 ## Development Rules
 
@@ -35,6 +36,7 @@ Keep the repo small and reproducible. Runtime state belongs in `var/`; source, c
 - Do not run long Docker builds, model launches, or network installs unless the user asks.
 - Do not rename `Qwen3.6Turbo-*` model slugs casually; `qz-codex` relies on the proven catalog names.
 - If changing proxy behavior, update or add docs under `docs/` that explain the runtime contract.
+- When the user asks what needs doing, review `docs/bugs/` and the active roadmap docs before answering.
 
 ## Proxy Policy Is the Source of Truth
 
@@ -62,6 +64,8 @@ Then verify with a capture from a real Codex request, not just generated config:
 jq '{model, instructions_head:(.instructions|.[0:180]), policy:.metadata.qz_prompt_policy}' var/captures/latest-forwarded.json
 curl -s http://127.0.0.1:18180/qz/status | jq '.backend.selected_backend_id, .backend.loaded_model, .backend.selected_context_length'
 ```
+
+Known bug reminder: stale profile aliases with dead `server_alias` targets must not be allowed to brick Codex sessions. See `docs/bugs/stale-profile-server-alias.md` before changing profile/catalog routing.
 
 ## Host Sudo Workflow
 
