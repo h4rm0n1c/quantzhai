@@ -66,8 +66,8 @@ Focus:
 
 ```text
 Fix stale symlink profile validation and compact errors first.
-Then fix qz-thoughts delta coalescing.
-Then add stream timing telemetry.
+qz-thoughts delta coalescing is now done.
+Next add stream timing telemetry.
 Do not start broad config movement before auditing data paths.
 ```
 

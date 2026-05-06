@@ -501,7 +501,7 @@ def main():
         state = read_json(Path(ProxyHandler.model_state_path), default={})
         if not isinstance(state, dict):
             return
-        requested = state.get("selected_backend_id") or state.get("selected_key") or ""
+        requested = state.get("selected_key") or state.get("selected_backend_id") or ""
         catalog = getattr(ProxyHandler, "model_catalog", None)
         if not isinstance(requested, str) or not requested.strip():
             selected = getattr(catalog, "selected", None)
@@ -512,7 +512,7 @@ def main():
             if selected is None:
                 fallback = getattr(catalog, "selected", None)
                 if isinstance(fallback, dict):
-                    requested = fallback.get("backend_id") or fallback.get("key") or requested
+                    requested = fallback.get("key") or fallback.get("backend_id") or requested
         if not isinstance(requested, str) or not requested.strip():
             return
         url = f"http://{args.listen}:{args.port}/qz/models/select"

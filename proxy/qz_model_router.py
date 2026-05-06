@@ -119,6 +119,25 @@ class ModelRouter:
         except Exception:
             return default
 
+    def _context_length_from_args(self, args) -> int | None:
+        if not isinstance(args, list):
+            return None
+        for index, arg in enumerate(args):
+            if arg == "--ctx-size" and index + 1 < len(args):
+                return self._parse_context_length(args[index + 1], None)
+            if isinstance(arg, str) and arg.startswith("--ctx-size="):
+                return self._parse_context_length(arg.split("=", 1)[1], None)
+        return None
+
+    def _context_length_from_preset(self, preset) -> int | None:
+        if not isinstance(preset, str):
+            return None
+        for line in preset.splitlines():
+            key, sep, value = line.partition("=")
+            if sep and key.strip() == "ctx-size":
+                return self._parse_context_length(value.strip(), None)
+        return None
+
     def model_state_path(self):
         cls_path = getattr(self.handler.__class__, "model_state_path", None)
         if isinstance(cls_path, str) and cls_path:
@@ -184,7 +203,29 @@ class ModelRouter:
         payload = read_json(self.backend_state_path(), default={})
         return payload if isinstance(payload, dict) else {}
 
-    def backend_context_length(self):
+    def backend_context_length(self, backend_models=None, selected_backend_id: str = ""):
+        backend_models = backend_models if isinstance(backend_models, dict) else None
+        if backend_models:
+            candidate_ids = []
+            if selected_backend_id:
+                candidate_ids.append(selected_backend_id)
+            candidate_ids.extend(
+                model_id
+                for model_id, entry in backend_models.items()
+                if isinstance(entry, dict) and entry.get("state") == "loaded"
+            )
+            candidate_ids.extend(backend_models.keys())
+            seen = set()
+            for model_id in candidate_ids:
+                if model_id in seen:
+                    continue
+                seen.add(model_id)
+                entry = backend_models.get(model_id)
+                if not isinstance(entry, dict):
+                    continue
+                context = self._parse_context_length(entry.get("context_length"), None)
+                if context is not None:
+                    return context
         state = self.load_backend_state()
         context = self._parse_context_length(state.get("backend_context_length"), None)
         if context is not None:
@@ -229,6 +270,12 @@ class ModelRouter:
                 "path": item.get("path"),
                 "quantization_level": item.get("quantization_level") or item.get("quant") or item.get("type"),
             }
+            if isinstance(status, dict):
+                context = self._context_length_from_args(status.get("args"))
+                if context is None:
+                    context = self._context_length_from_preset(status.get("preset"))
+                if context is not None:
+                    backend[model_id]["context_length"] = context
         return backend
 
     def backend_model_control_available(self, backend_models=None):
@@ -264,6 +311,48 @@ class ModelRouter:
                     "quantization_level": entry.get("quantization_level"),
                 })
         return loaded
+
+    def _reconcile_status_state(
+        self,
+        selected: dict | None,
+        health_status,
+        selected_backend_id: str,
+        selected_context_length,
+        backend_context_length,
+        backend_state: str,
+        loaded_model: str,
+    ):
+        selected = selected if isinstance(selected, dict) else {}
+        selected_key = entry_identity(selected)
+        model_state = self.load_runtime_model_state()
+        backend_state_file = self.load_backend_state()
+        model_drift = (
+            model_state.get("selected_key") != selected_key
+            or model_state.get("selected_backend_id") != selected_backend_id
+            or model_state.get("selected_path") != (selected.get("path") or "")
+        )
+        backend_drift = (
+            backend_state_file.get("selected_key") != selected_key
+            or backend_state_file.get("selected_backend_id") != selected_backend_id
+            or self._parse_context_length(backend_state_file.get("selected_context_length"), None) != selected_context_length
+            or self._parse_context_length(backend_state_file.get("backend_context_length"), None) != backend_context_length
+            or backend_state_file.get("state") != backend_state
+            or backend_state_file.get("loaded_model", "") != loaded_model
+            or backend_state_file.get("health_status") != health_status
+        )
+        if model_drift:
+            self._persist_model_state(selected, reason="status reconciliation", source="status_snapshot")
+        if backend_drift:
+            self._persist_backend_state(
+                selected=selected,
+                context_length=backend_context_length,
+                reason="status reconciliation",
+                source="status_snapshot",
+                state=backend_state,
+                loaded_model=loaded_model,
+                health_status=health_status,
+                restarted=False,
+            )
 
     def backend_health(self):
         resp = self.handler._backend().get_health(timeout=10)
@@ -464,13 +553,32 @@ class ModelRouter:
         loaded_models = self.loaded_backend_models(backend_models)
         loaded_model = loaded_models[0]["id"] if loaded_models else ""
         load_state = getattr(self.handler, "model_load_state", None)
+        load_model = getattr(self.handler, "model_load_model", None)
+        load_error = getattr(self.handler, "model_load_error", None)
+        load_started_at = getattr(self.handler, "model_load_started_at", None)
+        load_finished_at = getattr(self.handler, "model_load_finished_at", None)
+        if load_model and selected_backend_id and load_model != selected_backend_id and load_state not in ("loading", "unloading"):
+            load_state = backend_state
+            load_model = selected_backend_id
+            load_error = None
+            load_started_at = None
+            load_finished_at = None
         if load_state in (None, "", "idle"):
             load_state = backend_state
         ready = health_status == 200 and backend_state == "loaded"
         reasoning_level = self.selected_reasoning_level(selected)
         reasoning_policy = self.selected_reasoning_policy(selected)
         selected_context_length = self.selected_context_length(selected)
-        backend_context_length = self.backend_context_length()
+        backend_context_length = self.backend_context_length(backend_models, selected_backend_id)
+        self._reconcile_status_state(
+            selected,
+            health_status,
+            selected_backend_id,
+            selected_context_length,
+            backend_context_length,
+            backend_state,
+            loaded_model,
+        )
         return {
             "status": "ok" if ready else "loading",
             "router_mode": True,
@@ -500,10 +608,10 @@ class ModelRouter:
             },
             "load": {
                 "state": load_state,
-                "started_at": getattr(self.handler, "model_load_started_at", None),
-                "finished_at": getattr(self.handler, "model_load_finished_at", None),
-                "error": getattr(self.handler, "model_load_error", None),
-                "model": getattr(self.handler, "model_load_model", None),
+                "started_at": load_started_at,
+                "finished_at": load_finished_at,
+                "error": load_error,
+                "model": load_model,
             },
             "timestamp": time.time(),
         }

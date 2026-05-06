@@ -34,6 +34,10 @@ Date: 2026-04-29
 - The proxy now emits a fresh `status_snapshot` telemetry event on `/ready`,
   `/qz/status`, and new `/v1/responses` requests, so monitors can see the
   current load/ready state without depending on stale request state.
+- `/ready` and `/qz/status` reconcile `var/model-state.json` and
+  `var/backend-state.json` from the live backend model inventory when available.
+  Persisted state is a startup/fallback cache, not a higher-priority truth than
+  the running server.
 - `qz-codex` now prefers the model already loaded by the proxy at launch, then
   syncs Codex to that loaded backend model so startup does not clobber the
   current server state. If nothing is loaded yet, it falls back to the profile
@@ -95,8 +99,8 @@ Date: 2026-04-29
 - `QZ_CONTEXT` stays the base default for the backend process start. The proxy
   now reads per-model `runtime_context_length` from the live model catalog or
   override file, persists the current backend context in
-  `var/backend-state.json` via `QZ_BACKEND_STATE_PATH`, and uses that state as
-  the live source of truth when deciding whether a restart is needed.
+  `var/backend-state.json` via `QZ_BACKEND_STATE_PATH`, and uses live backend
+  inventory before persisted state when deciding whether a restart is needed.
 - The restart decision belongs in the proxy, not in `llama.cpp` model loading.
   When the selected model's runtime context differs from the running backend,
   the proxy should stop the container, relaunch it with the chosen `-c` value,

@@ -71,7 +71,7 @@ def read_json(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def fetch_json(url: str, timeout: float = 0.8) -> dict[str, Any]:
+def fetch_json(url: str, timeout: float = 1.0) -> dict[str, Any]:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
@@ -135,9 +135,9 @@ def base_state(phase: str, source: str) -> dict[str, Any]:
 
 
 def merge_proxy_status(state: dict[str, Any]) -> None:
-    status = fetch_json(proxy_base_url() + "/qz/status")
+    status = fetch_json(proxy_base_url() + "/qz/status", timeout=3.0)
     if not status:
-        status = fetch_json(proxy_base_url() + "/qz/telemetry/state")
+        status = fetch_json(proxy_base_url() + "/qz/telemetry/state", timeout=1.0)
     if not status:
         return
 
@@ -148,11 +148,22 @@ def merge_proxy_status(state: dict[str, Any]) -> None:
     backend = status.get("backend") if isinstance(status.get("backend"), dict) else {}
     load = status.get("load") if isinstance(status.get("load"), dict) else {}
 
+    selected_value = runtime.get("selected")
+    selected = ""
+    if isinstance(selected_value, dict):
+        selected = (
+            selected_value.get("key")
+            or selected_value.get("backend_id")
+            or selected_value.get("filename")
+            or ""
+        )
+    elif selected_value:
+        selected = str(selected_value)
     selected = (
-        runtime.get("selected")
+        selected
         or runtime.get("selected_backend_id")
-        or backend.get("selected_backend_id")
         or backend.get("selected_key")
+        or backend.get("selected_backend_id")
         or ""
     )
     if selected:

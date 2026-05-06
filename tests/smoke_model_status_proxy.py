@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import sys
+import tempfile
 import threading
 import urllib.request
 import urllib.error
@@ -83,7 +84,11 @@ class FakeBackendHandler(BaseHTTPRequestHandler):
                 "data": [
                     {
                         "id": model_id,
-                        "status": {"value": entry.get("status", "unknown")},
+                        "status": {
+                            "value": entry.get("status", "unknown"),
+                            "args": entry.get("args", []),
+                            "preset": entry.get("preset", ""),
+                        },
                         "path": entry.get("path"),
                     }
                     for model_id, entry in self.__class__.models.items()
@@ -161,99 +166,135 @@ def main():
     upstream = _free_server(FakeBackendHandler)
     proxy = None
     try:
-        FakeBackendHandler.requests = []
-        FakeBackendHandler.models = {
-            "model-a.gguf": {
-                "status": "unloaded",
-                "path": "/models/model-a.gguf",
-            },
-            "model-b.gguf": {
-                "status": "loaded",
-                "path": "/models/model-b.gguf",
-            },
-        }
-        ProxyHandler.upstream = f"http://127.0.0.1:{upstream.server_port}"
-        ProxyHandler.reasoning_stream_format = "raw"
-        ProxyHandler.runtime_state_enabled = True
-        ProxyHandler.model_catalog = FakeCatalog()
-        ProxyHandler.model_catalog_path = "/tmp/fake-model-catalog.json"
-        ProxyHandler.model_load_state = "idle"
-        ProxyHandler.model_load_model = None
-        ProxyHandler.model_load_started_at = None
-        ProxyHandler.model_load_finished_at = None
-        ProxyHandler.model_load_error = None
-        proxy = _free_server(ProxyHandler)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model_state_path = f"{tmpdir}/model-state.json"
+            backend_state_path = f"{tmpdir}/backend-state.json"
+            with open(model_state_path, "w", encoding="utf-8") as handle:
+                json.dump({
+                    "selected_key": "stale-profile.gguf",
+                    "selected_backend_id": "missing-old-model",
+                    "selected_path": "/models/missing-old-model.gguf",
+                }, handle)
+            with open(backend_state_path, "w", encoding="utf-8") as handle:
+                json.dump({
+                    "selected_key": "stale-profile.gguf",
+                    "selected_backend_id": "missing-old-model",
+                    "selected_context_length": 262144,
+                    "backend_context_length": 262144,
+                    "state": "loaded",
+                    "loaded_model": "missing-old-model",
+                }, handle)
 
-        status, content_type, ready = _request_json(f"http://127.0.0.1:{proxy.server_port}/ready")
-        assert status == 200, ready
-        assert "application/json" in content_type, content_type
-        assert ready["ready"] is True, ready
-        assert ready["load"]["state"] == "loaded", ready
+            FakeBackendHandler.requests = []
+            FakeBackendHandler.models = {
+                "model-a.gguf": {
+                    "status": "unloaded",
+                    "path": "/models/model-a.gguf",
+                    "args": ["llama-server", "--ctx-size", "131072"],
+                },
+                "model-b.gguf": {
+                    "status": "loaded",
+                    "path": "/models/model-b.gguf",
+                    "args": ["llama-server", "--ctx-size", "131072"],
+                },
+            }
+            ProxyHandler.upstream = f"http://127.0.0.1:{upstream.server_port}"
+            ProxyHandler.reasoning_stream_format = "raw"
+            ProxyHandler.runtime_state_enabled = True
+            ProxyHandler.model_catalog = FakeCatalog()
+            ProxyHandler.model_catalog_path = "/tmp/fake-model-catalog.json"
+            ProxyHandler.model_state_path = model_state_path
+            ProxyHandler.backend_state_path = backend_state_path
+            ProxyHandler.model_load_state = "failed"
+            ProxyHandler.model_load_model = "missing-old-model"
+            ProxyHandler.model_load_started_at = 1
+            ProxyHandler.model_load_finished_at = 2
+            ProxyHandler.model_load_error = "load failed: HTTP 404"
+            proxy = _free_server(ProxyHandler)
 
-        status, _, snapshot = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/status")
-        assert status == 200, snapshot
-        assert snapshot["router_mode"] is True, snapshot
-        assert snapshot["selected"]["key"] == "model-b.gguf", snapshot
+            status, content_type, ready = _request_json(f"http://127.0.0.1:{proxy.server_port}/ready")
+            assert status == 200, ready
+            assert "application/json" in content_type, content_type
+            assert ready["ready"] is True, ready
+            assert ready["load"]["state"] == "loaded", ready
+            assert ready["load"]["error"] is None, ready
+            assert ready["backend"]["backend_context_length"] == 131072, ready
 
-        status, _, telemetry = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/recent?limit=5")
-        assert status == 200, telemetry
-        assert any(event.get("type") == "status_snapshot" for event in telemetry.get("events", [])), telemetry
+            with open(model_state_path, encoding="utf-8") as handle:
+                reconciled_model_state = json.load(handle)
+            with open(backend_state_path, encoding="utf-8") as handle:
+                reconciled_backend_state = json.load(handle)
+            assert reconciled_model_state["selected_key"] == "model-b.gguf", reconciled_model_state
+            assert reconciled_model_state["selected_backend_id"] == "model-b.gguf", reconciled_model_state
+            assert reconciled_backend_state["selected_key"] == "model-b.gguf", reconciled_backend_state
+            assert reconciled_backend_state["selected_backend_id"] == "model-b.gguf", reconciled_backend_state
+            assert reconciled_backend_state["backend_context_length"] == 131072, reconciled_backend_state
+            assert reconciled_backend_state["loaded_model"] == "model-b.gguf", reconciled_backend_state
 
-        status, _, telemetry_state = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/state")
-        assert status == 200, telemetry_state
-        assert telemetry_state["runtime"]["selected_context_length"] == 131072, telemetry_state
-        assert telemetry_state["runtime"]["backend_context_length"] >= 131072, telemetry_state
-        assert telemetry_state["runtime"]["selected_reasoning_level"] == "medium", telemetry_state
+            status, _, snapshot = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/status")
+            assert status == 200, snapshot
+            assert snapshot["router_mode"] is True, snapshot
+            assert snapshot["selected"]["key"] == "model-b.gguf", snapshot
 
-        status, _, out = _request_json(
-            f"http://127.0.0.1:{proxy.server_port}/v1/responses",
-            {
-                "model": "model-a.gguf",
-                "stream": False,
-                "reasoning": {"effort": "high"},
-                "input": [{
-                    "type": "message",
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": "hello"}],
-                }],
-            },
-        )
-        assert status == 200, out
-        assert out["model"] == "model-a.gguf", out
-        assert len(FakeBackendHandler.requests) >= 1, FakeBackendHandler.requests
-        assert [req["path"] for req in FakeBackendHandler.requests[:3]] == ["/models/unload", "/models/load", "/v1/responses"], FakeBackendHandler.requests
-        assert FakeBackendHandler.requests[0]["body"].get("model") == "model-b.gguf", FakeBackendHandler.requests
-        assert FakeBackendHandler.requests[1]["body"].get("model") == "model-a.gguf", FakeBackendHandler.requests
-        assert FakeBackendHandler.requests[-1]["path"] == "/v1/responses", FakeBackendHandler.requests
-        sent = FakeBackendHandler.requests[-1]["body"]
-        assert sent["model"] == "model-a.gguf", sent
-        assert sent["instructions"].startswith("<QZSTATE"), sent
-        assert "Use high reasoning effort." in sent["instructions"], sent
-        assert sent["temperature"] == 0.6, sent
-        assert sent["top_p"] == 0.95, sent
-        assert sent["top_k"] == 20, sent
-        assert sent["min_p"] == 0, sent
-        assert sent["presence_penalty"] == 0, sent
-        assert sent["repeat_penalty"] == 1.0, sent
-        assert "thinking_budget_tokens" not in sent, sent
-        assert sent["metadata"]["qz_runtime"]["ready"] is True, sent
-        assert sent["metadata"]["qz_runtime"]["load_state"] == "ready", sent
-        assert sent["metadata"]["qz_reasoning"]["level"] == "high", sent
-        assert sent["metadata"]["qz_reasoning"]["policy"] == "prompt", sent
+            status, _, telemetry = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/recent?limit=5")
+            assert status == 200, telemetry
+            assert any(event.get("type") == "status_snapshot" for event in telemetry.get("events", [])), telemetry
 
-        status, _, telemetry_recent = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/recent?limit=50")
-        assert status == 200, telemetry_recent
-        assert any(
-            event.get("type") == "request_completed"
-            and (event.get("payload") or {}).get("runtime_metrics", {}).get("selected_context_length") == 131072
-            for event in telemetry_recent.get("events", [])
-        ), telemetry_recent
+            status, _, telemetry_state = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/state")
+            assert status == 200, telemetry_state
+            assert telemetry_state["runtime"]["selected_context_length"] == 131072, telemetry_state
+            assert telemetry_state["runtime"]["backend_context_length"] == 131072, telemetry_state
+            assert telemetry_state["runtime"]["selected_reasoning_level"] == "medium", telemetry_state
 
-        status, _, ready = _request_json(f"http://127.0.0.1:{proxy.server_port}/ready")
-        assert status == 200, ready
-        assert ready["ready"] is True, ready
-        assert ready["load"]["state"] == "ready", ready
-        assert ready["selected"]["key"] == "model-a.gguf", ready
+            status, _, out = _request_json(
+                f"http://127.0.0.1:{proxy.server_port}/v1/responses",
+                {
+                    "model": "model-a.gguf",
+                    "stream": False,
+                    "reasoning": {"effort": "high"},
+                    "input": [{
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "hello"}],
+                    }],
+                },
+            )
+            assert status == 200, out
+            assert out["model"] == "model-a.gguf", out
+            assert len(FakeBackendHandler.requests) >= 1, FakeBackendHandler.requests
+            assert [req["path"] for req in FakeBackendHandler.requests[:3]] == ["/models/unload", "/models/load", "/v1/responses"], FakeBackendHandler.requests
+            assert FakeBackendHandler.requests[0]["body"].get("model") == "model-b.gguf", FakeBackendHandler.requests
+            assert FakeBackendHandler.requests[1]["body"].get("model") == "model-a.gguf", FakeBackendHandler.requests
+            assert FakeBackendHandler.requests[-1]["path"] == "/v1/responses", FakeBackendHandler.requests
+            sent = FakeBackendHandler.requests[-1]["body"]
+            assert sent["model"] == "model-a.gguf", sent
+            assert "<QZSTATE v=1 ready=1 load=ready ctx=131072 prof=model-a.gguf sel=model-a.gguf>" in sent["instructions"], sent
+            assert "Use high reasoning effort." in sent["instructions"], sent
+            assert sent["temperature"] == 0.6, sent
+            assert sent["top_p"] == 0.95, sent
+            assert sent["top_k"] == 20, sent
+            assert sent["min_p"] == 0, sent
+            assert sent["presence_penalty"] == 0, sent
+            assert sent["repeat_penalty"] == 1.0, sent
+            assert "thinking_budget_tokens" not in sent, sent
+            assert sent["metadata"]["qz_runtime"]["ready"] is True, sent
+            assert sent["metadata"]["qz_runtime"]["load_state"] == "ready", sent
+            assert sent["metadata"]["qz_reasoning"]["level"] == "high", sent
+            assert sent["metadata"]["qz_reasoning"]["policy"] == "prompt", sent
+
+            status, _, telemetry_recent = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/recent?limit=50")
+            assert status == 200, telemetry_recent
+            assert any(
+                event.get("type") == "request_completed"
+                and (event.get("payload") or {}).get("runtime_metrics", {}).get("selected_context_length") == 131072
+                for event in telemetry_recent.get("events", [])
+            ), telemetry_recent
+
+            status, _, ready = _request_json(f"http://127.0.0.1:{proxy.server_port}/ready")
+            assert status == 200, ready
+            assert ready["ready"] is True, ready
+            assert ready["load"]["state"] == "ready", ready
+            assert ready["selected"]["key"] == "model-a.gguf", ready
     finally:
         if proxy is not None:
             proxy.shutdown()

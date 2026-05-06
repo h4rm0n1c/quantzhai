@@ -162,6 +162,11 @@ Does qz-thoughts mix backend telemetry and response SSE in a confusing order?
 
 ### 1. Coalesce qz-thoughts activity rows
 
+Status: implemented in `scripts/qz-thoughts`. Delta events now update rolling
+thought/answer state rows, while lifecycle events remain in activity. Monitor
+polling noise such as `/qz/status`, `/health`, and telemetry endpoints is
+filtered from the activity feed.
+
 Do not append a new activity row for every delta.
 
 Instead:

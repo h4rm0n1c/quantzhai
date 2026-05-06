@@ -436,13 +436,13 @@ Startup scripts may write an initial `requested` runtime-state snapshot before t
 ## Immediate action checklist
 
 - [ ] Inspect current `/status` implementation and model/context source paths.
-- [ ] Inspect `qz-top` token math and data source.
-- [ ] Inspect `qz-thoughts` input source and rendering loop.
+- [x] Inspect `qz-top` token math and data source.
+- [x] Inspect `qz-thoughts` input source and rendering loop.
 - [ ] Identify whether monitors currently share a file, pipe, or log tail source.
 - [ ] Define and add `qz-runtime-state.json` writer.
 - [ ] Define and add telemetry/event JSONL writers in the proxy.
-- [ ] Convert `qz-top` to structured telemetry.
-- [ ] Convert `qz-thoughts` to structured stream events.
+- [x] Convert `qz-top` to structured telemetry.
+- [x] Convert `qz-thoughts` to structured stream events.
 - [ ] Add concurrent monitor smoke test.
 - [ ] Review profile prompt/config ownership.
 - [ ] Add fixed profile-eval prompt set to the benchmark harness.

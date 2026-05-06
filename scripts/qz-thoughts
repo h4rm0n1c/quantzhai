@@ -35,6 +35,10 @@ class ThoughtState:
     status: str = ""
     thought: str = ""
     answer: str = ""
+    thought_delta_chars: int = 0
+    answer_delta_chars: int = 0
+    thought_done: bool = False
+    answer_done: bool = False
     activity: List[Tuple[str, str]] = field(default_factory=list)
     backend: List[Tuple[str, str]] = field(default_factory=list)
     events: int = 0
@@ -75,6 +79,49 @@ def clip(text: str, width: int) -> str:
     if len(text) <= width:
         return text
     return text[: max(0, width - 1)] + "…"
+
+
+def _apply_thought_delta(state: ThoughtState, delta: str):
+    if not delta:
+        return
+    state.thought += delta
+    state.thought_delta_chars += len(delta)
+    state.thought_done = False
+
+
+def _finish_thought(state: ThoughtState, text: str = ""):
+    if text and len(text) > len(state.thought):
+        state.thought = text
+        state.thought_delta_chars = len(text)
+    state.thought_done = True
+    _append_activity(state, "thought", f"done {len(state.thought)} chars".strip())
+
+
+def _apply_answer_delta(state: ThoughtState, delta: str):
+    if not delta:
+        return
+    state.answer += delta
+    state.answer_delta_chars += len(delta)
+    state.answer_done = False
+
+
+def _finish_answer(state: ThoughtState, text: str = ""):
+    if text and len(text) > len(state.answer):
+        state.answer = text
+        state.answer_delta_chars = len(text)
+    state.answer_done = True
+    _append_activity(state, "answer", f"done {len(state.answer)} chars".strip())
+
+
+def stream_status_rows(state: ThoughtState) -> List[Tuple[str, str]]:
+    rows: List[Tuple[str, str]] = []
+    if state.thought_delta_chars or state.thought:
+        status = "done" if state.thought_done else "streaming"
+        rows.append(("thought", f"{status} {len(state.thought)} chars"))
+    if state.answer_delta_chars or state.answer:
+        status = "done" if state.answer_done else "streaming"
+        rows.append(("answer", f"{status} {len(state.answer)} chars"))
+    return rows
 
 
 def parse_sse(raw: str, path: Path) -> ThoughtState:
@@ -144,27 +191,19 @@ def parse_sse(raw: str, path: Path) -> ThoughtState:
             return
 
         if ev_type in ("response.reasoning_text.delta", "response.reasoning_summary_text.delta"):
-            state.thought += payload.get("delta") or ""
-            state.activity.append(("thought", f"+{len(payload.get('delta') or '')} chars"))
+            _apply_thought_delta(state, payload.get("delta") or "")
             return
 
         if ev_type in ("response.reasoning_text.done", "response.reasoning_summary_text.done"):
-            text = payload.get("text") or ""
-            if text and len(text) > len(state.thought):
-                state.thought = text
-            state.activity.append(("thought", "done"))
+            _finish_thought(state, payload.get("text") or "")
             return
 
         if ev_type == "response.output_text.delta":
-            state.answer += payload.get("delta") or ""
-            state.activity.append(("answer", f"+{len(payload.get('delta') or '')} chars"))
+            _apply_answer_delta(state, payload.get("delta") or "")
             return
 
         if ev_type == "response.output_text.done":
-            text = payload.get("text") or ""
-            if text and len(text) > len(state.answer):
-                state.answer = text
-            state.activity.append(("answer", "done"))
+            _finish_answer(state, payload.get("text") or "")
             return
 
         if ev_type == "response.function_call_arguments.delta":
@@ -195,6 +234,25 @@ def _append_activity(state: ThoughtState, kind: str, message: str, limit: int = 
 def _append_backend(state: ThoughtState, kind: str, message: str, limit: int = 24):
     state.backend.append((kind, message))
     state.backend = state.backend[-limit:]
+
+
+def _path_without_query(path: str) -> str:
+    return str(path or "").split("?", 1)[0]
+
+
+def _is_monitor_poll(path: str) -> bool:
+    path = _path_without_query(path)
+    return (
+        path in {"/health", "/ready", "/qz/status"}
+        or path.startswith("/qz/telemetry")
+    )
+
+
+def _is_response_request(payload: dict) -> bool:
+    return (
+        payload.get("method") == "POST"
+        and _path_without_query(payload.get("path", "")) in {"/responses", "/v1/responses"}
+    )
 
 
 def _apply_response_event(state: ThoughtState, ev_type: str, payload: dict):
@@ -229,27 +287,19 @@ def _apply_response_event(state: ThoughtState, ev_type: str, payload: dict):
         return
 
     if ev_type in ("response.reasoning_text.delta", "response.reasoning_summary_text.delta"):
-        state.thought += payload.get("delta") or ""
-        _append_activity(state, "thought", f"+{len(payload.get('delta') or '')} chars")
+        _apply_thought_delta(state, payload.get("delta") or "")
         return
 
     if ev_type in ("response.reasoning_text.done", "response.reasoning_summary_text.done"):
-        text = payload.get("text") or ""
-        if text and len(text) > len(state.thought):
-            state.thought = text
-        _append_activity(state, "thought", "done")
+        _finish_thought(state, payload.get("text") or "")
         return
 
     if ev_type == "response.output_text.delta":
-        state.answer += payload.get("delta") or ""
-        _append_activity(state, "answer", f"+{len(payload.get('delta') or '')} chars")
+        _apply_answer_delta(state, payload.get("delta") or "")
         return
 
     if ev_type == "response.output_text.done":
-        text = payload.get("text") or ""
-        if text and len(text) > len(state.answer):
-            state.answer = text
-        _append_activity(state, "answer", "done")
+        _finish_answer(state, payload.get("text") or "")
         return
 
     if ev_type == "response.function_call_arguments.delta":
@@ -278,14 +328,18 @@ def _apply_telemetry_event(state: ThoughtState, event: dict, prefix_rows: List[T
 
     if ev_type == "request_started":
         path = payload.get("path", "")
-        if path == "/health" or str(path).startswith("/qz/telemetry"):
+        if _is_monitor_poll(path):
             return latest_ts
-        if path:
+        if path and _is_response_request(payload):
             state.response_id = ""
             state.model = ""
             state.status = ""
             state.thought = ""
             state.answer = ""
+            state.thought_delta_chars = 0
+            state.answer_delta_chars = 0
+            state.thought_done = False
+            state.answer_done = False
             state.activity = []
             state.backend_error = ""
             prefix_rows.append(("request", f"{payload.get('method', '')} {path}".strip()))
@@ -293,6 +347,8 @@ def _apply_telemetry_event(state: ThoughtState, event: dict, prefix_rows: List[T
 
     if ev_type == "request_completed":
         path = payload.get("path", "")
+        if _is_monitor_poll(path):
+            return latest_ts
         model = payload.get("backend_model") or payload.get("model") or ""
         elapsed = payload.get("elapsed_ms")
         bits = [f"{payload.get('method', '')} {path}".strip()]
@@ -308,6 +364,8 @@ def _apply_telemetry_event(state: ThoughtState, event: dict, prefix_rows: List[T
 
     if ev_type == "request_failed":
         path = payload.get("path", "")
+        if _is_monitor_poll(path):
+            return latest_ts
         error = payload.get("error") or payload.get("reason") or "request failed"
         bits = [f"{payload.get('method', '')} {path}".strip()]
         if payload.get("phase"):
@@ -363,6 +421,15 @@ def _apply_telemetry_event(state: ThoughtState, event: dict, prefix_rows: List[T
         _append_backend(state, "deprecated", str(payload.get("path", "")))
         return latest_ts
 
+    if ev_type in (
+        "request_admitted",
+        "request_queued",
+        "runtime_snapshot",
+        "status_snapshot",
+        "throughput_sample",
+    ):
+        return latest_ts
+
     if ev_type:
         _append_backend(state, "event", str(ev_type))
     return latest_ts
@@ -397,7 +464,7 @@ def load_telemetry_state(limit: int = 200) -> Optional[ThoughtState]:
         ev_type = event.get("type")
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         seq = event.get("seq")
-        if ev_type == "request_started" and payload.get("method") == "POST" and payload.get("path") == "/v1/responses":
+        if ev_type == "request_started" and _is_response_request(payload):
             request_floor_seq = seq
         if request_floor_seq is not None and seq is not None and ev_type == "request_started" and seq < request_floor_seq:
             continue
@@ -443,6 +510,10 @@ class TelemetryFeed:
                 status=self.state.status,
                 thought=self.state.thought,
                 answer=self.state.answer,
+                thought_delta_chars=self.state.thought_delta_chars,
+                answer_delta_chars=self.state.answer_delta_chars,
+                thought_done=self.state.thought_done,
+                answer_done=self.state.answer_done,
                 activity=list(self.state.activity),
                 backend=list(self.state.backend),
                 events=self.state.events,
@@ -641,7 +712,7 @@ class UI:
     def draw_activity(self, y: int, x: int, h: int, w: int, state: ThoughtState):
         self.box(y, x, h, w, "ACTIVITY")
         self.add(y + 1, x + 2, f"{'TYPE':<11} MESSAGE", self.dim | self.bold)
-        rows = (state.backend + state.activity)[-max(0, h - 3):]
+        rows = (state.backend + stream_status_rows(state) + state.activity)[-max(0, h - 3):]
         for i, (kind, message) in enumerate(rows):
             row = y + 2 + i
             self.add(row, x + 2, f"{clip(kind, 10):<11}", self.kind_attr(kind))
@@ -754,6 +825,8 @@ def print_once(path: Path):
     print()
     print("ACTIVITY")
     for kind, message in state.backend:
+        print(f"  {kind:<9} {message}")
+    for kind, message in stream_status_rows(state):
         print(f"  {kind:<9} {message}")
     for kind, message in state.activity:
         print(f"  {kind:<9} {message}")

@@ -146,6 +146,25 @@ def proxy_status() -> Optional[dict]:
     return fetch_json(f"{proxy_base_url()}/qz/status")
 
 
+def _path_without_query(path: str) -> str:
+    return str(path or "").split("?", 1)[0]
+
+
+def _is_monitor_poll(path: str) -> bool:
+    path = _path_without_query(path)
+    return (
+        path in {"/health", "/ready", "/qz/status"}
+        or path.startswith("/qz/telemetry")
+    )
+
+
+def _is_response_request(payload: dict) -> bool:
+    return (
+        payload.get("method") == "POST"
+        and _path_without_query(payload.get("path", "")) in {"/responses", "/v1/responses"}
+    )
+
+
 def model_status_from_proxy(status: Optional[dict]) -> ModelStatus:
     if not isinstance(status, dict):
         return ModelStatus()
@@ -308,7 +327,7 @@ def telemetry_row(event: dict) -> Optional[Tuple[str, str]]:
     if ev_type == "request_started":
         method = payload.get("method", "")
         path = payload.get("path", "")
-        if str(path).startswith("/qz/telemetry"):
+        if _is_monitor_poll(path) or not _is_response_request(payload):
             return None
         return ("request", f"{method} {path}".strip())
     if ev_type == "deprecated_endpoint":
@@ -317,6 +336,8 @@ def telemetry_row(event: dict) -> Optional[Tuple[str, str]]:
         return ("deprecated", f"{path} -> {replacement}".strip(" ->"))
     if ev_type == "request_completed":
         path = payload.get("path", "")
+        if _is_monitor_poll(path):
+            return None
         status = payload.get("status", "")
         elapsed = payload.get("elapsed_ms")
         usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
@@ -350,18 +371,12 @@ def telemetry_row(event: dict) -> Optional[Tuple[str, str]]:
         return ("throughput", msg.strip())
     if ev_type == "request_failed":
         path = payload.get("path", "")
+        if _is_monitor_poll(path):
+            return None
         error = payload.get("error", "")
         return ("error", f"{path} {error}".strip())
     if ev_type == "status_snapshot":
-        selected = payload.get("selected_key") or payload.get("selected") or ""
-        load_state = payload.get("load_state") or ""
-        ready = "ready" if payload.get("ready") else "not ready"
-        parts = [ready]
-        if selected:
-            parts.append(str(selected))
-        if load_state:
-            parts.append(str(load_state))
-        return ("status", " ".join(parts).strip())
+        return None
     if ev_type in {"model_selected", "model_load_started", "model_load_pending", "model_load_ready", "model_load_failed"}:
         requested = payload.get("requested") or payload.get("model") or ""
         selected = payload.get("selected") or payload.get("backend_id") or ""
@@ -388,7 +403,7 @@ def telemetry_row(event: dict) -> Optional[Tuple[str, str]]:
     if ev_type == "sse_event":
         sse_type = str(payload.get("event_type") or "")
         if sse_type.endswith(".delta"):
-            return ("stream", sse_type)
+            return None
         if sse_type in ("response.created", "response.completed"):
             return ("stream", sse_type.rsplit(".", 1)[-1])
     return None
@@ -510,7 +525,10 @@ def merge_telemetry(rates: Rates, telemetry: Optional[dict]) -> Rates:
     state = telemetry.get("state") or {}
     counters = state.get("counters") or {}
     try:
-        rates.requests = max(rates.requests, int(counters.get("request_started") or 0))
+        rates.requests = max(
+            rates.requests,
+            int(counters.get("request_admitted") or counters.get("request_completed") or 0),
+        )
     except Exception:
         pass
 
