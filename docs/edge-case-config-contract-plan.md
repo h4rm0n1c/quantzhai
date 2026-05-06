@@ -27,10 +27,10 @@ Example:
 ```text
 Codex-visible profile: prompt-compiler
 Prompt override:        prompt-compiler.gguf / system_prompt_file
-Backend target:         server_alias -> real GGUF model stem
+Backend target:         resolved symlink target GGUF stem
 ```
 
-The failure mode is that `prompt-compiler` can remain visible to Codex while its `server_alias` points at a backend model that no longer exists in `var/models/`.
+The failure mode is that `prompt-compiler` can remain visible to Codex while its symlink target points at a backend model that no longer exists in `var/models/`, or points outside the scanned model directory.
 
 That leads to:
 
@@ -62,9 +62,8 @@ A stale alias error should say something like:
 {
   "error": "profile backend missing",
   "profile": "prompt-compiler",
-  "server_alias": "missing-model-stem",
-  "reason": "server_alias target not found in scanned GGUF models",
-  "fix": "Update the profile override or restore the missing GGUF file."
+  "reason": "symlink target not found in scanned GGUF models: /path/to/missing.gguf",
+  "fix": "Update the profile symlink under var/models or restore the missing target GGUF file."
 }
 ```
 
@@ -174,7 +173,7 @@ Track at least:
 ```text
 model discovery
 profile alias resolution
-server_alias resolution
+symlink profile target resolution
 prompt override loading
 Codex catalog generation
 runtime status generation
@@ -205,15 +204,14 @@ Before the larger config restructure, prioritise the small safety fixes that sto
 
 ### 1. Validate profile backend targets
 
-Profiles with `server_alias` must be validated against scanned GGUF entries or backend inventory.
+Symlink profiles under `var/models/` must be validated against scanned GGUF entries or backend inventory.
 
 A profile should expose fields like:
 
 ```text
 profile_valid
 profile_error
-server_alias_valid
-server_alias_error
+profile_symlink
 backend_target
 ```
 
@@ -231,16 +229,7 @@ If a profile target disappears, do not quietly run a different model.
 
 Silent fallback would make prompt/profile behaviour unpredictable.
 
-A future explicit policy could exist:
-
-```json
-{
-  "allow_backend_fallback": true,
-  "fallback_server_alias": "safe-model-stem"
-}
-```
-
-Until that exists, fail clearly.
+Fail clearly when the symlink target is missing or outside scanned models.
 
 ### 4. Add an effective config view
 
@@ -275,7 +264,6 @@ Example profile intent:
   "models": {
     "prompt-compiler.gguf": {
       "label": "prompt-compiler",
-      "server_alias": "real-backend-model-stem",
       "runtime_context_length": 262144,
       "system_prompt_file": "config/user/prompts/prompt-compiler.md"
     }
@@ -286,8 +274,8 @@ Example profile intent:
 Rules:
 
 ```text
+Create the profile as a symlink under var/models/.
 Do not use the backend model id as the Codex-visible profile name unless that is truly the profile identity.
-Do not assume a symlink target and server_alias are always the same.
 Do not expose a profile as healthy unless its backend target validates.
 Do not let generated Codex metadata override proxy routing policy.
 Do not hide missing prompt files; report them clearly.

@@ -1,0 +1,162 @@
+import json
+import struct
+import tempfile
+import unittest
+from pathlib import Path
+
+from proxy.qz_model_catalog import ModelCatalog, load_manifest
+from proxy.qz_model_router import ModelRouter, profile_backend_error_payload
+
+
+def _write_string(handle, value):
+    data = value.encode("utf-8")
+    handle.write(struct.pack("<Q", len(data)))
+    handle.write(data)
+
+
+def _write_metadata_string(handle, key, value):
+    _write_string(handle, key)
+    handle.write(struct.pack("<I", 8))
+    _write_string(handle, value)
+
+
+def _write_gguf(path, name=None):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as handle:
+        handle.write(b"GGUF")
+        handle.write(struct.pack("<I", 3))
+        handle.write(struct.pack("<Q", 0))
+        handle.write(struct.pack("<Q", 2))
+        _write_metadata_string(handle, "general.architecture", "qwen")
+        _write_metadata_string(handle, "general.name", name or path.stem)
+
+
+class FakeHandler:
+    def __init__(self, catalog):
+        self.catalog = catalog
+        self.telemetry = None
+
+    def _model_catalog(self):
+        return self.catalog
+
+    def _backend(self):
+        raise AssertionError("invalid profile selection must not touch backend")
+
+
+class ModelCatalogProfileValidationTests(unittest.TestCase):
+    def test_symlink_profile_routes_to_target_backend(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            target = model_dir / "real-backend.gguf"
+            _write_gguf(target)
+            (model_dir / "prompt-compiler.gguf").symlink_to(target)
+            overrides = root / "var" / "model-overrides.json"
+            overrides.parent.mkdir(parents=True, exist_ok=True)
+            overrides.write_text(json.dumps({
+                "models": {
+                    "prompt-compiler.gguf": {
+                        "label": "prompt-compiler",
+                    }
+                }
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root, overrides))
+            profile, _ = catalog.resolve("prompt-compiler")
+
+            self.assertIsNotNone(profile)
+            self.assertTrue(profile["profile_valid"])
+            self.assertTrue(profile["profile_symlink"])
+            self.assertEqual(profile["backend_target"], "real-backend")
+            self.assertEqual(profile["backend_id"], "real-backend")
+            self.assertEqual(profile["stem"], "prompt-compiler")
+
+            backend, _ = catalog.resolve("real-backend")
+            self.assertIsNotNone(backend)
+            self.assertEqual(backend["stem"], "real-backend")
+
+    def test_symlink_target_outside_scanned_models_marks_profile_invalid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            external = root / "external" / "outside.gguf"
+            _write_gguf(external)
+            _write_gguf(model_dir / "healthy.gguf")
+            (model_dir / "prompt-compiler.gguf").symlink_to(external)
+            overrides = root / "var" / "model-overrides.json"
+            overrides.parent.mkdir(parents=True, exist_ok=True)
+            overrides.write_text(json.dumps({
+                "models": {
+                    "prompt-compiler.gguf": {
+                        "label": "prompt-compiler",
+                    }
+                }
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root, overrides))
+            profile, _ = catalog.resolve("prompt-compiler")
+
+            self.assertIsNotNone(profile)
+            self.assertFalse(profile["profile_valid"])
+            self.assertEqual(profile["backend_target"], "")
+            self.assertIn("outside.gguf", profile["profile_error"])
+            self.assertEqual(catalog.selected["key"], "healthy.gguf")
+
+    def test_broken_symlink_profile_is_visible_as_invalid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            model_dir.mkdir(parents=True, exist_ok=True)
+            _write_gguf(model_dir / "healthy.gguf")
+            (model_dir / "prompt-compiler.gguf").symlink_to(model_dir / "missing.gguf")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+            profile, _ = catalog.resolve("prompt-compiler")
+
+            self.assertIsNotNone(profile)
+            self.assertFalse(profile["profile_valid"])
+            self.assertTrue(profile["profile_symlink"])
+            self.assertEqual(profile["backend_target"], "")
+            self.assertIn("missing.gguf", profile["profile_error"])
+            self.assertEqual(catalog.selected["key"], "healthy.gguf")
+
+    def test_router_returns_compact_invalid_profile_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            external = root / "external" / "outside.gguf"
+            _write_gguf(external)
+            model_dir.mkdir(parents=True, exist_ok=True)
+            (model_dir / "prompt-compiler.gguf").symlink_to(external)
+            overrides = root / "var" / "model-overrides.json"
+            overrides.parent.mkdir(parents=True, exist_ok=True)
+            overrides.write_text(json.dumps({
+                "models": {
+                    "prompt-compiler.gguf": {
+                        "label": "prompt-compiler",
+                    }
+                }
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root, overrides))
+            selected, reason = ModelRouter(FakeHandler(catalog)).resolve_model_selection("prompt-compiler")
+
+            self.assertIsNone(selected)
+            self.assertEqual(reason["error"], "profile backend missing")
+            self.assertEqual(reason["profile"], "prompt-compiler")
+            self.assertNotIn("models", reason)
+            self.assertNotIn("catalog", reason)
+
+    def test_compact_error_payload_shape(self):
+        payload = profile_backend_error_payload({
+            "label": "prompt-compiler",
+            "profile_error": "symlink target not found in scanned GGUF models: outside.gguf",
+        })
+
+        self.assertEqual(payload["error"], "profile backend missing")
+        self.assertEqual(payload["profile"], "prompt-compiler")
+        self.assertIn("restore the missing target GGUF", payload["fix"])
+
+
+if __name__ == "__main__":
+    unittest.main()

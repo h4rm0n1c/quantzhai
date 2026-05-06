@@ -280,7 +280,9 @@ def build_entry(path: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
     tensor_count, metadata = read_gguf_metadata(path)
     stem = path.stem
     filename = path.name
-    name = infer_model_name(metadata, stem)
+    resolved_path = path.resolve()
+    profile_symlink = path.is_symlink()
+    name = stem if profile_symlink else infer_model_name(metadata, stem)
     architecture = infer_architecture(metadata, stem)
     context_length = infer_context_length(metadata)
     filtered_metadata = {
@@ -303,7 +305,11 @@ def build_entry(path: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
         "filename": filename,
         "stem": stem,
         "backend_id": backend_id,
-        "path": str(path.resolve()),
+        "native_backend_id": backend_id,
+        "path": str(resolved_path),
+        "source_path": str(path),
+        "profile_symlink": profile_symlink,
+        "symlink_target_path": str(resolved_path) if profile_symlink else "",
         "size_bytes": stat.st_size,
         "mtime": int(stat.st_mtime),
         "tensor_count": tensor_count,
@@ -318,12 +324,9 @@ def build_entry(path: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
     entry["overrides"] = overrides
     entry["label"] = overrides.get("label") or name or stem
     entry["default"] = bool(overrides.get("default"))
-    entry["server_alias"] = overrides.get("server_alias")
-    if isinstance(entry["server_alias"], str) and entry["server_alias"].strip():
-        entry["backend_id"] = entry["server_alias"].strip()
-        aliases = set(entry.get("aliases") or [])
-        aliases.add(entry["server_alias"].strip())
-        entry["aliases"] = sorted(x for x in aliases if isinstance(x, str) and x)
+    entry["backend_target"] = entry.get("native_backend_id") or stem
+    entry["profile_valid"] = True
+    entry["profile_error"] = ""
     entry["runtime_context_length"] = override_context_length(overrides)
     launch_args = overrides.get("launch_args", [])
     entry["launch_args"] = list(launch_args) if isinstance(launch_args, list) else []
@@ -335,18 +338,105 @@ def build_entry(path: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
     return entry
 
 
+def build_broken_symlink_entry(path: Path, manifest: Dict[str, Any], error: str) -> Dict[str, Any]:
+    stem = path.stem
+    filename = path.name
+    target_path = path.resolve()
+    entry = {
+        "key": filename,
+        "filename": filename,
+        "stem": stem,
+        "backend_id": stem,
+        "native_backend_id": stem,
+        "path": str(target_path),
+        "source_path": str(path),
+        "profile_symlink": True,
+        "symlink_target_path": str(target_path),
+        "size_bytes": 0,
+        "mtime": int(path.lstat().st_mtime),
+        "tensor_count": 0,
+        "metadata": {},
+        "architecture": "unknown",
+        "name": stem,
+        "context_length": None,
+        "aliases": sorted({filename, stem, str(path)}),
+    }
+    overrides = model_overrides(manifest, entry)
+    entry["overrides"] = overrides
+    entry["label"] = overrides.get("label") or stem
+    entry["default"] = bool(overrides.get("default"))
+    entry["backend_target"] = ""
+    entry["profile_valid"] = False
+    entry["profile_error"] = error
+    entry["runtime_context_length"] = override_context_length(overrides)
+    launch_args = overrides.get("launch_args", [])
+    entry["launch_args"] = list(launch_args) if isinstance(launch_args, list) else []
+    entry["notes"] = overrides.get("notes")
+    entry["priority"] = overrides.get("priority")
+    entry["default_reasoning_level"] = infer_reasoning_level(entry)
+    entry["supported_reasoning_levels"] = supported_reasoning_levels(entry["default_reasoning_level"])
+    entry["selected"] = False
+    return entry
+
+
+def validate_profile_targets(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    real_files_by_path: Dict[str, str] = {}
+    for entry in entries:
+        if entry.get("profile_symlink"):
+            continue
+        native_id = entry.get("native_backend_id") or entry.get("stem") or entry.get("key") or entry_identity(entry)
+        if not isinstance(native_id, str) or not native_id.strip():
+            continue
+        path_value = entry.get("path")
+        if isinstance(path_value, str) and path_value.strip():
+            real_files_by_path[str(Path(path_value).resolve())] = native_id.strip()
+
+    for entry in entries:
+        if entry.get("profile_valid") is False:
+            continue
+        native_id = entry.get("native_backend_id") or entry.get("stem") or entry_identity(entry)
+        if not entry.get("profile_symlink"):
+            entry["backend_target"] = native_id
+            entry["profile_valid"] = True
+            entry["profile_error"] = ""
+            continue
+
+        target_path = entry.get("symlink_target_path")
+        target_key = str(Path(target_path).resolve()) if isinstance(target_path, str) and target_path.strip() else ""
+        target_id = real_files_by_path.get(target_key)
+        if target_id:
+            entry["backend_id"] = target_id
+            entry["backend_target"] = target_id
+            entry["profile_valid"] = True
+            entry["profile_error"] = ""
+            continue
+
+        target_label = Path(target_key).name if target_key else str(target_path or "")
+        error = f"symlink target not found in scanned GGUF models: {target_label}"
+        entry["backend_target"] = ""
+        entry["profile_valid"] = False
+        entry["profile_error"] = error
+
+    return entries
+
+
 def scan_models(model_dir: Path, manifest: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     if not model_dir.is_dir():
         return [], []
     entries = []
     errors: List[Dict[str, Any]] = []
     for path in sorted(model_dir.glob("*.gguf")):
-        if path.is_file():
-            try:
-                entries.append(build_entry(path, manifest))
-            except Exception as exc:
+        if not path.is_file() and not path.is_symlink():
+            continue
+        try:
+            entries.append(build_entry(path, manifest))
+        except Exception as exc:
+            if path.is_symlink():
+                error = f"symlink target not found in scanned GGUF models: {Path(path.resolve()).name}"
+                entries.append(build_broken_symlink_entry(path, manifest, error))
+            else:
                 errors.append({"path": str(path), "error": str(exc)})
-    return entries, errors
+    return validate_profile_targets(entries), errors
 
 
 def match_model(entries: List[Dict[str, Any]], query: str) -> Optional[Dict[str, Any]]:
@@ -360,14 +450,20 @@ def match_model(entries: List[Dict[str, Any]], query: str) -> Optional[Dict[str,
             entry.get("key"),
             entry.get("filename"),
             entry.get("stem"),
-            entry.get("backend_id"),
-            entry.get("name"),
             entry.get("label"),
-            entry.get("server_alias"),
             entry.get("architecture"),
             str(entry.get("path")),
+            str(entry.get("source_path")),
         }
         haystack.update(entry.get("aliases", []))
+        for value in haystack:
+            if isinstance(value, str) and value.lower() == q:
+                return entry
+    for entry in entries:
+        haystack = {
+            entry.get("backend_id"),
+            entry.get("name"),
+        }
         for value in haystack:
             if isinstance(value, str) and value.lower() == q:
                 return entry
@@ -384,20 +480,24 @@ def choose_default(entries: List[Dict[str, Any]], manifest: Dict[str, Any], quer
             return match, f"matched {query}"
         return None, f"no match for {query}"
 
+    valid_entries = [entry for entry in entries if entry.get("profile_valid", True) is not False]
+    if not valid_entries:
+        return None, "no valid profiles found"
+
     default_key = manifest.get("default_key")
     if isinstance(default_key, str) and default_key:
-        match = match_model(entries, default_key)
-        if match:
+        match = match_model(valid_entries, default_key)
+        if match is not None:
             return match, f"default_key={default_key}"
 
-    for entry in entries:
+    for entry in valid_entries:
         if entry.get("default"):
             return entry, f"default flag on {entry_identity(entry)}"
 
-    if len(entries) == 1:
-        return entries[0], "single model"
+    if len(valid_entries) == 1:
+        return valid_entries[0], "single model"
 
-    return entries[0], "alphabetical fallback"
+    return valid_entries[0], "alphabetical fallback"
 
 
 def cache_payload(root: Path, model_dir: Path, manifest: Dict[str, Any], entries: List[Dict[str, Any]], selected: Optional[Dict[str, Any]], reason: str, errors: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -437,7 +537,6 @@ def shell_assignments(selected: Dict[str, Any], cache_path: Path, reason: str) -
         f"QZ_MODEL_RESOLVED_RUNTIME_CONTEXT={format_shell_value(selected.get('runtime_context_length'))}",
         f"QZ_MODEL_RESOLVED_REASON={format_shell_value(reason)}",
         f"QZ_MODEL_INVENTORY_CACHE={format_shell_value(str(cache_path))}",
-        f"QZ_MODEL_RESOLVED_SERVER_ALIAS={format_shell_value(selected.get('server_alias'))}",
         "QZ_MODEL_LAUNCH_ARGS=(" + " ".join(shlex.quote(str(arg)) for arg in launch_args) + ")",
     ]
     return "\n".join(lines)
@@ -518,7 +617,9 @@ class ModelCatalog:
                 "context_length": entry.get("context_length"),
                 "runtime_context_length": entry.get("runtime_context_length"),
                 "backend_id": entry.get("backend_id"),
-                "server_alias": entry.get("server_alias"),
+                "backend_target": entry.get("backend_target"),
+                "profile_valid": entry.get("profile_valid", True),
+                "profile_error": entry.get("profile_error"),
                 "state": backend.get("state", "unloaded"),
                 "backend_path": backend.get("path"),
                 "notes": entry.get("notes"),

@@ -22,7 +22,7 @@ Start here when you want to understand the repo without spelunking through every
 | Master plan | [Master stabilisation plan](master-stabilisation-plan.md) | Controlling map for current bugs, contracts, dependencies, and fix order. |
 | Config and error handling | [Edge case and config contract plan](edge-case-config-contract-plan.md) | Audit/refactor plan for edge cases, compact errors, profile safety, config layering, and reducing script sprawl. |
 | Current bugfix focus | [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) | Triage, review plan, proposed fixes, and acceptance checks for `/status`, monitor tools, profile tuning, and proxy streaming. |
-| Known bug | [Stale profile server_alias bug](bugs/stale-profile-server-alias.md) | Regression reminder for invalid profile aliases and missing backend GGUF targets. |
+| Known bug | [Stale profile symlink bug](bugs/stale-profile-server-alias.md) | Regression reminder for invalid symlink profiles and missing backend GGUF targets. |
 | Known bug | [Responses streaming and qz-thoughts bug](bugs/responses-streaming-and-qz-thoughts.md) | Audit plan for Responses SSE forwarding, summary transformation, and noisy live thought rendering. |
 | Compact profiles | [Caveman Codex model instructions v2](qz-caveman-codex-model-instructions-v2.md) | The compact Codex prompt/profile instructions used by `scripts/qz-codex caveman`. |
 | Compact profiles | [QuantZhai caveman profile](quantzhai-caveman-profile.md) | Notes and design intent for the caveman/compact profile. |
@@ -65,7 +65,7 @@ Read:
 Focus:
 
 ```text
-Fix stale server_alias validation and compact errors first.
+Fix stale symlink profile validation and compact errors first.
 Then fix qz-thoughts delta coalescing.
 Then add stream timing telemetry.
 Do not start broad config movement before auditing data paths.
@@ -77,7 +77,7 @@ Read:
 
 - [Master stabilisation plan](master-stabilisation-plan.md)
 - [Edge case and config contract plan](edge-case-config-contract-plan.md)
-- [Stale profile server_alias bug](bugs/stale-profile-server-alias.md)
+- [Stale profile symlink bug](bugs/stale-profile-server-alias.md)
 - [Runtime observability notes](runtime-observability-notes.md)
 
 Focus:

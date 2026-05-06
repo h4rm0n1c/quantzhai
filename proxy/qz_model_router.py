@@ -64,6 +64,25 @@ def reasoning_budget_map_for_entry(entry: dict | None):
     return budgets
 
 
+def profile_backend_error_payload(entry: dict | None, requested_model: str = "") -> dict:
+    entry = entry if isinstance(entry, dict) else {}
+    profile = (
+        requested_model
+        or entry.get("label")
+        or entry.get("slug")
+        or entry.get("stem")
+        or entry.get("key")
+        or ""
+    )
+    reason = entry.get("profile_error") or "profile backend target is invalid"
+    return {
+        "error": "profile backend missing",
+        "profile": profile,
+        "reason": reason,
+        "fix": "Update the profile symlink under var/models or restore the missing target GGUF file.",
+    }
+
+
 class ModelRouter:
     def __init__(self, handler):
         self.handler = handler
@@ -826,6 +845,14 @@ class ModelRouter:
             reason = reason or "catalog fallback"
         if selected is None:
             return None, reason
+        if selected.get("profile_valid", True) is False:
+            payload = profile_backend_error_payload(selected, requested_model or "")
+            self._emit("model_selection_failed", {
+                "requested": requested_model,
+                "selected": entry_identity(selected),
+                "error": payload.get("reason"),
+            })
+            return None, payload
         target_backend_id = selected.get("backend_id") or entry_identity(selected)
         backend_inventory = self.backend_models()
         desired_context_length = self.selected_context_length(selected)

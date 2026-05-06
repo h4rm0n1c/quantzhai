@@ -49,7 +49,7 @@ Any script or generator that echoes proxy datapath information out to Codex for 
 Do not create a second truth in scripts. In particular:
 
 - Profile/model aliases shown to Codex must remain the Codex-visible profile identity.
-- Backend routing must remain separate, for example through `server_alias` or the proxy-selected backend target.
+- Backend routing must remain separate as the proxy-selected backend target. Symlink profiles under `var/models/` keep their Codex-visible filename while routing to the resolved target GGUF stem.
 - Prompt selection must follow the proxy prompt policy and selected model/profile overrides.
 - If a helper script exports model names, context lengths, prompt sources, or status metadata to Codex, update it when proxy policy changes.
 - Generated Codex catalogs are a view of proxy policy, not an authority over prompt or backend routing.
@@ -57,7 +57,7 @@ Do not create a second truth in scripts. In particular:
 When changing proxy routing or prompt policy, audit at least:
 
 ```bash
-rg -n "model_catalog|base_instructions|system_prompt|server_alias|backend_id|context_window|status|QZSTATE|prompt_policy" scripts proxy config docs AGENTS.md
+rg -n "model_catalog|base_instructions|system_prompt|backend_id|backend_target|context_window|status|QZSTATE|prompt_policy" scripts proxy config docs AGENTS.md
 ```
 
 Then verify with a capture from a real Codex request, not just generated config:
@@ -67,7 +67,7 @@ jq '{model, instructions_head:(.instructions|.[0:180]), policy:.metadata.qz_prom
 curl -s http://127.0.0.1:18180/qz/status | jq '.backend.selected_backend_id, .backend.loaded_model, .backend.selected_context_length'
 ```
 
-Known bug reminder: stale profile aliases with dead `server_alias` targets must not be allowed to brick Codex sessions. See `docs/bugs/stale-profile-server-alias.md` before changing profile/catalog routing.
+Known bug reminder: stale profile symlinks with missing GGUF targets must not be allowed to brick Codex sessions. See `docs/bugs/stale-profile-server-alias.md` before changing profile/catalog routing.
 
 Known streaming reminder: Responses SSE forwarding and `qz-thoughts` currently need an audit. See `docs/bugs/responses-streaming-and-qz-thoughts.md` before changing SSE transformation, telemetry, reasoning-summary handling, or monitor rendering.
 

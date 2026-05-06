@@ -1,98 +1,85 @@
-# Stale Profile `server_alias` Can Brick Codex Sessions
+# Stale Profile Symlink Can Brick Codex Sessions
 
 ## Status
 
-Open. This is a known robustness bug and should be fixed soon.
+In progress. The intended contract is symlink-based profile routing with compact errors for invalid profiles.
 
 ## Summary
 
-QuantZhai supports profile-style model aliases, such as `prompt-compiler.gguf`, where the Codex-visible profile name is separate from the backend model actually loaded by the proxy.
+QuantZhai supports profile-style model aliases, such as `prompt-compiler.gguf`, by letting the user create a symlink in `var/models/`.
 
-That split is intentional and useful:
+The contract is:
 
 ```text
-Codex-visible profile: prompt-compiler
+Codex-visible profile: var/models/prompt-compiler.gguf
 Prompt override:        prompt-compiler.gguf / system_prompt_file
-Backend target:         server_alias -> real GGUF model stem
+Backend target:         resolved symlink target GGUF stem
 ```
 
-The current failure mode is that a profile can remain visible to Codex even when its `server_alias` points at a GGUF model that has been removed from `var/models/`.
+The profile filename is the identity Codex sees and the user selects. The proxy resolves the symlink target internally and routes backend requests to the real scanned GGUF model stem.
 
-When this happens, Codex can still select/send the profile name, the proxy resolves the profile, then the router tries to load/check a backend target that no longer exists. The result is a giant `503 Service Unavailable` response that can make Codex effectively unusable.
+Overrides may add metadata such as `label`, `runtime_context_length`, `system_prompt_file`, or `system_prompt`. Overrides must not carry a backend-name override.
 
-## Observed Failure
+## Failure Mode
 
-Example shape:
+A profile can remain visible to Codex when its symlink target has been removed, moved outside the scanned model directory, or no longer resolves to a scanned GGUF.
 
-```text
-unexpected status 503 Service Unavailable:
-{
-  "error": "no model available",
-  "reason": "matched prompt-compiler; target Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact not ready (unknown)",
-  "catalog": { ... huge model catalog dump ... }
-}
-```
-
-Root cause:
+Example:
 
 ```text
-prompt-compiler.gguf still exists as a profile
-var/model-overrides.json still has server_alias = removed model stem
-removed backend model is no longer in var/models/
-Codex menu/request can still select prompt-compiler
-proxy routes prompt-compiler to stale server_alias
-backend says unknown
-proxy returns noisy 503
+var/models/prompt-compiler.gguf -> missing-or-external.gguf
+Codex menu/request selects prompt-compiler
+proxy cannot resolve prompt-compiler to a scanned backend target
+old behaviour returns noisy 503 / unusable Codex session
 ```
 
 ## Design Rule
 
-Profiles are valid only if their backend target is valid.
+Profiles are valid only if their symlink target resolves to a real GGUF that is also scanned under `var/models/`.
 
 A stale profile alias must not brick a Codex session.
 
 Generated Codex catalogs are a view of proxy policy, not the authority. If the proxy cannot route a profile to a valid backend, Codex should not be encouraged to select it as if it were healthy.
 
-## Required Fix
-
-Implement validation for profile/backend target consistency.
+## Required Behaviour
 
 ### Catalog validation
 
-`proxy/qz_model_catalog.py` should validate `server_alias` against scanned GGUF entries.
+`proxy/qz_model_catalog.py` validates symlink profiles against scanned GGUF entries.
 
-Suggested fields on each entry:
+Fields on each entry:
 
 ```text
+profile_symlink: true | false
 backend_target: <resolved backend id or empty>
-server_alias_valid: true | false | null
-server_alias_error: <message or empty>
 profile_valid: true | false
 profile_error: <message or empty>
+source_path: <profile symlink path or file path>
+path: <resolved GGUF path>
 ```
 
 Rules:
 
 ```text
-No server_alias:
+Regular GGUF:
   backend_target = entry stem
   profile_valid = true
 
-server_alias points to an existing scanned model stem/key/filename/backend_id:
-  backend_target = server_alias
+Symlink points to an existing scanned GGUF:
+  backend_target = resolved target stem
   profile_valid = true
 
-server_alias points nowhere:
+Symlink points outside scanned models or nowhere:
   backend_target = ""
   profile_valid = false
-  profile_error = "server_alias target not found: <alias>"
+  profile_error = "symlink target not found in scanned GGUF models: <path>"
 ```
 
 ### Codex catalog generation
 
 `scripts/qz-codex-common` should not expose invalid profiles in the generated Codex model picker.
 
-Acceptable behavior:
+Acceptable behaviour:
 
 ```text
 profile_valid=true:
@@ -102,9 +89,7 @@ profile_valid=false:
   hide from Codex catalog, or mark unavailable if Codex supports that cleanly
 ```
 
-Do not show a dead profile as a healthy selectable model.
-
-### Router behavior
+### Router behaviour
 
 `proxy/qz_model_router.py` should detect invalid profiles and return a compact actionable error.
 
@@ -116,52 +101,42 @@ Preferred response shape:
 {
   "error": "profile backend missing",
   "profile": "prompt-compiler",
-  "server_alias": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact",
-  "reason": "server_alias target not found in scanned GGUF models",
-  "fix": "Update var/model-overrides.json server_alias or restore the missing GGUF file."
+  "reason": "symlink target not found in scanned GGUF models: /path/to/missing.gguf",
+  "fix": "Update the profile symlink under var/models or restore the missing target GGUF file."
 }
 ```
 
 ### Fallback policy
 
-Do not silently run a different backend model unless the profile explicitly opts into fallback.
+Do not silently run a different backend model.
 
-Potential future override:
-
-```json
-{
-  "models": {
-    "prompt-compiler.gguf": {
-      "server_alias": "preferred-model",
-      "fallback_server_alias": "safe-model",
-      "allow_backend_fallback": true
-    }
-  }
-}
-```
-
-Until such a policy exists, fail clearly and compactly.
+If a symlink profile target disappears, fail clearly and compactly. Silent fallback would make prompt/profile behaviour unpredictable.
 
 ## Acceptance Tests
 
-### Test 1: removed backend target does not appear healthy
+### Test 1: valid symlink profile routes to target backend
 
-1. Create or keep a profile alias:
+1. Create a real GGUF under `var/models/`.
+2. Create a symlink profile:
+
+```bash
+ln -s real-backend.gguf var/models/prompt-compiler.gguf
+```
+
+3. Add optional metadata only:
 
 ```json
 {
   "models": {
     "prompt-compiler.gguf": {
       "label": "prompt-compiler",
-      "server_alias": "missing-model-stem",
       "system_prompt_file": "var/prompts/sillytavern_card_v2_runtime_prompt_compiler.md"
     }
   }
 }
 ```
 
-2. Ensure `missing-model-stem.gguf` does not exist in `var/models/`.
-3. Regenerate the catalog:
+4. Regenerate the catalog:
 
 ```bash
 python3 proxy/qz_model_catalog.py scan
@@ -169,13 +144,29 @@ python3 proxy/qz_model_catalog.py scan
 
 Expected:
 
-```bash
-jq '.models[] | select(.key == "prompt-compiler.gguf") | {profile_valid, profile_error, server_alias_valid}' var/model-inventory.json
+```text
+prompt-compiler.gguf remains the Codex-visible profile
+backend_target is the real target GGUF stem
+profile_valid is true
 ```
 
-shows invalid profile state.
+### Test 2: stale profile does not appear healthy
 
-### Test 2: Codex menu does not offer dead profile as healthy
+If `var/models/prompt-compiler.gguf` points outside scanned models or to a missing file:
+
+```bash
+python3 proxy/qz_model_catalog.py scan
+```
+
+Expected:
+
+```text
+profile_valid is false
+profile_error explains the missing symlink target
+backend_target is empty
+```
+
+### Test 3: Codex menu does not offer dead profile as healthy
 
 Run:
 
@@ -191,7 +182,7 @@ Expected:
 prompt-compiler is hidden or clearly unavailable, not shown as a healthy selectable model.
 ```
 
-### Test 3: direct request gets compact error
+### Test 4: direct request gets compact error
 
 If Codex or a client still sends:
 
@@ -205,23 +196,6 @@ Expected:
 HTTP 503 compact actionable error
 no huge catalog dump
 no silent fallback
-```
-
-### Test 4: valid profile still works
-
-With `server_alias` pointing at an existing model:
-
-```bash
-jq '{model, instructions_head:(.instructions|.[0:180]), policy:.metadata.qz_prompt_policy}' var/captures/latest-forwarded.json
-curl -s http://127.0.0.1:18180/qz/status | jq '.backend.selected_backend_id, .backend.loaded_model, .backend.selected_context_length'
-```
-
-Expected:
-
-```text
-forwarded model == server_alias backend
-instructions start with the selected profile prompt
-status reports loaded backend and correct context
 ```
 
 ## Related Rule

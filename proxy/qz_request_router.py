@@ -207,7 +207,10 @@ class RequestRouter:
             with self._request_gate(self.handler.path, requested or "", False):
                 selected, reason = self.handler._resolve_model_selection(requested)
             if selected is None:
-                self.handler._send_json(404, {"error": "no model selected", "reason": reason, "catalog": catalog.to_payload()})
+                if isinstance(reason, dict):
+                    self.handler._send_json(503, reason)
+                else:
+                    self.handler._send_json(404, {"error": "no model selected", "reason": reason})
                 return
             self.handler._send_json(200, {
                 "selected": selected,
@@ -515,12 +518,15 @@ class RequestRouter:
         with self._request_gate(upstream_path, client_model, client_wants_stream):
             selected_model, selection_reason = self.handler._resolve_model_selection(client_model)
             if selected_model is None:
-                self._emit_request_telemetry("request_failed", started_at, upstream_path, client_model, error=selection_reason or "no model available", phase="select_model")
-                self.handler._send_json(503, {
-                    "error": "no model available",
-                    "reason": selection_reason,
-                    "catalog": self.handler._model_catalog().to_payload(),
-                })
+                error_text = selection_reason.get("reason") if isinstance(selection_reason, dict) else selection_reason
+                self._emit_request_telemetry("request_failed", started_at, upstream_path, client_model, error=error_text or "no model available", phase="select_model")
+                if isinstance(selection_reason, dict):
+                    self.handler._send_json(503, selection_reason)
+                else:
+                    self.handler._send_json(503, {
+                        "error": "no model available",
+                        "reason": selection_reason,
+                    })
                 return
 
             selected_identity = selected_model.get("slug") or selected_model.get("key") or selected_model.get("backend_id") or ""

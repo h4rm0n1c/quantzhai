@@ -5,7 +5,6 @@
     "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M.gguf": {
       "default": true,
       "label": "Qwen3.6 35B A3B baseline",
-      "server_alias": "QwenZhai",
       "notes": "Current QuantZhai baseline model."
     },
     "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ4_NL.gguf": {

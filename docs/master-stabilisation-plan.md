@@ -42,7 +42,7 @@ These are contract, validation, and observability failures. The engine works. Th
 
 ## Current documented bugs
 
-### 1. Stale profile `server_alias` can brick Codex
+### 1. Stale profile symlink can brick Codex
 
 Document:
 
@@ -55,10 +55,10 @@ Problem:
 ```text
 Codex-visible profile: prompt-compiler
 Prompt override:        prompt-compiler.gguf / system_prompt_file
-Backend target:         server_alias -> real GGUF model stem
+Backend target:         resolved symlink target GGUF stem
 ```
 
-If the backend GGUF is removed but the profile remains visible, Codex can still select the profile. The proxy resolves the profile, routes to a missing backend target, and returns a huge 503 response.
+If the symlink target GGUF is removed or points outside scanned models while the profile remains visible, Codex can still select the profile. The proxy resolves the profile, cannot route to a valid backend target, and returns a huge 503 response.
 
 Design rule:
 
@@ -70,8 +70,8 @@ Required fix:
 
 ```text
 qz_model_catalog.py:
-  validate server_alias target
-  expose profile_valid/profile_error/server_alias_valid/backend_target
+  validate symlink target
+  expose profile_valid/profile_error/profile_symlink/backend_target
 
 scripts/qz-codex-common:
   hide invalid profiles or mark them unavailable
@@ -250,7 +250,7 @@ A removed model file should not make Codex unusable.
 Implement:
 
 ```text
-catalog validation for server_alias
+catalog validation for symlink profile targets
 invalid profile state in model inventory
 hide invalid profiles from Codex catalog
 compact actionable router errors
@@ -397,7 +397,7 @@ Paths to audit:
 ```text
 model discovery
 profile alias resolution
-server_alias resolution
+symlink profile target resolution
 prompt override loading
 Codex catalog generation
 runtime status generation
@@ -492,7 +492,7 @@ fold all old script logic into qz-up/qz-down/qz-codex
 Start with:
 
 ```text
-stale server_alias validation + compact errors
+stale symlink profile validation + compact errors
 ```
 
 Reason:
