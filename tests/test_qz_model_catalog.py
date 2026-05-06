@@ -1,8 +1,10 @@
 import json
+import os
 import struct
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from proxy.qz_model_catalog import ModelCatalog, load_manifest
 from proxy.qz_model_router import ModelRouter, profile_backend_error_payload
@@ -44,6 +46,72 @@ class FakeHandler:
 
 
 class ModelCatalogProfileValidationTests(unittest.TestCase):
+    def test_last_selected_profile_wins_over_alphabetical_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"QZ_MODEL_KEY": ""}, clear=False):
+            os.environ.pop("QZ_MODEL_STATE_PATH", None)
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            target = model_dir / "z-backend.gguf"
+            _write_gguf(model_dir / "a-backend.gguf")
+            _write_gguf(target)
+            (model_dir / "prompt-compiler.gguf").symlink_to(target)
+            state = root / "var" / "model-state.json"
+            state.write_text(json.dumps({
+                "selected_key": "prompt-compiler.gguf",
+                "selected_backend_id": "z-backend",
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+
+            self.assertEqual(catalog.selected["key"], "prompt-compiler.gguf")
+            self.assertEqual(catalog.selected["backend_id"], "z-backend")
+            self.assertEqual(catalog.reason, "last_selected=prompt-compiler.gguf")
+
+    def test_explicit_query_wins_over_last_selected_profile(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"QZ_MODEL_KEY": ""}, clear=False):
+            os.environ.pop("QZ_MODEL_STATE_PATH", None)
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            target = model_dir / "z-backend.gguf"
+            _write_gguf(model_dir / "a-backend.gguf")
+            _write_gguf(target)
+            (model_dir / "prompt-compiler.gguf").symlink_to(target)
+            state = root / "var" / "model-state.json"
+            state.write_text(json.dumps({
+                "selected_key": "prompt-compiler.gguf",
+                "selected_backend_id": "z-backend",
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+            selected, reason = catalog.resolve("a-backend")
+
+            self.assertEqual(selected["key"], "a-backend.gguf")
+            self.assertEqual(reason, "matched a-backend")
+
+    def test_invalid_last_selected_falls_back_to_manifest_default(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"QZ_MODEL_KEY": ""}, clear=False):
+            os.environ.pop("QZ_MODEL_STATE_PATH", None)
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            _write_gguf(model_dir / "a-backend.gguf")
+            _write_gguf(model_dir / "z-backend.gguf")
+            overrides = root / "var" / "model-overrides.json"
+            overrides.parent.mkdir(parents=True, exist_ok=True)
+            overrides.write_text(json.dumps({
+                "default_key": "z-backend.gguf",
+                "models": {},
+            }), encoding="utf-8")
+            state = root / "var" / "model-state.json"
+            state.write_text(json.dumps({
+                "selected_key": "missing-profile.gguf",
+                "selected_backend_id": "missing-backend",
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root, overrides))
+
+            self.assertEqual(catalog.selected["key"], "z-backend.gguf")
+            self.assertEqual(catalog.reason, "default_key=z-backend.gguf")
+
     def test_symlink_profile_routes_to_target_backend(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

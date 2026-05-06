@@ -36,6 +36,21 @@ def load_json(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def load_last_selected_model(root: Path) -> str:
+    state_path = Path(os.environ.get("QZ_MODEL_STATE_PATH", str(root / "var" / "model-state.json"))).expanduser()
+    try:
+        state = load_json(state_path)
+    except Exception:
+        return ""
+    if not isinstance(state, dict):
+        return ""
+    for key in ("selected_key", "selected_backend_id", "loaded_model"):
+        value = state.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def entry_identity(entry: Dict[str, Any]) -> str:
     for field in ("slug", "key", "filename", "stem", "backend_id"):
         value = entry.get(field)
@@ -470,7 +485,7 @@ def match_model(entries: List[Dict[str, Any]], query: str) -> Optional[Dict[str,
     return None
 
 
-def choose_default(entries: List[Dict[str, Any]], manifest: Dict[str, Any], query: Optional[str]) -> Tuple[Optional[Dict[str, Any]], str]:
+def choose_default(entries: List[Dict[str, Any]], manifest: Dict[str, Any], query: Optional[str], last_selected: Optional[str] = None) -> Tuple[Optional[Dict[str, Any]], str]:
     if not entries:
         return None, "no gguf files found"
 
@@ -483,6 +498,11 @@ def choose_default(entries: List[Dict[str, Any]], manifest: Dict[str, Any], quer
     valid_entries = [entry for entry in entries if entry.get("profile_valid", True) is not False]
     if not valid_entries:
         return None, "no valid profiles found"
+
+    if last_selected:
+        match = match_model(valid_entries, last_selected)
+        if match is not None:
+            return match, f"last_selected={last_selected}"
 
     default_key = manifest.get("default_key")
     if isinstance(default_key, str) and default_key:
@@ -581,18 +601,24 @@ class ModelCatalog:
 
     def refresh(self, query: Optional[str] = None) -> None:
         self.entries, self.errors = scan_models(self.model_dir, self.manifest)
-        self.selected, self.reason = choose_default(self.entries, self.manifest, query or os.environ.get("QZ_MODEL_KEY"))
+        requested = query or os.environ.get("QZ_MODEL_KEY")
+        last_selected = "" if requested else load_last_selected_model(self.root)
+        self.selected, self.reason = choose_default(self.entries, self.manifest, requested, last_selected)
         payload = cache_payload(self.root, self.model_dir, self.manifest, self.entries, self.selected, self.reason, self.errors)
         self.cache_path = write_cache(self.root, payload)
 
     def resolve(self, query: Optional[str] = None, direct_path: Optional[Path] = None) -> Tuple[Optional[Dict[str, Any]], str]:
         if direct_path and direct_path.is_file():
             return build_entry(direct_path, self.manifest), "direct path"
-        selected, reason = choose_default(self.entries, self.manifest, query)
+        requested = query or None
+        last_selected = "" if requested else load_last_selected_model(self.root)
+        selected, reason = choose_default(self.entries, self.manifest, requested, last_selected)
         return selected, reason
 
     def select(self, query: Optional[str] = None) -> Tuple[Optional[Dict[str, Any]], str]:
-        selected, reason = choose_default(self.entries, self.manifest, query)
+        requested = query or None
+        last_selected = "" if requested else load_last_selected_model(self.root)
+        selected, reason = choose_default(self.entries, self.manifest, requested, last_selected)
         self.selected = selected
         self.reason = reason
         payload = cache_payload(self.root, self.model_dir, self.manifest, self.entries, self.selected, self.reason, self.errors)
