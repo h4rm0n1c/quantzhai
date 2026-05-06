@@ -385,6 +385,11 @@ catalog = {"models": merged_models}
 catalog_dst.write_text(json.dumps(catalog, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 text = config_dst.read_text(encoding="utf-8") if config_dst.is_file() else ""
+# Model limits now come from the generated model catalog and Codex defaults.
+# Older local configs may still contain static overrides that make /status
+# report stale runtime limits for the selected profile.
+text = re.sub(r'(?m)^\s*model_context_window\s*=\s*\d+\s*\n?', '', text)
+text = re.sub(r'(?m)^\s*model_max_output_tokens\s*=\s*\d+\s*\n?', '', text)
 catalog_line = f'model_catalog_json = "{catalog_dst}"'
 if re.search(r'(?m)^model_catalog_json\s*=\s*".*"$', text):
     text = re.sub(r'(?m)^model_catalog_json\s*=\s*".*"$', catalog_line, text, count=1)

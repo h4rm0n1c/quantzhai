@@ -281,12 +281,26 @@ def main():
             assert sent["metadata"]["qz_runtime"]["load_state"] == "ready", sent
             assert sent["metadata"]["qz_reasoning"]["level"] == "high", sent
             assert sent["metadata"]["qz_reasoning"]["policy"] == "prompt", sent
+            assert sent["metadata"]["qz_prompt_policy"]["mode"], sent
 
             status, _, telemetry_recent = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/recent?limit=50")
             assert status == 200, telemetry_recent
+            prompt_contracts = [
+                (event.get("payload") or {})
+                for event in telemetry_recent.get("events", [])
+                if event.get("type") == "prompt_contract"
+            ]
+            assert prompt_contracts, telemetry_recent
+            prompt_contract = prompt_contracts[-1]
+            assert prompt_contract["profile"] == "Model A", prompt_contract
+            assert prompt_contract["requested_model"] == "model-a.gguf", prompt_contract
+            assert prompt_contract["selected_backend_id"] == "model-a.gguf", prompt_contract
+            assert prompt_contract["reasoning_level"] == "high", prompt_contract
+            assert prompt_contract["prompt_policy"]["mode"], prompt_contract
             assert any(
                 event.get("type") == "request_completed"
                 and (event.get("payload") or {}).get("runtime_metrics", {}).get("selected_context_length") == 131072
+                and (event.get("payload") or {}).get("runtime_metrics", {}).get("prompt_contract", {}).get("requested_model") == "model-a.gguf"
                 for event in telemetry_recent.get("events", [])
             ), telemetry_recent
 

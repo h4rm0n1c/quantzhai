@@ -22,7 +22,7 @@ import subprocess
 import sys
 import time
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 @dataclass
@@ -78,7 +78,15 @@ class BenchmarkSummary:
 @dataclass
 class ModelStatus:
     ready: bool = False
+    profile: str = ""
     selected: str = ""
+    selected_key: str = ""
+    selected_backend_id: str = ""
+    profile_symlink: bool = False
+    prompt_files: List[str] = field(default_factory=list)
+    reasoning_level: str = ""
+    reasoning_policy: str = ""
+    sampling: dict = field(default_factory=dict)
     selected_state: str = ""
     selected_context_length: int = 0
     backend_context_length: int = 0
@@ -165,9 +173,57 @@ def _is_response_request(payload: dict) -> bool:
     )
 
 
+def _compact_sampling(sampling: dict) -> str:
+    if not isinstance(sampling, dict):
+        return ""
+    parts = []
+    for key in ("temperature", "top_p", "top_k", "min_p", "repeat_penalty"):
+        value = sampling.get(key)
+        if value is not None:
+            parts.append(f"{key}={value}")
+    return " ".join(parts)
+
+
+def _prompt_files_from_overrides(overrides: dict) -> List[str]:
+    if not isinstance(overrides, dict):
+        return []
+    files: List[str] = []
+    for key in (
+        "system_prompt_file",
+        "codex_base_instructions_file",
+        "base_instructions_file",
+        "prompt_replace_file",
+        "prompt_replace_files",
+        "prompt_prepend_files",
+        "prompt_append_files",
+    ):
+        value = overrides.get(key)
+        if isinstance(value, str) and value and value not in files:
+            files.append(value)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, str) and item and item not in files:
+                    files.append(item)
+    return files
+
+
+def _runtime_contract_from_event(event: dict) -> dict:
+    payload = event.get("payload") if isinstance(event, dict) else {}
+    if not isinstance(payload, dict):
+        return {}
+    if event.get("type") == "prompt_contract":
+        return payload
+    if event.get("type") in ("request_completed", "throughput_sample"):
+        runtime = payload.get("runtime_metrics") if isinstance(payload.get("runtime_metrics"), dict) else {}
+        contract = runtime.get("prompt_contract") if isinstance(runtime.get("prompt_contract"), dict) else {}
+        return contract
+    return {}
+
+
 def model_status_from_proxy(status: Optional[dict]) -> ModelStatus:
     if not isinstance(status, dict):
         return ModelStatus()
+    selected_entry = status.get("selected") if isinstance(status.get("selected"), dict) else {}
     backend = status.get("backend") if isinstance(status.get("backend"), dict) else {}
     load = status.get("load") if isinstance(status.get("load"), dict) else {}
     loaded_model = backend.get("loaded_model") if isinstance(backend.get("loaded_model"), str) else ""
@@ -186,10 +242,22 @@ def model_status_from_proxy(status: Optional[dict]) -> ModelStatus:
         ]
     if not loaded_model and loaded_ids:
         loaded_model = loaded_ids[0]
-    selected = backend.get("selected_backend_id") or backend.get("selected_key") or ""
+    selected_key = backend.get("selected_key") or selected_entry.get("key") or selected_entry.get("slug") or ""
+    selected_backend_id = backend.get("selected_backend_id") or selected_entry.get("backend_id") or selected_key
+    profile = selected_entry.get("label") or selected_entry.get("name") or selected_key
+    prompt_files = _prompt_files_from_overrides(selected_entry.get("overrides") if isinstance(selected_entry.get("overrides"), dict) else {})
+    sampling = backend.get("selected_sampling_params") if isinstance(backend.get("selected_sampling_params"), dict) else {}
     return ModelStatus(
         ready=bool(status.get("ready")),
-        selected=str(selected),
+        profile=str(profile or ""),
+        selected=str(selected_backend_id or selected_key or ""),
+        selected_key=str(selected_key or ""),
+        selected_backend_id=str(selected_backend_id or ""),
+        profile_symlink=bool(selected_entry.get("profile_symlink")),
+        prompt_files=prompt_files,
+        reasoning_level=str(backend.get("selected_reasoning_level") or ""),
+        reasoning_policy=str(backend.get("selected_reasoning_policy") or ""),
+        sampling=sampling,
         selected_state=str(backend.get("selected_state") or ""),
         selected_context_length=int(backend.get("selected_context_length") or 0),
         backend_context_length=int(backend.get("backend_context_length") or 0),
@@ -334,6 +402,26 @@ def telemetry_row(event: dict) -> Optional[Tuple[str, str]]:
         path = payload.get("path", "")
         replacement = payload.get("replacement", "")
         return ("deprecated", f"{path} -> {replacement}".strip(" ->"))
+    if ev_type == "prompt_contract":
+        contract = _runtime_contract_from_event(event)
+        profile = contract.get("profile") or contract.get("selected_key") or ""
+        backend = contract.get("selected_backend_id") or ""
+        prompt_files = contract.get("prompt_files") if isinstance(contract.get("prompt_files"), list) else []
+        policy = contract.get("prompt_policy") if isinstance(contract.get("prompt_policy"), dict) else {}
+        bits = []
+        if profile:
+            bits.append(str(profile))
+        if backend and backend != profile:
+            bits.append(f"backend={backend}")
+        if prompt_files:
+            bits.append(f"prompt={prompt_files[0]}")
+        if policy.get("mode"):
+            bits.append(f"mode={policy.get('mode')}")
+        if policy.get("replaced_client"):
+            bits.append("replaced")
+        if policy.get("synthesized_missing_client"):
+            bits.append("synthesized")
+        return ("prompt", " ".join(bits).strip() or "prompt contract")
     if ev_type == "request_completed":
         path = payload.get("path", "")
         if _is_monitor_poll(path):
@@ -352,6 +440,9 @@ def telemetry_row(event: dict) -> Optional[Tuple[str, str]]:
                 pass
         if total_tokens:
             msg += f" {total_tokens}t"
+        contract = _runtime_contract_from_event(event)
+        if contract.get("profile") and contract.get("selected_backend_id"):
+            msg += f" {contract.get('profile')}->{contract.get('selected_backend_id')}"
         return ("request", msg.strip())
     if ev_type == "throughput_sample":
         path = payload.get("path", "")
@@ -766,16 +857,34 @@ class UI:
         state_attr = self.green | self.bold if model_status.ready else self.yellow | self.bold
         if model_status.error:
             state_attr = self.red | self.bold
-        self.add(y + 3, x + 2, "MODEL", self.dim | self.bold)
-        self.add(y + 4, x + 2, "SELECTED", self.dim | self.bold)
-        self.add(y + 4, x + 12, clip(model_status.selected or "?", w - 14), self.white)
-        self.add(y + 5, x + 2, "LOADED", self.dim | self.bold)
-        self.add(y + 5, x + 12, clip(f"{loaded}{loaded_suffix}", w - 14), self.white)
-        self.add(y + 6, x + 2, "STATE", self.dim | self.bold)
+        profile_bits = [model_status.profile or model_status.selected_key or "?"]
+        if model_status.selected_backend_id and model_status.selected_backend_id not in profile_bits:
+            profile_bits.append(f"backend={model_status.selected_backend_id}")
+        if model_status.profile_symlink:
+            profile_bits.append("symlink")
+        prompt_files = model_status.prompt_files or []
+        reasoning = " ".join(
+            bit for bit in (
+                model_status.reasoning_level,
+                f"policy={model_status.reasoning_policy}" if model_status.reasoning_policy else "",
+                _compact_sampling(model_status.sampling or {}),
+            ) if bit
+        ) or "?"
+
+        self.add(y + 3, x + 2, "RUNTIME", self.dim | self.bold)
+        self.add(y + 4, x + 2, "PROFILE", self.dim | self.bold)
+        self.add(y + 4, x + 12, clip(" ".join(profile_bits), w - 14), self.white)
+        self.add(y + 5, x + 2, "PROMPT", self.dim | self.bold)
+        self.add(y + 5, x + 12, clip(", ".join(prompt_files[:2]) if prompt_files else "default", w - 14), self.white)
+        self.add(y + 6, x + 2, "REASON", self.dim | self.bold)
+        self.add(y + 6, x + 12, clip(reasoning, w - 14), self.white)
+        self.add(y + 7, x + 2, "LOADED", self.dim | self.bold)
+        self.add(y + 7, x + 12, clip(f"{loaded}{loaded_suffix}", w - 14), self.white)
+        self.add(y + 8, x + 2, "STATE", self.dim | self.bold)
         state_text = state
         if model_status.error:
             state_text += f" error={model_status.error}"
-        self.add(y + 6, x + 12, clip(state_text, w - 14), state_attr)
+        self.add(y + 8, x + 12, clip(state_text, w - 14), state_attr)
 
     def draw_container(self, y: int, x: int, h: int, w: int):
         self.box(y, x, h, w, "CONTAINER")
@@ -912,16 +1021,16 @@ class UI:
 
         self.draw_header(backend_ok, proxy_ok, gpus)
 
-        if h < 25 or w < 100:
-            self.add(4, 2, "Terminal too small. Need roughly 100x25.", self.red | self.bold)
+        if h < 27 or w < 100:
+            self.add(4, 2, "Terminal too small. Need roughly 100x27.", self.red | self.bold)
             self.stdscr.refresh()
             return
 
         full_w = w - 2
-        self.draw_profile(3, 0, 8, full_w, model_status)
-        self.draw_container(11, 0, 5, full_w)
-        self.draw_gpu(16, 0, 5 + min(2, len(gpus)), full_w, gpus)
-        throughput_y = 21 + min(2, len(gpus))
+        self.draw_profile(3, 0, 10, full_w, model_status)
+        self.draw_container(13, 0, 5, full_w)
+        self.draw_gpu(18, 0, 5 + min(2, len(gpus)), full_w, gpus)
+        throughput_y = 23 + min(2, len(gpus))
         self.draw_throughput(throughput_y, 0, 9, full_w, rates)
         benchmark_h = 5 if benchmark is not None else 0
         if benchmark is not None:
@@ -973,7 +1082,21 @@ def once():
     print(f"  ctx={live_ctx} np={os.environ.get('QZ_PARALLEL', '?')} split={os.environ.get('QZ_TENSOR_SPLIT', '?')} batch={os.environ.get('QZ_BATCH', '?')} ubatch={os.environ.get('QZ_UBATCH', '?')} cache={human_bytes_from_mib(parse_num(os.environ.get('QZ_CACHE_RAM', '0')))} reuse={os.environ.get('QZ_CACHE_REUSE', '?')} kv={os.environ.get('QZ_KV_KEY', '?')}/{os.environ.get('QZ_KV_VALUE', '?')}")
     loaded_suffix = f" ({model_status.loaded_count})" if model_status.loaded_count > 1 else ""
     state = model_status.selected_state or model_status.load_state or "unknown"
-    print(f"  selected : {model_status.selected or '?'}")
+    profile_bits = [model_status.profile or model_status.selected_key or "?"]
+    if model_status.selected_backend_id and model_status.selected_backend_id not in profile_bits:
+        profile_bits.append(f"backend={model_status.selected_backend_id}")
+    if model_status.profile_symlink:
+        profile_bits.append("symlink")
+    print(f"  profile  : {' '.join(profile_bits)}")
+    print(f"  prompt   : {', '.join((model_status.prompt_files or [])[:2]) or 'default'}")
+    reasoning = " ".join(
+        bit for bit in (
+            model_status.reasoning_level,
+            f"policy={model_status.reasoning_policy}" if model_status.reasoning_policy else "",
+            _compact_sampling(model_status.sampling or {}),
+        ) if bit
+    )
+    print(f"  reasoning: {reasoning or '?'}")
     print(f"  loaded   : {model_status.loaded or 'none'}{loaded_suffix}")
     print(f"  state    : {state}")
     if model_status.error:

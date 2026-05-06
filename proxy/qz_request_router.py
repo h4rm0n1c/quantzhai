@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import json
+import os
 import time
 from contextlib import contextmanager
+from pathlib import Path
 
 try:
     from .qz_proxy_config import CURRENT_API_ENDPOINTS, LEGACY_API_ENDPOINTS, MODEL_BUDGETS, api_contract_payload
@@ -261,6 +263,89 @@ class RequestRouter:
             "thinking_budget_tokens": backend.get("selected_thinking_budget_tokens"),
             "sampling": backend.get("selected_sampling_params") or {},
         }
+
+    def _prompt_contract(self, body: dict, selected_model: dict, client_model: str, backend_model: str) -> dict:
+        if not isinstance(body, dict):
+            body = {}
+        if not isinstance(selected_model, dict):
+            selected_model = {}
+        metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
+        prompt_policy = metadata.get("qz_prompt_policy") if isinstance(metadata.get("qz_prompt_policy"), dict) else {}
+        qz_runtime = metadata.get("qz_runtime") if isinstance(metadata.get("qz_runtime"), dict) else {}
+        qz_reasoning = metadata.get("qz_reasoning") if isinstance(metadata.get("qz_reasoning"), dict) else {}
+
+        def _display_path(value: str) -> str:
+            text = str(value or "")
+            if not text:
+                return ""
+            try:
+                root = str(Path(os.environ.get("QZ_ROOT", Path(__file__).resolve().parents[1])).resolve())
+                if text.startswith(root + "/"):
+                    return text[len(root) + 1 :]
+            except Exception:
+                pass
+            return text
+
+        def _strings(value):
+            if isinstance(value, str) and value:
+                return [_display_path(value)]
+            if isinstance(value, list):
+                return [_display_path(item) for item in value if isinstance(item, str) and item]
+            return []
+
+        prompt_files = []
+        for key in ("replacement_files_loaded", "prompt_files_loaded"):
+            for item in _strings(prompt_policy.get(key)):
+                if item not in prompt_files:
+                    prompt_files.append(item)
+
+        sampling = {}
+        raw_sampling = qz_reasoning.get("sampling")
+        if isinstance(raw_sampling, dict):
+            for key in ("temperature", "top_p", "top_k", "min_p", "presence_penalty", "repeat_penalty"):
+                if raw_sampling.get(key) is not None:
+                    sampling[key] = raw_sampling.get(key)
+
+        selected_key = selected_model.get("key") or selected_model.get("slug") or client_model or ""
+        profile = selected_model.get("label") or selected_model.get("name") or selected_key or client_model
+        return {
+            "profile": profile,
+            "requested_model": client_model or "",
+            "selected_key": selected_key,
+            "selected_label": profile,
+            "selected_backend_id": backend_model or selected_model.get("backend_id") or selected_key,
+            "profile_symlink": bool(selected_model.get("profile_symlink")),
+            "prompt_policy": {
+                "mode": prompt_policy.get("mode") or "",
+                "replaced_client": bool(prompt_policy.get("replaced_client")),
+                "synthesized_missing_client": bool(prompt_policy.get("synthesized_missing_client")),
+                "reused_existing_replacement": bool(prompt_policy.get("reused_existing_replacement")),
+                "ignored_replace": bool(prompt_policy.get("ignored_replace")),
+                "client_blocks": prompt_policy.get("client_blocks") or 0,
+                "existing_blocks": prompt_policy.get("existing_blocks") or 0,
+                "prompt_files_loaded": _strings(prompt_policy.get("prompt_files_loaded")),
+                "replacement_files_loaded": _strings(prompt_policy.get("replacement_files_loaded")),
+                "prompt_files_missing": _strings(prompt_policy.get("prompt_files_missing")),
+                "replacement_files_missing": _strings(prompt_policy.get("replacement_files_missing")),
+                "prompt_files_failed": _strings(prompt_policy.get("prompt_files_failed")),
+                "replacement_files_failed": _strings(prompt_policy.get("replacement_files_failed")),
+            },
+            "prompt_files": prompt_files,
+            "reasoning_level": qz_reasoning.get("level") or qz_runtime.get("reasoning_level") or "",
+            "reasoning_policy": qz_reasoning.get("policy") or qz_runtime.get("reasoning_policy") or "",
+            "thinking_budget_tokens": qz_reasoning.get("thinking_budget_tokens"),
+            "sampling": sampling,
+            "context_length": qz_runtime.get("context_length"),
+            "backend_context_length": qz_runtime.get("backend_context_length"),
+        }
+
+    def _emit_prompt_contract(self, contract: dict):
+        if not contract:
+            return
+        try:
+            self.handler.telemetry.emit("prompt_contract", contract)
+        except Exception:
+            pass
 
     def _emit_request_telemetry(self, event_type: str, started_at: float, upstream_path: str, client_model: str, backend_model: str = "", **extra):
         payload = {
@@ -551,6 +636,9 @@ class RequestRouter:
                     body["input"] = _microcompact_old_tool_results(_expand_local_compaction_items(input_items))
                 body = normalize_responses_input_for_qwen(body, selected_model=selected_model)
                 body = normalize_tools_for_llamacpp(body)
+                prompt_contract = self._prompt_contract(body, selected_model, client_model, backend_model)
+                runtime_metrics["prompt_contract"] = prompt_contract
+                self._emit_prompt_contract(prompt_contract)
                 try:
                     write_capture("latest-normalized-request.json", body)
                 except Exception:

@@ -41,6 +41,7 @@ class ThoughtState:
     answer_done: bool = False
     activity: List[Tuple[str, str]] = field(default_factory=list)
     backend: List[Tuple[str, str]] = field(default_factory=list)
+    contract: List[Tuple[str, str]] = field(default_factory=list)
     events: int = 0
     bytes_read: int = 0
     parse_error: str = ""
@@ -79,6 +80,94 @@ def clip(text: str, width: int) -> str:
     if len(text) <= width:
         return text
     return text[: max(0, width - 1)] + "…"
+
+
+def _compact_sampling(sampling: dict) -> str:
+    if not isinstance(sampling, dict):
+        return ""
+    parts = []
+    for key in ("temperature", "top_p", "top_k", "min_p", "repeat_penalty"):
+        value = sampling.get(key)
+        if value is not None:
+            parts.append(f"{key}={value}")
+    return " ".join(parts)
+
+
+def _contract_rows(payload: dict) -> List[Tuple[str, str]]:
+    if not isinstance(payload, dict):
+        return []
+    rows: List[Tuple[str, str]] = []
+    profile = payload.get("profile") or payload.get("selected_key") or ""
+    requested = payload.get("requested_model") or ""
+    backend = payload.get("selected_backend_id") or ""
+    selected_key = payload.get("selected_key") or ""
+    profile_bits = []
+    if profile:
+        profile_bits.append(str(profile))
+    if requested and requested != profile:
+        profile_bits.append(f"requested={requested}")
+    if selected_key and selected_key != profile:
+        profile_bits.append(f"key={selected_key}")
+    if backend and backend not in (profile, selected_key):
+        profile_bits.append(f"backend={backend}")
+    if payload.get("profile_symlink"):
+        profile_bits.append("symlink")
+    if profile_bits:
+        rows.append(("profile", " ".join(profile_bits)))
+
+    prompt_policy = payload.get("prompt_policy") if isinstance(payload.get("prompt_policy"), dict) else {}
+    prompt_files = payload.get("prompt_files") if isinstance(payload.get("prompt_files"), list) else []
+    if prompt_files:
+        rows.append(("prompt", ", ".join(str(item) for item in prompt_files[:3])))
+    missing = list(prompt_policy.get("replacement_files_missing") or []) + list(prompt_policy.get("prompt_files_missing") or [])
+    failed = list(prompt_policy.get("replacement_files_failed") or []) + list(prompt_policy.get("prompt_files_failed") or [])
+    if missing:
+        rows.append(("prompt", f"missing {', '.join(str(item) for item in missing[:2])}"))
+    if failed:
+        rows.append(("error", f"prompt failed {', '.join(str(item) for item in failed[:2])}"))
+
+    policy_bits = []
+    mode = prompt_policy.get("mode")
+    if mode:
+        policy_bits.append(f"mode={mode}")
+    for key, label in (
+        ("replaced_client", "replaced"),
+        ("synthesized_missing_client", "synthesized"),
+        ("reused_existing_replacement", "reused"),
+        ("ignored_replace", "ignored_replace"),
+    ):
+        if prompt_policy.get(key):
+            policy_bits.append(label)
+    if policy_bits:
+        rows.append(("policy", " ".join(policy_bits)))
+
+    reason_bits = []
+    if payload.get("reasoning_level"):
+        reason_bits.append(str(payload.get("reasoning_level")))
+    if payload.get("reasoning_policy"):
+        reason_bits.append(f"policy={payload.get('reasoning_policy')}")
+    if payload.get("thinking_budget_tokens") is not None:
+        reason_bits.append(f"budget={payload.get('thinking_budget_tokens')}")
+    sampling = _compact_sampling(payload.get("sampling"))
+    if sampling:
+        reason_bits.append(sampling)
+    if reason_bits:
+        rows.append(("reasoning", " ".join(reason_bits)))
+
+    ctx_bits = []
+    if payload.get("context_length"):
+        ctx_bits.append(f"ctx={payload.get('context_length')}")
+    if payload.get("backend_context_length"):
+        ctx_bits.append(f"backend_ctx={payload.get('backend_context_length')}")
+    if ctx_bits:
+        rows.append(("context", " ".join(ctx_bits)))
+    return rows
+
+
+def _contract_summary(rows: List[Tuple[str, str]]) -> str:
+    if not rows:
+        return ""
+    return "  ".join(f"{kind}={message}" for kind, message in rows[:4])
 
 
 def _apply_thought_delta(state: ThoughtState, delta: str):
@@ -341,14 +430,28 @@ def _apply_telemetry_event(state: ThoughtState, event: dict, prefix_rows: List[T
             state.thought_done = False
             state.answer_done = False
             state.activity = []
+            state.contract = []
             state.backend_error = ""
             prefix_rows.append(("request", f"{payload.get('method', '')} {path}".strip()))
+        return latest_ts
+
+    if ev_type == "prompt_contract":
+        rows = _contract_rows(payload)
+        if rows:
+            state.contract = rows
+            for kind, message in rows:
+                _append_backend(state, kind, message)
         return latest_ts
 
     if ev_type == "request_completed":
         path = payload.get("path", "")
         if _is_monitor_poll(path):
             return latest_ts
+        runtime = payload.get("runtime_metrics") if isinstance(payload.get("runtime_metrics"), dict) else {}
+        contract = runtime.get("prompt_contract") if isinstance(runtime.get("prompt_contract"), dict) else {}
+        rows = _contract_rows(contract)
+        if rows:
+            state.contract = rows
         model = payload.get("backend_model") or payload.get("model") or ""
         elapsed = payload.get("elapsed_ms")
         bits = [f"{payload.get('method', '')} {path}".strip()]
@@ -516,6 +619,7 @@ class TelemetryFeed:
                 answer_done=self.state.answer_done,
                 activity=list(self.state.activity),
                 backend=list(self.state.backend),
+                contract=list(self.state.contract),
                 events=self.state.events,
                 bytes_read=self.state.bytes_read,
                 parse_error=self.state.parse_error,
@@ -661,7 +765,7 @@ class UI:
             return self.magenta | self.bold
         if kind in ("answer", "message", "completed", "done"):
             return self.green | self.bold
-        if kind in ("prompt", "generate", "total", "request", "upstream", "stream"):
+        if kind in ("prompt", "policy", "context", "generate", "total", "request", "upstream", "stream"):
             return self.cyan | self.bold
         if kind in ("restore", "checkpoint", "tool", "web"):
             return self.yellow | self.bold
@@ -750,8 +854,12 @@ class UI:
             warnings.append(f"parse={state.parse_error}")
         if state.backend_error:
             warnings.append(f"backend={state.backend_error}")
+        summary = _contract_summary(state.contract)
+        if summary:
+            self.add(y + 1, 0, clip(summary, w - 1), self.cyan | self.bold)
         if warnings:
-            self.add(y + 1, 0, clip("  ".join(warnings), w - 1), self.red | self.bold)
+            warning_y = y + 2 if summary else y + 1
+            self.add(warning_y, 0, clip("  ".join(warnings), w - 1), self.red | self.bold)
 
     def draw(self, state: ThoughtState):
         self.stdscr.erase()
@@ -765,7 +873,7 @@ class UI:
 
         self.draw_meta(2, state)
 
-        body_y = 4
+        body_y = 5
         body_h = max(8, h - body_y - 2)
         full_w = max(98, w - 2)
         activity_w = min(62, max(40, full_w // 3))
@@ -816,6 +924,8 @@ def print_once(path: Path):
         print(f"error={state.parse_error}")
     if state.backend_error:
         print(f"backend_error={state.backend_error}")
+    if state.contract:
+        print("contract=" + _contract_summary(state.contract))
     print()
     print("THOUGHT")
     print(state.thought.strip() or "(empty)")
