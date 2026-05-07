@@ -245,8 +245,8 @@ QZ_DOCTOR_PROMPT_SMOKE=1 scripts/qz-doctor
 ```
 
 `caveman` is an experimental compact-instructions profile. `scripts/qz-codex caveman`
-loads `docs/qz-caveman-codex-model-instructions-v2.md` and caps Codex output at
-2048 tokens for that session.
+loads `docs/qz-caveman-codex-model-instructions-v2.md`; reasoning effort and
+prompt policy are the supported tuning knobs, not hard output-token caps.
 
 `scripts/qz-codex` passes remaining arguments through to Codex after the optional
 profile. For example:
@@ -270,6 +270,10 @@ Codex JSONL events, final answers, proxy captures, and a run summary. The latest
 summary is also shown by `scripts/qz-top`. The main compression metric is input
 token ratio versus the baseline profile; instruction, final-answer, total-token,
 and wall-time ratios are recorded too.
+
+`scripts/qz-top` GPU rows show current VRAM `USED`, per-GPU low-water `BASE`,
+and live `DELTA`. `DELTA` is useful for cache/buffer pressure tests; it is an
+approximation until the backend exposes exact model/KV/scratch allocation data.
 
 If the backend is healthy but the proxy is not running, `qz-benchmark` starts a
 temporary proxy for the run. Pass `--no-manage-proxy` to require an existing

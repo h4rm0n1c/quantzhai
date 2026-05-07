@@ -370,6 +370,35 @@ def gpu_summary(gpus: List[GpuRow]) -> Tuple[float, float, float, float, float, 
     return util, used, available, total, power, temp
 
 
+def update_vram_baseline(gpus: List[GpuRow], baseline: dict) -> dict:
+    for gpu in gpus:
+        current = max(0.0, gpu.mem_used)
+        previous = baseline.get(gpu.index)
+        if previous is None or current < previous:
+            baseline[gpu.index] = current
+    return baseline
+
+
+def vram_parts(gpu: GpuRow, baseline: dict) -> Tuple[float, float, float, float]:
+    used = max(0.0, gpu.mem_used)
+    base = max(0.0, baseline.get(gpu.index, used))
+    delta = max(0.0, used - base)
+    available = max(0.0, gpu.mem_total - used)
+    return used, base, delta, available
+
+
+def vram_split_summary(gpus: List[GpuRow], baseline: dict) -> Tuple[float, float, float, float, float]:
+    used = base = delta = available = total = 0.0
+    for gpu in gpus:
+        row_used, row_base, row_delta, row_available = vram_parts(gpu, baseline)
+        used += row_used
+        base += row_base
+        delta += row_delta
+        available += row_available
+        total += max(0.0, gpu.mem_total)
+    return used, base, delta, available, total
+
+
 def parse_gpus() -> List[GpuRow]:
     query = (
         "index,name,utilization.gpu,memory.used,memory.total,"
@@ -691,6 +720,7 @@ class UI:
         self.stdscr = stdscr
         self.interval = interval
         self.running = True
+        self.vram_baseline = {}
         self.setup_colours()
 
     def setup_colours(self):
@@ -894,27 +924,35 @@ class UI:
 
     def draw_gpu(self, y: int, x: int, h: int, w: int, gpus: List[GpuRow]):
         self.box(y, x, h, w, "GPU")
-        self.add(y + 1, x + 2, f"{'ID':<5} {'NAME':<27} {'UTIL':>5}  {'MODEL USE':>11} {'AVAILABLE':>11} {'TOTAL VRAM':>11} {'POWER':>8} {'TEMP':>6} {'PCIE':>8}", self.dim | self.bold)
+        update_vram_baseline(gpus, self.vram_baseline)
+        self.add(y + 1, x + 2, f"{'ID':<5} {'NAME':<24} {'UTIL':>5}  {'USED':>8} {'BASE':>8} {'DELTA':>8} {'FREE':>8} {'TOTAL':>8} {'POWER':>7} {'TEMP':>5} {'PCIE':>8}", self.dim | self.bold)
         rows = gpus[: max(0, h - 4)]
         for i, gpu in enumerate(rows):
             row = y + 2 + i
-            name = clip(gpu.name, 27)
-            used = human_bytes_from_mib(gpu.mem_used)
-            available = human_bytes_from_mib(max(0.0, gpu.mem_total - gpu.mem_used))
-            total = human_bytes_from_mib(gpu.mem_total)
+            name = clip(gpu.name, 24)
+            used, base, delta, available = vram_parts(gpu, self.vram_baseline)
             row_text = (
-                f"GPU{gpu.index:<2} {name:<27} {gpu.util:>4.0f}%  "
-                f"{used:>11} {available:>11} {total:>11} "
-                f"{gpu.power:>6.1f}W {gpu.temp:>5.0f}C g{gpu.gen}x{gpu.width}"
+                f"GPU{gpu.index:<2} {name:<24} {gpu.util:>4.0f}%  "
+                f"{human_bytes_from_mib(used, compact=True):>8} "
+                f"{human_bytes_from_mib(base, compact=True):>8} "
+                f"{human_bytes_from_mib(delta, compact=True):>8} "
+                f"{human_bytes_from_mib(available, compact=True):>8} "
+                f"{human_bytes_from_mib(gpu.mem_total, compact=True):>8} "
+                f"{gpu.power:>5.1f}W {gpu.temp:>4.0f}C g{gpu.gen}x{gpu.width}"
             )
             self.add(row, x + 2, row_text, self.colour_for_util(gpu.util))
         if gpus and len(rows) < h - 3:
-            util, used, available, total, power, temp = gpu_summary(gpus)
+            util, _, _, _, power, temp = gpu_summary(gpus)
+            used, base, delta, available, total = vram_split_summary(gpus, self.vram_baseline)
             row = y + 2 + len(rows)
             total_text = (
-                f"{'TOTAL':<5} {'':<27} {util:>4.0f}%  "
-                f"{human_bytes_from_mib(used):>11} {human_bytes_from_mib(available):>11} {human_bytes_from_mib(total):>11} "
-                f"{power:>6.1f}W {temp:>5.0f}C {'-':>8}"
+                f"{'TOTAL':<5} {'':<24} {util:>4.0f}%  "
+                f"{human_bytes_from_mib(used, compact=True):>8} "
+                f"{human_bytes_from_mib(base, compact=True):>8} "
+                f"{human_bytes_from_mib(delta, compact=True):>8} "
+                f"{human_bytes_from_mib(available, compact=True):>8} "
+                f"{human_bytes_from_mib(total, compact=True):>8} "
+                f"{power:>5.1f}W {temp:>4.0f}C {'-':>8}"
             )
             self.add(row, x + 2, total_text, self.cyan | self.bold)
 
@@ -1084,22 +1122,30 @@ def once():
     if model_status.error:
         print(f"  error    : {model_status.error}")
     if gpus:
-        used, available, total = vram_summary(gpus)
-        print(f"  vram=model={human_bytes_from_mib(used)} available={human_bytes_from_mib(available)} total={human_bytes_from_mib(total)}")
+        baseline = update_vram_baseline(gpus, {})
+        used, base, delta, available, total = vram_split_summary(gpus, baseline)
+        print(
+            f"  vram=used={human_bytes_from_mib(used)} base={human_bytes_from_mib(base)} "
+            f"delta={human_bytes_from_mib(delta)} available={human_bytes_from_mib(available)} total={human_bytes_from_mib(total)}"
+        )
     print()
     print("GPU")
+    baseline = update_vram_baseline(gpus, {})
     for gpu in gpus:
-            avail = max(0.0, gpu.mem_total - gpu.mem_used)
-            print(
-                f"  GPU{gpu.index} {gpu.name:<26} util={gpu.util:3.0f}% "
-                f"model={human_bytes_from_mib(gpu.mem_used)} avail={human_bytes_from_mib(avail)} total={human_bytes_from_mib(gpu.mem_total)} "
-                f"pwr={gpu.power:.1f}W temp={gpu.temp:.0f}C PCIe=g{gpu.gen}x{gpu.width}"
-            )
+        used, base, delta, avail = vram_parts(gpu, baseline)
+        print(
+            f"  GPU{gpu.index} {gpu.name:<26} util={gpu.util:3.0f}% "
+            f"used={human_bytes_from_mib(used)} base={human_bytes_from_mib(base)} "
+            f"delta={human_bytes_from_mib(delta)} avail={human_bytes_from_mib(avail)} total={human_bytes_from_mib(gpu.mem_total)} "
+            f"pwr={gpu.power:.1f}W temp={gpu.temp:.0f}C PCIe=g{gpu.gen}x{gpu.width}"
+        )
     if gpus:
-        util, used, available, total, power, temp = gpu_summary(gpus)
+        util, _, _, _, power, temp = gpu_summary(gpus)
+        used, base, delta, available, total = vram_split_summary(gpus, baseline)
         print(
             f"  TOTAL {'':<26} util={util:3.0f}% "
-            f"model={human_bytes_from_mib(used)} avail={human_bytes_from_mib(available)} total={human_bytes_from_mib(total)} "
+            f"used={human_bytes_from_mib(used)} base={human_bytes_from_mib(base)} "
+            f"delta={human_bytes_from_mib(delta)} avail={human_bytes_from_mib(available)} total={human_bytes_from_mib(total)} "
             f"pwr={power:.1f}W temp={temp:.0f}C PCIe=-"
         )
     print()
