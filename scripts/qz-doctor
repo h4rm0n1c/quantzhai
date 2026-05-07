@@ -4,29 +4,57 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qz-env"
 
 fail=0
+ok() {
+  printf 'ok   %s\n' "$1"
+}
+
+skip() {
+  printf 'skip %s\n' "$1"
+}
+
+fail_check() {
+  printf 'fail %s\n' "$1"
+  fail=1
+}
+
 check() {
   local name="$1"
   shift
   if "$@" >/dev/null 2>&1; then
-    printf 'ok   %s\n' "$name"
+    ok "$name"
   else
-    printf 'fail %s\n' "$name"
-    fail=1
+    fail_check "$name"
   fi
+}
+
+fetch_json() {
+  local url="$1"
+  python3 - "$url" <<'PY'
+import json
+import sys
+import urllib.request
+
+url = sys.argv[1]
+try:
+    with urllib.request.urlopen(url, timeout=2.0) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+except Exception:
+    sys.exit(1)
+print(json.dumps(payload, ensure_ascii=False))
+PY
 }
 
 docker_cli_status=0
 docker_cli_output="$(qz_docker --version 2>&1)" || docker_cli_status=$?
 if [[ "$docker_cli_status" -eq 0 ]]; then
-  printf 'ok   docker cli\n'
+  ok "docker cli"
 else
-  printf 'fail docker cli\n'
+  fail_check "docker cli"
   if [[ "$QZ_DOCKER_CMD" == *qz-docker-quantzhai* ]]; then
     printf 'hint install helper once: scripts/qz-install-sudo-helper\n'
   elif [[ "$QZ_DOCKER_CMD" == sudo* ]]; then
     printf 'hint QZ_DOCKER_CMD uses sudo; run from a terminal where sudo can prompt, or use docker group access\n'
   fi
-  fail=1
 fi
 
 check codex codex --version
@@ -39,44 +67,259 @@ if model_report="$(python3 "$QZ_ROOT/proxy/qz_model_catalog.py" resolve --json 2
   selected_key="${selected_parts[0]:-}"
   selected_path="${selected_parts[1]:-}"
   selected_reason="${selected_parts[2]:-}"
-  printf 'ok   model: %s\n' "$selected_path"
-  printf 'ok   model key: %s\n' "$selected_key"
-  printf 'ok   model selection: %s\n' "$selected_reason"
+  ok "model: $selected_path"
+  ok "model key: $selected_key"
+  ok "model selection: $selected_reason"
+
+  if catalog_contract="$(python3 -c '
+import json
+import sys
+
+data = json.loads(sys.stdin.read())
+problems = []
+models = data.get("models") if isinstance(data.get("models"), list) else []
+selected = data.get("selected") if isinstance(data.get("selected"), dict) else {}
+
+for entry in models:
+    if not isinstance(entry, dict):
+        continue
+    if entry.get("profile_valid", True) is False:
+        key = entry.get("key") or entry.get("filename") or entry.get("path") or "unknown"
+        err = entry.get("profile_error") or "invalid profile"
+        problems.append(f"{key}: {err}")
+
+if selected.get("profile_valid", True) is False:
+    problems.append("selected profile invalid: " + str(selected.get("profile_error") or selected.get("key") or "unknown"))
+
+if selected.get("profile_symlink"):
+    backend = selected.get("backend_id") or ""
+    target = selected.get("backend_target") or ""
+    if not backend:
+        problems.append("selected symlink profile has no backend_id")
+    if not target:
+        problems.append("selected symlink profile has no backend_target")
+    if backend and target and backend != target:
+        problems.append(f"selected symlink backend mismatch: backend_id={backend} backend_target={target}")
+    if not selected.get("symlink_target_path"):
+        problems.append("selected symlink profile has no symlink_target_path")
+
+if problems:
+    print("\n".join(problems))
+    sys.exit(1)
+' <<<"$model_report")"; then
+    ok "profile catalog contract"
+  else
+    fail_check "profile catalog contract"
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && printf 'hint %s\n' "$line"
+    done <<<"$catalog_contract"
+  fi
 else
-  printf 'fail model: no GGUF found under %s\n' "$QZ_MODEL_DIR"
-  fail=1
+  fail_check "model: no GGUF found under $QZ_MODEL_DIR"
 fi
 
 docker_image_status=0
 docker_image_output="$(qz_docker image inspect "$QZ_IMAGE" 2>&1)" || docker_image_status=$?
 if [[ "$docker_image_status" -eq 0 ]]; then
-  printf 'ok   docker image: %s\n' "$QZ_IMAGE"
+  ok "docker image: $QZ_IMAGE"
 else
   if grep -Eiq 'permission denied|password is required|terminal is required|sudo' <<<"$docker_image_output"; then
-    printf 'fail docker daemon access for image check\n'
+    fail_check "docker daemon access for image check"
     if [[ "$QZ_DOCKER_CMD" == *qz-docker-quantzhai* ]]; then
       printf 'hint install helper once: scripts/qz-install-sudo-helper\n'
     else
       printf 'hint fix Docker permissions, or run from a terminal where sudo can prompt\n'
     fi
   else
-    printf 'fail docker image missing: %s\n' "$QZ_IMAGE"
+    fail_check "docker image missing: $QZ_IMAGE"
     printf 'hint build it with: scripts/qz-build-image\n'
   fi
-  fail=1
 fi
 
 if [[ -n "$SEARXNG_POLICY" && -f "$SEARXNG_POLICY" ]]; then
-  printf 'ok   search policy: %s\n' "$SEARXNG_POLICY"
+  ok "search policy: $SEARXNG_POLICY"
 else
-  printf 'fail search policy missing: %s\n' "${SEARXNG_POLICY:-unset}"
-  fail=1
+  fail_check "search policy missing: ${SEARXNG_POLICY:-unset}"
 fi
 
 if [[ -n "$SEARXNG_BASE_URL" ]]; then
-  printf 'ok   search base configured: %s\n' "$SEARXNG_BASE_URL"
+  ok "search base configured: $SEARXNG_BASE_URL"
 else
-  printf 'skip search base: set SEARXNG_BASE_URL to enable local web_search\n'
+  skip "search base: set SEARXNG_BASE_URL to enable local web_search"
+fi
+
+codex_config="$QZ_ROOT/var/codex-home/config.toml"
+if [[ -f "$codex_config" ]]; then
+  if stale_codex_limits="$(python3 - "$codex_config" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+bad = []
+for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    if re.match(r"\s*model_context_window\s*=", line):
+        bad.append(f"{path}:{number}: model_context_window")
+    if re.match(r"\s*model_max_output_tokens\s*=", line):
+        bad.append(f"{path}:{number}: model_max_output_tokens")
+if bad:
+    print("\n".join(bad))
+    sys.exit(1)
+PY
+  )"; then
+    ok "codex config has no stale static model limits"
+  else
+    fail_check "codex config has stale static model limits"
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && printf 'hint remove stale override: %s\n' "$line"
+    done <<<"$stale_codex_limits"
+    printf 'hint run scripts/qz-codex once to regenerate the local Codex config\n'
+  fi
+else
+  skip "codex config: not generated yet"
+fi
+
+proxy_base="http://$QZ_PROXY_HOST:$QZ_PROXY_PORT"
+if status_json="$(fetch_json "$proxy_base/qz/status")"; then
+  ok "proxy status: $proxy_base/qz/status"
+  if models_json="$(fetch_json "$proxy_base/v1/models")"; then
+    ok "proxy models: $proxy_base/v1/models"
+    if live_contract="$(python3 - "$status_json" "$models_json" <<'PY'
+import json
+import sys
+
+status = json.loads(sys.argv[1])
+models = json.loads(sys.argv[2])
+selected = status.get("selected") if isinstance(status.get("selected"), dict) else {}
+backend = status.get("backend") if isinstance(status.get("backend"), dict) else {}
+problems = []
+
+selected_key = selected.get("key") or selected.get("id") or ""
+selected_backend = selected.get("backend_id") or selected.get("backend_target") or selected_key
+backend_selected_key = backend.get("selected_key") or ""
+backend_selected_backend = backend.get("selected_backend_id") or backend.get("loaded_model") or ""
+loaded = backend.get("loaded_model") or ""
+
+if selected_key and backend_selected_key and selected_key != backend_selected_key:
+    problems.append(f"selected key mismatch: status.selected.key={selected_key} backend.selected_key={backend_selected_key}")
+if selected_backend and backend_selected_backend and selected_backend != backend_selected_backend:
+    problems.append(f"backend target mismatch: selected.backend_id={selected_backend} backend.selected_backend_id={backend_selected_backend}")
+if loaded and selected_backend and loaded != selected_backend:
+    problems.append(f"loaded model mismatch: loaded_model={loaded} selected.backend_id={selected_backend}")
+
+selected_context = selected.get("runtime_context_length") or selected.get("context_length")
+backend_context = backend.get("selected_context_length") or backend.get("backend_context_length")
+if selected_context and backend_context and int(selected_context) != int(backend_context):
+    problems.append(f"context mismatch: selected={selected_context} backend={backend_context}")
+
+model_entries = models.get("data") if isinstance(models.get("data"), list) else []
+model_entry = next((entry for entry in model_entries if isinstance(entry, dict) and entry.get("id") == selected_key), None)
+if selected_key and model_entry is None:
+    problems.append(f"selected profile missing from /v1/models: {selected_key}")
+elif model_entry is not None:
+    model_context = model_entry.get("runtime_context_length") or model_entry.get("context_length")
+    if selected_context and model_context and int(selected_context) != int(model_context):
+        problems.append(f"/v1/models context mismatch for {selected_key}: models={model_context} status={selected_context}")
+    model_backend = model_entry.get("backend_id") or model_entry.get("backend_target") or ""
+    if selected_backend and model_backend and selected_backend != model_backend:
+        problems.append(f"/v1/models backend mismatch for {selected_key}: models={model_backend} status={selected_backend}")
+
+if problems:
+    print("\n".join(problems))
+    sys.exit(1)
+PY
+    )"; then
+      ok "live profile/backend/context contract"
+    else
+      fail_check "live profile/backend/context contract"
+      while IFS= read -r line; do
+        [[ -n "$line" ]] && printf 'hint %s\n' "$line"
+      done <<<"$live_contract"
+    fi
+  else
+    fail_check "proxy models endpoint"
+  fi
+
+  if telemetry_json="$(fetch_json "$proxy_base/qz/telemetry/recent?limit=80")"; then
+    if prompt_contract_check="$(python3 - "$telemetry_json" <<'PY'
+import json
+import sys
+
+data = json.loads(sys.argv[1])
+events = data.get("events") if isinstance(data.get("events"), list) else []
+contracts = [event.get("payload") or {} for event in events if event.get("type") == "prompt_contract"]
+if not contracts:
+    sys.exit(2)
+contract = contracts[-1]
+missing = [key for key in ("requested_model", "selected_backend_id", "reasoning_level", "prompt_policy") if not contract.get(key)]
+if missing:
+    print("missing fields: " + ", ".join(missing))
+    sys.exit(1)
+PY
+    )"; then
+      ok "recent prompt contract telemetry"
+    else
+      prompt_contract_status=$?
+      if [[ "$prompt_contract_status" -eq 2 ]]; then
+        skip "recent prompt contract telemetry: no recent model request"
+      else
+        fail_check "recent prompt contract telemetry"
+        while IFS= read -r line; do
+          [[ -n "$line" ]] && printf 'hint %s\n' "$line"
+        done <<<"$prompt_contract_check"
+      fi
+    fi
+  else
+    skip "telemetry recent: proxy endpoint unavailable"
+  fi
+
+  if [[ "${QZ_DOCTOR_PROMPT_SMOKE:-0}" == "1" ]]; then
+    if prompt_smoke="$(python3 - "$proxy_base" "$selected_key" <<'PY'
+import json
+import sys
+import urllib.request
+
+base_url, model = sys.argv[1], sys.argv[2]
+body = {
+    "model": model,
+    "stream": False,
+    "max_output_tokens": 1,
+    "input": [{
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "Reply with ok."}],
+    }],
+}
+request = urllib.request.Request(
+    base_url + "/v1/responses",
+    data=json.dumps(body).encode("utf-8"),
+    method="POST",
+    headers={"Content-Type": "application/json", "Accept": "application/json", "Authorization": "Bearer local"},
+)
+with urllib.request.urlopen(request, timeout=60.0) as response:
+    if response.status >= 400:
+        raise SystemExit(response.status)
+
+with urllib.request.urlopen(base_url + "/qz/telemetry/recent?limit=20", timeout=2.0) as response:
+    telemetry = json.loads(response.read().decode("utf-8"))
+events = telemetry.get("events") if isinstance(telemetry.get("events"), list) else []
+if not any(event.get("type") == "prompt_contract" for event in events):
+    print("no prompt_contract event after smoke request")
+    raise SystemExit(1)
+PY
+    )"; then
+      ok "prompt contract smoke request"
+    else
+      fail_check "prompt contract smoke request"
+      while IFS= read -r line; do
+        [[ -n "$line" ]] && printf 'hint %s\n' "$line"
+      done <<<"$prompt_smoke"
+    fi
+  else
+    skip "prompt contract smoke request: set QZ_DOCTOR_PROMPT_SMOKE=1 to run"
+  fi
+else
+  skip "proxy live contract: $proxy_base/qz/status unavailable"
 fi
 
 exit "$fail"

@@ -325,6 +325,12 @@ Check environment:
 scripts/qz-doctor
 ```
 
+Run the optional prompt-contract smoke against a live proxy:
+
+```bash
+QZ_DOCTOR_PROMPT_SMOKE=1 scripts/qz-doctor
+```
+
 Start server and proxy:
 
 ```bash
