@@ -58,10 +58,20 @@ def deep_merge(base, overlay):
     return result
 
 
+def first_existing_path(*paths):
+    for path in paths:
+        if path.is_file():
+            return path
+    return paths[0]
+
+
 def load_override_manifest():
     manifest = {}
     for path in (
-        root_dir / "config" / "qz-model-overrides.default.json",
+        first_existing_path(
+            root_dir / "config" / "default" / "model-overrides.json",
+            root_dir / "config" / "qz-model-overrides.default.json",
+        ),
         root_dir / "var" / "model-overrides.json",
     ):
         data = load_json(path)
@@ -130,7 +140,7 @@ def system_prompt_for_model(overrides):
     if file_text:
         return file_text
 
-    # Global default, shipped through config/qz-model-overrides.default.json and
+    # Global default, shipped through config/default/model-overrides.json and
     # optionally overridden in var/model-overrides.json.
     inline = override_value(
         OVERRIDE_MANIFEST,

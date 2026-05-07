@@ -22,12 +22,14 @@ class EffectiveConfigReportTests(unittest.TestCase):
                 root = Path(tmp)
                 var_dir = root / "var"
                 (root / "config" / "default").mkdir(parents=True)
+                (root / "config" / "example").mkdir(parents=True)
                 (root / "proxy").mkdir()
                 (var_dir / "models").mkdir(parents=True)
-                (root / "config" / "qz-model-overrides.default.json").write_text(
+                (root / "config" / "default" / "model-overrides.json").write_text(
                     '{"models":{"profile.gguf":{"system_prompt_file":"config/user/prompts/profile.md"}}}\n',
                     encoding="utf-8",
                 )
+                (root / "config" / "example" / "model-overrides.json").write_text('{"models":{}}\n', encoding="utf-8")
                 (root / "config" / "default" / "search-policy.json").write_text("{}\n", encoding="utf-8")
                 (var_dir / "model-overrides.json").write_text('{"models":{}}\n', encoding="utf-8")
                 (root / "proxy" / "searxng-capabilities.json").write_text("{}\n", encoding="utf-8")
@@ -43,6 +45,8 @@ class EffectiveConfigReportTests(unittest.TestCase):
                 paths = {item["name"]: item for item in payload["paths"]}
                 self.assertEqual(paths["model_dir"]["classification"], "local_models")
                 self.assertEqual(paths["model_overrides_default"]["state"], "file")
+                self.assertEqual(paths["model_overrides_default"]["path"], str(root / "config" / "default" / "model-overrides.json"))
+                self.assertEqual(paths["model_overrides_example"]["path"], str(root / "config" / "example" / "model-overrides.json"))
                 self.assertEqual(paths["model_overrides_user"]["state"], "file")
                 self.assertEqual(paths["codex_model_catalog"]["source_layer"], "generated")
                 self.assertEqual(paths["searxng_policy"]["path"], str(root / "config" / "default" / "search-policy.json"))

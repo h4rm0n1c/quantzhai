@@ -46,6 +46,44 @@ class FakeHandler:
 
 
 class ModelCatalogProfileValidationTests(unittest.TestCase):
+    def test_load_manifest_uses_config_default_layer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            default_path = root / "config" / "default" / "model-overrides.json"
+            default_path.parent.mkdir(parents=True, exist_ok=True)
+            default_path.write_text(json.dumps({
+                "default_key": "profile.gguf",
+                "models": {
+                    "profile.gguf": {
+                        "label": "profile",
+                    }
+                },
+            }), encoding="utf-8")
+
+            manifest = load_manifest(root)
+
+            self.assertEqual(manifest["default_key"], "profile.gguf")
+            self.assertEqual(manifest["models"]["profile.gguf"]["label"], "profile")
+
+    def test_load_manifest_keeps_legacy_default_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            legacy_path = root / "config" / "qz-model-overrides.default.json"
+            legacy_path.parent.mkdir(parents=True, exist_ok=True)
+            legacy_path.write_text(json.dumps({
+                "default_key": "legacy.gguf",
+                "models": {
+                    "legacy.gguf": {
+                        "label": "legacy",
+                    }
+                },
+            }), encoding="utf-8")
+
+            manifest = load_manifest(root)
+
+            self.assertEqual(manifest["default_key"], "legacy.gguf")
+            self.assertEqual(manifest["models"]["legacy.gguf"]["label"], "legacy")
+
     def test_last_selected_profile_wins_over_alphabetical_fallback(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"QZ_MODEL_KEY": ""}, clear=False):
             os.environ.pop("QZ_MODEL_STATE_PATH", None)

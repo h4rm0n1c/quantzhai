@@ -213,8 +213,8 @@ Tracked source/default files:
 config/codex-config.example.toml
 config/qwenzhai-models.example.json
 config/qz-benchmark-prompts.json
-config/qz-model-overrides.default.json
-config/qz-model-overrides.example.json
+config/default/model-overrides.json
+config/example/model-overrides.json
 config/default/search-policy.json
 ```
 
@@ -258,7 +258,7 @@ var/codex-home/sqlite/*
 
 | Path | Source read | Runtime/generated write | User-visible output | Failure mode | Preferred recovery |
 | --- | --- | --- | --- | --- | --- |
-| model discovery | `QZ_MODEL_DIR`, default `var/models`; `config/qz-model-overrides.default.json`; `var/model-overrides.json`; optional `config/qz-model-overrides.example.json` behind `QZ_LOAD_EXAMPLE_MODEL_OVERRIDES` | `var/model-inventory.json` | `/v1/models`, `/qz/status`, generated Codex catalog | missing model dir, bad GGUF metadata, stale cache, broken symlink | compact scan error, invalid profile hidden, cache is regenerated not trusted |
+| model discovery | `QZ_MODEL_DIR`, default `var/models`; `config/default/model-overrides.json`; `var/model-overrides.json`; optional `config/example/model-overrides.json` behind `QZ_LOAD_EXAMPLE_MODEL_OVERRIDES`; legacy `config/qz-model-overrides.*.json` files are read only as compatibility fallback | `var/model-inventory.json` | `/v1/models`, `/qz/status`, generated Codex catalog | missing model dir, bad GGUF metadata, stale cache, broken symlink | compact scan error, invalid profile hidden, cache is regenerated not trusted |
 | profile alias resolution | scanned `*.gguf` entries, override aliases, symlink filename/stem | inventory entry fields `profile_symlink`, `profile_valid`, `profile_error`, `backend_target` | Codex model picker slug stays profile identity | old synthetic aliases or backend ids leak into Codex-visible names | no synthetic alias layer; profile name is model-dir filename/stem only |
 | symlink profile target resolution | `var/models/<profile>.gguf` symlink target plus real scanned GGUF paths | inventory stores `symlink_target_path`, target backend id, validity | direct request either routes to target or fails compactly | target missing/outside scan bricks session or falls through to wrong backend | mark invalid before catalog generation; no silent fallback |
 | prompt override loading | merged override manifest; inline prompt fields; prompt files resolved relative to repo root unless absolute | prompt contract telemetry and latest request contract capture | forwarded request instructions and generated Codex `base_instructions` | missing prompt file silently empties profile prompt in some generated paths | effective config view must report loaded/missing/failed prompt files |

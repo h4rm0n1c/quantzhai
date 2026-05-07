@@ -54,9 +54,20 @@ def _deep_merge(base, overlay):
     return result
 
 
+def _first_existing_path(*paths):
+    for path in paths:
+        if path.is_file():
+            return path
+    return paths[0]
+
+
 def _load_manifest():
     manifest = {}
-    default_path = _root_dir() / "config" / "qz-model-overrides.default.json"
+    root = _root_dir()
+    default_path = _first_existing_path(
+        root / "config" / "default" / "model-overrides.json",
+        root / "config" / "qz-model-overrides.default.json",
+    )
     default_manifest = _load_json(default_path)
     if default_manifest:
         manifest = _deep_merge(manifest, default_manifest)

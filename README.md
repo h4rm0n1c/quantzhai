@@ -318,9 +318,11 @@ Important settings:
 The current defaults came from the working two-GPU Qwen3.6 setup. They are not universal.
 
 `proxy/qz_model_catalog.py` scans `QZ_MODEL_DIR`, merges
-`config/qz-model-overrides.example.json` with `QZ_MODEL_OVERRIDES` if present,
-writes `var/model-inventory.json`, and feeds the proxy's `/v1/models`,
-`/qz/models`, and model-load paths.
+`config/default/model-overrides.json`, optional
+`config/example/model-overrides.json` when `QZ_LOAD_EXAMPLE_MODEL_OVERRIDES`
+is enabled, and `QZ_MODEL_OVERRIDES` if present. It writes
+`var/model-inventory.json` and feeds the proxy's `/v1/models`, `/qz/models`,
+and model-load paths.
 
 `scripts/qz-codex` also refreshes its local Codex model catalog from that live
 inventory, so the model picker tracks the actual `var/models/*.gguf` files.

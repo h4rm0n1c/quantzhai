@@ -142,6 +142,13 @@ def _default_search_policy_path(root: Path, script_dir: Path) -> Path:
     return root / "config" / "default" / "search-policy.json"
 
 
+def _first_existing_path(*paths: Path) -> Path:
+    for path in paths:
+        if path.is_file():
+            return path
+    return paths[0]
+
+
 def effective_config_payload(handler=None) -> Dict[str, Any]:
     root = _root_dir()
     var_dir = _var_dir(root)
@@ -165,8 +172,14 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
     else:
         searxng_capabilities = Path(os.environ.get("SEARXNG_CAPABILITIES") or script_dir / "searxng-capabilities.json").expanduser()
 
-    default_overrides = root / "config" / "qz-model-overrides.default.json"
-    example_overrides = root / "config" / "qz-model-overrides.example.json"
+    default_overrides = _first_existing_path(
+        root / "config" / "default" / "model-overrides.json",
+        root / "config" / "qz-model-overrides.default.json",
+    )
+    example_overrides = _first_existing_path(
+        root / "config" / "example" / "model-overrides.json",
+        root / "config" / "qz-model-overrides.example.json",
+    )
 
     records = [
         _record("root", root, source_layer="environment", classification="repo_root", env_var="QZ_ROOT"),

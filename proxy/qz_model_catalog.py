@@ -227,12 +227,22 @@ def _truthy_env(name: str) -> bool:
     return (os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _first_existing_path(*paths: Path) -> Path:
+    for path in paths:
+        if path.is_file():
+            return path
+    return paths[0]
+
+
 def load_manifest(root: Path, overrides_path: Optional[Path] = None) -> Dict[str, Any]:
     manifest = {
         "default_key": None,
         "models": {},
     }
-    default_path = root / "config" / "qz-model-overrides.default.json"
+    default_path = _first_existing_path(
+        root / "config" / "default" / "model-overrides.json",
+        root / "config" / "qz-model-overrides.default.json",
+    )
     loaded = load_json(default_path)
     if loaded:
         manifest = deep_merge(manifest, loaded)
@@ -242,7 +252,10 @@ def load_manifest(root: Path, overrides_path: Optional[Path] = None) -> Dict[str
     if loaded:
         manifest = deep_merge(manifest, loaded)
     elif _truthy_env("QZ_LOAD_EXAMPLE_MODEL_OVERRIDES"):
-        base_path = root / "config" / "qz-model-overrides.example.json"
+        base_path = _first_existing_path(
+            root / "config" / "example" / "model-overrides.json",
+            root / "config" / "qz-model-overrides.example.json",
+        )
         loaded = load_json(base_path)
         if loaded:
             manifest = deep_merge(manifest, loaded)

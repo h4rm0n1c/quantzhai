@@ -241,6 +241,7 @@ Status:
 Started. Current data paths are audited in docs/edge-case-config-contract-plan.md.
 /qz/config/effective exposes a read-only effective path/config report.
 Search policy moved from docs/ to config/default/search-policy.json with old-path compatibility fallback.
+Model override defaults/examples moved into config/default/model-overrides.json and config/example/model-overrides.json with old-path compatibility fallback.
 ```
 
 Proposed destination:
