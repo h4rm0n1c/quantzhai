@@ -191,6 +191,59 @@ high -> Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact
 max -> Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact
 ```
 
+## Model Profile Symlinks
+
+QuantZhai model profiles are filesystem symlinks under `var/models/`.
+
+Example:
+
+```bash
+ln -s Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ4_NL.gguf var/models/prompt-compiler.gguf
+```
+
+Contract:
+
+```text
+Codex-visible profile: var/models/prompt-compiler.gguf
+Prompt overrides:       prompt-compiler.gguf in var/model-overrides.json
+Backend target:         resolved symlink target GGUF stem
+llama.cpp load id:      real backend target, not the profile filename
+```
+
+Codex sees and selects the profile name. The proxy resolves the symlink target
+and routes llama.cpp backend requests to the real scanned GGUF model. Do not add
+a backend-name override in profile metadata.
+
+Optional profile metadata lives in `var/model-overrides.json`:
+
+```json
+{
+  "models": {
+    "prompt-compiler.gguf": {
+      "label": "prompt-compiler",
+      "runtime_context_length": 262144,
+      "system_prompt_file": "var/prompts/sillytavern_card_v2_runtime_prompt_compiler.md"
+    }
+  }
+}
+```
+
+Profiles are valid only when the symlink target resolves to a real GGUF scanned
+under `var/models/`. If a target is missing or outside that directory, the
+profile is hidden from generated Codex catalogs or rejected with a compact
+actionable error. Silent fallback is intentionally avoided because it would make
+prompt/profile behaviour unpredictable.
+
+`scripts/qz-doctor` checks the profile catalog, live proxy/backend/context
+agreement, stale Codex context/output overrides, and prompt-contract telemetry.
+After changing profile symlinks or pulling proxy changes, run:
+
+```bash
+scripts/qz-doctor
+scripts/qz-proxy
+QZ_DOCTOR_PROMPT_SMOKE=1 scripts/qz-doctor
+```
+
 `caveman` is an experimental compact-instructions profile. `scripts/qz-codex caveman`
 loads `docs/qz-caveman-codex-model-instructions-v2.md` and caps Codex output at
 2048 tokens for that session.

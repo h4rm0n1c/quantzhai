@@ -1,6 +1,6 @@
 # QuantZhai documentation index
 
-Start here when you want to understand the repo without spelunking through every note like a caffeinated truffle pig.
+Start here when you want to understand the repo without reading every note in the tree.
 
 ## Recommended reading path
 
@@ -22,7 +22,7 @@ Start here when you want to understand the repo without spelunking through every
 | Master plan | [Master stabilisation plan](master-stabilisation-plan.md) | Controlling map for current bugs, contracts, dependencies, and fix order. |
 | Config and error handling | [Edge case and config contract plan](edge-case-config-contract-plan.md) | Audit/refactor plan for edge cases, compact errors, profile safety, config layering, and reducing script sprawl. |
 | Current bugfix focus | [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) | Triage, review plan, proposed fixes, and acceptance checks for `/status`, monitor tools, profile tuning, and proxy streaming. |
-| Known bug | [Stale profile symlink bug](bugs/stale-profile-server-alias.md) | Regression reminder for invalid symlink profiles and missing backend GGUF targets. |
+| Fixed bug / regression guard | [Stale profile symlink bug](bugs/stale-profile-server-alias.md) | Symlink profile contract, compact invalid-profile errors, and `qz-doctor` regression checks. |
 | Known bug | [Responses streaming and qz-thoughts bug](bugs/responses-streaming-and-qz-thoughts.md) | Audit plan for Responses SSE forwarding, summary transformation, and noisy live thought rendering. |
 | Compact profiles | [Caveman Codex model instructions v2](qz-caveman-codex-model-instructions-v2.md) | The compact Codex prompt/profile instructions used by `scripts/qz-codex caveman`. |
 | Compact profiles | [QuantZhai caveman profile](quantzhai-caveman-profile.md) | Notes and design intent for the caveman/compact profile. |
@@ -65,9 +65,9 @@ Read:
 Focus:
 
 ```text
-Fix stale symlink profile validation and compact errors first.
-qz-thoughts delta coalescing is now done.
-Next add stream timing telemetry.
+Stale symlink profile validation, compact errors, and doctor checks are done.
+qz-thoughts delta coalescing is done.
+Next add stream timing telemetry or profile-preset review.
 Do not start broad config movement before auditing data paths.
 ```
 
@@ -84,7 +84,7 @@ Focus:
 
 ```text
 Audit before refactor.
-Fix compact errors and invalid-profile handling before broad config movement.
+Compact errors and invalid-profile handling are done; keep doctor checks green before broad config movement.
 Do not add new one-off shell scripts unless there is a strong reason.
 ```
 
