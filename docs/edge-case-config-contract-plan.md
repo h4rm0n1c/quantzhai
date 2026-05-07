@@ -306,6 +306,17 @@ Only after that report exists should files move toward `config/default/`,
 currently active config living under `docs/`, and it does not affect model
 routing or profile identity.
 
+Initial inspection surface:
+
+```text
+GET /qz/config/effective
+GET /qz/config/paths
+```
+
+This endpoint reports the active path, source layer, classification, existence
+state, env override, and config warnings for current config/state/generated/debug
+paths. It is read-only and must not become a routing authority.
+
 ## Minimal fixes before full refactor
 
 Before the larger config restructure, prioritise the small safety fixes that stop current breakage.

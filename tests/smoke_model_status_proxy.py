@@ -255,6 +255,15 @@ def main():
             assert telemetry_state["runtime"]["backend_context_length"] == 131072, telemetry_state
             assert telemetry_state["runtime"]["selected_reasoning_level"] == "medium", telemetry_state
 
+            status, _, config_report = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/config/effective")
+            assert status == 200, config_report
+            assert config_report["schema"] == "qz.config.effective.v1", config_report
+            config_paths = {item["name"]: item for item in config_report["paths"]}
+            assert config_paths["model_state"]["path"] == model_state_path, config_report
+            assert config_paths["backend_state"]["path"] == backend_state_path, config_report
+            assert config_paths["capture_dir"]["path"] == f"{tmpdir}/captures", config_report
+            assert config_paths["codex_model_catalog"]["source_layer"] == "generated", config_report
+
             status, _, out = _request_json(
                 f"http://127.0.0.1:{proxy.server_port}/v1/responses",
                 {

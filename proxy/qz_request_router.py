@@ -10,6 +10,7 @@ PROMPT_CONTRACT_SCHEMA = "qz.prompt.contract.v1"
 CAPTURE_CONTRACT_SCHEMA = "qz.capture.contract.v1"
 
 try:
+    from .qz_config_report import effective_config_payload
     from .qz_telemetry import TELEMETRY_RECENT_SCHEMA
     from .qz_proxy_config import CURRENT_API_ENDPOINTS, LEGACY_API_ENDPOINTS, api_contract_payload
     from .qz_responses import (
@@ -30,6 +31,7 @@ try:
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import append_capture, capture_enabled, capture_path, runtime_log, write_capture
 except ImportError:
+    from qz_config_report import effective_config_payload
     from qz_telemetry import TELEMETRY_RECENT_SCHEMA
     from qz_proxy_config import CURRENT_API_ENDPOINTS, LEGACY_API_ENDPOINTS, api_contract_payload
     from qz_responses import (
@@ -157,6 +159,10 @@ class RequestRouter:
 
         if self.handler.path in ("/qz/telemetry/events", "/qz/telemetry/stream"):
             self.handler._send_telemetry_sse()
+            return
+
+        if self.handler.path in ("/qz/config/effective", "/qz/config/paths"):
+            self.handler._send_json(200, effective_config_payload(self.handler))
             return
 
         if self.handler.path == "/v1/models":
