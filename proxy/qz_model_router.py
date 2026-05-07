@@ -26,6 +26,11 @@ except ImportError:
     from qz_runtime_io import read_json, runtime_state_path, write_json
 
 
+STATUS_SNAPSHOT_SCHEMA = "qz.status.snapshot.v1"
+STATUS_SUMMARY_SCHEMA = "qz.status.summary.v1"
+RUNTIME_STATE_SCHEMA = "qz.runtime.state.v1"
+
+
 def entry_identity(entry: dict | None) -> str:
     entry = entry if isinstance(entry, dict) else {}
     for field in ("slug", "key", "backend_id", "filename", "stem"):
@@ -578,6 +583,7 @@ class ModelRouter:
             loaded_model,
         )
         return {
+            "schema": STATUS_SNAPSHOT_SCHEMA,
             "status": "ok" if ready else "loading",
             "router_mode": True,
             "ready": ready,
@@ -628,6 +634,7 @@ class ModelRouter:
         ]
         loaded_model = backend.get("loaded_model") or (loaded_ids[0] if loaded_ids else "")
         return {
+            "schema": STATUS_SUMMARY_SCHEMA,
             "reason": reason,
             "ready": snapshot.get("ready", False),
             "router_mode": snapshot.get("router_mode", False),
@@ -657,12 +664,18 @@ class ModelRouter:
         profile = requested_model or selected.get("label") or selected.get("slug") or selected.get("key") or ""
         selected_key = backend.get("selected_key") or entry_identity(selected)
         return {
+            "schema": RUNTIME_STATE_SCHEMA,
             "ready": snapshot["ready"],
             "load_state": load.get("state") or "unknown",
             "profile": profile,
             "selected": selected_key,
+            "selected_key": selected_key,
+            "selected_backend_id": backend.get("selected_backend_id") or "",
+            "selected_state": backend.get("selected_state") or "unknown",
             "context_length": backend.get("selected_context_length"),
             "backend_context_length": backend.get("backend_context_length"),
+            "restart_required": bool(backend.get("restart_required")),
+            "health_status": (snapshot.get("health") or {}).get("status"),
             "reasoning_level": backend.get("selected_reasoning_level") or "medium",
             "reasoning_policy": backend.get("selected_reasoning_policy") or reasoning_policy_mode(),
         }

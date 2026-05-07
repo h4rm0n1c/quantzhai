@@ -277,8 +277,11 @@ def main():
             assert sent["presence_penalty"] == 0, sent
             assert sent["repeat_penalty"] == 1.0, sent
             assert "thinking_budget_tokens" not in sent, sent
+            assert sent["metadata"]["qz_runtime"]["schema"] == "qz.runtime.state.v1", sent
             assert sent["metadata"]["qz_runtime"]["ready"] is True, sent
             assert sent["metadata"]["qz_runtime"]["load_state"] == "ready", sent
+            assert sent["metadata"]["qz_runtime"]["selected_backend_id"] == "model-a.gguf", sent
+            assert sent["metadata"]["qz_runtime"]["selected_state"] == "loaded", sent
             assert sent["metadata"]["qz_reasoning"]["level"] == "high", sent
             assert sent["metadata"]["qz_reasoning"]["policy"] == "prompt", sent
             assert sent["metadata"]["qz_prompt_policy"]["mode"], sent
@@ -292,6 +295,7 @@ def main():
             ]
             assert prompt_contracts, telemetry_recent
             prompt_contract = prompt_contracts[-1]
+            assert prompt_contract["schema"] == "qz.prompt.contract.v1", prompt_contract
             assert prompt_contract["profile"] == "Model A", prompt_contract
             assert prompt_contract["requested_model"] == "model-a.gguf", prompt_contract
             assert prompt_contract["selected_backend_id"] == "model-a.gguf", prompt_contract
@@ -300,12 +304,14 @@ def main():
             assert any(
                 event.get("type") == "request_completed"
                 and (event.get("payload") or {}).get("runtime_metrics", {}).get("selected_context_length") == 131072
+                and (event.get("payload") or {}).get("runtime_metrics", {}).get("schema") == "qz.runtime.metrics.v1"
                 and (event.get("payload") or {}).get("runtime_metrics", {}).get("prompt_contract", {}).get("requested_model") == "model-a.gguf"
                 for event in telemetry_recent.get("events", [])
             ), telemetry_recent
 
             status, _, ready = _request_json(f"http://127.0.0.1:{proxy.server_port}/ready")
             assert status == 200, ready
+            assert ready["schema"] == "qz.status.snapshot.v1", ready
             assert ready["ready"] is True, ready
             assert ready["load"]["state"] == "ready", ready
             assert ready["selected"]["key"] == "model-a.gguf", ready

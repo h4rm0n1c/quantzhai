@@ -5,6 +5,9 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+RUNTIME_METRICS_SCHEMA = "qz.runtime.metrics.v1"
+PROMPT_CONTRACT_SCHEMA = "qz.prompt.contract.v1"
+
 try:
     from .qz_telemetry import TELEMETRY_RECENT_SCHEMA
     from .qz_proxy_config import CURRENT_API_ENDPOINTS, LEGACY_API_ENDPOINTS, api_contract_payload
@@ -251,6 +254,7 @@ class RequestRouter:
         if not isinstance(load, dict):
             load = {}
         return {
+            "schema": RUNTIME_METRICS_SCHEMA,
             "ready": bool(snapshot.get("ready")) if isinstance(snapshot, dict) else False,
             "load_state": load.get("state") or "unknown",
             "selected_model": selected_model or selected.get("label") or selected.get("slug") or selected.get("key") or "",
@@ -310,6 +314,7 @@ class RequestRouter:
         selected_key = selected_model.get("key") or selected_model.get("slug") or client_model or ""
         profile = selected_model.get("label") or selected_model.get("name") or selected_key or client_model
         return {
+            "schema": PROMPT_CONTRACT_SCHEMA,
             "profile": profile,
             "requested_model": client_model or "",
             "selected_key": selected_key,
