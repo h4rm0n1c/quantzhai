@@ -109,6 +109,12 @@ separate, and displays latest as the newest valid sample rather than the
 highest observed sample.
 ```
 
+VRAM display has a host-local first pass. `qz-top` now shows `USED`, low-water
+`BASE`, live `DELTA`, `FREE`, and `TOTAL` from `nvidia-smi`, but those values
+are not yet proxy/backend telemetry. `DELTA` is only an approximation for
+cache/buffer pressure until the backend reports model, KV-cache, and scratch
+buffer allocations explicitly.
+
 ### Observed problem
 
 `qz-top` has bad token-per-second counters. The math is suspect and can produce gibberish.
@@ -132,6 +138,16 @@ Likely symptoms:
 - Request ID.
 - Last-event age.
 - Model/context from the shared runtime-state snapshot.
+- VRAM source and confidence, so host-local GPU probes are not confused with
+  backend-confirmed allocation telemetry.
+- Current GPU VRAM split:
+  - `used`: current device memory used.
+  - `model_base`: backend-confirmed model allocation when available; otherwise
+    monitor low-water baseline.
+  - `kv_cache`: backend-confirmed KV/cache allocation when available.
+  - `scratch_buffers`: backend-confirmed compute/scratch buffers when available.
+  - `delta`: current used minus model base when exact backend split is missing.
+  - `free` and `total`.
 
 No fake precision. No guessing unless explicitly labelled.
 
@@ -148,6 +164,20 @@ Primary live inputs:
 /qz/telemetry/recent    # bounded recent history
 /qz/telemetry/stream    # live SSE telemetry stream
 ```
+
+Backend telemetry update still needed:
+
+- Add a proxy/backend `vram_snapshot` or `gpu_snapshot` event with schema id,
+  monotonic timestamp, wall timestamp, and source fields.
+- Prefer backend-reported allocation classes when TurboQuant/llama.cpp exposes
+  them: model weights, KV/cache, scratch/compute buffers, other/process
+  overhead.
+- Preserve qz-top's direct `nvidia-smi` probe as a fallback/host view and label
+  it as `source=nvidia-smi`.
+- Make `/qz/status` and `/qz/telemetry/recent` expose the same VRAM snapshot so
+  `qz-top --once`, live qz-top, and any future remote monitor agree.
+- Display confidence/state: `confirmed` for backend allocation split,
+  `estimated` for low-water delta, `unknown` when neither source is available.
 
 JSON/JSONL files may be written for replay, audit, and offline debugging, but
 they are not the primary freshness contract for the live dashboard.
@@ -543,6 +573,7 @@ state/recent/stream runtime:
 - [x] Define first `/qz/telemetry/stream` SSE fan-out contract.
 - [x] Keep JSON/JSONL telemetry as optional replay/debug output only.
 - [x] Convert `qz-top` to structured telemetry.
+- [ ] Add backend/proxy VRAM snapshot telemetry for qz-top `USED`/`BASE`/cache/buffer split.
 - [x] Convert `qz-thoughts` to structured stream events.
 - [x] Fix first-pass `qz-top` TPS sanity.
 - [x] Add concurrent monitor smoke test.

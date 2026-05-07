@@ -92,6 +92,11 @@ Date: 2026-04-29
   low-water `BASE` and live `DELTA`. `DELTA` is useful for cache/buffer pressure
   testing, but it is an approximation until the backend reports exact model,
   KV-cache, and scratch-buffer allocations.
+- Remaining qz-top telemetry work: add proxy/backend `vram_snapshot` or
+  `gpu_snapshot` events and surface them through `/qz/status` and
+  `/qz/telemetry/recent`. The target split is current used, confirmed model
+  base, confirmed KV/cache, confirmed scratch buffers, fallback delta, free,
+  total, source, and confidence state.
 - `README.md` documents the new launcher and monitor entry points.
 
 ## Roadmap Impact
