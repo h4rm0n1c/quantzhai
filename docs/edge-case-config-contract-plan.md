@@ -198,6 +198,114 @@ preferred error message
 whether recovery is safe
 ```
 
+## Current data path audit
+
+Date: 2026-05-07
+
+This is the current state before the broader config refactor. It is a map of
+where truth lives today, not the destination layout.
+
+### Path ownership boundaries
+
+Tracked source/default files:
+
+```text
+config/codex-config.example.toml
+config/qwenzhai-models.example.json
+config/qz-benchmark-prompts.json
+config/qz-model-overrides.default.json
+config/qz-model-overrides.example.json
+docs/searxng-agent-policy-profiled.json
+proxy/searxng-agent-policy.json
+proxy/searxng-capabilities.json
+```
+
+Local user/runtime inputs:
+
+```text
+.env
+var/model-overrides.json
+var/models/*.gguf
+var/models/*.gguf symlinks used as profiles
+QZ_* and SEARXNG_* environment variables
+```
+
+Generated files:
+
+```text
+var/model-inventory.json
+var/codex-home/config.toml
+var/codex-home/model-catalogs/qwenzhai-models.json
+```
+
+Runtime state:
+
+```text
+var/model-state.json
+var/backend-state.json
+var/run/qz-runtime-state.json
+in-memory proxy telemetry bus
+```
+
+Debug/replay outputs:
+
+```text
+var/captures/*
+var/logs/*
+var/benchmarks/latest-summary.json
+var/codex-home/sqlite/*
+```
+
+### Current path map
+
+| Path | Source read | Runtime/generated write | User-visible output | Failure mode | Preferred recovery |
+| --- | --- | --- | --- | --- | --- |
+| model discovery | `QZ_MODEL_DIR`, default `var/models`; `config/qz-model-overrides.default.json`; `var/model-overrides.json`; optional `config/qz-model-overrides.example.json` behind `QZ_LOAD_EXAMPLE_MODEL_OVERRIDES` | `var/model-inventory.json` | `/v1/models`, `/qz/status`, generated Codex catalog | missing model dir, bad GGUF metadata, stale cache, broken symlink | compact scan error, invalid profile hidden, cache is regenerated not trusted |
+| profile alias resolution | scanned `*.gguf` entries, override aliases, symlink filename/stem | inventory entry fields `profile_symlink`, `profile_valid`, `profile_error`, `backend_target` | Codex model picker slug stays profile identity | old synthetic aliases or backend ids leak into Codex-visible names | no synthetic alias layer; profile name is model-dir filename/stem only |
+| symlink profile target resolution | `var/models/<profile>.gguf` symlink target plus real scanned GGUF paths | inventory stores `symlink_target_path`, target backend id, validity | direct request either routes to target or fails compactly | target missing/outside scan bricks session or falls through to wrong backend | mark invalid before catalog generation; no silent fallback |
+| prompt override loading | merged override manifest; inline prompt fields; prompt files resolved relative to repo root unless absolute | prompt contract telemetry and latest request contract capture | forwarded request instructions and generated Codex `base_instructions` | missing prompt file silently empties profile prompt in some generated paths | effective config view must report loaded/missing/failed prompt files |
+| Codex catalog generation | `config/codex-config.example.toml`, `var/model-inventory.json`, default/user overrides | `var/codex-home/config.toml`, `var/codex-home/model-catalogs/qwenzhai-models.json` | Codex model list, context window, prompt metadata | generated catalog becomes second truth or keeps stale profile/context | always regenerate from proxy catalog policy; never route from generated catalog |
+| runtime status generation | live proxy catalog/router/backend status, `QZ_MODEL_STATE_PATH`, `QZ_BACKEND_STATE_PATH`, telemetry state | `/qz/status` response; telemetry events | `qz-top`, `qz-thoughts`, doctor checks, manual curl | early status reports env defaults as facts | keep source fields for context/model/load state; unknown beats fake certainty |
+| backend state persistence | proxy/backend observations and startup scripts | `var/backend-state.json` | `/qz/status.backend`, runtime snapshot | stale backend state outlives process | proxy live facts win; file is fallback/debug only |
+| model-state persistence | selected model/profile from catalog/proxy | `var/model-state.json` | default selection after restart, status summary | removed last-selected profile can steer startup toward invalid entry | validate selected entry against current scan before use |
+| capture writing | request/response/proxy events when `QZ_CAPTURE_MODE` enabled | `var/captures/latest-*.json`, `.raw`, `.txt`, `.log` | debug files and monitor fallback | captures mistaken for live truth, stale latest files mislead monitors | telemetry endpoints first; captures are replay/debug fallback only |
+| logs | proxy/script diagnostics, Docker output when inspected | `var/logs/*`, capture log files | doctor/top/thoughts fallback detail | logs become parsing contract | logs are diagnostic, never authoritative status schema |
+| search policy loading | `SEARXNG_POLICY`; `scripts/qz-env` default `docs/searxng-agent-policy-profiled.json`; proxy fallback `proxy/searxng-agent-policy.json` | web route captures | web-search behaviour and route diagnostics | policy lives in docs path and proxy fallback differs from script default | move shipped search policy under config default layer with compatibility path |
+| searxng capabilities loading | `SEARXNG_CAPABILITIES`; proxy fallback `proxy/searxng-capabilities.json` | web route captures/cache in memory | tool capability decisions | empty env means implicit proxy file fallback, hard to inspect | effective config view reports capability source and missing/disabled state |
+
+### Current blur points
+
+The biggest remaining contract risks are:
+
+```text
+docs/searxng-agent-policy-profiled.json behaves like active config.
+var/model-inventory.json is generated, but several scripts read it as a policy view.
+var/codex-home/config.toml is generated from an example, then patched in place.
+var/run/qz-runtime-state.json is a startup/status snapshot, not live truth.
+prompt file load failures are not yet surfaced in one shared effective-config report.
+```
+
+### Smallest safe next move
+
+Do not move model files, profile symlinks, or Codex-visible slugs.
+
+The next safe config-layer move is to add one shared effective path/config report
+fed by existing path rules. It should report:
+
+```text
+active value
+source layer
+source file/path
+missing file warnings
+generated/runtime/debug classification
+```
+
+Only after that report exists should files move toward `config/default/`,
+`config/example/`, `config/user/`, `var/generated/`, `var/state/`, and
+`var/cache/`. The first actual file move should be search policy, because it is
+currently active config living under `docs/`, and it does not affect model
+routing or profile identity.
+
 ## Minimal fixes before full refactor
 
 Before the larger config restructure, prioritise the small safety fixes that stop current breakage.
