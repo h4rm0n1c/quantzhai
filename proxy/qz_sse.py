@@ -72,10 +72,17 @@ def transform_sse_event(event_lines, summary_started, mode):
     if mode == "raw":
         return [b"".join(event_lines)]
 
+    parse_lines = []
+    for line in event_lines or []:
+        if isinstance(line, str):
+            line = line.encode("utf-8")
+        split = line.splitlines(keepends=True)
+        parse_lines.extend(split or [line])
+
     event_type = None
     data_parts = []
 
-    for line in event_lines:
+    for line in parse_lines:
         if line.startswith(b"event:"):
             event_type = line.split(b":", 1)[1].strip().decode("utf-8", "replace")
         elif line.startswith(b"data:"):

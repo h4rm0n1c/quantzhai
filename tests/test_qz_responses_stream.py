@@ -179,6 +179,77 @@ def _final_message_stream():
     ]
 
 
+def _reasoning_message_stream():
+    return [
+        _sse_block("response.created", {
+            "response": {
+                "id": "resp_fake_reasoning",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "in_progress",
+                "model": "fake",
+                "output": [],
+            },
+        }),
+        _sse_block("response.output_item.added", {
+            "output_index": 0,
+            "item": {
+                "id": "rs_fake",
+                "type": "reasoning",
+                "status": "in_progress",
+                "summary": [],
+                "content": [],
+            },
+        }),
+        _sse_block("response.reasoning_text.delta", {
+            "item_id": "rs_fake",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "thinking",
+        }),
+        _sse_block("response.output_item.added", {
+            "output_index": 1,
+            "item": {
+                "id": "msg_fake",
+                "type": "message",
+                "status": "in_progress",
+                "role": "assistant",
+                "content": [],
+            },
+        }),
+        _sse_block("response.output_text.delta", {
+            "item_id": "msg_fake",
+            "output_index": 1,
+            "content_index": 0,
+            "delta": "stream ok",
+        }),
+        _sse_block("response.completed", {
+            "response": {
+                "id": "resp_fake_reasoning",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "completed",
+                "model": "fake",
+                "output": [{
+                    "id": "rs_fake",
+                    "type": "reasoning",
+                    "status": "completed",
+                    "summary": [],
+                    "content": [{"type": "reasoning_text", "text": "thinking"}],
+                }, {
+                    "id": "msg_fake",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "stream ok", "annotations": []}],
+                }],
+                "usage": {},
+            },
+        }),
+        b"data: [DONE]\n\n",
+    ]
+
+
 def _apply_patch_call_stream():
     arguments = json.dumps({
         "operation": {
@@ -229,12 +300,12 @@ def _apply_patch_call_stream():
 
 
 class ResponsesStreamRuntimeTests(unittest.TestCase):
-    def _run_runtime(self, opener, web_runtime=None, telemetry=None):
+    def _run_runtime(self, opener, web_runtime=None, telemetry=None, reasoning_stream_format="raw"):
         chunks = []
         runtime = ResponsesStreamRuntime(
             upstream="http://127.0.0.1:1",
             authorization="Bearer local",
-            reasoning_stream_format="raw",
+            reasoning_stream_format=reasoning_stream_format,
             web_runtime=web_runtime or FakeWebRuntime(),
             chunk_writer=chunks.append,
             stream_opener=opener,
@@ -303,6 +374,16 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertEqual([event for event, _payload in events].count("response.created"), 1)
         self.assertIn("stream ok", stream_text)
         self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+
+    def test_summary_mode_transforms_reasoning_stream(self):
+        def opener(body):
+            return FakeStream(_reasoning_message_stream())
+
+        stream_text = self._run_runtime(opener, reasoning_stream_format="summary")
+
+        self.assertNotIn("response.reasoning_text.delta", stream_text)
+        self.assertIn("response.reasoning_summary_text.delta", stream_text)
+        self.assertIn("stream ok", stream_text)
 
     def test_streaming_emits_timing_telemetry_without_changing_output(self):
         telemetry = TelemetryBus()
