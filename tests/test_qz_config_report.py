@@ -39,6 +39,7 @@ class EffectiveConfigReportTests(unittest.TestCase):
 
                 os.environ["QZ_ROOT"] = str(root)
                 os.environ["QZ_VAR_DIR"] = str(var_dir)
+                os.environ.pop("QZ_MODEL_OVERRIDES", None)
                 os.environ.pop("SEARXNG_POLICY", None)
                 os.environ["SEARXNG_CAPABILITIES"] = str(root / "proxy" / "searxng-capabilities.json")
 
@@ -50,8 +51,13 @@ class EffectiveConfigReportTests(unittest.TestCase):
                 self.assertEqual(paths["model_overrides_default"]["state"], "file")
                 self.assertEqual(paths["model_overrides_default"]["path"], str(root / "config" / "default" / "model-overrides.json"))
                 self.assertEqual(paths["model_overrides_example"]["path"], str(root / "config" / "example" / "model-overrides.json"))
-                self.assertEqual(paths["model_overrides_user"]["state"], "file")
+                self.assertEqual(paths["model_overrides_user"]["path"], str(root / "config" / "user" / "model-overrides.json"))
+                self.assertEqual(paths["model_overrides_user"]["state"], "missing")
+                self.assertEqual(paths["model_overrides_legacy_user"]["state"], "file")
+                self.assertTrue(paths["model_overrides_legacy_user"]["active"])
                 self.assertEqual(paths["codex_model_catalog"]["source_layer"], "generated")
+                self.assertEqual(paths["codex_config_template"]["path"], str(root / "config" / "example" / "codex-config.toml"))
+                self.assertEqual(paths["benchmark_prompts_default"]["path"], str(root / "config" / "default" / "benchmark-prompts.json"))
                 self.assertEqual(paths["searxng_policy"]["path"], str(root / "config" / "default" / "search-policy.json"))
                 self.assertIn("prompt_file:system_prompt_file", paths)
                 self.assertEqual(paths["prompt_file:system_prompt_file"]["state"], "missing")

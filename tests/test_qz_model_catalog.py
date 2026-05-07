@@ -1,10 +1,13 @@
 import json
 import os
 import struct
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from proxy.qz_model_catalog import ModelCatalog, load_manifest
 from proxy.qz_model_router import ModelRouter, profile_backend_error_payload
@@ -64,6 +67,28 @@ class ModelCatalogProfileValidationTests(unittest.TestCase):
 
             self.assertEqual(manifest["default_key"], "profile.gguf")
             self.assertEqual(manifest["models"]["profile.gguf"]["label"], "profile")
+
+    def test_load_manifest_prefers_config_user_then_legacy_var(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("QZ_MODEL_OVERRIDES", None)
+            root = Path(tmp)
+            user_path = root / "config" / "user" / "model-overrides.json"
+            legacy_path = root / "var" / "model-overrides.json"
+            user_path.parent.mkdir(parents=True, exist_ok=True)
+            legacy_path.parent.mkdir(parents=True, exist_ok=True)
+            legacy_path.write_text(json.dumps({
+                "models": {"profile.gguf": {"label": "legacy"}},
+            }), encoding="utf-8")
+
+            manifest = load_manifest(root)
+            self.assertEqual(manifest["models"]["profile.gguf"]["label"], "legacy")
+
+            user_path.write_text(json.dumps({
+                "models": {"profile.gguf": {"label": "user"}},
+            }), encoding="utf-8")
+
+            manifest = load_manifest(root)
+            self.assertEqual(manifest["models"]["profile.gguf"]["label"], "user")
 
     def test_load_manifest_keeps_legacy_default_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:

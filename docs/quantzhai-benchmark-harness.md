@@ -53,7 +53,7 @@ Compression metrics:
 Prompt fixture:
 
 ```text
-config/qz-benchmark-prompts.json
+config/default/benchmark-prompts.json
 ```
 
 Current prompts test:

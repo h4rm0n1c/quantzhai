@@ -54,7 +54,15 @@ export QZ_TQ_BRANCH="${QZ_TQ_BRANCH:-feature/turboquant-kv-cache}"
 export QZ_CUDA_ARCH="${QZ_CUDA_ARCH:-70;86}"
 export QZ_MODEL_DIR="${QZ_MODEL_DIR:-$QZ_ROOT/var/models}"
 export QZ_MODEL_KEY="${QZ_MODEL_KEY:-}"
-export QZ_MODEL_OVERRIDES="${QZ_MODEL_OVERRIDES:-$QZ_ROOT/var/model-overrides.json}"
+if [[ -z "${QZ_MODEL_OVERRIDES:-}" ]]; then
+  if [[ -f "$QZ_ROOT/config/user/model-overrides.json" || ! -f "$QZ_ROOT/var/model-overrides.json" ]]; then
+    export QZ_MODEL_OVERRIDES="$QZ_ROOT/config/user/model-overrides.json"
+  else
+    export QZ_MODEL_OVERRIDES="$QZ_ROOT/var/model-overrides.json"
+  fi
+else
+  export QZ_MODEL_OVERRIDES
+fi
 export QZ_MODEL_INVENTORY_CACHE="${QZ_MODEL_INVENTORY_CACHE:-$QZ_ROOT/var/model-inventory.json}"
 export QZ_MODEL_STATE_PATH="${QZ_MODEL_STATE_PATH:-$QZ_ROOT/var/model-state.json}"
 export QZ_BACKEND_STATE_PATH="${QZ_BACKEND_STATE_PATH:-$QZ_ROOT/var/backend-state.json}"

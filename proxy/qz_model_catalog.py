@@ -234,6 +234,24 @@ def _first_existing_path(*paths: Path) -> Path:
     return paths[0]
 
 
+def _user_override_paths(root: Path, overrides_path: Optional[Path] = None) -> list[Path]:
+    if overrides_path is not None:
+        return [overrides_path]
+    env_path = os.environ.get("QZ_MODEL_OVERRIDES")
+    if isinstance(env_path, str) and env_path.strip():
+        path = Path(env_path).expanduser()
+        paths = [path]
+        default_user = root / "config" / "user" / "model-overrides.json"
+        legacy_user = root / "var" / "model-overrides.json"
+        if path == default_user and not path.is_file():
+            paths.append(legacy_user)
+        return paths
+    return [
+        root / "config" / "user" / "model-overrides.json",
+        root / "var" / "model-overrides.json",
+    ]
+
+
 def load_manifest(root: Path, overrides_path: Optional[Path] = None) -> Dict[str, Any]:
     manifest = {
         "default_key": None,
@@ -247,11 +265,14 @@ def load_manifest(root: Path, overrides_path: Optional[Path] = None) -> Dict[str
     if loaded:
         manifest = deep_merge(manifest, loaded)
 
-    runtime_path = overrides_path or Path(os.environ.get("QZ_MODEL_OVERRIDES", str(root / "var" / "model-overrides.json")))
-    loaded = load_json(runtime_path)
-    if loaded:
-        manifest = deep_merge(manifest, loaded)
-    elif _truthy_env("QZ_LOAD_EXAMPLE_MODEL_OVERRIDES"):
+    runtime_loaded = False
+    for runtime_path in _user_override_paths(root, overrides_path):
+        loaded = load_json(runtime_path)
+        if loaded:
+            manifest = deep_merge(manifest, loaded)
+            runtime_loaded = True
+            break
+    if not runtime_loaded and _truthy_env("QZ_LOAD_EXAMPLE_MODEL_OVERRIDES"):
         base_path = _first_existing_path(
             root / "config" / "example" / "model-overrides.json",
             root / "config" / "qz-model-overrides.example.json",

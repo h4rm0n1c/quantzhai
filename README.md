@@ -205,7 +205,7 @@ Contract:
 
 ```text
 Codex-visible profile: var/models/prompt-compiler.gguf
-Prompt overrides:       prompt-compiler.gguf in var/model-overrides.json
+Prompt overrides:       prompt-compiler.gguf in config/user/model-overrides.json
 Backend target:         resolved symlink target GGUF stem
 llama.cpp load id:      real backend target, not the profile filename
 ```
@@ -214,7 +214,7 @@ Codex sees and selects the profile name. The proxy resolves the symlink target
 and routes llama.cpp backend requests to the real scanned GGUF model. Do not add
 a backend-name override in profile metadata.
 
-Optional profile metadata lives in `var/model-overrides.json`:
+Optional profile metadata lives in `config/user/model-overrides.json`:
 
 ```json
 {
@@ -282,7 +282,7 @@ proxy.
 The prompt fixture lives at:
 
 ```text
-config/qz-benchmark-prompts.json
+config/default/benchmark-prompts.json
 ```
 
 See `docs/quantzhai-benchmark-harness.md` for metrics and focused runs.
@@ -302,7 +302,7 @@ Important settings:
 - `QZ_CUDA_ARCH`: CUDA architectures for the Docker build.
 - `QZ_MODEL_DIR`: directory scanned for local `*.gguf` files, default `var/models`.
 - `QZ_MODEL_KEY`: optional explicit selection by filename, stem, or model alias.
-- `QZ_MODEL_OVERRIDES`: local JSON overrides file, default `var/model-overrides.json`.
+- `QZ_MODEL_OVERRIDES`: local JSON overrides file, default `config/user/model-overrides.json`; legacy `var/model-overrides.json` is still read when the new file is absent.
 - `QZ_CAPTURE_MODE`: file capture mode, `off` by default; set `latest` for
   request/response captures or `full` for heavier debug capture.
 - `QZ_MONITOR_LOG_FALLBACK`: set to `1/true/yes/on` to let `qz-top` and
@@ -322,9 +322,11 @@ Important settings:
 The current defaults came from the working two-GPU Qwen3.6 setup. They are not universal.
 
 `proxy/qz_model_catalog.py` scans `QZ_MODEL_DIR`, merges
-`config/default/model-overrides.json`, optional
+`config/default/model-overrides.json`, local
+`config/user/model-overrides.json` through `QZ_MODEL_OVERRIDES`, legacy
+`var/model-overrides.json` when the user file is absent, and optional
 `config/example/model-overrides.json` when `QZ_LOAD_EXAMPLE_MODEL_OVERRIDES`
-is enabled, and `QZ_MODEL_OVERRIDES` if present. It writes
+is enabled. It writes
 `var/model-inventory.json` and feeds the proxy's `/v1/models`, `/qz/models`,
 and model-load paths.
 

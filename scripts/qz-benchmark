@@ -13,7 +13,7 @@ Usage: scripts/qz-benchmark [options] [profile ...]
 Run fixed prompts through Codex exec and write benchmark artifacts under var/.
 
 Options:
-  --prompts FILE       Prompt fixture JSON (default: config/qz-benchmark-prompts.json)
+  --prompts FILE       Prompt fixture JSON (default: config/default/benchmark-prompts.json)
   --output-dir DIR     Benchmark output root (default: var/benchmarks)
   --run-id ID          Run id (default: UTC timestamp)
   --only ID            Run only one prompt id; repeatable
@@ -30,7 +30,7 @@ Default profiles: high caveman
 EOF
 }
 
-prompts_file="$QZ_ROOT/config/qz-benchmark-prompts.json"
+prompts_file="$QZ_ROOT/config/default/benchmark-prompts.json"
 output_dir="$QZ_VAR_DIR/benchmarks"
 run_id="$(date -u +%Y%m%dT%H%M%SZ)"
 sandbox_mode="read-only"

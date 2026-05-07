@@ -210,7 +210,7 @@ def _write_codex_config(codex_home: Path, proxy_port: int):
     sqlite_dir.mkdir(parents=True)
 
     catalog_path = catalog_dir / "qwenzhai-models.json"
-    catalog_path.write_text((ROOT / "config" / "qwenzhai-models.example.json").read_text(), encoding="utf-8")
+    catalog_path.write_text((ROOT / "config" / "example" / "qwenzhai-models.json").read_text(), encoding="utf-8")
 
     config = f"""
 model_catalog_json = "{catalog_path}"

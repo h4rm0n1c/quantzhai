@@ -39,7 +39,18 @@ def _model_overrides_path():
     raw = os.environ.get("QZ_MODEL_OVERRIDES")
     if isinstance(raw, str) and raw.strip():
         return Path(raw).expanduser()
-    return runtime_state_path("model-overrides.json")
+    return _root_dir() / "config" / "user" / "model-overrides.json"
+
+
+def _model_override_paths():
+    root = _root_dir()
+    path = _model_overrides_path()
+    paths = [path]
+    default_user = root / "config" / "user" / "model-overrides.json"
+    legacy_user = runtime_state_path("model-overrides.json")
+    if path == default_user and not path.is_file():
+        paths.append(legacy_user)
+    return paths
 
 
 def _deep_merge(base, overlay):
@@ -72,9 +83,11 @@ def _load_manifest():
     if default_manifest:
         manifest = _deep_merge(manifest, default_manifest)
 
-    runtime_manifest = _load_json(_model_overrides_path())
-    if runtime_manifest:
-        manifest = _deep_merge(manifest, runtime_manifest)
+    for runtime_path in _model_override_paths():
+        runtime_manifest = _load_json(runtime_path)
+        if runtime_manifest:
+            manifest = _deep_merge(manifest, runtime_manifest)
+            break
 
     if not isinstance(manifest.get("models"), dict):
         manifest["models"] = {}

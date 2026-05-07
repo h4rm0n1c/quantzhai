@@ -1,5 +1,7 @@
 .env
 .codex
+config/user/*
+!config/user/.gitignore
 var/
 logs/
 captures/
