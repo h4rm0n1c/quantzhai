@@ -183,7 +183,6 @@ def _finish_thought(state: ThoughtState, text: str = ""):
         state.thought = text
         state.thought_delta_chars = len(text)
     state.thought_done = True
-    _append_activity(state, "thought", f"done {len(state.thought)} chars".strip())
 
 
 def _apply_answer_delta(state: ThoughtState, delta: str):
@@ -199,7 +198,6 @@ def _finish_answer(state: ThoughtState, text: str = ""):
         state.answer = text
         state.answer_delta_chars = len(text)
     state.answer_done = True
-    _append_activity(state, "answer", f"done {len(state.answer)} chars".strip())
 
 
 def stream_status_rows(state: ThoughtState) -> List[Tuple[str, str]]:
