@@ -82,6 +82,39 @@ class QzThoughtsCliTests(unittest.TestCase):
         self.assertNotIn("  thought   'll", result.stdout)
         self.assertNotIn("response.content_part", result.stdout)
 
+    def test_once_does_not_read_default_stale_capture(self):
+        raw = textwrap.dedent(
+            """
+            event: response.output_text.done
+            data: {"type":"response.output_text.done","text":"stale capture answer"}
+
+            """
+        ).lstrip()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            capture_dir = Path(tmpdir) / "captures"
+            capture_dir.mkdir()
+            (capture_dir / "latest-synthetic-sse.raw").write_text(raw, encoding="utf-8")
+
+            env = os.environ.copy()
+            env["QZ_VAR_DIR"] = tmpdir
+            env["QZ_PROXY_PORT"] = "9"
+            env["QZ_PROXY_HOST"] = "127.0.0.1"
+            result = subprocess.run(
+                [str(ROOT / "scripts/qz-thoughts"), "--once"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+                check=True,
+            )
+
+        self.assertIn("source=proxy-telemetry", result.stdout)
+        self.assertIn("status=unavailable", result.stdout)
+        self.assertIn("telemetry unavailable", result.stdout)
+        self.assertNotIn("stale capture answer", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

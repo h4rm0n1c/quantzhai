@@ -63,9 +63,9 @@ Date: 2026-04-29
 - Startup model warmup should target the selected backend model id, not the
   raw catalog filename, and skip a reload when the router already reports that
   model as `loaded` or `loading`.
-- Small `max_output_tokens` caps can produce reasoning-only responses on this
-  profile. That is model/profile tuning behavior, not a monitor failure, and it
-  should be measured when comparing grug/caveman prompt variants.
+- Reasoning effort is the tuning knob for this profile. Hard response-token
+  caps are stale Chat Completions-era tuning and should not be used to shape
+  Codex reasoning behavior.
 - Real live thought viewing needs a streamed Responses runtime that can pause
   at tool calls, execute local tools, append tool results, and continue with
   another streamed upstream request.
@@ -84,9 +84,10 @@ Date: 2026-04-29
     profile.
 - `scripts/qz-thoughts` was added as a curses-style monitor for streamed
   thought/output activity and live backend state.
-- `scripts/qz-thoughts` now uses proxy telemetry first, isolates the latest
-  response window, and filters health/telemetry poll noise from its activity
-  view.
+- `scripts/qz-thoughts` now uses proxy telemetry by default, isolates the
+  latest response window, and filters health/telemetry poll noise from its
+  activity view. Raw capture replay is explicit with `--file`; the monitor no
+  longer reads latest capture files as live truth.
 - `README.md` documents the new launcher and monitor entry points.
 
 ## Roadmap Impact

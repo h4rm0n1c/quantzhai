@@ -216,7 +216,8 @@ Rules:
 - `qz-thoughts` reads normalized proxy telemetry by default.
 - `/qz/telemetry/stream` should be SSE so thought/summary chunks arrive without
   polling a file.
-- `--file` remains useful for replaying raw captures and regression fixtures.
+- `--file` is the only capture replay path and remains useful for raw captures
+  and regression fixtures.
 - JSONL stream files are optional debug/audit artifacts, not live truth.
 - Docker/proxy log fallback must be opt-in.
 - Reasoning summaries and output text must be tagged differently.
@@ -538,9 +539,9 @@ state/recent/stream runtime:
 - [ ] Inspect current `/status` implementation and model/context source paths.
 - [x] Inspect `qz-top` token math and data source.
 - [x] Inspect `qz-thoughts` input source and rendering loop.
-- [ ] Identify every monitor fallback that still treats files/logs as live truth.
+- [x] Identify every monitor fallback that still treats files/logs as live truth.
 - [x] Define first `/qz/telemetry/stream` SSE fan-out contract.
-- [ ] Keep JSON/JSONL telemetry as optional replay/debug output only.
+- [x] Keep JSON/JSONL telemetry as optional replay/debug output only.
 - [x] Convert `qz-top` to structured telemetry.
 - [x] Convert `qz-thoughts` to structured stream events.
 - [x] Fix first-pass `qz-top` TPS sanity.

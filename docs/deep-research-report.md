@@ -1,4 +1,8 @@
-**Executive Summary.** The default Codex system prompt (for Qwen3.6Turbo in QuantZhai) is lengthy and encourages broad, multi-step reasoning, which conflicts with a “caveman” style (very terse, one‑step at a time) and risks runaway outputs. We propose a **caveman‑style prompt** that preserves Codex’s core safety and coding conventions (safe tool use, `apply_patch` workflow, obeying AGENTS.md, etc.) but *strips all fluff*.  This yields faster, cheaper responses【7†L278-L282】 and forces the agent to take one narrowly‑focused action at a time. We accompany this with a brief AGENTS.md to reinforce brevity, and a minimal caveman “skill” snippet. We also clamp output token budgets in the config and proxy to hard-stop any overshooting. The rollout plan (see timeline) is: apply the new prompt → lower caps → restart Codex → test critical cases → monitor performance (tokens, SSE completions) → rollback if needed.
+> Status note, 2026-05-07: token-cap guidance in this older report is obsolete.
+> QuantZhai now strips hard output/reasoning caps from runtime requests.
+> Reasoning effort selection and prompt policy are the supported tuning surfaces.
+
+**Executive Summary.** The default Codex system prompt (for Qwen3.6Turbo in QuantZhai) is lengthy and encourages broad, multi-step reasoning, which conflicts with a “caveman” style (very terse, one‑step at a time) and risks runaway outputs. We propose a **caveman‑style prompt** that preserves Codex’s core safety and coding conventions (safe tool use, `apply_patch` workflow, obeying AGENTS.md, etc.) but *strips all fluff*.  This yields faster, cheaper responses【7†L278-L282】 and forces the agent to take one narrowly‑focused action at a time. We accompany this with a brief AGENTS.md to reinforce brevity, and a minimal caveman “skill” snippet.
 
 ## 1. Cavemanified System Prompt (≤900 tokens)
 ```text
@@ -54,18 +58,7 @@ Respond terse like a smart caveman.  All technical substance stays; fluff dies. 
   ```
   This appends the caveman behavior harness to the active Codex/QuantZhai
   instruction stack; it should not be treated as a replacement system prompt.
-- **Clamp output tokens:** Lower `model_max_output_tokens` for high/medium profiles (e.g. to ~1024) in `config.toml`【10†L18-L22】. Also in the proxy (`quantzhai_proxy.py`) set `n_predict`, `max_tokens` to ≤512 or ≤1024 as hard caps (we did this earlier). For example:
-  ```diff
-  - model_max_output_tokens = 4096
-  + model_max_output_tokens = 1024
-  ```
-  and similarly in `[profiles.qwen36turbo-high]`.  This prevents excessively long answers.
-- **Proxy caps:** In `quantzhai_proxy.py`, ensure code like:
-  ```python
-  body["n_predict"] = min(int(body.get("n_predict", 0) or 1024), 512)
-  body["max_output_tokens"] = min(int(body.get("max_output_tokens", 0) or 1024), 512)
-  ```
-  (This enforces a 512-token hard stop on generation; we did analogous patches earlier.)
+- **Runtime tuning:** Do not set `model_max_output_tokens`, `max_output_tokens`, `max_tokens`, `n_predict`, or `thinking_budget_tokens` to shape Codex behavior. Use reasoning effort selection, sampler policy, prompt policy, and better task discipline instead.
 
 All changes are small text edits; no extra tools needed beyond your editor or `sed` as shown.
 
@@ -79,18 +72,18 @@ All changes are small text edits; no extra tools needed beyond your editor or `s
   *Expect:* Agent uses `apply_patch` JSON on `foo.py`; final answer notes test results.
 
 Monitor **qz-top** metrics during these tests:
-- **Gen tokens / eval time:** A good prompt stays well under 512 tokens per step.  After clamping, `generate` should not exceed 512 and `eval time` should drop proportionally.
+- **Gen tokens / eval time:** A good prompt stays compact per step without a hard output cap. Use the monitor to catch drift, not to justify cap injection.
 - **SSE completions:** Ensure each request yields a complete SSE `[DONE]`.  No hanging or missing `[DONE]` events.
 - **CUDA/OOM:** Should be 0 errors.
 - **Throughput tokens/sec:** Should rise if the model is not churning out 20K-token essays.  (The caveman prompt aims for ~70% fewer tokens【7†L278-L282】, so expect ~3× faster response time.)
 
-If any test fails (e.g. agent still spawns multiple curls or ignores timeouts), adjust prompt wording or lower tokens further, then re-test.
+If any test fails (e.g. agent still spawns multiple curls or ignores timeouts), adjust prompt wording or reasoning effort, then re-test.
 
 ## 6. Rollback Plan
 If issues arise (e.g. agent too constrained or non-compliant):
 - Restore original `model_instructions_file` behavior (or remove that line) in `config.toml`.
 - Restore original `AGENTS.md` (keep a backup as `AGENTS.md.bak`).
-- Undo token cap changes (reset `model_max_output_tokens` and proxy caps to previous values).
+- Undo prompt or reasoning-effort changes.
 - Restart Codex.
 
 This reverts to the known-good state. Logging the changes with version control or notes ensures you can track exactly what was modified.

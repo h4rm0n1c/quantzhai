@@ -48,11 +48,6 @@ class ThoughtState:
     backend_error: str = ""
 
 
-def capture_path(name: str) -> Path:
-    root = Path(os.environ.get("QZ_VAR_DIR", "var"))
-    return root / "captures" / name
-
-
 def proxy_base_url() -> str:
     host = os.environ.get("QZ_PROXY_HOST", "127.0.0.1")
     port = os.environ.get("QZ_PROXY_PORT", "18180")
@@ -569,6 +564,14 @@ def load_state(path: Path) -> ThoughtState:
     return parse_sse(raw, path)
 
 
+def unavailable_telemetry_state() -> ThoughtState:
+    state = ThoughtState(path=Path("proxy-telemetry"))
+    state.status = "unavailable"
+    state.parse_error = f"telemetry unavailable: {proxy_base_url()}/qz/telemetry/recent"
+    state.mtime = time.time()
+    return state
+
+
 def load_telemetry_state(limit: int = 200) -> Optional[ThoughtState]:
     data = fetch_json(f"{proxy_base_url()}/qz/telemetry/recent?limit={limit}")
     if not isinstance(data, dict):
@@ -611,15 +614,17 @@ def load_telemetry_state(limit: int = 200) -> Optional[ThoughtState]:
     return state
 
 
-def load_live_state(path: Path) -> ThoughtState:
+def load_live_state(path: Optional[Path] = None) -> ThoughtState:
+    if path is not None:
+        return load_state(path)
     state = load_telemetry_state()
     if state is not None:
         return state
-    return load_state(path)
+    return unavailable_telemetry_state()
 
 
 class TelemetryFeed:
-    def __init__(self, path: Path):
+    def __init__(self, path: Optional[Path] = None):
         self.path = path
         self.state = load_live_state(path)
         self.lock = threading.Lock()
@@ -740,7 +745,7 @@ def wrap_lines(text: str, width: int, limit: int) -> List[str]:
 
 
 class UI:
-    def __init__(self, stdscr, path: Path, interval: float):
+    def __init__(self, stdscr, path: Optional[Path], interval: float):
         self.stdscr = stdscr
         self.path = path
         self.interval = interval
@@ -946,7 +951,7 @@ class UI:
                 time.sleep(0.05)
 
 
-def print_once(path: Path):
+def print_once(path: Optional[Path] = None):
     state = load_live_state(path)
     age = max(0.0, time.time() - state.mtime) if state.mtime else 0.0
     print(f"QZ-THOUGHTS {time.strftime('%Y-%m-%d %H:%M:%S')} status={state.status or '?'} events={state.events} age={age:.1f}s bytes={state.bytes_read}")
@@ -978,10 +983,10 @@ def main():
     parser = argparse.ArgumentParser(description="Monitor QuantZhai streamed reasoning/thought output")
     parser.add_argument("--once", "-1", action="store_true", help="print one snapshot and exit")
     parser.add_argument("-i", "--interval", type=float, default=0.5, help="refresh interval in seconds")
-    parser.add_argument("--file", default=str(capture_path("latest-synthetic-sse.raw")), help="SSE capture file to monitor")
+    parser.add_argument("--file", help="explicit SSE capture file to replay instead of live proxy telemetry")
     args = parser.parse_args()
 
-    path = Path(args.file)
+    path = Path(args.file) if args.file else None
     if args.once:
         print_once(path)
         return

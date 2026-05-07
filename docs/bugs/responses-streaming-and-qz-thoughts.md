@@ -232,6 +232,9 @@ thought/answer state rows, while lifecycle events remain in activity. Monitor
 polling noise such as `/qz/status`, `/health`, and telemetry endpoints is
 filtered from the activity feed. `tests/test_qz_thoughts_cli.py` covers the
 `--once --file` rendering path with tiny reasoning and answer deltas.
+Default mode now reads proxy telemetry only; raw capture replay requires
+explicit `--file`, so stale `latest-*` captures cannot masquerade as live
+thought state.
 
 Do not append a new activity row for every delta.
 
