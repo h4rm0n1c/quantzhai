@@ -89,6 +89,41 @@ class ResponsesStreamRuntime:
         except Exception:
             pass
 
+    def _emit_stream_event_timing(
+        self,
+        event_type: str,
+        received_at: float,
+        parsed_at: float,
+        forwarded_at: float | None,
+        *,
+        forwarded_chunks: int = 0,
+        forwarded_bytes: int = 0,
+        suppressed: str = "",
+    ):
+        emitted_at = time.time()
+        payload = {
+            "event_type": event_type or "event",
+            "received_to_parsed_ms": round(max(0.0, parsed_at - received_at) * 1000.0, 3),
+            "parsed_to_forwarded_ms": None,
+            "received_to_telemetry_ms": round(max(0.0, emitted_at - received_at) * 1000.0, 3),
+            "forwarded_chunks": int(forwarded_chunks),
+            "forwarded_bytes": int(forwarded_bytes),
+        }
+        if forwarded_at is not None:
+            payload["parsed_to_forwarded_ms"] = round(max(0.0, forwarded_at - parsed_at) * 1000.0, 3)
+        if suppressed:
+            payload["suppressed"] = suppressed
+        self._emit("stream_event_timing", payload)
+
+    def _write_transformed_chunks(self, chunks):
+        forwarded_chunks = 0
+        forwarded_bytes = 0
+        for out_chunk in chunks:
+            forwarded_chunks += 1
+            forwarded_bytes += len(out_chunk)
+            self._write_chunk(out_chunk)
+        return forwarded_chunks, forwarded_bytes
+
     def _transformed_chunks(
         self,
         event_type,
@@ -145,9 +180,8 @@ class ResponsesStreamRuntime:
 
     def _emit_public_tool_item(self, item: dict, public_index: int, sequence: int):
         chunks, sequence = public_tool_item_events(item, public_index, sequence)
-        for out_chunk in chunks:
-            self._write_chunk(out_chunk)
-        return sequence
+        forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(chunks)
+        return sequence, forwarded_chunks, forwarded_bytes
 
     def _emit_completed(self, requested_model: str, output: list, summary_started: set, usage=None):
         completed_payload = {
@@ -213,6 +247,7 @@ class ResponsesStreamRuntime:
                     raw_log = self._open_raw_log()
                     assembler = StreamedFunctionCallAssembler()
                     event_lines = []
+                    event_started_at = None
                     next_input = list(hop_body.get("input") or [])
                     completed_call = None
                     max_output_index = -1
@@ -226,11 +261,16 @@ class ResponsesStreamRuntime:
                             raw_log.write(chunk)
                             raw_log.flush()
 
+                        if event_started_at is None:
+                            event_started_at = time.time()
                         event_lines.append(chunk)
                         if chunk not in (b"\n", b"\r\n"):
                             continue
 
+                        event_received_at = event_started_at or time.time()
                         event_type, payload = parse_sse_event_lines(event_lines)
+                        event_parsed_at = time.time()
+                        event_started_at = None
                         if first_output_at is None and event_type not in {"response.created", "response.in_progress"}:
                             first_output_at = time.time()
                         if isinstance(payload, dict) and isinstance(payload.get("output_index"), int):
@@ -259,12 +299,30 @@ class ResponsesStreamRuntime:
                                 public_trace.append(public_item)
                                 next_input.append(completed_call)
                                 next_input.append(tool_output_item)
-                                sequence = self._emit_public_tool_item(public_item, public_index, sequence)
+                                sequence, forwarded_chunks, forwarded_bytes = self._emit_public_tool_item(public_item, public_index, sequence)
+                                self._emit_stream_event_timing(
+                                    event_type,
+                                    event_received_at,
+                                    event_parsed_at,
+                                    time.time(),
+                                    forwarded_chunks=forwarded_chunks,
+                                    forwarded_bytes=forwarded_bytes,
+                                    suppressed="function_call_private",
+                                )
                                 break
 
                             public_item = self._public_tool_item_from_function_call(completed_call, apply_patch_output_style)
                             public_trace.append(public_item)
-                            sequence = self._emit_public_tool_item(public_item, public_index, sequence)
+                            sequence, forwarded_chunks, forwarded_bytes = self._emit_public_tool_item(public_item, public_index, sequence)
+                            self._emit_stream_event_timing(
+                                event_type,
+                                event_received_at,
+                                event_parsed_at,
+                                time.time(),
+                                forwarded_chunks=forwarded_chunks,
+                                forwarded_bytes=forwarded_bytes,
+                                suppressed="function_call_private",
+                            )
                             self._emit_stream_completed(requested_model, len(public_trace), started_at)
                             completed_at = time.time()
                             self._emit_completed(requested_model, public_trace, summary_started, usage=final_usage)
@@ -278,21 +336,42 @@ class ResponsesStreamRuntime:
                             )
 
                         if is_function_call_stream_event(event_type, payload):
+                            self._emit_stream_event_timing(
+                                event_type,
+                                event_received_at,
+                                event_parsed_at,
+                                None,
+                                suppressed="function_call",
+                            )
                             event_lines = []
                             continue
 
                         if is_terminal_stream_event(event_type, payload) and completed_call and completed_call.get("name") == "web_search":
+                            self._emit_stream_event_timing(
+                                event_type,
+                                event_received_at,
+                                event_parsed_at,
+                                None,
+                                suppressed="web_search_terminal",
+                            )
                             event_lines = []
                             continue
 
                         if event_type in {"response.created", "response.in_progress"}:
                             if sent_response_start:
+                                self._emit_stream_event_timing(
+                                    event_type,
+                                    event_received_at,
+                                    event_parsed_at,
+                                    None,
+                                    suppressed="duplicate_response_start",
+                                )
                                 event_lines = []
                                 continue
                             sent_response_start = True
 
                         if is_terminal_stream_event(event_type, payload):
-                            for out_chunk in self._transformed_chunks(
+                            forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(self._transformed_chunks(
                                 event_type,
                                 payload,
                                 event_lines,
@@ -300,20 +379,34 @@ class ResponsesStreamRuntime:
                                 output_index_offset=output_index_offset,
                                 prepend_output=public_trace,
                                 model=requested_model,
-                            ):
-                                self._write_chunk(out_chunk)
+                            ))
+                            self._emit_stream_event_timing(
+                                event_type,
+                                event_received_at,
+                                event_parsed_at,
+                                time.time(),
+                                forwarded_chunks=forwarded_chunks,
+                                forwarded_bytes=forwarded_bytes,
+                            )
                             event_lines = []
                             continue
 
-                        for out_chunk in self._transformed_chunks(
+                        forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(self._transformed_chunks(
                             event_type,
                             payload,
                             event_lines,
                             summary_started,
                             output_index_offset=output_index_offset,
                             model=requested_model,
-                        ):
-                            self._write_chunk(out_chunk)
+                        ))
+                        self._emit_stream_event_timing(
+                            event_type,
+                            event_received_at,
+                            event_parsed_at,
+                            time.time(),
+                            forwarded_chunks=forwarded_chunks,
+                            forwarded_bytes=forwarded_bytes,
+                        )
                         event_lines = []
                 finally:
                     if raw_log is not None:

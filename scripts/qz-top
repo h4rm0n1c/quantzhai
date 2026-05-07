@@ -491,6 +491,8 @@ def telemetry_row(event: dict) -> Optional[Tuple[str, str]]:
         return ("web", ev_type.replace("_", " "))
     if ev_type in {"stream_started", "stream_completed", "stream_failed"}:
         return ("stream", ev_type.replace("_", " "))
+    if ev_type == "stream_event_timing":
+        return None
     if ev_type == "sse_event":
         sse_type = str(payload.get("event_type") or "")
         if sse_type.endswith(".delta"):

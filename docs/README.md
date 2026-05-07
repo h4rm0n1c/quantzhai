@@ -67,7 +67,8 @@ Focus:
 ```text
 Stale symlink profile validation, compact errors, and doctor checks are done.
 qz-thoughts delta coalescing is done.
-Next add stream timing telemetry or profile-preset review.
+Stream timing telemetry is done.
+Next audit summary-mode SSE transform or review profile presets.
 Do not start broad config movement before auditing data paths.
 ```
 

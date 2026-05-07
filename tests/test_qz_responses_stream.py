@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from proxy.qz_responses_stream import ResponsesStreamRuntime
+from proxy.qz_telemetry import TelemetryBus
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "sse"
 
@@ -228,7 +229,7 @@ def _apply_patch_call_stream():
 
 
 class ResponsesStreamRuntimeTests(unittest.TestCase):
-    def _run_runtime(self, opener, web_runtime=None):
+    def _run_runtime(self, opener, web_runtime=None, telemetry=None):
         chunks = []
         runtime = ResponsesStreamRuntime(
             upstream="http://127.0.0.1:1",
@@ -238,6 +239,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             chunk_writer=chunks.append,
             stream_opener=opener,
             capture_enabled=False,
+            telemetry=telemetry,
         )
         runtime.run({
             "model": "QwenZhai-high",
@@ -301,6 +303,30 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertEqual([event for event, _payload in events].count("response.created"), 1)
         self.assertIn("stream ok", stream_text)
         self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+
+    def test_streaming_emits_timing_telemetry_without_changing_output(self):
+        telemetry = TelemetryBus()
+
+        def opener(body):
+            return FakeStream(_fixture_chunks("basic_message.raw"))
+
+        stream_text = self._run_runtime(opener, telemetry=telemetry)
+        timing_events = [
+            event
+            for event in telemetry.recent()
+            if event.get("type") == "stream_event_timing"
+        ]
+
+        self.assertIn("stream ok", stream_text)
+        self.assertTrue(timing_events)
+        self.assertTrue(any((event.get("payload") or {}).get("event_type") == "response.output_text.delta" for event in timing_events))
+        for event in timing_events:
+            payload = event.get("payload") or {}
+            self.assertIn("received_to_parsed_ms", payload)
+            self.assertIn("parsed_to_forwarded_ms", payload)
+            self.assertIn("received_to_telemetry_ms", payload)
+            self.assertIn("forwarded_chunks", payload)
+            self.assertIn("forwarded_bytes", payload)
 
     def test_golden_web_search_stream_replays_with_continuation(self):
         requests = []

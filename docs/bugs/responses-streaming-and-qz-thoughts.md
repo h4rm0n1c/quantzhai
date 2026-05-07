@@ -2,7 +2,9 @@
 
 ## Status
 
-Open. Needs audit before implementation.
+Partially fixed. `qz-thoughts` delta coalescing and lightweight stream timing
+telemetry are implemented. Remaining work is summary-mode transform audit and
+real-session forwarding validation.
 
 This is a known streaming/observability problem. It affects the feel of Codex output, the correctness of Responses API SSE forwarding, and the usefulness of `qz-thoughts` as a live reasoning monitor.
 
@@ -189,6 +191,11 @@ Only add activity rows for lifecycle events:
 This should make `qz-thoughts` useful without changing wire behaviour.
 
 ### 2. Add stream timing telemetry
+
+Status: implemented in `proxy/qz_responses_stream.py`. Each parsed upstream SSE
+event emits lightweight `stream_event_timing` telemetry with parse, forward, and
+telemetry lag fields. `qz-top` and `qz-thoughts` ignore these timing events in
+normal activity views so the monitor stays low-noise.
 
 Emit timing counters around the stream path:
 

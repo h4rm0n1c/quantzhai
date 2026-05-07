@@ -529,6 +529,7 @@ def _apply_telemetry_event(state: ThoughtState, event: dict, prefix_rows: List[T
         "request_queued",
         "runtime_snapshot",
         "status_snapshot",
+        "stream_event_timing",
         "throughput_sample",
     ):
         return latest_ts
