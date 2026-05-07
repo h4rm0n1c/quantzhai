@@ -131,6 +131,17 @@ def _prompt_file_records(root: Path, paths: List[Path]) -> List[Dict[str, Any]]:
     return records
 
 
+def _default_search_policy_path(root: Path, script_dir: Path) -> Path:
+    for path in (
+        root / "config" / "default" / "search-policy.json",
+        root / "docs" / "searxng-agent-policy-profiled.json",
+        script_dir / "searxng-agent-policy.json",
+    ):
+        if path.is_file():
+            return path
+    return root / "config" / "default" / "search-policy.json"
+
+
 def effective_config_payload(handler=None) -> Dict[str, Any]:
     root = _root_dir()
     var_dir = _var_dir(root)
@@ -148,7 +159,7 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
     if policy_path:
         searxng_policy = Path(policy_path).expanduser()
     else:
-        searxng_policy = Path(os.environ.get("SEARXNG_POLICY") or script_dir / "searxng-agent-policy.json").expanduser()
+        searxng_policy = Path(os.environ.get("SEARXNG_POLICY") or _default_search_policy_path(root, script_dir)).expanduser()
     if capabilities_path:
         searxng_capabilities = Path(capabilities_path).expanduser()
     else:
@@ -188,7 +199,6 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
         if record["active"] and record["state"] == "missing" and record["name"] in {
             "model_dir",
             "searxng_policy",
-            "searxng_capabilities",
         }:
             warnings.append({"path": record["path"], "warning": f"{record['name']} is active but missing"})
 

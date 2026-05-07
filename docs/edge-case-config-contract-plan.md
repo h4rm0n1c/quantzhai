@@ -215,9 +215,7 @@ config/qwenzhai-models.example.json
 config/qz-benchmark-prompts.json
 config/qz-model-overrides.default.json
 config/qz-model-overrides.example.json
-docs/searxng-agent-policy-profiled.json
-proxy/searxng-agent-policy.json
-proxy/searxng-capabilities.json
+config/default/search-policy.json
 ```
 
 Local user/runtime inputs:
@@ -270,7 +268,7 @@ var/codex-home/sqlite/*
 | model-state persistence | selected model/profile from catalog/proxy | `var/model-state.json` | default selection after restart, status summary | removed last-selected profile can steer startup toward invalid entry | validate selected entry against current scan before use |
 | capture writing | request/response/proxy events when `QZ_CAPTURE_MODE` enabled | `var/captures/latest-*.json`, `.raw`, `.txt`, `.log` | debug files and monitor fallback | captures mistaken for live truth, stale latest files mislead monitors | telemetry endpoints first; captures are replay/debug fallback only |
 | logs | proxy/script diagnostics, Docker output when inspected | `var/logs/*`, capture log files | doctor/top/thoughts fallback detail | logs become parsing contract | logs are diagnostic, never authoritative status schema |
-| search policy loading | `SEARXNG_POLICY`; `scripts/qz-env` default `docs/searxng-agent-policy-profiled.json`; proxy fallback `proxy/searxng-agent-policy.json` | web route captures | web-search behaviour and route diagnostics | policy lives in docs path and proxy fallback differs from script default | move shipped search policy under config default layer with compatibility path |
+| search policy loading | `SEARXNG_POLICY`; `scripts/qz-env` default `config/default/search-policy.json`; proxy fallback checks `config/default/search-policy.json`, old docs path, then old proxy path | web route captures | web-search behaviour and route diagnostics | old local env can still point at docs path | report docs-path policy as compatibility warning |
 | searxng capabilities loading | `SEARXNG_CAPABILITIES`; proxy fallback `proxy/searxng-capabilities.json` | web route captures/cache in memory | tool capability decisions | empty env means implicit proxy file fallback, hard to inspect | effective config view reports capability source and missing/disabled state |
 
 ### Current blur points
@@ -278,7 +276,7 @@ var/codex-home/sqlite/*
 The biggest remaining contract risks are:
 
 ```text
-docs/searxng-agent-policy-profiled.json behaves like active config.
+search policy has moved to `config/default/search-policy.json`; old docs path is compatibility only.
 var/model-inventory.json is generated, but several scripts read it as a policy view.
 var/codex-home/config.toml is generated from an example, then patched in place.
 var/run/qz-runtime-state.json is a startup/status snapshot, not live truth.
@@ -302,9 +300,9 @@ generated/runtime/debug classification
 
 Only after that report exists should files move toward `config/default/`,
 `config/example/`, `config/user/`, `var/generated/`, `var/state/`, and
-`var/cache/`. The first actual file move should be search policy, because it is
-currently active config living under `docs/`, and it does not affect model
-routing or profile identity.
+`var/cache/`. The first actual file move was search policy, because it was
+active config living under `docs/`, and it does not affect model routing or
+profile identity.
 
 Initial inspection surface:
 

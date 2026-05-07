@@ -136,7 +136,7 @@ Also update repeat-detection signature. Include `profile` in the signature so th
 Use:
 
 ```text
-searxng-agent-policy-profiled.json
+config/default/search-policy.json
 ```
 
 It keeps the legacy keys your current proxy expects, but adds `web_search_profiles`, `targeted_engines`, `routing`, `quality_rules`, `quarantine_until_fixed`, and `non_text_engines_disabled_for_current_web_search_tool`.

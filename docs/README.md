@@ -153,7 +153,7 @@ Useful config:
 ```text
 SEARXNG_BASE_URL
 SEARXNG_POLICY
-docs/searxng-agent-policy-profiled.json
+config/default/search-policy.json
 ```
 
 ### I want to improve agent editing/tooling

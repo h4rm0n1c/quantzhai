@@ -16,22 +16,16 @@ Do not create multiple tool names. Add a `profile` argument to the existing `web
 
 ## Inputs
 
-Place this policy beside the proxy:
+Active policy path:
 
 ```text
-~/turboquant/proxy/searxng-agent-policy-profiled.json
+config/default/search-policy.json
 ```
 
-Then either:
+Override with:
 
 ```bash
-cp searxng-agent-policy-profiled.json ~/turboquant/proxy/searxng-agent-policy.json
-```
-
-or launch the proxy with the explicit policy path if supported:
-
-```bash
---searxng-policy ~/turboquant/proxy/searxng-agent-policy-profiled.json
+SEARXNG_POLICY=/path/to/search-policy.json
 ```
 
 ## Patch map

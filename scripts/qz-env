@@ -52,7 +52,7 @@ export QZ_MODEL_LOAD_TIMEOUT="${QZ_MODEL_LOAD_TIMEOUT:-120}"
 
 export SEARXNG_BASE_URL="${SEARXNG_BASE_URL:-}"
 export SEARXNG_TIMEOUT="${SEARXNG_TIMEOUT:-15}"
-export SEARXNG_POLICY="${SEARXNG_POLICY:-$QZ_ROOT/docs/searxng-agent-policy-profiled.json}"
+export SEARXNG_POLICY="${SEARXNG_POLICY:-$QZ_ROOT/config/default/search-policy.json}"
 export SEARXNG_CAPABILITIES="${SEARXNG_CAPABILITIES:-}"
 
 qz_docker() {

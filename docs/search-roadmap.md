@@ -19,7 +19,7 @@ The near-term target is a profile-aware SearXNG-backed search runtime:
 ## Current Assets
 
 - `profile-aware-web-search-design.md`: profile design and runtime behavior.
-- `searxng-agent-policy-profiled.json`: draft policy with profile-aware engine routing.
+- `config/default/search-policy.json`: active policy with profile-aware engine routing.
 - `codex-implementation-brief-web-search-profiles.md`: implementation brief for patching the proxy.
 - `profiled-web-search-pickup-README.md`: pickup pack instructions.
 
@@ -37,7 +37,7 @@ Status: landed in the proxy.
 
 Status: landed and smoke tested against a local SearXNG instance.
 
-- `searxng-agent-policy-profiled.json` loads from configurable `SEARXNG_POLICY`.
+- `config/default/search-policy.json` loads from configurable `SEARXNG_POLICY`.
 - Profiles resolve to categories and engines through policy JSON.
 - Disabled, quarantined, and non-text engine filters are applied.
 - Low-result fallback routing is implemented.

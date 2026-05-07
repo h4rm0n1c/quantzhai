@@ -235,6 +235,14 @@ cache
 
 These categories currently blur together. That makes generated files act like source of truth and stale state override real proxy policy.
 
+Status:
+
+```text
+Started. Current data paths are audited in docs/edge-case-config-contract-plan.md.
+/qz/config/effective exposes a read-only effective path/config report.
+Search policy moved from docs/ to config/default/search-policy.json with old-path compatibility fallback.
+```
+
 Proposed destination:
 
 ```text

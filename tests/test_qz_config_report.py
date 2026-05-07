@@ -21,13 +21,14 @@ class EffectiveConfigReportTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 var_dir = root / "var"
-                (root / "config").mkdir()
+                (root / "config" / "default").mkdir(parents=True)
                 (root / "proxy").mkdir()
                 (var_dir / "models").mkdir(parents=True)
                 (root / "config" / "qz-model-overrides.default.json").write_text(
                     '{"models":{"profile.gguf":{"system_prompt_file":"config/user/prompts/profile.md"}}}\n',
                     encoding="utf-8",
                 )
+                (root / "config" / "default" / "search-policy.json").write_text("{}\n", encoding="utf-8")
                 (var_dir / "model-overrides.json").write_text('{"models":{}}\n', encoding="utf-8")
                 (root / "proxy" / "searxng-capabilities.json").write_text("{}\n", encoding="utf-8")
 
@@ -44,6 +45,7 @@ class EffectiveConfigReportTests(unittest.TestCase):
                 self.assertEqual(paths["model_overrides_default"]["state"], "file")
                 self.assertEqual(paths["model_overrides_user"]["state"], "file")
                 self.assertEqual(paths["codex_model_catalog"]["source_layer"], "generated")
+                self.assertEqual(paths["searxng_policy"]["path"], str(root / "config" / "default" / "search-policy.json"))
                 self.assertIn("prompt_file:system_prompt_file", paths)
                 self.assertEqual(paths["prompt_file:system_prompt_file"]["state"], "missing")
         finally:

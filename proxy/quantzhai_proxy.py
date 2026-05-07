@@ -470,6 +470,16 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.active_deprecation = None
         self._request_router().handle_post()
 
+def _default_search_policy_path(root: Path, script_dir: Path) -> Path:
+    for path in (
+        root / "config" / "default" / "search-policy.json",
+        root / "docs" / "searxng-agent-policy-profiled.json",
+        script_dir / "searxng-agent-policy.json",
+    ):
+        if path.is_file():
+            return path
+    return root / "config" / "default" / "search-policy.json"
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--listen", default="127.0.0.1")
@@ -490,12 +500,12 @@ def main():
     ProxyHandler.reasoning_stream_format = args.reasoning_stream_format
     ProxyHandler.runtime_state_enabled = args.runtime_state_enabled
 
+    root = Path(os.environ.get("QZ_ROOT", Path(__file__).resolve().parents[1]))
     script_dir = Path(__file__).resolve().parent
-    policy_path = Path(args.searxng_policy) if args.searxng_policy else script_dir / "searxng-agent-policy.json"
+    policy_path = Path(args.searxng_policy) if args.searxng_policy else _default_search_policy_path(root, script_dir)
     capabilities_path = Path(args.searxng_capabilities) if args.searxng_capabilities else script_dir / "searxng-capabilities.json"
     policy = _safe_json_file(policy_path)
     capabilities = _safe_json_file(capabilities_path)
-    root = Path(os.environ.get("QZ_ROOT", Path(__file__).resolve().parents[1]))
     catalog = ModelCatalog.from_env(root)
     ProxyHandler.model_catalog = catalog
     ProxyHandler.model_catalog_path = str(catalog.cache_path)

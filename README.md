@@ -313,7 +313,7 @@ Important settings:
 - `QZ_CACHE_RAM` / `QZ_CACHE_REUSE`: prompt cache settings, defaults `8192` and `256`.
 - `QZ_KV_KEY` / `QZ_KV_VALUE`: KV cache quant settings.
 - `SEARXNG_BASE_URL`: optional SearXNG base URL for local web search. Leave empty to disable search.
-- `SEARXNG_POLICY`: search routing policy, default `docs/searxng-agent-policy-profiled.json`.
+- `SEARXNG_POLICY`: search routing policy, default `config/default/search-policy.json`.
 
 The current defaults came from the working two-GPU Qwen3.6 setup. They are not universal.
 
@@ -342,7 +342,7 @@ ai_models
 reference
 ```
 
-Normal use should leave `profile` as `auto`. The proxy routes the query through `docs/searxng-agent-policy-profiled.json`, filters disabled or non-text engines, and writes the latest routing decision to:
+Normal use should leave `profile` as `auto`. The proxy routes the query through `config/default/search-policy.json`, filters disabled or non-text engines, and writes the latest routing decision to:
 
 ```text
 var/captures/latest-web-search-route.json
