@@ -108,6 +108,12 @@ def _iter_prompt_refs(manifest: Dict[str, Any]):
 def _prompt_file_records(root: Path, paths: List[Path]) -> List[Dict[str, Any]]:
     seen = set()
     records = []
+    summary = {
+        "schema": "qz.prompt.files.v1",
+        "loaded": [],
+        "missing": [],
+        "failed": [],
+    }
     for manifest_path in paths:
         manifest = _load_json(manifest_path)
         if not manifest:
@@ -120,15 +126,28 @@ def _prompt_file_records(root: Path, paths: List[Path]) -> List[Dict[str, Any]]:
             if key in seen:
                 continue
             seen.add(key)
-            records.append(_record(
+            record = _record(
                 f"prompt_file:{field}",
                 path,
                 source_layer="prompt_override",
                 classification="tracked_or_user_prompt",
                 active=True,
                 note=f"referenced by {manifest_path}",
-            ))
-    return records
+            )
+            if record["state"] == "file":
+                try:
+                    path.read_text(encoding="utf-8")
+                    summary["loaded"].append(str(path))
+                except Exception as exc:
+                    record["state"] = "failed"
+                    record["note"] = f"{record['note']}; read failed: {exc}"
+                    summary["failed"].append({"path": str(path), "error": str(exc)})
+            elif record["state"] == "missing":
+                summary["missing"].append(str(path))
+            else:
+                summary["failed"].append({"path": str(path), "error": f"not a readable file: {record['state']}"})
+            records.append(record)
+    return records, summary
 
 
 def _default_search_policy_path(root: Path, script_dir: Path) -> Path:
@@ -200,7 +219,8 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
         _record("searxng_policy", searxng_policy, source_layer="tracked_or_env_config", classification="active_search_policy", env_var="SEARXNG_POLICY"),
         _record("searxng_capabilities", searxng_capabilities, source_layer="tracked_or_env_config", classification="active_search_capabilities", env_var="SEARXNG_CAPABILITIES"),
     ]
-    records.extend(_prompt_file_records(root, [default_overrides, model_overrides]))
+    prompt_records, prompt_file_summary = _prompt_file_records(root, [default_overrides, model_overrides])
+    records.extend(prompt_records)
 
     warnings = []
     if "docs" in searxng_policy.parts:
@@ -220,5 +240,6 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
         "root": str(root),
         "var_dir": str(var_dir),
         "paths": records,
+        "prompt_files": prompt_file_summary,
         "warnings": warnings,
     }

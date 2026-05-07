@@ -11,6 +11,7 @@ try:
         reasoning_policy_for_level,
         reasoning_policy_mode,
     )
+    from .qz_prompt_policy import assemble_instruction_stack
     from .qz_runtime_io import read_json, runtime_state_path, write_json
 except ImportError:
     from qz_reasoning_policy import (
@@ -19,6 +20,7 @@ except ImportError:
         reasoning_policy_for_level,
         reasoning_policy_mode,
     )
+    from qz_prompt_policy import assemble_instruction_stack
     from qz_runtime_io import read_json, runtime_state_path, write_json
 
 
@@ -500,6 +502,66 @@ class ModelRouter:
         policy["thinking_budget_tokens"] = None
         return policy
 
+    def selected_prompt_status(self, selected: dict | None = None) -> dict:
+        selected = selected if isinstance(selected, dict) else self.selected_model_entry()
+        try:
+            _instructions, policy = assemble_instruction_stack(
+                existing_instructions="",
+                client_blocks=[],
+                selected_model=selected,
+            )
+        except Exception as exc:
+            policy = {
+                "mode": "",
+                "prompt_files_loaded": [],
+                "replacement_files_loaded": [],
+                "prompt_files_missing": [],
+                "replacement_files_missing": [],
+                "prompt_files_failed": [{"path": "", "error": str(exc)}],
+                "replacement_files_failed": [],
+            }
+
+        def _strings(value):
+            if not isinstance(value, list):
+                return []
+            return [item for item in value if isinstance(item, str)]
+
+        def _failures(*values):
+            out = []
+            for value in values:
+                if not isinstance(value, list):
+                    continue
+                for item in value:
+                    if isinstance(item, dict):
+                        out.append({
+                            "path": str(item.get("path") or ""),
+                            "error": str(item.get("error") or ""),
+                        })
+                    elif isinstance(item, str):
+                        out.append({"path": item, "error": ""})
+            return out
+
+        loaded = []
+        for item in _strings(policy.get("replacement_files_loaded")) + _strings(policy.get("prompt_files_loaded")):
+            if item not in loaded:
+                loaded.append(item)
+        missing = []
+        for item in _strings(policy.get("replacement_files_missing")) + _strings(policy.get("prompt_files_missing")):
+            if item not in missing:
+                missing.append(item)
+
+        return {
+            "schema": "qz.prompt.status.v1",
+            "mode": policy.get("mode") or "",
+            "policy": policy,
+            "files_loaded": loaded,
+            "files_missing": missing,
+            "files_failed": _failures(
+                policy.get("replacement_files_failed"),
+                policy.get("prompt_files_failed"),
+            ),
+        }
+
     def apply_reasoning_policy(self, body: dict, selected: dict | None = None):
         policy = self.selected_reasoning_policy(selected, body)
         result = apply_reasoning_policy(body, policy.get("effort"), policy.get("mode"))
@@ -545,6 +607,7 @@ class ModelRouter:
         ready = health_status == 200 and backend_state == "loaded"
         reasoning_level = self.selected_reasoning_level(selected)
         reasoning_policy = self.selected_reasoning_policy(selected)
+        prompt_status = self.selected_prompt_status(selected)
         selected_context_length, selected_context_source, selected_context_state = self.selected_context_length_fact(selected)
         backend_context_length, backend_context_source, backend_context_state = self.backend_context_length_fact(backend_models, selected_backend_id)
         restart_required_state = "confirmed" if backend_context_state == "confirmed" else "pending"
@@ -602,6 +665,7 @@ class ModelRouter:
                 "loaded_models": loaded_models,
                 "models": backend_models,
             },
+            "prompt": prompt_status,
             "load": {
                 "state": load_state,
                 "started_at": load_started_at,
@@ -620,6 +684,7 @@ class ModelRouter:
         load = snapshot.get("load") or {}
         health = snapshot.get("health") or {}
         latest_request = snapshot.get("latest_request") if isinstance(snapshot.get("latest_request"), dict) else {}
+        prompt = snapshot.get("prompt") if isinstance(snapshot.get("prompt"), dict) else {}
         loaded_models = backend.get("loaded_models") or []
         loaded_ids = [
             model.get("id")
@@ -654,6 +719,7 @@ class ModelRouter:
             "load_state": load.get("state") or "unknown",
             "health_status": health.get("status"),
             "latest_request": latest_request,
+            "prompt": prompt,
             "timestamp": snapshot.get("timestamp"),
         }
 

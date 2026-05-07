@@ -24,6 +24,7 @@ class FakeCatalog:
             "name": "Model A",
             "context_length": 131072,
             "metadata": {},
+            "overrides": {"system_prompt_file": "var/prompts/model-a.md"},
             "default": False,
         }, {
             "key": "model-b.gguf",
@@ -34,6 +35,7 @@ class FakeCatalog:
             "name": "Model B",
             "context_length": 131072,
             "metadata": {},
+            "overrides": {"system_prompt_file": "var/prompts/model-b.md"},
             "default": True,
         }]
         self.selected = self.entries[1]
@@ -248,6 +250,8 @@ def main():
             assert snapshot["backend"]["selected_context_length"] == 131072, snapshot
             assert snapshot["backend"]["backend_context_length"] == 131072, snapshot
             assert snapshot["backend"]["backend_context_length_state"] == "confirmed", snapshot
+            assert snapshot["prompt"]["schema"] == "qz.prompt.status.v1", snapshot
+            assert snapshot["prompt"]["files_missing"], snapshot
 
             status, _, telemetry = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/recent?limit=5")
             assert status == 200, telemetry
@@ -334,6 +338,7 @@ def main():
             assert prompt_contract["selected_backend_id"] == "model-a.gguf", prompt_contract
             assert prompt_contract["reasoning_level"] == "high", prompt_contract
             assert prompt_contract["prompt_policy"]["mode"], prompt_contract
+            assert prompt_contract["prompt_policy"]["replacement_files_missing"], prompt_contract
             assert any(
                 event.get("type") == "request_completed"
                 and event.get("request_id")

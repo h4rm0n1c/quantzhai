@@ -2,8 +2,10 @@
 
 ## Status
 
-Open master plan. Phase 1 breakage fixes are complete enough to move the
-active engineering focus to shared telemetry schema work.
+Open master plan. Phase 1 breakage fixes, telemetry schema base, monitor
+fallback cleanup, concurrent monitor smoke, stream timing telemetry, and
+qz-top host-local VRAM split are complete enough to move the active
+engineering focus to config ownership and prompt/profile reporting.
 
 This is the controlling map for the current QuantZhai stabilisation work. It ties together the known bug notes, observability agenda, and configuration-contract plan.
 
@@ -602,41 +604,46 @@ fold all old script logic into qz-up/qz-down/qz-codex
 Start with:
 
 ```text
-shared telemetry schema hardening
+profile prompt/config ownership
 ```
 
 Reason:
 
 ```text
-Phase 1 breakage fixes are done.
-qz-top, qz-thoughts, /status, streaming diagnostics, and benchmarks need one
-runtime event contract before deeper monitor or config work.
+Telemetry base, monitor fallback cleanup, concurrent monitor smoke, stream
+timing telemetry, and qz-top host-local VRAM split are done. The next contract
+risk is config ownership: prompt files, profile overrides, generated Codex
+catalog metadata, /qz/config/effective, and /qz/status must report the same
+prompt/profile truth before files move.
 ```
 
 Then do:
 
 ```text
-monitor fallback cleanup and concurrent monitor smoke
+prompt/config reporting hardening
 ```
 
 Reason:
 
 ```text
-qz-top TPS first pass is done. Remaining monitor work is proving qz-top and
-qz-thoughts can run together without file/log fallback becoming live truth.
+Missing or failed prompt files should surface consistently in
+/qz/config/effective, /qz/status, and request prompt-contract telemetry.
+Generated Codex catalog views must remain views of proxy policy, not routing
+authority.
 ```
 
 Then do:
 
 ```text
-stream timing telemetry
+explicit config layers
 ```
 
 Reason:
 
 ```text
-proves whether the proxy is actually delaying Codex
-turns vibes into data
+Once effective config reporting is trustworthy, move cautiously toward
+config/default, config/example, config/user, and generated/runtime/debug state
+under var without changing model-dir profiles or Codex-visible slugs.
 ```
 
 ## Current working principle

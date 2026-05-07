@@ -1,7 +1,10 @@
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from proxy.qz_config_report import EFFECTIVE_CONFIG_SCHEMA, effective_config_payload
 
@@ -52,6 +55,8 @@ class EffectiveConfigReportTests(unittest.TestCase):
                 self.assertEqual(paths["searxng_policy"]["path"], str(root / "config" / "default" / "search-policy.json"))
                 self.assertIn("prompt_file:system_prompt_file", paths)
                 self.assertEqual(paths["prompt_file:system_prompt_file"]["state"], "missing")
+                self.assertEqual(payload["prompt_files"]["schema"], "qz.prompt.files.v1")
+                self.assertIn(str(root / "config" / "user" / "prompts" / "profile.md"), payload["prompt_files"]["missing"])
         finally:
             for name, value in old_env.items():
                 if value is None:
