@@ -7,6 +7,7 @@ from pathlib import Path
 
 RUNTIME_METRICS_SCHEMA = "qz.runtime.metrics.v1"
 PROMPT_CONTRACT_SCHEMA = "qz.prompt.contract.v1"
+CAPTURE_CONTRACT_SCHEMA = "qz.capture.contract.v1"
 
 try:
     from .qz_telemetry import TELEMETRY_RECENT_SCHEMA
@@ -263,6 +264,11 @@ class RequestRouter:
             "selected_context_length": backend.get("selected_context_length"),
             "backend_context_length": backend.get("backend_context_length"),
             "restart_required": bool(backend.get("restart_required")),
+            "restart_required_state": backend.get("restart_required_state") or "unknown",
+            "selected_context_length_state": backend.get("selected_context_length_state") or "intended",
+            "selected_context_length_source": backend.get("selected_context_length_source") or "",
+            "backend_context_length_state": backend.get("backend_context_length_state") or "unknown",
+            "backend_context_length_source": backend.get("backend_context_length_source") or "",
             "reasoning_level": backend.get("selected_reasoning_level") or "medium",
             "reasoning_policy": backend.get("selected_reasoning_policy") or "prompt",
             "thinking_budget_tokens": backend.get("selected_thinking_budget_tokens"),
@@ -315,6 +321,7 @@ class RequestRouter:
         profile = selected_model.get("label") or selected_model.get("name") or selected_key or client_model
         return {
             "schema": PROMPT_CONTRACT_SCHEMA,
+            "request_id": metadata.get("qz_request_id") or "",
             "profile": profile,
             "requested_model": client_model or "",
             "selected_key": selected_key,
@@ -371,6 +378,25 @@ class RequestRouter:
             pass
         if event_type == "request_completed":
             self._emit_throughput_sample(payload)
+
+    def _request_id(self, started_at: float) -> str:
+        return f"qz_req_{int(started_at * 1000)}_{id(self.handler) & 0xffff:x}"
+
+    def _capture_contract(self, request_id: str, prompt_contract: dict, runtime_metrics: dict) -> dict:
+        prompt_contract = prompt_contract if isinstance(prompt_contract, dict) else {}
+        runtime_metrics = runtime_metrics if isinstance(runtime_metrics, dict) else {}
+        return {
+            "schema": CAPTURE_CONTRACT_SCHEMA,
+            "request_id": request_id or "",
+            "status_schema": "qz.status.snapshot.v1",
+            "runtime_metrics_schema": runtime_metrics.get("schema") or RUNTIME_METRICS_SCHEMA,
+            "prompt_contract_schema": prompt_contract.get("schema") or PROMPT_CONTRACT_SCHEMA,
+            "requested_model": prompt_contract.get("requested_model") or runtime_metrics.get("selected_model") or "",
+            "selected_key": prompt_contract.get("selected_key") or runtime_metrics.get("selected_key") or "",
+            "selected_backend_id": prompt_contract.get("selected_backend_id") or runtime_metrics.get("selected_backend_id") or "",
+            "prompt_policy": prompt_contract.get("prompt_policy") or {},
+            "runtime_metrics": runtime_metrics,
+        }
 
     def _emit_throughput_sample(self, payload: dict):
         if not isinstance(payload, dict):
@@ -569,6 +595,7 @@ class RequestRouter:
 
     def proxy_json_api(self, upstream_path):
         started_at = time.time()
+        request_id = self._request_id(started_at)
         try:
             append_capture("latest-json-api.log", f"{time.time():.3f} ENTER path={self.handler.path} upstream_path={upstream_path} accept={self.handler.headers.get('Accept','')}\n")
         except Exception:
@@ -580,7 +607,7 @@ class RequestRouter:
         try:
             body = json.loads(raw.decode("utf-8"))
         except Exception as e:
-            self._emit_request_telemetry("request_failed", started_at, upstream_path, "", error=f"invalid JSON: {e}", phase="parse")
+            self._emit_request_telemetry("request_failed", started_at, upstream_path, "", error=f"invalid JSON: {e}", phase="parse", request_id=request_id)
             self.handler._send_json(400, {"error": f"invalid JSON: {e}"})
             return
 
@@ -610,7 +637,7 @@ class RequestRouter:
             selected_model, selection_reason = self.handler._resolve_model_selection(client_model)
             if selected_model is None:
                 error_text = selection_reason.get("reason") if isinstance(selection_reason, dict) else selection_reason
-                self._emit_request_telemetry("request_failed", started_at, upstream_path, client_model, error=error_text or "no model available", phase="select_model")
+                self._emit_request_telemetry("request_failed", started_at, upstream_path, client_model, error=error_text or "no model available", phase="select_model", request_id=request_id)
                 if isinstance(selection_reason, dict):
                     self.handler._send_json(503, selection_reason)
                 else:
@@ -624,12 +651,14 @@ class RequestRouter:
 
             backend_model = selected_model.get("backend_id") or selected_identity or client_model
             runtime_metrics = self._runtime_metrics(client_model)
+            runtime_metrics["request_id"] = request_id
             upstream_instructions = body.get("instructions")
             upstream_instructions_present = isinstance(upstream_instructions, str) and bool(upstream_instructions.strip())
             metadata = body.get("metadata")
             if not isinstance(metadata, dict):
                 metadata = {}
             metadata["qz_upstream_instructions_present"] = upstream_instructions_present
+            metadata["qz_request_id"] = request_id
             body["metadata"] = metadata
             body["model"] = backend_model
             body = self.handler._model_router().apply_reasoning_policy(body, selected_model)
@@ -647,6 +676,7 @@ class RequestRouter:
                 self._emit_prompt_contract(prompt_contract)
                 try:
                     write_capture("latest-normalized-request.json", body)
+                    write_capture("latest-request-contract.json", self._capture_contract(request_id, prompt_contract, runtime_metrics))
                 except Exception:
                     pass
 
@@ -678,6 +708,7 @@ class RequestRouter:
                             gen_ms=stream_result.get("gen_ms") if isinstance(stream_result, dict) else None,
                             output_items=stream_result.get("output_items") if isinstance(stream_result, dict) else None,
                             runtime_metrics=runtime_metrics,
+                            request_id=request_id,
                         )
                     except (BrokenPipeError, ConnectionResetError):
                         self._emit_request_telemetry(
@@ -690,6 +721,7 @@ class RequestRouter:
                             error="client disconnected",
                             phase="stream",
                             runtime_metrics=runtime_metrics,
+                            request_id=request_id,
                         )
                         pass
                     except Exception as e:
@@ -708,6 +740,7 @@ class RequestRouter:
                             error=str(e),
                             phase="stream",
                             runtime_metrics=runtime_metrics,
+                            request_id=request_id,
                         )
                         error_payload = {
                             "type": "response.failed",
@@ -753,6 +786,7 @@ class RequestRouter:
                             content_type=content_type,
                             usage=out.get("usage"),
                             runtime_metrics=runtime_metrics,
+                            request_id=request_id,
                         )
                         return
 
@@ -768,6 +802,7 @@ class RequestRouter:
                         content_type=content_type,
                         usage=out.get("usage"),
                         runtime_metrics=runtime_metrics,
+                        request_id=request_id,
                     )
                     return
                 except Exception as e:
@@ -786,6 +821,7 @@ class RequestRouter:
                         error=str(e),
                         phase="local_web_runtime",
                         runtime_metrics=runtime_metrics,
+                        request_id=request_id,
                     )
                     self.handler._send_json(502, {"error": f"local web runtime error: {e}"})
                     return
@@ -800,6 +836,7 @@ class RequestRouter:
                 "model": client_model,
                 "backend_model": backend_model,
                 "stream": bool(body.get("stream")),
+                "request_id": request_id,
             })
         except Exception:
             pass
@@ -828,6 +865,7 @@ class RequestRouter:
                 error=str(e),
                 phase="upstream_request",
                 runtime_metrics=runtime_metrics,
+                request_id=request_id,
             )
             self.handler._send_json(502, {"error": f"upstream error: {e}"})
             return
@@ -872,6 +910,7 @@ class RequestRouter:
                     error="client disconnected",
                     phase="upstream_stream",
                     runtime_metrics=runtime_metrics,
+                    request_id=request_id,
                 )
                 pass
             finally:
@@ -891,6 +930,7 @@ class RequestRouter:
                 gen_ms=stream_result.get("gen_ms") if isinstance(stream_result, dict) else None,
                 output_items=stream_result.get("output_items") if isinstance(stream_result, dict) else None,
                 runtime_metrics=runtime_metrics,
+                request_id=request_id,
             )
             self.handler.close_connection = True
             return
@@ -925,6 +965,7 @@ class RequestRouter:
                 content_type=content_type,
                 usage=out.get("usage"),
                 runtime_metrics=runtime_metrics,
+                request_id=request_id,
             )
         except Exception:
             self.handler.send_response(status)
@@ -943,6 +984,7 @@ class RequestRouter:
                 status=status,
                 content_type=content_type,
                 runtime_metrics=runtime_metrics,
+                request_id=request_id,
             )
 
     def proxy_raw(self, method):

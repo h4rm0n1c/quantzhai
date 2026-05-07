@@ -371,6 +371,14 @@ We can tell whether Codex delay is proxy buffering or upstream behaviour.
 
 #### 4. Fix early `/status` truth
 
+Status:
+
+```text
+Started. /qz/status and telemetry summaries now expose source/state fields for
+selected and backend context lengths, plus a restart_required_state so monitors
+can distinguish confirmed facts from pending/default values.
+```
+
 Implement:
 
 ```text
@@ -388,6 +396,14 @@ Unknown values are labelled unknown/pending.
 ```
 
 #### 5. Define shared telemetry/event schema
+
+Status:
+
+```text
+Started. Request telemetry, prompt contracts, runtime metrics, and request
+captures now share request_id/schema metadata. latest-request-contract.json
+captures the request id, prompt contract, runtime metrics, and selected backend.
+```
 
 Implement:
 

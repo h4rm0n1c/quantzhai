@@ -207,6 +207,10 @@ class ModelRouter:
         return payload if isinstance(payload, dict) else {}
 
     def backend_context_length(self, backend_models=None, selected_backend_id: str = ""):
+        context, _source, _state = self.backend_context_length_fact(backend_models, selected_backend_id)
+        return context
+
+    def backend_context_length_fact(self, backend_models=None, selected_backend_id: str = ""):
         backend_models = backend_models if isinstance(backend_models, dict) else None
         if backend_models:
             candidate_ids = []
@@ -228,20 +232,35 @@ class ModelRouter:
                     continue
                 context = self._parse_context_length(entry.get("context_length"), None)
                 if context is not None:
-                    return context
+                    return context, "backend_inventory", "confirmed"
         state = self.load_backend_state()
         context = self._parse_context_length(state.get("backend_context_length"), None)
         if context is not None:
-            return context
-        return self._parse_context_length(os.environ.get("QZ_CONTEXT"), 131072)
+            return context, "backend_state", "cached"
+        env_value = os.environ.get("QZ_CONTEXT")
+        context = self._parse_context_length(env_value, None)
+        if context is not None:
+            return context, "env:QZ_CONTEXT", "default"
+        return 131072, "built_in_default", "default"
 
     def selected_context_length(self, selected: dict | None = None):
+        context, _source, _state = self.selected_context_length_fact(selected)
+        return context
+
+    def selected_context_length_fact(self, selected: dict | None = None):
         selected = selected if isinstance(selected, dict) else self.selected_model_entry()
         if isinstance(selected, dict):
             runtime_context = self._parse_context_length(selected.get("runtime_context_length"), None)
             if runtime_context is not None:
-                return runtime_context
-        return self._parse_context_length(os.environ.get("QZ_CONTEXT"), 131072)
+                return runtime_context, "catalog.runtime_context_length", "intended"
+            catalog_context = self._parse_context_length(selected.get("context_length"), None)
+            if catalog_context is not None:
+                return catalog_context, "catalog.context_length", "intended"
+        env_value = os.environ.get("QZ_CONTEXT")
+        context = self._parse_context_length(env_value, None)
+        if context is not None:
+            return context, "env:QZ_CONTEXT", "intended"
+        return 131072, "built_in_default", "default"
 
     def _emit(self, event_type: str, payload: dict | None = None):
         telemetry = getattr(self.handler, "telemetry", None)
@@ -571,8 +590,14 @@ class ModelRouter:
         ready = health_status == 200 and backend_state == "loaded"
         reasoning_level = self.selected_reasoning_level(selected)
         reasoning_policy = self.selected_reasoning_policy(selected)
-        selected_context_length = self.selected_context_length(selected)
-        backend_context_length = self.backend_context_length(backend_models, selected_backend_id)
+        selected_context_length, selected_context_source, selected_context_state = self.selected_context_length_fact(selected)
+        backend_context_length, backend_context_source, backend_context_state = self.backend_context_length_fact(backend_models, selected_backend_id)
+        restart_required_state = "confirmed" if backend_context_state == "confirmed" else "pending"
+        restart_required = (
+            selected_context_length != backend_context_length
+            if restart_required_state == "confirmed"
+            else False
+        )
         self._reconcile_status_state(
             selected,
             health_status,
@@ -603,8 +628,13 @@ class ModelRouter:
                 "selected_sampling_params": reasoning_policy.get("sampling"),
                 "selected_thinking_budget_tokens": reasoning_policy.get("thinking_budget_tokens"),
                 "selected_context_length": selected_context_length,
+                "selected_context_length_state": selected_context_state,
+                "selected_context_length_source": selected_context_source,
                 "backend_context_length": backend_context_length,
-                "restart_required": selected_context_length != backend_context_length,
+                "backend_context_length_state": backend_context_state,
+                "backend_context_length_source": backend_context_source,
+                "restart_required": restart_required,
+                "restart_required_state": restart_required_state,
                 "loaded_model": loaded_model,
                 "loaded_count": len(loaded_models),
                 "loaded_models": loaded_models,
@@ -647,7 +677,13 @@ class ModelRouter:
             "sampling": backend.get("selected_sampling_params") or {},
             "thinking_budget_tokens": backend.get("selected_thinking_budget_tokens"),
             "selected_context_length": backend.get("selected_context_length"),
+            "selected_context_length_state": backend.get("selected_context_length_state") or "unknown",
+            "selected_context_length_source": backend.get("selected_context_length_source") or "",
             "backend_context_length": backend.get("backend_context_length"),
+            "backend_context_length_state": backend.get("backend_context_length_state") or "unknown",
+            "backend_context_length_source": backend.get("backend_context_length_source") or "",
+            "restart_required": bool(backend.get("restart_required")),
+            "restart_required_state": backend.get("restart_required_state") or "unknown",
             "loaded": loaded_ids,
             "loaded_model": loaded_model,
             "loaded_count": backend.get("loaded_count") or len(loaded_ids),
@@ -673,8 +709,13 @@ class ModelRouter:
             "selected_backend_id": backend.get("selected_backend_id") or "",
             "selected_state": backend.get("selected_state") or "unknown",
             "context_length": backend.get("selected_context_length"),
+            "context_length_state": backend.get("selected_context_length_state") or "unknown",
+            "context_length_source": backend.get("selected_context_length_source") or "",
             "backend_context_length": backend.get("backend_context_length"),
+            "backend_context_length_state": backend.get("backend_context_length_state") or "unknown",
+            "backend_context_length_source": backend.get("backend_context_length_source") or "",
             "restart_required": bool(backend.get("restart_required")),
+            "restart_required_state": backend.get("restart_required_state") or "unknown",
             "health_status": (snapshot.get("health") or {}).get("status"),
             "reasoning_level": backend.get("selected_reasoning_level") or "medium",
             "reasoning_policy": backend.get("selected_reasoning_policy") or reasoning_policy_mode(),

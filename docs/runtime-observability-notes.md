@@ -38,6 +38,15 @@ Date: 2026-04-29
   `var/backend-state.json` from the live backend model inventory when available.
   Persisted state is a startup/fallback cache, not a higher-priority truth than
   the running server.
+- `/qz/status` reports source/state metadata for context facts. Selected
+  context is an intended value from catalog/env/defaults; backend context is
+  confirmed only when live backend inventory reports it, otherwise cached or
+  default. `restart_required_state` tells monitors whether the restart decision
+  is confirmed or pending.
+- When capture mode is enabled, `var/captures/latest-request-contract.json`
+  records the request id, prompt contract schema, runtime metrics schema,
+  requested model, selected backend, and prompt-policy summary for the latest
+  normalized Responses request.
 - `qz-codex` now prefers the model already loaded by the proxy at launch, then
   syncs Codex to that loaded backend model so startup does not clobber the
   current server state. If nothing is loaded yet, it falls back to the profile

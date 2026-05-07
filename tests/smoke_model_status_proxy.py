@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -165,8 +166,12 @@ def _request_json(url, payload=None):
 def main():
     upstream = _free_server(FakeBackendHandler)
     proxy = None
+    old_var_dir = os.environ.get("QZ_VAR_DIR")
+    old_capture_mode = os.environ.get("QZ_CAPTURE_MODE")
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
+            os.environ["QZ_VAR_DIR"] = tmpdir
+            os.environ["QZ_CAPTURE_MODE"] = "latest"
             model_state_path = f"{tmpdir}/model-state.json"
             backend_state_path = f"{tmpdir}/backend-state.json"
             with open(model_state_path, "w", encoding="utf-8") as handle:
@@ -219,6 +224,10 @@ def main():
             assert ready["load"]["state"] == "loaded", ready
             assert ready["load"]["error"] is None, ready
             assert ready["backend"]["backend_context_length"] == 131072, ready
+            assert ready["backend"]["backend_context_length_state"] == "confirmed", ready
+            assert ready["backend"]["backend_context_length_source"] == "backend_inventory", ready
+            assert ready["backend"]["selected_context_length_state"] == "intended", ready
+            assert ready["backend"]["restart_required_state"] == "confirmed", ready
 
             with open(model_state_path, encoding="utf-8") as handle:
                 reconciled_model_state = json.load(handle)
@@ -282,6 +291,9 @@ def main():
             assert sent["metadata"]["qz_runtime"]["load_state"] == "ready", sent
             assert sent["metadata"]["qz_runtime"]["selected_backend_id"] == "model-a.gguf", sent
             assert sent["metadata"]["qz_runtime"]["selected_state"] == "loaded", sent
+            assert sent["metadata"]["qz_runtime"]["backend_context_length_state"] == "confirmed", sent
+            assert sent["metadata"]["qz_runtime"]["restart_required_state"] == "confirmed", sent
+            assert sent["metadata"]["qz_request_id"].startswith("qz_req_"), sent
             assert sent["metadata"]["qz_reasoning"]["level"] == "high", sent
             assert sent["metadata"]["qz_reasoning"]["policy"] == "prompt", sent
             assert sent["metadata"]["qz_prompt_policy"]["mode"], sent
@@ -296,6 +308,7 @@ def main():
             assert prompt_contracts, telemetry_recent
             prompt_contract = prompt_contracts[-1]
             assert prompt_contract["schema"] == "qz.prompt.contract.v1", prompt_contract
+            assert prompt_contract["request_id"].startswith("qz_req_"), prompt_contract
             assert prompt_contract["profile"] == "Model A", prompt_contract
             assert prompt_contract["requested_model"] == "model-a.gguf", prompt_contract
             assert prompt_contract["selected_backend_id"] == "model-a.gguf", prompt_contract
@@ -303,11 +316,19 @@ def main():
             assert prompt_contract["prompt_policy"]["mode"], prompt_contract
             assert any(
                 event.get("type") == "request_completed"
+                and event.get("request_id")
                 and (event.get("payload") or {}).get("runtime_metrics", {}).get("selected_context_length") == 131072
                 and (event.get("payload") or {}).get("runtime_metrics", {}).get("schema") == "qz.runtime.metrics.v1"
                 and (event.get("payload") or {}).get("runtime_metrics", {}).get("prompt_contract", {}).get("requested_model") == "model-a.gguf"
                 for event in telemetry_recent.get("events", [])
             ), telemetry_recent
+            contract_path = f"{tmpdir}/captures/latest-request-contract.json"
+            with open(contract_path, encoding="utf-8") as handle:
+                capture_contract = json.load(handle)
+            assert capture_contract["schema"] == "qz.capture.contract.v1", capture_contract
+            assert capture_contract["request_id"] == prompt_contract["request_id"], capture_contract
+            assert capture_contract["selected_backend_id"] == "model-a.gguf", capture_contract
+            assert capture_contract["runtime_metrics"]["backend_context_length_state"] == "confirmed", capture_contract
 
             status, _, ready = _request_json(f"http://127.0.0.1:{proxy.server_port}/ready")
             assert status == 200, ready
@@ -319,6 +340,14 @@ def main():
         if proxy is not None:
             proxy.shutdown()
         upstream.shutdown()
+        if old_var_dir is None:
+            os.environ.pop("QZ_VAR_DIR", None)
+        else:
+            os.environ["QZ_VAR_DIR"] = old_var_dir
+        if old_capture_mode is None:
+            os.environ.pop("QZ_CAPTURE_MODE", None)
+        else:
+            os.environ["QZ_CAPTURE_MODE"] = old_capture_mode
 
 
 if __name__ == "__main__":
