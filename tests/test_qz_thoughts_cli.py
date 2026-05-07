@@ -31,8 +31,14 @@ class QzThoughtsCliTests(unittest.TestCase):
             event: response.output_text.delta
             data: {"type":"response.output_text.delta","delta":"hello"}
 
+            event: response.content_part.added
+            data: {"type":"response.content_part.added","part":{"type":"output_text","text":""}}
+
             event: response.output_text.delta
             data: {"type":"response.output_text.delta","delta":" world"}
+
+            event: response.content_part.done
+            data: {"type":"response.content_part.done","part":{"type":"output_text","text":"hello world"}}
 
             event: response.output_text.done
             data: {"type":"response.output_text.done","text":"hello world"}
@@ -74,6 +80,7 @@ class QzThoughtsCliTests(unittest.TestCase):
         self.assertEqual(result.stdout.count("  answer    done 11 chars"), 1)
         self.assertNotIn("  thought   I", result.stdout)
         self.assertNotIn("  thought   'll", result.stdout)
+        self.assertNotIn("response.content_part", result.stdout)
 
 
 if __name__ == "__main__":

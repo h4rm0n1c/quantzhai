@@ -277,6 +277,14 @@ def parse_sse(raw: str, path: Path) -> ThoughtState:
             state.activity.append(("done", f"{label} {item.get('status', '')}".strip()))
             return
 
+        if ev_type in (
+            "response.content_part.added",
+            "response.content_part.done",
+            "response.reasoning_summary_part.added",
+            "response.reasoning_summary_part.done",
+        ):
+            return
+
         if ev_type in ("response.reasoning_text.delta", "response.reasoning_summary_text.delta"):
             _apply_thought_delta(state, payload.get("delta") or "")
             return
@@ -314,11 +322,15 @@ def parse_sse(raw: str, path: Path) -> ThoughtState:
 
 
 def _append_activity(state: ThoughtState, kind: str, message: str, limit: int = 40):
+    if state.activity and state.activity[-1] == (kind, message):
+        return
     state.activity.append((kind, message))
     state.activity = state.activity[-limit:]
 
 
 def _append_backend(state: ThoughtState, kind: str, message: str, limit: int = 24):
+    if state.backend and state.backend[-1] == (kind, message):
+        return
     state.backend.append((kind, message))
     state.backend = state.backend[-limit:]
 
@@ -371,6 +383,14 @@ def _apply_response_event(state: ThoughtState, ev_type: str, payload: dict):
         item = payload.get("item") or {}
         label = item.get("type", "item")
         _append_activity(state, "done", f"{label} {item.get('status', '')}".strip())
+        return
+
+    if ev_type in (
+        "response.content_part.added",
+        "response.content_part.done",
+        "response.reasoning_summary_part.added",
+        "response.reasoning_summary_part.done",
+    ):
         return
 
     if ev_type in ("response.reasoning_text.delta", "response.reasoning_summary_text.delta"):
@@ -558,6 +578,12 @@ def load_telemetry_state(limit: int = 200) -> Optional[ThoughtState]:
 
     events = [event for event in (data.get("events") or []) if isinstance(event, dict)]
     request_floor_seq = None
+    for event in events:
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        seq = event.get("seq")
+        if event.get("type") == "request_started" and _is_response_request(payload):
+            request_floor_seq = seq
+
     state = ThoughtState(path=Path("proxy-telemetry"))
     state.status = str((data.get("state") or {}).get("status") or "ok")
     prefix_rows: List[Tuple[str, str]] = []
@@ -566,10 +592,12 @@ def load_telemetry_state(limit: int = 200) -> Optional[ThoughtState]:
         ev_type = event.get("type")
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         seq = event.get("seq")
-        if ev_type == "request_started" and _is_response_request(payload):
-            request_floor_seq = seq
-        if request_floor_seq is not None and seq is not None and ev_type == "request_started" and seq < request_floor_seq:
-            continue
+        if request_floor_seq is not None and seq is not None:
+            try:
+                if int(seq) < int(request_floor_seq):
+                    continue
+            except Exception:
+                pass
         latest_ts = _apply_telemetry_event(state, event, prefix_rows, latest_ts)
         try:
             if isinstance(seq, int):
