@@ -3,9 +3,10 @@
 ## Status
 
 Open master plan. Phase 1 breakage fixes, telemetry schema base, monitor
-fallback cleanup, concurrent monitor smoke, stream timing telemetry, and
-qz-top host-local VRAM split are complete enough to move the active
-engineering focus to config ownership and prompt/profile reporting.
+fallback cleanup, concurrent monitor smoke, stream timing telemetry, qz-top
+host-local VRAM split, and the first config ownership/layering pass are
+live-smoked. The active engineering focus now moves to reducing duplicated
+shell/config ownership and adding backend telemetry for model/cache VRAM split.
 
 This is the controlling map for the current QuantZhai stabilisation work. It ties together the known bug notes, observability agenda, and configuration-contract plan.
 
@@ -247,6 +248,13 @@ Started. Current data paths are audited in docs/edge-case-config-contract-plan.m
 /qz/config/effective exposes a read-only effective path/config report.
 Search policy moved from docs/ to config/default/search-policy.json with old-path compatibility fallback.
 Model override defaults/examples moved into config/default/model-overrides.json and config/example/model-overrides.json with old-path compatibility fallback.
+Codex config/catalog examples moved under config/example/, benchmark prompts
+moved under config/default/, and config/user/ is present for local overrides.
+Live smoke confirms /qz/config/effective, /qz/status, /qz/telemetry/recent,
+/qz/telemetry/stream, qz-top, qz-thoughts, qz-doctor, and generated Codex
+catalog preparation all still work against the current proxy. One host-local
+compatibility path remains active when config/user/model-overrides.json is
+absent: legacy var/model-overrides.json.
 ```
 
 Proposed destination:
@@ -604,46 +612,47 @@ fold all old script logic into qz-up/qz-down/qz-codex
 Start with:
 
 ```text
-profile prompt/config ownership
+reduce script sprawl around shared config/path ownership
 ```
 
 Reason:
 
 ```text
-Telemetry base, monitor fallback cleanup, concurrent monitor smoke, stream
-timing telemetry, and qz-top host-local VRAM split are done. The next contract
-risk is config ownership: prompt files, profile overrides, generated Codex
-catalog metadata, /qz/config/effective, and /qz/status must report the same
-prompt/profile truth before files move.
+Config ownership, prompt/profile reporting, explicit default/example/user
+config paths, generated Codex catalog preparation, and monitor fallback smoke
+are done as a first pass. The remaining risk is duplicated shell ownership:
+qz-env, qz-codex-common, monitor scripts, and helper wrappers still each own
+pieces of config/path/runtime behaviour. Recent smoke caught stale local
+SEARXNG_POLICY compatibility and a generated catalog import bug there.
 ```
 
 Then do:
 
 ```text
-prompt/config reporting hardening
+qz-top backend VRAM telemetry split
 ```
 
 Reason:
 
 ```text
-Missing or failed prompt files should surface consistently in
-/qz/config/effective, /qz/status, and request prompt-contract telemetry.
-Generated Codex catalog views must remain views of proxy policy, not routing
-authority.
+qz-top now displays host-local used/base/delta VRAM, but the proxy/backend
+telemetry still needs model-vs-cache facts where the backend can expose them.
+This is needed for reliable context/cache limit testing instead of guessing
+from nvidia-smi process totals.
 ```
 
 Then do:
 
 ```text
-explicit config layers
+finer var layout migration
 ```
 
 Reason:
 
 ```text
-Once effective config reporting is trustworthy, move cautiously toward
-config/default, config/example, config/user, and generated/runtime/debug state
-under var without changing model-dir profiles or Codex-visible slugs.
+After shared config/path helpers exist, move generated/runtime/cache/debug
+state toward var/generated, var/state, var/cache, var/run, var/logs, and
+var/captures without changing model-dir profiles or Codex-visible slugs.
 ```
 
 ## Current working principle

@@ -54,7 +54,16 @@ def proxy_base_url() -> str:
     return f"http://{host}:{port}"
 
 
-def fetch_json(url: str, timeout: float = 0.5) -> Optional[dict]:
+def monitor_http_timeout() -> float:
+    try:
+        return max(0.1, float(os.environ.get("QZ_MONITOR_HTTP_TIMEOUT", "2.0")))
+    except Exception:
+        return 2.0
+
+
+def fetch_json(url: str, timeout: Optional[float] = None) -> Optional[dict]:
+    if timeout is None:
+        timeout = monitor_http_timeout()
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
@@ -609,6 +618,7 @@ def load_telemetry_state(limit: int = 200) -> Optional[ThoughtState]:
             pass
 
     state.activity = (prefix_rows + state.activity)[-40:]
+    state.events = max(state.events, len(events))
     state.mtime = latest_ts or time.time()
     state.bytes_read = 0 if not events else len(json.dumps(events).encode("utf-8"))
     return state

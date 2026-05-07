@@ -26,6 +26,7 @@ qz_prepare_codex_home() {
   local catalog_dst="$QZ_ROOT/var/codex-home/model-catalogs/qwenzhai-models.json"
   python3 - "$QZ_MODEL_INVENTORY_CACHE" "$catalog_dst" "$QZ_ROOT/var/codex-home/config.toml" <<'PY'
 import json
+import os
 import re
 import sys
 from pathlib import Path
