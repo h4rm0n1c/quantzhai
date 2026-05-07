@@ -242,15 +242,26 @@ def main():
 
             status, _, snapshot = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/status")
             assert status == 200, snapshot
+            assert snapshot["schema"] == "qz.status.snapshot.v1", snapshot
             assert snapshot["router_mode"] is True, snapshot
             assert snapshot["selected"]["key"] == "model-b.gguf", snapshot
+            assert snapshot["backend"]["selected_context_length"] == 131072, snapshot
+            assert snapshot["backend"]["backend_context_length"] == 131072, snapshot
+            assert snapshot["backend"]["backend_context_length_state"] == "confirmed", snapshot
 
             status, _, telemetry = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/recent?limit=5")
             assert status == 200, telemetry
+            assert telemetry["schema"] == "qz.telemetry.recent.v1", telemetry
+            assert telemetry["state"]["schema"] == "qz.telemetry.state.v1", telemetry
+            assert telemetry["state"]["runtime"]["schema"] == "qz.status.summary.v1", telemetry
+            assert telemetry["state"]["runtime"]["selected_context_length"] == 131072, telemetry
+            assert telemetry["state"]["runtime"]["backend_context_length"] == 131072, telemetry
             assert any(event.get("type") == "status_snapshot" for event in telemetry.get("events", [])), telemetry
 
             status, _, telemetry_state = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/state")
             assert status == 200, telemetry_state
+            assert telemetry_state["schema"] == "qz.telemetry.state.v1", telemetry_state
+            assert telemetry_state["runtime"]["schema"] == "qz.status.summary.v1", telemetry_state
             assert telemetry_state["runtime"]["selected_context_length"] == 131072, telemetry_state
             assert telemetry_state["runtime"]["backend_context_length"] == 131072, telemetry_state
             assert telemetry_state["runtime"]["selected_reasoning_level"] == "medium", telemetry_state

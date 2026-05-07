@@ -491,6 +491,8 @@ Current first schema:
 event schema:  qz.telemetry.event.v1
 state schema:  qz.telemetry.state.v1
 recent schema: qz.telemetry.recent.v1
+stream schema: qz.telemetry.stream.v1
+unknown runtime schema: qz.runtime.summary.v1
 
 event fields:
   schema
@@ -500,6 +502,11 @@ event fields:
   monotonic_ts
   request_id
   payload
+
+state/recent/stream runtime:
+  runtime.schema == qz.status.summary.v1 when live status is available
+  runtime.schema == qz.runtime.summary.v1 and state == unknown otherwise
+  /qz/telemetry/stream opens with telemetry_stream_open carrying runtime
 ```
 
 ## Immediate action checklist

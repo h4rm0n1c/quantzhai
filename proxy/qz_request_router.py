@@ -134,11 +134,11 @@ class RequestRouter:
             return
 
         if self.handler.path == "/qz/telemetry/state":
-            state = self.handler.telemetry.state()
             try:
-                state["runtime"] = self.handler._model_router().status_summary(self.handler.path)
+                runtime = self.handler._model_router().status_summary(self.handler.path)
             except Exception:
-                state["runtime"] = {}
+                runtime = None
+            state = self.handler.telemetry.state(runtime=runtime)
             self.handler._send_json(200, state)
             return
 
@@ -150,11 +150,13 @@ class RequestRouter:
                 limit = int(params.get("limit", limit))
             except Exception:
                 limit = 100
-            self.handler._send_json(200, {
-                "schema": TELEMETRY_RECENT_SCHEMA,
-                "events": self.handler.telemetry.recent(limit),
-                "state": self.handler.telemetry.state(),
-            })
+            try:
+                runtime = self.handler._model_router().status_summary(self.handler.path)
+            except Exception:
+                runtime = None
+            payload = self.handler.telemetry.recent_payload(limit=limit, runtime=runtime)
+            payload["schema"] = TELEMETRY_RECENT_SCHEMA
+            self.handler._send_json(200, payload)
             return
 
         if self.handler.path in ("/qz/telemetry/events", "/qz/telemetry/stream"):

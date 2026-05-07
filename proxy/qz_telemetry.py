@@ -10,6 +10,8 @@ import time
 TELEMETRY_SCHEMA = "qz.telemetry.event.v1"
 TELEMETRY_STATE_SCHEMA = "qz.telemetry.state.v1"
 TELEMETRY_RECENT_SCHEMA = "qz.telemetry.recent.v1"
+TELEMETRY_STREAM_SCHEMA = "qz.telemetry.stream.v1"
+UNKNOWN_RUNTIME_SCHEMA = "qz.runtime.summary.v1"
 
 
 class TelemetryBus:
@@ -28,7 +30,7 @@ class TelemetryBus:
     def emit(self, event_type: str, payload: dict | None = None) -> dict:
         now_wall = time.time()
         now_mono = time.monotonic()
-        payload = payload if isinstance(payload, dict) else {}
+        payload = dict(payload) if isinstance(payload, dict) else {}
         event = {
             "schema": TELEMETRY_SCHEMA,
             "seq": next(self._seq),
@@ -70,7 +72,7 @@ class TelemetryBus:
             return []
         return events[-limit:]
 
-    def state(self) -> dict:
+    def state(self, runtime: dict | None = None) -> dict:
         now_wall = time.time()
         now_mono = time.monotonic()
         with self._lock:
@@ -91,9 +93,31 @@ class TelemetryBus:
             "event_count": event_count,
             "capacity": self.capacity,
             "counters": counters,
+            "runtime": self._runtime_payload(runtime),
+            "latest_request_id": self._event_request_id(latest),
+            "latest_completed_request_id": self._event_request_id(latest_completed),
             "latest": latest,
             "latest_completed": latest_completed,
             "latest_throughput": latest_throughput,
+        }
+
+    def recent_payload(self, limit: int | None = None, runtime: dict | None = None) -> dict:
+        return {
+            "schema": TELEMETRY_RECENT_SCHEMA,
+            "events": self.recent(limit),
+            "state": self.state(runtime=runtime),
+        }
+
+    def stream_open_event(self, runtime: dict | None = None) -> dict:
+        now_wall = time.time()
+        return {
+            "schema": TELEMETRY_STREAM_SCHEMA,
+            "type": "telemetry_stream_open",
+            "ts": now_wall,
+            "wall_ts": now_wall,
+            "monotonic_ts": time.monotonic(),
+            "request_id": "",
+            "runtime": self._runtime_payload(runtime),
         }
 
     @contextmanager
@@ -126,8 +150,24 @@ class TelemetryBus:
 
     @staticmethod
     def _request_id_from_payload(payload: dict) -> str:
-        for key in ("request_id", "response_id", "id"):
+        for key in ("request_id", "qz_request_id", "response_id", "id"):
             value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
+        metadata = payload.get("metadata")
+        if isinstance(metadata, dict):
+            for key in ("qz_request_id", "request_id"):
+                value = metadata.get(key)
+                if isinstance(value, str) and value:
+                    return value
+        runtime = payload.get("runtime_metrics")
+        if isinstance(runtime, dict):
+            value = runtime.get("request_id")
+            if isinstance(value, str) and value:
+                return value
+        prompt_contract = payload.get("prompt_contract")
+        if isinstance(prompt_contract, dict):
+            value = prompt_contract.get("request_id")
             if isinstance(value, str) and value:
                 return value
         response = payload.get("response")
@@ -136,6 +176,21 @@ class TelemetryBus:
             if isinstance(value, str) and value:
                 return value
         return ""
+
+    @staticmethod
+    def _event_request_id(event: dict | None) -> str:
+        if isinstance(event, dict) and isinstance(event.get("request_id"), str):
+            return event.get("request_id") or ""
+        return ""
+
+    @staticmethod
+    def _runtime_payload(runtime: dict | None) -> dict:
+        if isinstance(runtime, dict) and runtime:
+            return dict(runtime)
+        return {
+            "schema": UNKNOWN_RUNTIME_SCHEMA,
+            "state": "unknown",
+        }
 
 
 DEFAULT_TELEMETRY = TelemetryBus()

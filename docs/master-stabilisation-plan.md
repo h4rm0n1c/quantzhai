@@ -409,9 +409,10 @@ Unknown values are labelled unknown/pending.
 Status:
 
 ```text
-Started. Request telemetry, prompt contracts, runtime metrics, and request
-captures now share request_id/schema metadata. latest-request-contract.json
-captures the request id, prompt contract, runtime metrics, and selected backend.
+Fixed base contract. Request telemetry, prompt contracts, runtime metrics, and
+request captures share request_id/schema metadata. /qz/status,
+/qz/telemetry/recent, and /qz/telemetry/stream expose the same status-summary
+runtime truth, or an explicit unknown runtime sentinel when unavailable.
 ```
 
 Implement:
@@ -433,14 +434,18 @@ proxy/qz_telemetry.py:
   event schema qz.telemetry.event.v1
   state schema qz.telemetry.state.v1
   recent schema qz.telemetry.recent.v1
+  stream schema qz.telemetry.stream.v1
   seq
   wall_ts / ts
   monotonic_ts
-  request_id promoted from request payloads where available
+  request_id promoted from top-level, metadata, runtime_metrics,
+    prompt_contract, and response payloads where available
+  latest_request_id / latest_completed_request_id on state
+  unknown runtime sentinel qz.runtime.summary.v1
 
 proxy/qz_request_router.py:
   /qz/telemetry/stream aliases /qz/telemetry/events
-  /qz/telemetry/recent includes schema
+  /qz/telemetry/recent includes schema plus state.runtime
 ```
 
 Acceptance:

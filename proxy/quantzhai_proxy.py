@@ -148,6 +148,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         with self.telemetry.subscribe() as events:
             try:
+                runtime = None
+                try:
+                    runtime = self._model_router().status_summary(self.path)
+                except Exception:
+                    runtime = None
+                self.wfile.write(make_sse_block("telemetry_stream_open", self.telemetry.stream_open_event(runtime=runtime)))
+                self.wfile.flush()
+
                 for event in self.telemetry.recent(50):
                     self.wfile.write(make_sse_block(event["type"], event))
                     self.wfile.flush()
