@@ -146,8 +146,6 @@ def _contract_rows(payload: dict) -> List[Tuple[str, str]]:
         reason_bits.append(str(payload.get("reasoning_level")))
     if payload.get("reasoning_policy"):
         reason_bits.append(f"policy={payload.get('reasoning_policy')}")
-    if payload.get("thinking_budget_tokens") is not None:
-        reason_bits.append(f"budget={payload.get('thinking_budget_tokens')}")
     sampling = _compact_sampling(payload.get("sampling"))
     if sampling:
         reason_bits.append(sampling)

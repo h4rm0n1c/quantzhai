@@ -2,10 +2,11 @@
 
 ## Status
 
-Partially fixed. `qz-thoughts` delta coalescing, lightweight stream timing
-telemetry, runtime summary-mode transformation, and synthetic terminal
-`data: [DONE]` forwarding are implemented and live-smoked. Remaining work is
-the broader shared telemetry/event schema and profile preset review.
+End-to-end audited on 2026-05-07. `qz-thoughts` delta coalescing, lightweight
+stream timing telemetry, runtime summary-mode transformation, synthetic
+terminal `data: [DONE]` forwarding, and per-request stream telemetry
+correlation are implemented and live-smoked. Remaining work is profile/runtime
+behaviour for upstream reasoning-only completions.
 
 This is a known streaming/observability problem. It affects the feel of Codex output, the correctness of Responses API SSE forwarding, and the usefulness of `qz-thoughts` as a live reasoning monitor.
 
@@ -165,6 +166,63 @@ Does the local web/tool continuation loop create duplicate or malformed streams?
 Does qz-thoughts mix backend telemetry and response SSE in a confusing order?
 ```
 
+## 2026-05-07 audit result
+
+Live audited through a temporary capture-enabled proxy against the real
+TurboQuant backend:
+
+```text
+client -> patched proxy -> llama.cpp/TurboQuant -> proxy transform -> client SSE
+/qz/telemetry/stream
+/qz/telemetry/recent
+qz-top --once
+qz-thoughts --once
+```
+
+Observed for request `qz_req_1778145026771_bbf0`:
+
+```text
+upstream events: 389
+upstream reasoning_text.delta: 384
+upstream output_text.delta: 0
+upstream [DONE]: 0
+
+client events: 391
+client reasoning_summary_text.delta: 384
+client reasoning_text.delta: 0
+client output_text.delta: 0
+client response.completed: 1
+client [DONE]: 1
+
+telemetry events for request: 781
+sse_event records: 388
+stream_event_timing records: 389
+avg parsed_to_forwarded_ms: 0.172
+max parsed_to_forwarded_ms: 2.717
+suppressed duplicate response start: 1
+```
+
+Conclusions:
+
+```text
+Transport is healthy for this path.
+Summary-mode transform does not leak raw reasoning_text events to the client.
+Terminal forwarding is correct: response.completed once, [DONE] once.
+Timing telemetry is low-latency and request-correlated.
+qz-thoughts reads proxy telemetry and no longer spams per-delta activity rows.
+qz-top reads shared status/telemetry and reports the same request throughput.
+```
+
+Remaining issue:
+
+```text
+The backend can spend the whole completion budget in reasoning_text and emit no
+output_text deltas. In that case transport is correct but ANSWER is empty in
+qz-thoughts and the client receives only reasoning_summary_text deltas. Fix this
+in profile/reasoning preset policy or classify/report reasoning-only
+completions explicitly.
+```
+
 ## Minimal fixes likely needed
 
 ### 1. Coalesce qz-thoughts activity rows
@@ -200,8 +258,9 @@ This should make `qz-thoughts` useful without changing wire behaviour.
 
 Status: implemented in `proxy/qz_responses_stream.py`. Each parsed upstream SSE
 event emits lightweight `stream_event_timing` telemetry with parse, forward, and
-telemetry lag fields. `qz-top` and `qz-thoughts` ignore these timing events in
-normal activity views so the monitor stays low-noise.
+telemetry lag fields. Stream timing and forwarded SSE telemetry carry the
+request id for request-level correlation. `qz-top` and `qz-thoughts` ignore
+these timing events in normal activity views so the monitor stays low-noise.
 
 Emit timing counters around the stream path:
 
@@ -216,7 +275,7 @@ Keep it lightweight. Do not spam the normal monitor.
 
 ### 3. Audit summary-mode transform
 
-Status: implemented for the runtime transform path. Live smoke confirmed
+Status: implemented for the runtime transform path. Live audit confirmed
 `response.reasoning_text.delta` is no longer forwarded in summary mode,
 `response.reasoning_summary_text.delta` is forwarded, assistant answer deltas
 still stream, and the proxy emits a final `data: [DONE]` marker even when

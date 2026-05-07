@@ -283,7 +283,6 @@ base_url, model = sys.argv[1], sys.argv[2]
 body = {
     "model": model,
     "stream": False,
-    "max_output_tokens": 1,
     "input": [{
         "type": "message",
         "role": "user",

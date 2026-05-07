@@ -339,6 +339,10 @@ def main():
                 and event.get("request_id")
                 and (event.get("payload") or {}).get("runtime_metrics", {}).get("selected_context_length") == 131072
                 and (event.get("payload") or {}).get("runtime_metrics", {}).get("schema") == "qz.runtime.metrics.v1"
+                and (event.get("payload") or {}).get("runtime_metrics", {}).get("reasoning_level") == "high"
+                and (event.get("payload") or {}).get("runtime_metrics", {}).get("active_reasoning_level") == "high"
+                and (event.get("payload") or {}).get("runtime_metrics", {}).get("selected_reasoning_level") == "medium"
+                and (event.get("payload") or {}).get("runtime_metrics", {}).get("runtime_truth_source") == "prompt_contract"
                 and (event.get("payload") or {}).get("runtime_metrics", {}).get("prompt_contract", {}).get("requested_model") == "model-a.gguf"
                 for event in telemetry_recent.get("events", [])
             ), telemetry_recent
@@ -349,6 +353,8 @@ def main():
             assert capture_contract["request_id"] == prompt_contract["request_id"], capture_contract
             assert capture_contract["selected_backend_id"] == "model-a.gguf", capture_contract
             assert capture_contract["runtime_metrics"]["backend_context_length_state"] == "confirmed", capture_contract
+            assert capture_contract["runtime_metrics"]["reasoning_level"] == "high", capture_contract
+            assert capture_contract["runtime_metrics"]["selected_reasoning_level"] == "medium", capture_contract
 
             status, _, ready = _request_json(f"http://127.0.0.1:{proxy.server_port}/ready")
             assert status == 200, ready
@@ -356,6 +362,7 @@ def main():
             assert ready["ready"] is True, ready
             assert ready["load"]["state"] == "ready", ready
             assert ready["selected"]["key"] == "model-a.gguf", ready
+            assert ready["latest_request"]["latest_completed_request_id"] == prompt_contract["request_id"], ready
     finally:
         if proxy is not None:
             proxy.shutdown()

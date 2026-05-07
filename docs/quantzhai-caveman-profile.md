@@ -15,17 +15,14 @@ Runtime behavior:
 - The Codex model picker now lists the actual GGUF models from `var/models`,
   and the per-model reasoning screen is generated from that same inventory.
 - Low/medium/high/max now map to Qwen reasoning policy metadata. The proxy
-  injects effort guidance and sampler params, while hard thinking budgets stay
-  off unless `QZ_REASONING_POLICY=hard_budget` is explicitly enabled.
+  injects effort guidance and sampler params. No hard thinking-token cap is
+  sent.
 - Loads `docs/qz-caveman-codex-model-instructions-v2.md` through
   `model_instructions_file` when launched by `scripts/qz-codex caveman`. This
   appends the caveman behavior harness to the active Codex instruction stack;
   it is not a replacement system prompt.
-- Sets `model_max_output_tokens=2048` for that launcher session.
 - Starts each session with caveman chat mode on; the user can say `normal mode`
   or `caveman off` to switch back during the session.
-- Non-caveman profiles keep the same generous output cap so model choice does
-  not double as answer-length limiting.
 - The model catalog now defaults to `medium` verbosity instead of `low`, so the
   coding agent starts with a less clipped answer style.
 
@@ -37,19 +34,16 @@ Manual test:
 4. Say `normal mode`, then ask another ordinary question.
 5. Expected response switches back to normal concise English.
 
-Response-size knobs:
+Reasoning knobs:
 
-- `model_max_output_tokens` in the Codex config or launcher override controls
-  how much Codex asks the model to emit.
 - Reasoning effort in the proxy now comes from the selected profile's policy
   metadata: prompt guidance plus sampler params. `thinking_budget_tokens` is
-  reserved for explicit diagnostic hard-budget mode.
+  stripped before upstream and reported as `null` in runtime metadata.
 - `COMPACTION_CONFIG["target_output_tokens"]` controls local compaction summary
   size, not ordinary chat responses.
 
-Current defaults now separate model choice from answer length: low/medium/high/max
-all use the same generous output cap, while caveman stays intentionally smaller
-at 2048.
+Current defaults separate model choice from answer length. Low/medium/high/max
+select reasoning policy, not hard output caps.
 
 Prompt-chain contract:
 

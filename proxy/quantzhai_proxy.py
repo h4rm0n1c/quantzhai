@@ -200,7 +200,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             "payload": compact,
         }
 
-    def _emit_sse_telemetry(self, chunk):
+    def _emit_sse_telemetry(self, chunk, request_id: str = ""):
         if not chunk:
             return
         event_name = ""
@@ -244,6 +244,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         compact = self._telemetry_sse_payload(event_type, payload)
         if compact is not None:
+            if request_id:
+                compact["request_id"] = request_id
             self.telemetry.emit("sse_event", compact)
 
 

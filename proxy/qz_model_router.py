@@ -6,9 +6,7 @@ from pathlib import Path
 
 try:
     from .qz_reasoning_policy import (
-        HARD_BUDGET_POLICY_MODE,
         apply_reasoning_policy,
-        hard_budget_for_level,
         normalize_reasoning_level,
         reasoning_policy_for_level,
         reasoning_policy_mode,
@@ -16,9 +14,7 @@ try:
     from .qz_runtime_io import read_json, runtime_state_path, write_json
 except ImportError:
     from qz_reasoning_policy import (
-        HARD_BUDGET_POLICY_MODE,
         apply_reasoning_policy,
-        hard_budget_for_level,
         normalize_reasoning_level,
         reasoning_policy_for_level,
         reasoning_policy_mode,
@@ -38,33 +34,6 @@ def entry_identity(entry: dict | None) -> str:
         if isinstance(value, str) and value:
             return value
     return ""
-
-
-def reasoning_budget_for_level(level: str | None) -> int:
-    return hard_budget_for_level(level)
-
-
-def reasoning_budget_map_for_entry(entry: dict | None):
-    entry = entry if isinstance(entry, dict) else {}
-    budgets = {}
-    supported = entry.get("supported_reasoning_levels")
-    if isinstance(supported, list):
-        for item in supported:
-            if not isinstance(item, dict):
-                continue
-            effort = normalize_reasoning_level(item.get("effort"))
-            if effort not in {"low", "medium", "high", "xhigh"}:
-                continue
-            budget = item.get("budget_tokens")
-            if budget is None:
-                budget = item.get("thinking_budget_tokens")
-            if budget is None:
-                budget = hard_budget_for_level(effort)
-            try:
-                budgets[effort] = int(budget)
-            except Exception:
-                budgets[effort] = hard_budget_for_level(effort)
-    return budgets
 
 
 def profile_backend_error_payload(entry: dict | None, requested_model: str = "") -> dict:
@@ -514,16 +483,7 @@ class ModelRouter:
         return "medium"
 
     def selected_thinking_budget_tokens(self, selected: dict | None = None):
-        selected = selected if isinstance(selected, dict) else self.selected_model_entry()
-        level = self.selected_reasoning_level(selected)
-        budgets = reasoning_budget_map_for_entry(selected)
-        if level in budgets:
-            return budgets[level]
-        if selected is not None:
-            for fallback in ("medium", "high", "low", "xhigh"):
-                if fallback in budgets:
-                    return budgets[fallback]
-        return reasoning_budget_for_level(level)
+        return None
 
     def selected_reasoning_policy(self, selected: dict | None = None, body: dict | None = None):
         selected = selected if isinstance(selected, dict) else self.selected_model_entry()
@@ -537,10 +497,7 @@ class ModelRouter:
                 level = normalize_reasoning_level(body.get("reasoning_effort"))
         policy = reasoning_policy_for_level(level)
         policy["mode"] = reasoning_policy_mode()
-        if policy["mode"] == HARD_BUDGET_POLICY_MODE:
-            policy["thinking_budget_tokens"] = hard_budget_for_level(level, selected)
-        else:
-            policy["thinking_budget_tokens"] = None
+        policy["thinking_budget_tokens"] = None
         return policy
 
     def apply_reasoning_policy(self, body: dict, selected: dict | None = None):
@@ -551,8 +508,6 @@ class ModelRouter:
         qz_reasoning["thinking_budget_tokens"] = policy.get("thinking_budget_tokens")
         metadata["qz_reasoning"] = qz_reasoning
         result["metadata"] = metadata
-        if policy.get("mode") == HARD_BUDGET_POLICY_MODE:
-            result["thinking_budget_tokens"] = policy.get("thinking_budget_tokens")
         return result
 
     def profile_model_entry(self, requested_model: str):
@@ -607,6 +562,13 @@ class ModelRouter:
             backend_state,
             loaded_model,
         )
+        latest_request = {}
+        try:
+            telemetry = getattr(self.handler, "telemetry", None)
+            if telemetry is not None and hasattr(telemetry, "latest_request_summary"):
+                latest_request = telemetry.latest_request_summary()
+        except Exception:
+            latest_request = {}
         return {
             "schema": STATUS_SNAPSHOT_SCHEMA,
             "status": "ok" if ready else "loading",
@@ -647,6 +609,7 @@ class ModelRouter:
                 "error": load_error,
                 "model": load_model,
             },
+            "latest_request": latest_request,
             "timestamp": time.time(),
         }
 
@@ -656,6 +619,7 @@ class ModelRouter:
         backend = snapshot.get("backend") or {}
         load = snapshot.get("load") or {}
         health = snapshot.get("health") or {}
+        latest_request = snapshot.get("latest_request") if isinstance(snapshot.get("latest_request"), dict) else {}
         loaded_models = backend.get("loaded_models") or []
         loaded_ids = [
             model.get("id")
@@ -689,6 +653,7 @@ class ModelRouter:
             "loaded_count": backend.get("loaded_count") or len(loaded_ids),
             "load_state": load.get("state") or "unknown",
             "health_status": health.get("status"),
+            "latest_request": latest_request,
             "timestamp": snapshot.get("timestamp"),
         }
 

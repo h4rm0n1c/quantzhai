@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-import os
 from copy import deepcopy
 from typing import Any, Dict, List
 
 
 DEFAULT_REASONING_POLICY_MODE = "prompt"
-HARD_BUDGET_POLICY_MODE = "hard_budget"
 
 REASONING_POLICIES: Dict[str, Dict[str, Any]] = {
     "low": {
@@ -20,7 +18,6 @@ REASONING_POLICIES: Dict[str, Dict[str, Any]] = {
             "presence_penalty": 1.5,
             "repeat_penalty": 1.0,
         },
-        "hard_budget_tokens": 0,
     },
     "medium": {
         "effort": "medium",
@@ -34,7 +31,6 @@ REASONING_POLICIES: Dict[str, Dict[str, Any]] = {
             "presence_penalty": 0,
             "repeat_penalty": 1.0,
         },
-        "hard_budget_tokens": 256,
     },
     "high": {
         "effort": "high",
@@ -48,7 +44,6 @@ REASONING_POLICIES: Dict[str, Dict[str, Any]] = {
             "presence_penalty": 0,
             "repeat_penalty": 1.0,
         },
-        "hard_budget_tokens": 512,
     },
     "xhigh": {
         "effort": "xhigh",
@@ -62,7 +57,6 @@ REASONING_POLICIES: Dict[str, Dict[str, Any]] = {
             "presence_penalty": 0,
             "repeat_penalty": 1.0,
         },
-        "hard_budget_tokens": -1,
     },
 }
 
@@ -79,9 +73,6 @@ def normalize_reasoning_level(level: str | None) -> str:
 
 
 def reasoning_policy_mode() -> str:
-    value = (os.environ.get("QZ_REASONING_POLICY") or DEFAULT_REASONING_POLICY_MODE).strip().lower()
-    if value in {HARD_BUDGET_POLICY_MODE, "budget", "hard-budget"}:
-        return HARD_BUDGET_POLICY_MODE
     return DEFAULT_REASONING_POLICY_MODE
 
 
@@ -105,27 +96,6 @@ def supported_reasoning_levels(default_level: str | None = None) -> List[Dict[st
     return supported
 
 
-def hard_budget_for_level(level: str | None, entry: Dict[str, Any] | None = None) -> int:
-    effort = normalize_reasoning_level(level)
-    if isinstance(entry, dict):
-        supported = entry.get("supported_reasoning_levels")
-        if isinstance(supported, list):
-            for item in supported:
-                if not isinstance(item, dict):
-                    continue
-                if normalize_reasoning_level(item.get("effort")) != effort:
-                    continue
-                budget = item.get("budget_tokens")
-                if budget is None:
-                    budget = item.get("thinking_budget_tokens")
-                if budget is not None:
-                    try:
-                        return int(budget)
-                    except Exception:
-                        break
-    return int(REASONING_POLICIES[effort]["hard_budget_tokens"])
-
-
 def requested_reasoning_level(body: Dict[str, Any] | None, default_level: str | None) -> str:
     if isinstance(body, dict):
         reasoning = body.get("reasoning")
@@ -144,10 +114,7 @@ def apply_reasoning_policy(body: Dict[str, Any], level: str | None, mode: str | 
     policy = reasoning_policy_for_level(level)
     mode = mode or reasoning_policy_mode()
 
-    if mode == HARD_BUDGET_POLICY_MODE:
-        body["thinking_budget_tokens"] = hard_budget_for_level(policy["effort"])
-    else:
-        body.pop("thinking_budget_tokens", None)
+    body.pop("thinking_budget_tokens", None)
 
     for key, value in policy["sampling"].items():
         body.setdefault(key, value)
@@ -168,7 +135,7 @@ def apply_reasoning_policy(body: Dict[str, Any], level: str | None, mode: str | 
         "policy": mode,
         "prompt": policy["prompt"],
         "sampling": policy["sampling"],
-        "thinking_budget_tokens": body.get("thinking_budget_tokens") if mode == HARD_BUDGET_POLICY_MODE else None,
+        "thinking_budget_tokens": None,
     }
     body["metadata"] = metadata
     return body

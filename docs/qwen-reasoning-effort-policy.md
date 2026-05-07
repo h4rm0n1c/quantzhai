@@ -58,22 +58,16 @@ Optional future general/research policy:
 | Thinking/general | `temperature=1.0`, `top_p=0.95`, `top_k=20`, `min_p=0`, `presence_penalty=1.5`, `repeat_penalty=1.0` |
 | Non-thinking/reasoning | `temperature=1.0`, `top_p=1.0`, `top_k=40`, `min_p=0`, `presence_penalty=2.0`, `repeat_penalty=1.0` |
 
-## Hard Budget Policy
+## Reasoning Budget Policy
 
-Do not send `thinking_budget_tokens` by default for normal reasoning effort
-selection.
+Do not send hard reasoning-token caps for normal Codex runtime. QuantZhai's
+reasoning effort implementation is prompt guidance plus Qwen-aware sampler
+params.
 
-Hard reasoning budgets may remain as an explicit diagnostic or emergency
-guardrail, but they must not be the main `low`/`medium`/`high`/`xhigh`
-implementation.
-
-Recommended default:
-
-- `QZ_REASONING_POLICY=prompt`
-- Optional diagnostic mode: `QZ_REASONING_POLICY=hard_budget`
-
-When hard-budget mode is off, status and telemetry should report no active hard
-budget.
+`thinking_budget_tokens` is not a supported tuning knob for this stack. If a
+caller sends it, the proxy strips it before forwarding the request upstream.
+Status and telemetry may keep a `thinking_budget_tokens` field for schema
+stability, but its value should be `null`.
 
 ## Request Behavior
 
@@ -84,7 +78,7 @@ For each `/v1/responses` request:
 3. Apply the effort policy:
    - inject compact prompt guidance into model-visible instructions;
    - apply sampling params unless caller explicitly supplied them;
-   - avoid `thinking_budget_tokens` unless diagnostic hard-budget mode is on.
+   - strip `thinking_budget_tokens` before forwarding upstream.
 4. Preserve existing tool, SSE, and Responses normalization behavior.
 
 Prompt injection should be system/developer-style context, not appended to the
@@ -102,7 +96,7 @@ request metadata and telemetry, not model-visible prompt syntax.
 - selected reasoning effort;
 - reasoning policy mode;
 - active sampling params;
-- hard budget only when enabled.
+- `thinking_budget_tokens: null` for schema stability.
 
 This makes live behavior inspectable without relying on log files.
 
@@ -113,9 +107,7 @@ This makes live behavior inspectable without relying on log files.
 - Normalized upstream request for each effort contains the expected prompt
   guidance and sampling params.
 - Normalized upstream request does not contain `thinking_budget_tokens` by
-  default.
-- Hard-budget diagnostic mode sends the expected budget only when explicitly
-  enabled.
+  default or when callers send it explicitly.
 - Live smoke:
   - `low` greeting gives short answer with minimal thought;
   - `medium` coding task remains balanced;

@@ -89,6 +89,10 @@ class TelemetryBusTests(unittest.TestCase):
         self.assertEqual(recent["state"]["runtime"], runtime)
         self.assertEqual([event["type"] for event in recent["events"]], ["request_completed"])
 
+        latest_request = bus.latest_request_summary()
+        self.assertEqual(latest_request["latest_completed_request_id"], "req-1")
+        self.assertEqual(latest_request["latest_completed"]["request_id"], "req-1")
+
     def test_stream_open_event_has_schema_and_runtime(self):
         bus = TelemetryBus(capacity=3)
         runtime = {"schema": "qz.status.summary.v1", "selected_key": "model.gguf"}

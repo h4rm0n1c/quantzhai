@@ -109,10 +109,11 @@ docs/bugs/responses-streaming-and-qz-thoughts.md
 Status:
 
 ```text
-Partially fixed. qz-thoughts delta coalescing, stream timing telemetry,
-runtime summary-mode transformation, and synthetic terminal DONE forwarding
-are implemented. Remaining work belongs to the shared telemetry schema and
-profile preset review.
+End-to-end stream audit complete. qz-thoughts delta coalescing, stream timing
+telemetry, runtime summary-mode transformation, synthetic terminal DONE
+forwarding, and request_id correlation for stream telemetry are implemented and
+live-smoked. Remaining work belongs to profile/runtime handling for
+reasoning-only completions.
 ```
 
 Problem:
@@ -155,6 +156,7 @@ proxy stream path:
   add timing telemetry around parse/transform/forward
   verify normal output_text events are forwarded immediately
   audit reasoning_text -> reasoning_summary_text conversion
+  promote request_id into sse_event and stream_event_timing telemetry
 ```
 
 ### 3. `/status`, `qz-top`, `qz-thoughts`, and streaming lack one shared telemetry truth
@@ -197,8 +199,9 @@ Status:
 ```text
 Started. Telemetry events now carry a schema id, sequence number,
 wall-clock timestamp, monotonic timestamp, and promoted request_id when the
-payload provides one. /qz/telemetry/stream is available as a live SSE alias for
-the older /qz/telemetry/events endpoint.
+payload or stream runtime provides one. /qz/status, /qz/telemetry/recent, and
+/qz/telemetry/stream expose the same request/runtime truth for the audited
+Responses streaming path.
 ```
 
 Rules:

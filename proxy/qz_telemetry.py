@@ -108,6 +108,16 @@ class TelemetryBus:
             "state": self.state(runtime=runtime),
         }
 
+    def latest_request_summary(self) -> dict:
+        with self._lock:
+            latest_completed = self._latest_completed
+            latest_throughput = self._latest_throughput
+        return {
+            "latest_completed_request_id": self._event_request_id(latest_completed),
+            "latest_completed": latest_completed,
+            "latest_throughput": latest_throughput,
+        }
+
     def stream_open_event(self, runtime: dict | None = None) -> dict:
         now_wall = time.time()
         return {

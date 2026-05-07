@@ -300,7 +300,7 @@ def _apply_patch_call_stream():
 
 
 class ResponsesStreamRuntimeTests(unittest.TestCase):
-    def _run_runtime(self, opener, web_runtime=None, telemetry=None, reasoning_stream_format="raw"):
+    def _run_runtime(self, opener, web_runtime=None, telemetry=None, reasoning_stream_format="raw", request_id=""):
         chunks = []
         runtime = ResponsesStreamRuntime(
             upstream="http://127.0.0.1:1",
@@ -311,6 +311,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             stream_opener=opener,
             capture_enabled=False,
             telemetry=telemetry,
+            request_id=request_id,
         )
         runtime.run({
             "model": "test-model.gguf",
@@ -400,7 +401,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         def opener(body):
             return FakeStream(_fixture_chunks("basic_message.raw"))
 
-        stream_text = self._run_runtime(opener, telemetry=telemetry)
+        stream_text = self._run_runtime(opener, telemetry=telemetry, request_id="req-stream-1")
         timing_events = [
             event
             for event in telemetry.recent()
@@ -411,7 +412,9 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertTrue(timing_events)
         self.assertTrue(any((event.get("payload") or {}).get("event_type") == "response.output_text.delta" for event in timing_events))
         for event in timing_events:
+            self.assertEqual(event.get("request_id"), "req-stream-1")
             payload = event.get("payload") or {}
+            self.assertEqual(payload.get("request_id"), "req-stream-1")
             self.assertIn("received_to_parsed_ms", payload)
             self.assertIn("parsed_to_forwarded_ms", payload)
             self.assertIn("received_to_telemetry_ms", payload)

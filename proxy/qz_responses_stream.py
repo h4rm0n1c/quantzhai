@@ -54,6 +54,7 @@ class ResponsesStreamRuntime:
         stream_opener=None,
         capture_enabled: bool = True,
         telemetry=None,
+        request_id: str = "",
     ):
         self.upstream = upstream.rstrip("/")
         self.authorization = authorization or "Bearer local"
@@ -63,6 +64,7 @@ class ResponsesStreamRuntime:
         self.stream_opener = stream_opener or self._open_upstream_stream
         self.capture_enabled = capture_enabled
         self.telemetry = telemetry
+        self.request_id = request_id or ""
 
     def _open_upstream_stream(self, body: dict):
         data = json.dumps(body).encode("utf-8")
@@ -85,7 +87,10 @@ class ResponsesStreamRuntime:
         if not self.telemetry:
             return
         try:
-            self.telemetry.emit(event_type, payload if isinstance(payload, dict) else {})
+            event_payload = dict(payload) if isinstance(payload, dict) else {}
+            if self.request_id and not event_payload.get("request_id"):
+                event_payload["request_id"] = self.request_id
+            self.telemetry.emit(event_type, event_payload)
         except Exception:
             pass
 

@@ -277,11 +277,53 @@ class RequestRouter:
             "selected_context_length_source": backend.get("selected_context_length_source") or "",
             "backend_context_length_state": backend.get("backend_context_length_state") or "unknown",
             "backend_context_length_source": backend.get("backend_context_length_source") or "",
+            "selected_reasoning_level": backend.get("selected_reasoning_level") or "medium",
+            "selected_reasoning_policy": backend.get("selected_reasoning_policy") or "prompt",
+            "selected_thinking_budget_tokens": backend.get("selected_thinking_budget_tokens"),
+            "selected_sampling": backend.get("selected_sampling_params") or {},
             "reasoning_level": backend.get("selected_reasoning_level") or "medium",
             "reasoning_policy": backend.get("selected_reasoning_policy") or "prompt",
             "thinking_budget_tokens": backend.get("selected_thinking_budget_tokens"),
             "sampling": backend.get("selected_sampling_params") or {},
+            "runtime_truth_source": "selected_default",
         }
+
+    def _promote_prompt_contract_runtime_truth(self, runtime_metrics: dict, prompt_contract: dict) -> dict:
+        if not isinstance(runtime_metrics, dict):
+            runtime_metrics = {}
+        if not isinstance(prompt_contract, dict):
+            prompt_contract = {}
+
+        active_reasoning_level = (
+            prompt_contract.get("reasoning_level")
+            or runtime_metrics.get("selected_reasoning_level")
+            or runtime_metrics.get("reasoning_level")
+            or ""
+        )
+        active_reasoning_policy = (
+            prompt_contract.get("reasoning_policy")
+            or runtime_metrics.get("selected_reasoning_policy")
+            or runtime_metrics.get("reasoning_policy")
+            or ""
+        )
+        active_sampling = prompt_contract.get("sampling") if isinstance(prompt_contract.get("sampling"), dict) else {}
+        if not active_sampling:
+            active_sampling = (
+                runtime_metrics.get("selected_sampling")
+                if isinstance(runtime_metrics.get("selected_sampling"), dict)
+                else {}
+            )
+
+        runtime_metrics["active_reasoning_level"] = active_reasoning_level
+        runtime_metrics["active_reasoning_policy"] = active_reasoning_policy
+        runtime_metrics["active_sampling"] = dict(active_sampling)
+        runtime_metrics["active_thinking_budget_tokens"] = prompt_contract.get("thinking_budget_tokens")
+        runtime_metrics["reasoning_level"] = active_reasoning_level
+        runtime_metrics["reasoning_policy"] = active_reasoning_policy
+        runtime_metrics["sampling"] = dict(active_sampling)
+        runtime_metrics["thinking_budget_tokens"] = prompt_contract.get("thinking_budget_tokens")
+        runtime_metrics["runtime_truth_source"] = "prompt_contract"
+        return runtime_metrics
 
     def _prompt_contract(self, body: dict, selected_model: dict, client_model: str, backend_model: str) -> dict:
         if not isinstance(body, dict):
@@ -470,6 +512,10 @@ class RequestRouter:
             sample["reasoning_level"] = runtime.get("reasoning_level")
             sample["reasoning_policy"] = runtime.get("reasoning_policy")
             sample["thinking_budget_tokens"] = runtime.get("thinking_budget_tokens")
+            sample["selected_reasoning_level"] = runtime.get("selected_reasoning_level")
+            sample["selected_reasoning_policy"] = runtime.get("selected_reasoning_policy")
+            sample["active_reasoning_level"] = runtime.get("active_reasoning_level")
+            sample["active_reasoning_policy"] = runtime.get("active_reasoning_policy")
             sample["restart_required"] = runtime.get("restart_required")
         try:
             self.handler.telemetry.emit("throughput_sample", sample)
@@ -512,22 +558,29 @@ class RequestRouter:
         resp = self.handler._backend().post_json(url, body, timeout=900)
         return resp.status, resp.content_type, resp.data
 
-    def _write_sse_chunk(self, chunk: bytes, raw_log=None):
+    def _write_sse_chunk(self, chunk: bytes, raw_log=None, request_id: str = ""):
         if raw_log is not None:
             raw_log.write(chunk)
             raw_log.flush()
-        self.handler._emit_sse_telemetry(chunk)
+        self.handler._emit_sse_telemetry(chunk, request_id=request_id)
         self.handler.wfile.write(chunk)
         self.handler.wfile.flush()
 
-    def _run_responses_streaming_locally(self, body: dict, requested_model: str, apply_patch_output_style: str = "native"):
+    def _run_responses_streaming_locally(
+        self,
+        body: dict,
+        requested_model: str,
+        apply_patch_output_style: str = "native",
+        request_id: str = "",
+    ):
         runtime = ResponsesStreamRuntime(
             upstream=self.handler.upstream,
             authorization=self.handler.headers.get("Authorization", "Bearer local"),
             reasoning_stream_format=self.handler.reasoning_stream_format,
             web_runtime=self._web_runtime(),
-            chunk_writer=self._write_sse_chunk,
+            chunk_writer=lambda chunk: self._write_sse_chunk(chunk, request_id=request_id),
             telemetry=self.handler.telemetry,
+            request_id=request_id,
         )
         return runtime.run(body, requested_model, apply_patch_output_style)
 
@@ -680,6 +733,7 @@ class RequestRouter:
                 body = normalize_responses_input_for_qwen(body, selected_model=selected_model)
                 body = normalize_tools_for_llamacpp(body)
                 prompt_contract = self._prompt_contract(body, selected_model, client_model, backend_model)
+                runtime_metrics = self._promote_prompt_contract_runtime_truth(runtime_metrics, prompt_contract)
                 runtime_metrics["prompt_contract"] = prompt_contract
                 self._emit_prompt_contract(prompt_contract)
                 try:
@@ -702,6 +756,7 @@ class RequestRouter:
                             body,
                             client_model,
                             apply_patch_output_style,
+                            request_id=request_id,
                         )
                         self._emit_request_telemetry(
                             "request_completed",

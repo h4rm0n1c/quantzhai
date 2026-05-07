@@ -76,8 +76,8 @@ Current behavior:
   selected catalog entry's own reasoning policy metadata rather than the
   backend model filename.
 - Applies Qwen-aware sampler defaults and compact effort prompts.
-- Leaves `thinking_budget_tokens` off by default; hard budgets are diagnostic
-  only through `QZ_REASONING_POLICY=hard_budget`.
+- Strips `thinking_budget_tokens`; hard reasoning-token caps are not part of
+  the Codex runtime policy.
 
 What works well:
 

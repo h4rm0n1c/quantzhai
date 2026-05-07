@@ -430,6 +430,29 @@ Expected:
 - `qz-top` updates token counters during generation.
 - No giant delayed paste unless upstream itself only sends data at the end.
 
+### 2026-05-07 audit status
+
+Done for the audited Responses streaming path. A capture-enabled proxy was run
+against the live TurboQuant backend and checked through client SSE,
+`/qz/telemetry/stream`, `/qz/telemetry/recent`, `qz-top`, and `qz-thoughts`.
+
+Result:
+
+- Forwarded stream emitted `response.completed` once and `[DONE]` once.
+- Summary mode converted upstream `response.reasoning_text.delta` into client
+  `response.reasoning_summary_text.delta`; no raw reasoning text leaked.
+- `sse_event` and `stream_event_timing` telemetry carry `request_id`.
+- Forwarding delay stayed low: average `parsed_to_forwarded_ms` was `0.172`,
+  max was `2.717`.
+- `qz-top` and `qz-thoughts` read the proxy telemetry surfaces concurrently.
+
+Remaining issue:
+
+- The backend can emit reasoning-only completions with no `output_text` deltas.
+  That leaves `qz-thoughts` ANSWER empty even though transport is behaving.
+  Treat this as profile/reasoning preset work or report it explicitly as a
+  reasoning-only completion.
+
 ## 7. Shared telemetry contract
 
 This is the recommended foundation for all fixes above.
@@ -477,7 +500,8 @@ Startup scripts may write an initial `requested` runtime-state snapshot before t
 ### General rules
 
 - Include `schema` versions.
-- Include `request_id` on request-specific events.
+- Include `request_id` on request-specific events, including transformed SSE
+  event telemetry and stream timing telemetry.
 - Include monotonic timestamps for math.
 - Include wall-clock timestamps for humans.
 - Include sequence numbers for stream events.
@@ -520,7 +544,7 @@ state/recent/stream runtime:
 - [x] Convert `qz-top` to structured telemetry.
 - [x] Convert `qz-thoughts` to structured stream events.
 - [x] Fix first-pass `qz-top` TPS sanity.
-- [ ] Add concurrent monitor smoke test.
+- [x] Add concurrent monitor smoke test.
 - [ ] Review profile prompt/config ownership.
 - [ ] Add fixed profile-eval prompt set to the benchmark harness.
 - [ ] Tune low/medium/high/xhigh/max based on measured behaviour.
