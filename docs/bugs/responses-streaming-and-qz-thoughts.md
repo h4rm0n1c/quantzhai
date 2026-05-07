@@ -2,9 +2,10 @@
 
 ## Status
 
-Partially fixed. `qz-thoughts` delta coalescing and lightweight stream timing
-telemetry are implemented. Remaining work is summary-mode transform audit and
-real-session forwarding validation.
+Partially fixed. `qz-thoughts` delta coalescing, lightweight stream timing
+telemetry, runtime summary-mode transformation, and synthetic terminal
+`data: [DONE]` forwarding are implemented and live-smoked. Remaining work is
+the broader shared telemetry/event schema and profile preset review.
 
 This is a known streaming/observability problem. It affects the feel of Codex output, the correctness of Responses API SSE forwarding, and the usefulness of `qz-thoughts` as a live reasoning monitor.
 
@@ -59,6 +60,10 @@ summary_started handling
 The summary mode currently converts `response.reasoning_text.delta` into `response.reasoning_summary_text.delta`. If the upstream model emits one-character or tiny deltas, the proxy can forward those as tiny summary deltas.
 
 That may be technically faithful, but it is not useful as a monitor signal.
+
+The runtime transform now accepts both line-split SSE chunks and complete SSE
+blocks, so `summary` mode applies on the live streaming path as well as in
+offline transform tests.
 
 ### Streaming runtime loop
 
@@ -209,6 +214,12 @@ telemetry_event_emitted
 Keep it lightweight. Do not spam the normal monitor.
 
 ### 3. Audit summary-mode transform
+
+Status: implemented for the runtime transform path. Live smoke confirmed
+`response.reasoning_text.delta` is no longer forwarded in summary mode,
+`response.reasoning_summary_text.delta` is forwarded, assistant answer deltas
+still stream, and the proxy emits a final `data: [DONE]` marker even when
+upstream closes after `response.completed`.
 
 Check whether `reasoning_text.delta` -> `reasoning_summary_text.delta` should be passed through as-is, coalesced, hidden, or converted only on done.
 

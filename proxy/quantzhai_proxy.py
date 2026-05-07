@@ -345,6 +345,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
         completed_at = None
         final_usage = _normalize_response_usage({})
         output_items = 0
+        sent_terminal = False
+        sent_done = False
 
         while True:
             chunk = resp.readline()
@@ -362,6 +364,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         self._emit_sse_telemetry(out_chunk)
                         self.wfile.write(out_chunk)
                         self.wfile.flush()
+                    if event_type == "done" or payload == "[DONE]":
+                        sent_done = True
+                    elif is_terminal_stream_event(event_type, payload):
+                        sent_terminal = True
                     completed_at = time.time()
                 break
 
@@ -385,9 +391,19 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     self._emit_sse_telemetry(out_chunk)
                     self.wfile.write(out_chunk)
                     self.wfile.flush()
+                if event_type == "done" or payload == "[DONE]":
+                    sent_done = True
+                elif is_terminal_stream_event(event_type, payload):
+                    sent_terminal = True
                 event_lines = []
                 if event_type == "response.completed":
                     completed_at = time.time()
+
+        if sent_terminal and not sent_done:
+            done_chunk = b"data: [DONE]\n\n"
+            self._emit_sse_telemetry(done_chunk)
+            self.wfile.write(done_chunk)
+            self.wfile.flush()
 
         if completed_at is None:
             completed_at = time.time()

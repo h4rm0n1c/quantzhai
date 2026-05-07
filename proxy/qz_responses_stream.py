@@ -227,6 +227,8 @@ class ResponsesStreamRuntime:
         output_index_offset = 0
         sequence = 0
         sent_response_start = False
+        sent_terminal = False
+        sent_done = False
         self._start_capture()
         self._emit("stream_started", {
             "model": requested_model,
@@ -388,6 +390,10 @@ class ResponsesStreamRuntime:
                                 forwarded_chunks=forwarded_chunks,
                                 forwarded_bytes=forwarded_bytes,
                             )
+                            if event_type == "done" or payload == "[DONE]":
+                                sent_done = True
+                            else:
+                                sent_terminal = True
                             event_lines = []
                             continue
 
@@ -419,6 +425,10 @@ class ResponsesStreamRuntime:
                         output_index_offset += max_output_index + 1
                     working_body["input"] = next_input
                     continue
+
+                if sent_terminal and not sent_done:
+                    self._write_chunk(b"data: [DONE]\n\n")
+                    sent_done = True
 
                 completed_at = time.time()
                 return self._build_result(

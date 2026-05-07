@@ -68,7 +68,8 @@ Focus:
 Stale symlink profile validation, compact errors, and doctor checks are done.
 qz-thoughts delta coalescing is done.
 Stream timing telemetry is done.
-Next audit summary-mode SSE transform or review profile presets.
+Summary-mode SSE transform and missing DONE marker are fixed and live-smoked.
+Next review profile presets or start shared telemetry schema work.
 Do not start broad config movement before auditing data paths.
 ```
 

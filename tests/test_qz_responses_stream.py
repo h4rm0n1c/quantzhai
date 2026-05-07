@@ -375,6 +375,15 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertIn("stream ok", stream_text)
         self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
 
+    def test_stream_adds_done_when_upstream_closes_after_completed(self):
+        def opener(body):
+            return FakeStream(_final_message_stream()[:-1])
+
+        stream_text = self._run_runtime(opener)
+
+        self.assertIn("response.completed", stream_text)
+        self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+
     def test_summary_mode_transforms_reasoning_stream(self):
         def opener(body):
             return FakeStream(_reasoning_message_stream())
