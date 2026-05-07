@@ -1,4 +1,4 @@
-# Profile-aware `web_search` for Qwen3.6Turbo Codex proxy
+# Profile-aware `web_search` for QuantZhai Codex proxy
 
 Date: 2026-04-28
 

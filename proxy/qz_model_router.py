@@ -5,7 +5,6 @@ import time
 from pathlib import Path
 
 try:
-    from .qz_proxy_config import MODEL_BUDGETS
     from .qz_reasoning_policy import (
         HARD_BUDGET_POLICY_MODE,
         apply_reasoning_policy,
@@ -16,7 +15,6 @@ try:
     )
     from .qz_runtime_io import read_json, runtime_state_path, write_json
 except ImportError:
-    from qz_proxy_config import MODEL_BUDGETS
     from qz_reasoning_policy import (
         HARD_BUDGET_POLICY_MODE,
         apply_reasoning_policy,
@@ -941,14 +939,12 @@ class ModelRouter:
 
     def resolve_model_selection(self, requested_model):
         catalog = self.handler._model_catalog()
-        if not requested_model or requested_model in MODEL_BUDGETS:
-            selected, reason = self.profile_model_entry(requested_model or "")
-            if selected is None:
-                selected = catalog.selected or (catalog.entries[0] if catalog.entries else None)
-                reason = f"profile {requested_model or 'default'}"
+        if not requested_model:
+            selected = catalog.selected or (catalog.entries[0] if catalog.entries else None)
+            reason = "default"
         else:
             selected, reason = catalog.resolve(query=requested_model)
-        if selected is None and catalog.entries:
+        if selected is None and not requested_model and catalog.entries:
             selected = catalog.entries[0]
             reason = reason or "catalog fallback"
         if selected is None:
@@ -1082,7 +1078,7 @@ class ModelRouter:
         except Exception:
             body = {}
 
-        model = body.get("model") or body.get("name") or "Qwen3.6Turbo-medium"
+        model = body.get("model") or body.get("name") or ""
 
         if self.handler.path in ("/api/pull", "/v1/api/pull"):
             # Pretend the model is already installed.

@@ -274,7 +274,7 @@ def main():
         proxy = _free_server(ProxyHandler)
 
         payload = {
-            "model": "QwenZhai-high",
+            "model": "test-model.gguf",
             "stream": True,
             "input": [{
                 "type": "message",

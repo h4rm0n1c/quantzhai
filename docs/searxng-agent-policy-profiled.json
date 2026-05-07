@@ -1,6 +1,6 @@
 {
   "version": "profiled-web-search-v1",
-  "purpose": "Policy for profile-aware SearXNG-backed web_search in the Qwen3.6Turbo local Codex proxy.",
+  "purpose": "Policy for profile-aware SearXNG-backed web_search in the QuantZhai local Codex proxy.",
   "searxng_base": "",
   "compatibility": {
     "keeps_legacy_keys": true,

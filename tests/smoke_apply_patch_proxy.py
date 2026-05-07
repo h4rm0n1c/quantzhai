@@ -180,7 +180,7 @@ def main():
         proxy = _free_server(ProxyHandler)
 
         payload = {
-            "model": "QwenZhai-high",
+            "model": "test-model.gguf",
             "stream": False,
             "input": [{
                 "type": "message",
@@ -219,7 +219,7 @@ def main():
         assert "response.output_item.done" in stream_text, stream_text
 
         followup_payload = {
-            "model": "QwenZhai-high",
+            "model": "test-model.gguf",
             "input": [{
                 "type": "apply_patch_call_output",
                 "call_id": "call_fake_apply_patch",
@@ -234,7 +234,7 @@ def main():
         assert followup_body["input"][0]["call_id"] == "call_fake_apply_patch", followup_body["input"]
 
         custom_payload = {
-            "model": "QwenZhai-high",
+            "model": "test-model.gguf",
             "stream": False,
             "input": [{
                 "type": "message",

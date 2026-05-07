@@ -215,6 +215,18 @@ class ModelCatalogProfileValidationTests(unittest.TestCase):
             self.assertNotIn("models", reason)
             self.assertNotIn("catalog", reason)
 
+    def test_router_rejects_removed_synthetic_aliases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            _write_gguf(model_dir / "healthy.gguf")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+            selected, reason = ModelRouter(FakeHandler(catalog)).resolve_model_selection("Qwen3.6Turbo-high")
+
+            self.assertIsNone(selected)
+            self.assertEqual(reason, "no match for Qwen3.6Turbo-high")
+
     def test_compact_error_payload_shape(self):
         payload = profile_backend_error_payload({
             "label": "prompt-compiler",

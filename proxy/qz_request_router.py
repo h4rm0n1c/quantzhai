@@ -6,7 +6,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 try:
-    from .qz_proxy_config import CURRENT_API_ENDPOINTS, LEGACY_API_ENDPOINTS, MODEL_BUDGETS, api_contract_payload
+    from .qz_telemetry import TELEMETRY_RECENT_SCHEMA
+    from .qz_proxy_config import CURRENT_API_ENDPOINTS, LEGACY_API_ENDPOINTS, api_contract_payload
     from .qz_responses import (
         _apply_patch_output_style,
         _build_local_compaction_response,
@@ -25,7 +26,8 @@ try:
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import append_capture, capture_enabled, capture_path, runtime_log, write_capture
 except ImportError:
-    from qz_proxy_config import CURRENT_API_ENDPOINTS, LEGACY_API_ENDPOINTS, MODEL_BUDGETS, api_contract_payload
+    from qz_telemetry import TELEMETRY_RECENT_SCHEMA
+    from qz_proxy_config import CURRENT_API_ENDPOINTS, LEGACY_API_ENDPOINTS, api_contract_payload
     from qz_responses import (
         _apply_patch_output_style,
         _build_local_compaction_response,
@@ -118,9 +120,7 @@ class RequestRouter:
         if self.handler.path == "/health":
             self.handler._send_json(200, {
                 "status": "ok",
-                "proxy": "Qwen3.6Turbo",
                 "upstream": self.handler.upstream,
-                "models": MODEL_BUDGETS,
                 "catalog": self.handler._model_catalog_payload(),
                 "supports": list(CURRENT_API_ENDPOINTS),
                 "api_contract": api_contract_payload(),
@@ -145,12 +145,13 @@ class RequestRouter:
             except Exception:
                 limit = 100
             self.handler._send_json(200, {
+                "schema": TELEMETRY_RECENT_SCHEMA,
                 "events": self.handler.telemetry.recent(limit),
                 "state": self.handler.telemetry.state(),
             })
             return
 
-        if self.handler.path == "/qz/telemetry/events":
+        if self.handler.path in ("/qz/telemetry/events", "/qz/telemetry/stream"):
             self.handler._send_telemetry_sse()
             return
 
@@ -599,7 +600,7 @@ class RequestRouter:
             or "text/event-stream" in self.handler.headers.get("Accept", "")
         )
 
-        client_model = body.get("model") or "Qwen3.6Turbo-medium"
+        client_model = body.get("model") or ""
         with self._request_gate(upstream_path, client_model, client_wants_stream):
             selected_model, selection_reason = self.handler._resolve_model_selection(client_model)
             if selected_model is None:

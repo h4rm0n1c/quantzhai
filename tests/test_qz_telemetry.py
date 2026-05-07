@@ -14,10 +14,21 @@ class TelemetryBusTests(unittest.TestCase):
         state = bus.state()
 
         self.assertEqual([event["type"] for event in recent], ["request_started", "request_completed"])
+        self.assertEqual(recent[0]["schema"], "qz.telemetry.event.v1")
+        self.assertIn("monotonic_ts", recent[0])
+        self.assertIn("wall_ts", recent[0])
         self.assertEqual(state["event_count"], 2)
+        self.assertEqual(state["schema"], "qz.telemetry.state.v1")
         self.assertEqual(state["counters"]["request_started"], 1)
         self.assertEqual(state["latest"]["type"], "request_completed")
         self.assertEqual(state["latest_completed"]["type"], "request_completed")
+
+    def test_emit_promotes_request_id(self):
+        bus = TelemetryBus(capacity=3)
+
+        event = bus.emit("request_completed", {"request_id": "req-1"})
+
+        self.assertEqual(event["request_id"], "req-1")
 
     def test_recent_honors_capacity_and_limit(self):
         bus = TelemetryBus(capacity=2)

@@ -207,7 +207,7 @@ class ApplyPatchAdapterTests(unittest.TestCase):
     def test_stream_synthesis_includes_apply_patch_call_item(self):
         out = {
             "id": "resp_1",
-            "model": "QwenZhai-high",
+            "model": "test-model.gguf",
             "output": [{
                 "id": "apc_1",
                 "type": "apply_patch_call",

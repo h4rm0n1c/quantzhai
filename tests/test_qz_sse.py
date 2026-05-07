@@ -18,7 +18,7 @@ class SseTests(unittest.TestCase):
     def test_response_stream_synthesizes_message_events(self):
         out = {
             "id": "resp_1",
-            "model": "QwenZhai-high",
+            "model": "test-model.gguf",
             "output": [{
                 "id": "msg_1",
                 "type": "message",

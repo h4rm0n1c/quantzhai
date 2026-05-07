@@ -68,8 +68,10 @@ Current API direction:
 
 Current behavior:
 
-- Provides `QwenZhai-*` aliases.
-- Keeps older `Qwen3.6Turbo-*` aliases for compatibility.
+- Exposes real GGUF model files from the model directory.
+- Exposes profile entries only as symlinks under the model directory.
+- Does not provide synthetic `QwenZhai-*`, `Qwen3.6Turbo-*`, or reasoning-budget
+  alias model ids.
 - Keeps low, medium, high, and max profile reasoning choices aligned with the
   selected catalog entry's own reasoning policy metadata rather than the
   backend model filename.

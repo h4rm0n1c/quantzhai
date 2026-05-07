@@ -2,7 +2,8 @@
 
 ## Status
 
-Open master plan.
+Open master plan. Phase 1 breakage fixes are complete enough to move the
+active engineering focus to shared telemetry schema work.
 
 This is the controlling map for the current QuantZhai stabilisation work. It ties together the known bug notes, observability agenda, and configuration-contract plan.
 
@@ -50,6 +51,12 @@ Document:
 docs/bugs/stale-profile-server-alias.md
 ```
 
+Status:
+
+```text
+Fixed. Keep this as a regression contract.
+```
+
 Problem:
 
 ```text
@@ -66,7 +73,7 @@ Design rule:
 Profiles are valid only if their backend target is valid.
 ```
 
-Required fix:
+Implemented contract:
 
 ```text
 qz_model_catalog.py:
@@ -77,11 +84,19 @@ scripts/qz-codex-common:
   hide invalid profiles or mark them unavailable
 
 qz_model_router.py:
-  return compact actionable errors
-  do not dump the full catalog into normal client errors
+  returns compact actionable errors
+  does not dump the full catalog into normal client errors
 ```
 
 No silent fallback unless the profile explicitly opts into fallback.
+
+Synthetic alias policy:
+
+```text
+Removed. Do not route or advertise QwenZhai-* or Qwen3.6Turbo-* budget aliases.
+Model ids are real GGUF files from the model directory, plus symlink profiles in
+that directory.
+```
 
 ### 2. Responses SSE and `qz-thoughts` streaming are not trustworthy enough
 
@@ -89,6 +104,15 @@ Document:
 
 ```text
 docs/bugs/responses-streaming-and-qz-thoughts.md
+```
+
+Status:
+
+```text
+Partially fixed. qz-thoughts delta coalescing, stream timing telemetry,
+runtime summary-mode transformation, and synthetic terminal DONE forwarding
+are implemented. Remaining work belongs to the shared telemetry schema and
+profile preset review.
 ```
 
 Problem:
@@ -119,7 +143,7 @@ qz-thoughts rendering
 Codex-visible behaviour
 ```
 
-Likely first fixes:
+Implemented first fixes:
 
 ```text
 qz-thoughts:
@@ -156,24 +180,34 @@ Target shape:
 
 ```text
 proxy observes facts
-proxy writes structured state/events
+proxy owns live structured state/events
 tools render read-only views
 ```
 
-Proposed shared files:
+Primary live surfaces:
 
 ```text
-var/run/qz-runtime-state.json
-var/run/qz-telemetry.jsonl
-var/run/qz-stream-events.jsonl
+/qz/status
+/qz/telemetry/recent
+/qz/telemetry/stream
+```
+
+Status:
+
+```text
+Started. Telemetry events now carry a schema id, sequence number,
+wall-clock timestamp, monotonic timestamp, and promoted request_id when the
+payload provides one. /qz/telemetry/stream is available as a live SSE alias for
+the older /qz/telemetry/events endpoint.
 ```
 
 Rules:
 
 ```text
-Only the proxy writes normal runtime telemetry.
+Only the proxy owns normal runtime telemetry.
 Monitors are read-only consumers.
-Readers tolerate missing files, partial lines, and schema changes.
+JSON/JSONL files are optional replay/debug artifacts, not live truth.
+Readers tolerate missing endpoints, missing files, partial lines, and schema changes.
 Missing telemetry displays as unknown, not fake certainty.
 ```
 
@@ -241,6 +275,12 @@ Do not attack the lower layers before the upper contracts are at least minimally
 
 #### 1. Validate invalid profile/backend targets
 
+Status:
+
+```text
+Fixed. Keep acceptance tests and bug note current.
+```
+
 Why first:
 
 ```text
@@ -267,6 +307,12 @@ No silent fallback.
 
 #### 2. Fix `qz-thoughts` delta spam
 
+Status:
+
+```text
+Fixed. Remaining monitor work is shared telemetry schema/fallback cleanup.
+```
+
 Why second:
 
 ```text
@@ -291,6 +337,12 @@ Raw captures still preserve raw SSE for debugging.
 ```
 
 #### 3. Add stream timing telemetry
+
+Status:
+
+```text
+Fixed first pass. Timing fields exist for parsed stream events.
+```
 
 Why third:
 
@@ -340,13 +392,30 @@ Unknown values are labelled unknown/pending.
 Implement:
 
 ```text
-qz-runtime-state.json
-qz-telemetry.jsonl
-qz-stream-events.jsonl
+/qz/status
+/qz/telemetry/recent
+/qz/telemetry/stream
 schema versions
 request ids
 monotonic timestamps
 sequence numbers
+```
+
+Started:
+
+```text
+proxy/qz_telemetry.py:
+  event schema qz.telemetry.event.v1
+  state schema qz.telemetry.state.v1
+  recent schema qz.telemetry.recent.v1
+  seq
+  wall_ts / ts
+  monotonic_ts
+  request_id promoted from request payloads where available
+
+proxy/qz_request_router.py:
+  /qz/telemetry/stream aliases /qz/telemetry/events
+  /qz/telemetry/recent includes schema
 ```
 
 Acceptance:
@@ -358,6 +427,14 @@ Readers do not mutate shared telemetry.
 ```
 
 #### 6. Fix `qz-top` token math
+
+Status:
+
+```text
+Fixed first pass. qz-top consumes structured telemetry, rejects non-finite or
+non-positive timing/rate samples, keeps prompt/generation/total rates separate,
+and treats latest as the latest valid sample instead of the maximum sample.
+```
 
 Implement:
 
@@ -492,30 +569,28 @@ fold all old script logic into qz-up/qz-down/qz-codex
 Start with:
 
 ```text
-stale symlink profile validation + compact errors
+shared telemetry schema hardening
 ```
 
 Reason:
 
 ```text
-contained
-well documented
-prevents unusable sessions
-sets the pattern for validation-before-use
+Phase 1 breakage fixes are done.
+qz-top, qz-thoughts, /status, streaming diagnostics, and benchmarks need one
+runtime event contract before deeper monitor or config work.
 ```
 
 Then do:
 
 ```text
-qz-thoughts coalescing
+monitor fallback cleanup and concurrent monitor smoke
 ```
 
 Reason:
 
 ```text
-safe visible improvement
-does not require wire-protocol changes
-reduces false diagnosis noise
+qz-top TPS first pass is done. Remaining monitor work is proving qz-top and
+qz-thoughts can run together without file/log fallback becoming live truth.
 ```
 
 Then do:

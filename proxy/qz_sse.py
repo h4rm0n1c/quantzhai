@@ -160,7 +160,7 @@ def transform_sse_event(event_lines, summary_started, mode):
 
 def make_response_stream_events(out: dict):
     response_id = out.get("id", "resp_local")
-    model = out.get("model", "Qwen3.6Turbo")
+    model = out.get("model", "")
     output_items = out.get("output", [])
 
     seq = 0

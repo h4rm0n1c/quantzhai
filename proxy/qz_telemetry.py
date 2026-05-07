@@ -7,6 +7,11 @@ import itertools
 import time
 
 
+TELEMETRY_SCHEMA = "qz.telemetry.event.v1"
+TELEMETRY_STATE_SCHEMA = "qz.telemetry.state.v1"
+TELEMETRY_RECENT_SCHEMA = "qz.telemetry.recent.v1"
+
+
 class TelemetryBus:
     def __init__(self, capacity: int = 1000, subscriber_queue_size: int = 200):
         self.capacity = max(1, int(capacity))
@@ -21,12 +26,18 @@ class TelemetryBus:
         self._latest_throughput = None
 
     def emit(self, event_type: str, payload: dict | None = None) -> dict:
-        now = time.time()
+        now_wall = time.time()
+        now_mono = time.monotonic()
+        payload = payload if isinstance(payload, dict) else {}
         event = {
+            "schema": TELEMETRY_SCHEMA,
             "seq": next(self._seq),
-            "ts": now,
+            "ts": now_wall,
+            "wall_ts": now_wall,
+            "monotonic_ts": now_mono,
             "type": str(event_type or "event"),
-            "payload": payload if isinstance(payload, dict) else {},
+            "request_id": self._request_id_from_payload(payload),
+            "payload": payload,
         }
 
         with self._lock:
@@ -60,7 +71,8 @@ class TelemetryBus:
         return events[-limit:]
 
     def state(self) -> dict:
-        now = time.time()
+        now_wall = time.time()
+        now_mono = time.monotonic()
         with self._lock:
             latest = self._events[-1] if self._events else None
             latest_completed = self._latest_completed
@@ -69,10 +81,13 @@ class TelemetryBus:
             counters = dict(self._counters)
 
         return {
+            "schema": TELEMETRY_STATE_SCHEMA,
             "status": "ok",
             "started_at": self.started_at,
-            "now": now,
-            "uptime_seconds": max(0.0, now - self.started_at),
+            "now": now_wall,
+            "wall_ts": now_wall,
+            "monotonic_ts": now_mono,
+            "uptime_seconds": max(0.0, now_wall - self.started_at),
             "event_count": event_count,
             "capacity": self.capacity,
             "counters": counters,
@@ -108,6 +123,19 @@ class TelemetryBus:
             subscriber.put_nowait(event)
         except Full:
             pass
+
+    @staticmethod
+    def _request_id_from_payload(payload: dict) -> str:
+        for key in ("request_id", "response_id", "id"):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
+        response = payload.get("response")
+        if isinstance(response, dict):
+            value = response.get("id")
+            if isinstance(value, str) and value:
+                return value
+        return ""
 
 
 DEFAULT_TELEMETRY = TelemetryBus()

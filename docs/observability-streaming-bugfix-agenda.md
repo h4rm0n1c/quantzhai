@@ -64,12 +64,14 @@ If the backend has not confirmed a value yet, display it as `pending` or `unconf
 
 ### Proposed fix
 
-Create a single runtime-state snapshot that is written at stack startup and refreshed whenever the proxy observes backend facts.
+Create a single runtime-state snapshot owned by the proxy. Startup may record
+requested state, but live truth should come from `/qz/status` as the proxy
+observes backend facts.
 
-Suggested file:
+Primary surface:
 
 ```text
-var/run/qz-runtime-state.json
+/qz/status
 ```
 
 Rules:
@@ -78,7 +80,9 @@ Rules:
 - Prefer backend-confirmed facts over env/config.
 - Write startup-intended state first.
 - Replace with backend-confirmed state as soon as available.
-- Make `/status`, `qz-top`, and `qz-thoughts` read the same snapshot.
+- Make `/status`, `qz-top`, and `qz-thoughts` read the same proxy-owned
+  snapshot.
+- Treat any `var/run/` snapshot file as cache/debug fallback, not live truth.
 
 ### Acceptance checks
 
@@ -95,6 +99,15 @@ Expected:
 - Any unconfirmed fields are explicitly marked as unconfirmed.
 
 ## 2. `qz-top` token-per-second counters are unreliable
+
+Status:
+
+```text
+Fixed first pass. qz-top now uses structured proxy telemetry for rates, rejects
+non-finite or non-positive samples, keeps prompt/generation/total rates
+separate, and displays latest as the newest valid sample rather than the
+highest observed sample.
+```
 
 ### Observed problem
 
@@ -124,7 +137,20 @@ No fake precision. No guessing unless explicitly labelled.
 
 ### Proposed fix
 
-Define a monotonic telemetry event schema and make `qz-top` consume that instead of scraping ambiguous text.
+Define monotonic telemetry events in the proxy and make `qz-top` consume the
+proxy telemetry endpoints instead of scraping ambiguous text or treating files
+as the live channel.
+
+Primary live inputs:
+
+```text
+/qz/status              # current runtime snapshot
+/qz/telemetry/recent    # bounded recent history
+/qz/telemetry/stream    # live SSE telemetry stream
+```
+
+JSON/JSONL files may be written for replay, audit, and offline debugging, but
+they are not the primary freshness contract for the live dashboard.
 
 TPS calculation rules:
 
@@ -177,17 +203,21 @@ Default mode should stay focused on thought/reasoning summaries. It should not b
 
 ### Proposed fix
 
-Give `qz-thoughts` a narrow contract and structured input.
+Give `qz-thoughts` a narrow contract and structured live input from the proxy.
 
-Suggested stream file:
+Primary live input:
 
 ```text
-var/run/qz-stream-events.jsonl
+/qz/telemetry/stream
 ```
 
 Rules:
 
-- `qz-thoughts` reads only normalized event JSONL by default.
+- `qz-thoughts` reads normalized proxy telemetry by default.
+- `/qz/telemetry/stream` should be SSE so thought/summary chunks arrive without
+  polling a file.
+- `--file` remains useful for replaying raw captures and regression fixtures.
+- JSONL stream files are optional debug/audit artifacts, not live truth.
 - Docker/proxy log fallback must be opt-in.
 - Reasoning summaries and output text must be tagged differently.
 - Preserve event order with sequence numbers.
@@ -226,25 +256,28 @@ Potential conflict types:
 
 Multiple observers should be able to attach at once.
 
-`qz-top` and `qz-thoughts` should be read-only consumers of shared append-only state.
+`qz-top` and `qz-thoughts` should be read-only consumers of proxy-owned
+telemetry. Attaching one monitor must not consume or mutate events for another.
 
 ### Proposed fix
 
-Use append-only JSONL event logs plus atomic snapshot files:
+Use the proxy telemetry bus as the primary fan-out point:
 
 ```text
-var/run/qz-runtime-state.json
-var/run/qz-telemetry.jsonl
-var/run/qz-stream-events.jsonl
+/qz/status
+/qz/telemetry/recent
+/qz/telemetry/stream
 ```
 
 Rules:
 
-- Proxy is the only writer.
+- Proxy owns live telemetry and fan-out.
 - Monitors are read-only.
-- Writes use append plus flush, or temp-file then atomic rename for snapshots.
-- Readers tolerate truncation, rotation, and partial final lines.
-- No monitor should delete, rotate, or rewrite shared telemetry.
+- Live monitors prefer proxy endpoints over files.
+- JSON/JSONL under `var/` may exist for replay/debug, but readers must treat it
+  as stale-prone fallback unless explicitly opened with `--file`.
+- No monitor should delete, rotate, rewrite, or become the source of shared
+  telemetry.
 
 ### Acceptance checks
 
@@ -401,17 +434,35 @@ Expected:
 
 This is the recommended foundation for all fixes above.
 
-### Files
+### Live endpoints
 
 ```text
-var/run/qz-runtime-state.json       # atomic latest snapshot
-var/run/qz-telemetry.jsonl          # append-only numeric telemetry
-var/run/qz-stream-events.jsonl      # append-only normalized stream events
+/qz/status                          # current runtime snapshot
+/qz/telemetry/recent                # bounded recent telemetry history
+/qz/telemetry/stream                # SSE event stream for live monitors
 ```
 
-### Writer
+Compatibility note:
 
-Only the proxy writes these files during normal operation.
+```text
+/qz/telemetry/events remains available as the older live SSE endpoint name.
+New readers should use /qz/telemetry/stream.
+```
+
+### Optional files
+
+```text
+var/run/qz-runtime-state.json       # optional latest snapshot/cache
+var/run/qz-telemetry.jsonl          # optional append-only audit/replay log
+var/run/qz-stream-events.jsonl      # optional normalized stream replay log
+```
+
+Files are fallback/debug surfaces. They must not be the source of live truth for
+`qz-top` or `qz-thoughts`.
+
+### Owner
+
+Only the proxy owns normal runtime telemetry.
 
 Startup scripts may write an initial `requested` runtime-state snapshot before the proxy confirms backend facts.
 
@@ -430,19 +481,38 @@ Startup scripts may write an initial `requested` runtime-state snapshot before t
 - Include monotonic timestamps for math.
 - Include wall-clock timestamps for humans.
 - Include sequence numbers for stream events.
-- Readers must tolerate missing files, partial lines, and version mismatches.
+- Readers must tolerate missing endpoints, missing files, partial lines, and
+  version mismatches.
 - Bad or missing telemetry should degrade to `unknown`, not fabricated certainty.
+
+Current first schema:
+
+```text
+event schema:  qz.telemetry.event.v1
+state schema:  qz.telemetry.state.v1
+recent schema: qz.telemetry.recent.v1
+
+event fields:
+  schema
+  seq
+  type
+  ts / wall_ts
+  monotonic_ts
+  request_id
+  payload
+```
 
 ## Immediate action checklist
 
 - [ ] Inspect current `/status` implementation and model/context source paths.
 - [x] Inspect `qz-top` token math and data source.
 - [x] Inspect `qz-thoughts` input source and rendering loop.
-- [ ] Identify whether monitors currently share a file, pipe, or log tail source.
-- [ ] Define and add `qz-runtime-state.json` writer.
-- [ ] Define and add telemetry/event JSONL writers in the proxy.
+- [ ] Identify every monitor fallback that still treats files/logs as live truth.
+- [x] Define first `/qz/telemetry/stream` SSE fan-out contract.
+- [ ] Keep JSON/JSONL telemetry as optional replay/debug output only.
 - [x] Convert `qz-top` to structured telemetry.
 - [x] Convert `qz-thoughts` to structured stream events.
+- [x] Fix first-pass `qz-top` TPS sanity.
 - [ ] Add concurrent monitor smoke test.
 - [ ] Review profile prompt/config ownership.
 - [ ] Add fixed profile-eval prompt set to the benchmark harness.

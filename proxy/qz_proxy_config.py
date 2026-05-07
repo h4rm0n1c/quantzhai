@@ -1,19 +1,3 @@
-MODEL_BUDGETS = {
-    "QwenZhai-low": 0,
-    "QwenZhai-medium": 256,
-    "QwenZhai-high": 512,
-    "QwenZhai-max": -1,
-    "QwenZhai-caveman": 256,
-    "QwenZhai": 256,
-    "Qwen3.6Turbo-low": 0,
-    "Qwen3.6Turbo-medium": 256,
-    "Qwen3.6Turbo-high": 512,
-    "Qwen3.6Turbo-max": -1,
-    "Qwen3.6Turbo-caveman": 256,
-    "Qwen3.6Turbo": 256,
-}
-
-
 LOCAL_CODEX_RATE_LIMITS = {
     "limit_id": "codex",
     "limit_name": "local",

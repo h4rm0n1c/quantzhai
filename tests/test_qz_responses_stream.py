@@ -313,14 +313,14 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             telemetry=telemetry,
         )
         runtime.run({
-            "model": "QwenZhai-high",
+            "model": "test-model.gguf",
             "input": [{
                 "type": "message",
                 "role": "user",
                 "content": [{"type": "input_text", "text": "test"}],
             }],
             "tools": [{"type": "web_search"}],
-        }, "QwenZhai-high")
+        }, "test-model.gguf")
         return b"".join(chunks).decode("utf-8")
 
     def test_web_search_call_is_public_and_upstream_resumes_with_hidden_output(self):
@@ -452,7 +452,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertIn("searched.", stream_text)
         self.assertNotIn('"type": "function_call"', stream_text)
         self.assertIn(1, output_indexes)
-        self.assertEqual(completed["model"], "QwenZhai-high")
+        self.assertEqual(completed["model"], "test-model.gguf")
         self.assertEqual(completed["output"][0]["type"], "web_search_call")
 
 

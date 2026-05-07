@@ -125,6 +125,7 @@ This makes live behavior inspectable without relying on log files.
 ## Non-Goals For First Pass
 
 - Do not remove real GGUF inventory model selection.
-- Do not reintroduce old `Qwen3.6Turbo-*` profile-only model picker entries.
+- Do not reintroduce old `QwenZhai-*`, `Qwen3.6Turbo-*`, or other synthetic
+  profile-only model picker entries.
 - Do not disable Qwen thinking for `low` yet.
 - Do not tune per-model quant variants beyond the shared policy table.

@@ -15,7 +15,7 @@ from proxy.quantzhai_proxy import ProxyHandler  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MODEL = "Qwen3.6Turbo-high"
+MODEL = "test-model.gguf"
 
 
 def _sse_block(event_type, payload):

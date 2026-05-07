@@ -147,12 +147,12 @@ class StreamingStateTests(unittest.TestCase):
             },
             output_index_offset=2,
             prepend_output=[{"type": "web_search_call", "id": "wsc_1"}],
-            model="Qwen3.6Turbo",
+            model="test-model.gguf",
         )
 
         self.assertEqual(event_type, "response.completed")
         self.assertEqual(payload["output_index"], 2)
-        self.assertEqual(payload["response"]["model"], "Qwen3.6Turbo")
+        self.assertEqual(payload["response"]["model"], "test-model.gguf")
         self.assertEqual(payload["response"]["output"][0]["type"], "web_search_call")
 
 

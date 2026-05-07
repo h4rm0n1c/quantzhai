@@ -15,7 +15,6 @@ try:
         CURRENT_API_ENDPOINTS,
         LEGACY_API_ENDPOINTS,
         LOCAL_CODEX_RATE_LIMITS,
-        MODEL_BUDGETS,
         api_contract_payload,
     )
     from .qz_model_catalog import ModelCatalog
@@ -60,7 +59,6 @@ except ImportError:
         CURRENT_API_ENDPOINTS,
         LEGACY_API_ENDPOINTS,
         LOCAL_CODEX_RATE_LIMITS,
-        MODEL_BUDGETS,
         api_contract_payload,
     )
     from qz_model_catalog import ModelCatalog
@@ -550,7 +548,7 @@ def main():
 
     threading.Thread(target=_preload_last_model, daemon=True).start()
     print(
-        f"Qwen3.6Turbo proxy listening on {args.listen}:{args.port} -> {ProxyHandler.upstream}, reasoning_stream_format={ProxyHandler.reasoning_stream_format}, searxng_base={ProxyHandler.searxng_base_url}",
+        f"QuantZhai proxy listening on {args.listen}:{args.port} -> {ProxyHandler.upstream}, reasoning_stream_format={ProxyHandler.reasoning_stream_format}, searxng_base={ProxyHandler.searxng_base_url}",
         flush=True,
     )
     server.serve_forever()
