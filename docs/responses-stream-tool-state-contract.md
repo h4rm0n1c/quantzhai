@@ -184,8 +184,13 @@ before broad stream/tool refactors.
 - `basic_message.raw`: normal output and terminal `[DONE]`
 - `public_function_call.raw`: public function call buffered until arguments are complete
 - `apply_patch_call.raw`: function-call patch stream rewritten to `apply_patch_call`
+- `apply_patch_update_call.raw` and `apply_patch_delete_call.raw`: native
+  update/delete patch operations rewritten to `apply_patch_call`
 - `custom_apply_patch_call.raw`: function-call patch stream rewritten to Codex
   custom `apply_patch` envelope
+- `custom_apply_patch_update_call.raw` and `custom_apply_patch_delete_call.raw`:
+  update/delete patch operations rewritten to Codex custom `apply_patch`
+  envelopes
 - `invalid_apply_patch_call.raw`: malformed model-side patch operation becomes
   an assistant error message, not a runnable private tool call
 - `completed_without_done.raw`: upstream `response.completed` without `[DONE]`
@@ -205,13 +210,13 @@ Still needed:
 
 - continuation hop with no duplicate response start beyond web-search coverage
 - more continuation terminal-edge cases
-- larger update/delete patch variants
+- larger multi-hunk and move patch variants
 
 ## Known Gaps
 
 - Golden replay fixture coverage has expanded across normal output, tool-call
   buffering, web-search continuation, reasoning aborts, and apply_patch
-  adaptation, but is not broad enough yet.
+  adaptation for create/update/delete patches, but is not broad enough yet.
 - Tool lifecycle now has an initial internal boundary for streamed call state,
   public item conversion, completed-call routing decisions, and proxy-local
   continuation shaping, but request normalization, adapter ownership, and

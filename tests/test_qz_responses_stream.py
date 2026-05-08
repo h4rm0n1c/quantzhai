@@ -905,6 +905,91 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertIn("*** Add File: tmp/quantzhai-custom-smoke.txt", custom_items[0]["input"])
         self.assertIn("+quantzhai custom apply_patch smoke", custom_items[0]["input"])
 
+    def test_golden_apply_patch_update_stream_rewrites_to_apply_patch_call(self):
+        def opener(body):
+            return FakeStream(_fixture_chunks("apply_patch_update_call.raw"))
+
+        stream_text = self._run_runtime(opener)
+        events = _parse_sse_events(stream_text)
+        patch_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "apply_patch_call"
+        ]
+
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertEqual(len(patch_items), 2)
+        self.assertEqual(patch_items[0]["operation"]["type"], "update_file")
+        self.assertEqual(patch_items[0]["operation"]["path"], "tmp/quantzhai-update.txt")
+        self.assertIn("+new line", patch_items[0]["operation"]["diff"])
+
+    def test_golden_custom_apply_patch_update_stream_rewrites_to_patch_envelope(self):
+        def opener(body):
+            return FakeStream(_fixture_chunks("custom_apply_patch_update_call.raw"))
+
+        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        events = _parse_sse_events(stream_text)
+        custom_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "custom_tool_call"
+        ]
+
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertEqual(len(custom_items), 2)
+        self.assertIn("*** Update File: tmp/quantzhai-update.txt", custom_items[0]["input"])
+        self.assertIn("-old line", custom_items[0]["input"])
+        self.assertIn("+new line", custom_items[0]["input"])
+
+    def test_golden_apply_patch_delete_stream_rewrites_to_apply_patch_call(self):
+        def opener(body):
+            return FakeStream(_fixture_chunks("apply_patch_delete_call.raw"))
+
+        stream_text = self._run_runtime(opener)
+        events = _parse_sse_events(stream_text)
+        patch_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "apply_patch_call"
+        ]
+
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertEqual(len(patch_items), 2)
+        self.assertEqual(patch_items[0]["operation"]["type"], "delete_file")
+        self.assertEqual(patch_items[0]["operation"]["path"], "tmp/quantzhai-delete.txt")
+
+    def test_golden_custom_apply_patch_delete_stream_rewrites_to_patch_envelope(self):
+        def opener(body):
+            return FakeStream(_fixture_chunks("custom_apply_patch_delete_call.raw"))
+
+        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        events = _parse_sse_events(stream_text)
+        custom_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "custom_tool_call"
+        ]
+
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertEqual(len(custom_items), 2)
+        self.assertIn("*** Delete File: tmp/quantzhai-delete.txt", custom_items[0]["input"])
+
     def test_golden_invalid_apply_patch_stream_becomes_message_not_private_call(self):
         requests = []
 

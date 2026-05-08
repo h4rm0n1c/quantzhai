@@ -467,7 +467,7 @@ Missing:
    public tool-call buffering, malformed empty tool history, apply_patch
    native/custom rewrite, invalid apply_patch rejection, completed-without-DONE
    terminal closure, and web_search continuation. Remaining coverage: more
-   continuation terminal-edge cases and larger update/delete patch variants.
+   continuation terminal-edge cases and larger multi-hunk/move patch variants.
 3. Broaden the tool lifecycle boundary to cover request normalization,
    history filtering, adapter ownership, and telemetry naming. Completed-call
    public/proxy-local decisions and proxy-local continuation shaping are now
