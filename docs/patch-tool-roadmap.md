@@ -22,6 +22,8 @@ The near-term target is a protocol adapter: let the local model emit patch inten
 - Patch adapter unit tests exist under `tests/test_apply_patch_adapter.py`.
 - Proxy smoke coverage exists under `tests/smoke_apply_patch_proxy.py`.
 - Codex CLI smoke coverage exists under `tests/smoke_apply_patch_codex_exec.py`.
+- Live Qwen/TurboQuant smoke on 2026-05-09 confirmed custom `apply_patch`
+  output from a real streamed function call.
 
 This means QuantZhai now has a first-pass protocol adapter for native and current-Codex custom patch calls. It still does not apply files itself. Codex remains responsible for workspace writes.
 
@@ -74,6 +76,11 @@ Outcome:
 - Confirmed the current Codex CLI uses `custom_tool_call` and `custom_tool_call_output` for `apply_patch`.
 - Confirmed the proxy must remember whether the client asked for native or custom patch shape before normalizing tools for llama.cpp.
 - Confirmed Codex can consume QuantZhai's custom patch output and apply a file edit in a temp workspace.
+- Captured live Qwen/TurboQuant custom patch request
+  `qz_req_1778256346716_c050`: upstream emitted streamed
+  `function_call` arguments for `apply_patch`; the proxy buffered them and
+  returned a completed `custom_tool_call` containing a valid
+  `*** Begin Patch` envelope.
 
 ## Phase 2: Protocol Adapter
 
@@ -101,8 +108,9 @@ Implemented:
 Still pending:
 
 - Preserve the original client tool shape in explicit per-request metadata.
-- Capture and inspect a real live-model Codex patch workflow end to end.
-- Confirm whether live Qwen reliably emits valid patch operations from the model-facing schema.
+- Run the same live patch path through an actual `qz-codex` session rather than
+  a direct Responses client.
+- Confirm reliability across update/delete operations and larger diffs.
 - Add more negative fixtures for invalid patch operations.
 
 The first implementation does not write files. It only translates tool-call shape.

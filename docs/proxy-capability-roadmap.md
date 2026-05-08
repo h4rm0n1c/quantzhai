@@ -209,7 +209,6 @@ Current behavior:
 
 Missing or incomplete:
 
-- `apply_patch` has not been tested yet with a live Qwen/TurboQuant model deciding and continuing from a real edit.
 - No proxy-side patch executor exists.
 - Tool-call continuation does not yet have a documented state table or broad
   golden replay coverage.
@@ -242,6 +241,10 @@ Maturity:
 Live smoke note:
 
 - The Codex exec apply_patch smoke now uses a real SSE-shaped upstream response and includes a minimal usage block on `response.completed`, so the end-to-end temp-workspace edit path is verified against the current proxy contract.
+- A direct live Qwen/TurboQuant Responses smoke on 2026-05-09 produced streamed
+  `apply_patch` function-call arguments and the proxy returned a completed
+  custom `apply_patch` envelope. Capture:
+  `var/captures/requests/qz_req_1778256346716_c050`.
 
 ## Search
 
