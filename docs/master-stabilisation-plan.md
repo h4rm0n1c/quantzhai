@@ -156,7 +156,7 @@ Current contract:
 ```text
 docs/responses-stream-tool-state-contract.md defines the state table for
 upstream SSE, proxy state, Codex-visible events, telemetry, and captures.
-Keep it in sync before extracting tool lifecycle code.
+Keep it in sync as tool lifecycle ownership moves out of the stream loop.
 ```
 
 Implemented first fixes:
@@ -648,16 +648,16 @@ apply_patch rewrite, and web_search continuation.
 Then do:
 
 ```text
-extract tool lifecycle handling into a small internal boundary
+broaden tool lifecycle ownership beyond the first internal boundary
 ```
 
 Reason:
 
 ```text
-Tool declaration normalization, private/public stream suppression, argument
-assembly, result injection, bad-history filtering, and capture telemetry are
-still spread across the proxy flow. Keep behaviour stable, but give one module
-ownership of the lifecycle.
+Streamed call state and public item conversion now have a small internal
+boundary. Tool declaration normalization, result injection, bad-history
+filtering, and capture telemetry are still spread across the proxy flow. Keep
+behaviour stable while moving those contracts behind clearer ownership.
 ```
 
 Then do:

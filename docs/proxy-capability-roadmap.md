@@ -204,6 +204,8 @@ Current behavior:
 - Empty-argument function-call history and matching parse-error outputs are
   dropped before replay to llama.cpp.
 - Executable public function calls are buffered until arguments are complete.
+- Streamed tool-call state, guard accounting, and public item conversion now
+  live behind `proxy/qz_tool_lifecycle.py`.
 
 Missing or incomplete:
 
@@ -452,7 +454,8 @@ Missing:
    public tool-call buffering, malformed empty tool history, apply_patch
    rewrite, and web_search continuation. Remaining coverage: custom
    apply_patch and more continuation terminal-edge cases.
-3. Extract tool lifecycle handling into a small internal boundary.
+3. Broaden the tool lifecycle boundary to cover request normalization,
+   history filtering, adapter ownership, and telemetry naming.
 4. Run a live Qwen/TurboQuant patch workflow and capture whether it emits valid patch operations.
 5. Add broader golden tests for Responses normalization.
 6. Split `proxy/quantzhai_proxy.py` into a conventional Python package.

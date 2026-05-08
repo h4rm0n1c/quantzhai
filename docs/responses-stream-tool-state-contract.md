@@ -31,6 +31,7 @@ Implementation:
 proxy/qz_responses_stream.py   streamed Responses runtime and continuation loop
 proxy/qz_streaming.py          SSE parser and streamed function-call assembler
 proxy/qz_responses.py          request normalization, tool filtering, history cleanup
+proxy/qz_tool_lifecycle.py     private streamed tool-call state and public item conversion
 proxy/qz_tool_apply_patch.py   apply_patch envelope adaptation
 proxy/qz_runtime_io.py         request-scoped capture helpers
 proxy/qz_telemetry.py          status and telemetry events
@@ -42,6 +43,7 @@ Regression tests:
 ```text
 tests/test_qz_responses_stream.py
 tests/test_qz_streaming.py
+tests/test_qz_tool_lifecycle.py
 tests/test_apply_patch_adapter.py
 tests/test_qz_runtime_io.py
 tests/test_qz_thoughts_cli.py
@@ -187,6 +189,8 @@ before broad stream/tool refactors.
 - `web_search_call.raw` and `web_search_final.raw`: proxy-local web search continuation
 - `responses_input/malformed_empty_tool_history.json`: empty tool-call plus
   parse-error output is filtered while valid neighboring history survives
+- `tests/test_qz_tool_lifecycle.py`: pins private streamed function-call state,
+  guard accounting, and apply_patch public item conversion
 
 Still needed:
 
@@ -197,8 +201,9 @@ Still needed:
 ## Known Gaps
 
 - Golden replay fixture coverage has started, but is not broad enough yet.
-- Tool lifecycle handling is still embedded across stream runtime, request
-  normalization, adapters, and telemetry.
+- Tool lifecycle now has an initial internal boundary for streamed call state
+  and public item conversion, but request normalization, adapters, and telemetry
+  still need tighter ownership.
 - No redaction layer for captures.
 - Request-scoped captures are not grouped under a higher-level run id.
 - Proxy-side shell/code/computer/MCP execution is not implemented.

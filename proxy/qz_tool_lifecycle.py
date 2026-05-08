@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+
+try:
+    from .qz_responses import normalize_apply_patch_output_for_codex
+    from .qz_streaming import StreamedFunctionCallAssembler, is_function_call_stream_event
+except ImportError:
+    from qz_responses import normalize_apply_patch_output_for_codex
+    from qz_streaming import StreamedFunctionCallAssembler, is_function_call_stream_event
+
+
+def function_call_key(payload):
+    if not isinstance(payload, dict):
+        return None
+    item_id = payload.get("item_id")
+    if item_id:
+        return item_id
+    item = payload.get("item")
+    if isinstance(item, dict):
+        return item.get("id") or item.get("call_id")
+    output_index = payload.get("output_index")
+    if output_index is not None:
+        return f"output:{output_index}"
+    return None
+
+
+def public_tool_item_from_function_call(call: dict, apply_patch_output_style: str):
+    if call.get("name") == "apply_patch":
+        return normalize_apply_patch_output_for_codex([call], apply_patch_output_style)[0]
+    return call
+
+
+class StreamToolCallState:
+    """Owns private streamed function-call assembly and stall accounting."""
+
+    def __init__(self):
+        self.assembler = StreamedFunctionCallAssembler()
+        self.started_at = None
+        self.delta_count = 0
+        self.call_name = ""
+
+    def observe(self, event_type, payload, received_at):
+        completed = self.assembler.observe(event_type, payload)
+        if not is_function_call_stream_event(event_type, payload):
+            return completed
+
+        if self.started_at is None:
+            self.started_at = received_at
+        if (
+            event_type == "response.output_item.added"
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+        ):
+            item = payload["item"]
+            self.call_name = item.get("name") or self.call_name
+        if event_type == "response.function_call_arguments.delta":
+            self.delta_count += 1
+        return completed
+
+    def abort_reason(self, now, timeout_s: float, delta_limit: int):
+        if self.started_at is None:
+            return ""
+        elapsed = max(0.0, now - self.started_at)
+        if timeout_s >= 0 and elapsed > timeout_s:
+            return "timeout"
+        if delta_limit >= 0 and self.delta_count > delta_limit:
+            return "delta_limit"
+        return ""

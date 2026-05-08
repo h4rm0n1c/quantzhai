@@ -7,42 +7,36 @@ import urllib.request
 try:
     from .qz_responses import (
         _now_ts,
-        normalize_apply_patch_output_for_codex,
         normalize_responses_input_for_qwen,
         normalize_tools_for_llamacpp,
     )
     from .qz_runtime_io import capture_enabled, capture_path, request_capture_path, write_capture, write_request_capture
     from .qz_sse import _normalize_response_usage, make_sse_block, transform_sse_event
     from .qz_streaming import (
-        StreamedFunctionCallAssembler,
         is_function_call_stream_event,
         is_terminal_stream_event,
-        public_tool_item_done_event,
         parse_sse_event_lines,
-        public_tool_item_started_event,
         public_tool_item_events,
         rewrite_sse_payload,
     )
+    from .qz_tool_lifecycle import StreamToolCallState, public_tool_item_from_function_call
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS
 except ImportError:
     from qz_responses import (
         _now_ts,
-        normalize_apply_patch_output_for_codex,
         normalize_responses_input_for_qwen,
         normalize_tools_for_llamacpp,
     )
     from qz_runtime_io import capture_enabled, capture_path, request_capture_path, write_capture, write_request_capture
     from qz_sse import _normalize_response_usage, make_sse_block, transform_sse_event
     from qz_streaming import (
-        StreamedFunctionCallAssembler,
         is_function_call_stream_event,
         is_terminal_stream_event,
-        public_tool_item_done_event,
         parse_sse_event_lines,
-        public_tool_item_started_event,
         public_tool_item_events,
         rewrite_sse_payload,
     )
+    from qz_tool_lifecycle import StreamToolCallState, public_tool_item_from_function_call
     from qz_tool_web import WEB_SEARCH_MAX_HOPS
 
 
@@ -242,25 +236,6 @@ class ResponsesStreamRuntime:
             )
         return transform_sse_event(event_lines, summary_started, self.reasoning_stream_format)
 
-    def _public_tool_item_from_function_call(self, call: dict, apply_patch_output_style: str):
-        if call.get("name") == "apply_patch":
-            return normalize_apply_patch_output_for_codex([call], apply_patch_output_style)[0]
-        return call
-
-    def _function_call_key(self, payload):
-        if not isinstance(payload, dict):
-            return None
-        item_id = payload.get("item_id")
-        if item_id:
-            return item_id
-        item = payload.get("item")
-        if isinstance(item, dict):
-            return item.get("id") or item.get("call_id")
-        output_index = payload.get("output_index")
-        if output_index is not None:
-            return f"output:{output_index}"
-        return None
-
     def _start_capture(self):
         if not self.capture_enabled or not capture_enabled():
             return
@@ -302,16 +277,6 @@ class ResponsesStreamRuntime:
 
     def _emit_public_tool_item(self, item: dict, public_index: int, sequence: int):
         chunks, sequence = public_tool_item_events(item, public_index, sequence)
-        forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(chunks)
-        return sequence, forwarded_chunks, forwarded_bytes
-
-    def _emit_public_tool_item_started(self, item: dict, public_index: int, sequence: int):
-        chunks, sequence = public_tool_item_started_event(item, public_index, sequence)
-        forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(chunks)
-        return sequence, forwarded_chunks, forwarded_bytes
-
-    def _emit_public_tool_item_done(self, item: dict, public_index: int, sequence: int):
-        chunks, sequence = public_tool_item_done_event(item, public_index, sequence)
         forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(chunks)
         return sequence, forwarded_chunks, forwarded_bytes
 
@@ -450,14 +415,11 @@ class ResponsesStreamRuntime:
                 try:
                     resp = self.stream_opener(hop_body)
                     raw_log = self._open_raw_log()
-                    assembler = StreamedFunctionCallAssembler()
+                    tool_call_state = StreamToolCallState()
                     event_lines = []
                     event_started_at = None
                     next_input = list(hop_body.get("input") or [])
                     completed_call = None
-                    private_call_started_at = None
-                    private_call_delta_count = 0
-                    private_call_name = ""
                     reasoning_only_started_at = None
                     reasoning_only_last_delta_at = None
                     reasoning_only_chars = 0
@@ -505,36 +467,17 @@ class ResponsesStreamRuntime:
                             if isinstance(response, dict):
                                 final_usage = _normalize_response_usage(response.get("usage"))
 
-                        completed = assembler.observe(event_type, payload)
+                        completed = tool_call_state.observe(event_type, payload, event_received_at)
                         if is_function_call_stream_event(event_type, payload):
-                            call_key = self._function_call_key(payload)
-                            if private_call_started_at is None:
-                                private_call_started_at = event_received_at
-                            if (
-                                event_type == "response.output_item.added"
-                                and isinstance(payload, dict)
-                                and isinstance(payload.get("item"), dict)
-                            ):
-                                call_item = payload["item"]
-                                private_call_name = call_item.get("name") or private_call_name
-                                # Do not expose executable tool calls until arguments are complete.
-                                # Codex currently treats response.output_item.added for function_call
-                                # as runnable even when arguments are still streaming, which can execute
-                                # an empty-argument command before response.function_call_arguments.done.
-                            if event_type == "response.function_call_arguments.delta":
-                                private_call_delta_count += 1
-                            private_call_elapsed = max(0.0, time.time() - private_call_started_at)
-                            abort_reason = ""
-                            if (
-                                self.private_function_call_timeout_s >= 0
-                                and private_call_elapsed > self.private_function_call_timeout_s
-                            ):
-                                abort_reason = "timeout"
-                            elif (
-                                self.private_function_call_delta_limit >= 0
-                                and private_call_delta_count > self.private_function_call_delta_limit
-                            ):
-                                abort_reason = "delta_limit"
+                            # Do not expose executable tool calls until arguments are complete.
+                            # Codex currently treats response.output_item.added for function_call
+                            # as runnable even when arguments are still streaming, which can execute
+                            # an empty-argument command before response.function_call_arguments.done.
+                            abort_reason = tool_call_state.abort_reason(
+                                time.time(),
+                                self.private_function_call_timeout_s,
+                                self.private_function_call_delta_limit,
+                            )
                             if abort_reason:
                                 forwarded_chunks = 0
                                 forwarded_bytes = 0
@@ -552,7 +495,7 @@ class ResponsesStreamRuntime:
                                     summary_started,
                                     final_usage,
                                     abort_reason,
-                                    private_call_name,
+                                    tool_call_state.call_name,
                                 ))
                                 self._emit_stream_completed(requested_model, len(public_trace), started_at, fallback=True)
                                 completed_at = time.time()
@@ -656,7 +599,10 @@ class ResponsesStreamRuntime:
                                 )
                                 break
 
-                            public_item = self._public_tool_item_from_function_call(completed_call, apply_patch_output_style)
+                            public_item = public_tool_item_from_function_call(
+                                completed_call,
+                                apply_patch_output_style,
+                            )
                             public_trace.append(public_item)
                             sequence, forwarded_chunks, forwarded_bytes = self._emit_public_tool_item(public_item, public_index, sequence)
                             self._emit_stream_event_timing(
