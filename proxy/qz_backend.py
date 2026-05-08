@@ -170,6 +170,7 @@ class BackendClient:
         cache_reuse = os.environ.get("QZ_CACHE_REUSE", "256")
         kv_key = os.environ.get("QZ_KV_KEY", "q8_0")
         kv_value = os.environ.get("QZ_KV_VALUE", "turbo3")
+        reasoning_budget = os.environ.get("QZ_REASONING_BUDGET", "-1")
 
         return [
             "run",
@@ -219,7 +220,7 @@ class BackendClient:
             "--reasoning",
             "on",
             "--reasoning-budget",
-            "-1",
+            reasoning_budget,
             "--cache-ram",
             cache_ram,
             "--cache-reuse",

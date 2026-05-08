@@ -20,6 +20,12 @@ mode:
   `presence_penalty=0`
 - Thinking/general: `temperature=1.0`, `top_p=0.95`, `top_k=20`,
   `presence_penalty=1.5`
+
+Qwen also notes that supported runtimes can raise `presence_penalty` between
+`0` and `2` to reduce endless repetitions. QuantZhai keeps Qwen's coding
+temperature/top-p/top-k shape, but adds mild anti-repeat sampling for Codex
+agent sessions because unbounded thinking can otherwise degenerate into
+repetitive reasoning loops.
 - Non-thinking: `temperature=0.7`, `top_p=0.8`, `top_k=20`,
   `presence_penalty=1.5`
 
@@ -41,15 +47,18 @@ of these policies.
 
 | Effort | Intent | Sampling | Prompt guidance |
 | --- | --- | --- | --- |
-| `low` | Fast/shallow effort. Good for simple prompts. | `temperature=0.7`, `top_p=0.8`, `top_k=20`, `min_p=0`, `presence_penalty=1.5`, `repeat_penalty=1.0` | `Use low reasoning effort. Think briefly.` |
-| `medium` | Default coding-agent balance. | `temperature=0.6`, `top_p=0.95`, `top_k=20`, `min_p=0`, `presence_penalty=0`, `repeat_penalty=1.0` | `Use medium reasoning effort. Balance speed and correctness.` |
-| `high` | Careful reasoning for complex coding work. | Same as `medium` | `Use high reasoning effort. Reason carefully before acting.` |
-| `xhigh` | Deep effort when complexity warrants it. | Same as `medium` | `Use extra-high reasoning effort. Explore deeply when complexity warrants it.` |
+| `low` | Fast/shallow effort. Good for simple prompts. | `temperature=0.7`, `top_p=0.8`, `top_k=20`, `min_p=0`, `presence_penalty=1.5`, `repeat_penalty=1.0` | `Reasoning effort: low.` |
+| `medium` | Default coding-agent balance. | `temperature=0.6`, `top_p=0.95`, `top_k=20`, `min_p=0`, `presence_penalty=1.5`, `repeat_penalty=1.0` | `Reasoning effort: medium.` |
+| `high` | Careful reasoning for complex coding work. | Same as `medium` | `Reasoning effort: high.` |
+| `xhigh` | Deep effort when complexity warrants it. | Same as `medium` | `Reasoning effort: xhigh.` |
 
 For QuantZhai's default Codex/coding-agent path, keep `medium`, `high`, and
-`xhigh` on Qwen's precise coding sampler. Do not use hotter general-thinking
-sampling for coding by default; it should be a later task-classifier or
-research-mode policy if benchmarks justify it.
+`xhigh` on Qwen's precise coding temperature/top-p/top-k sampler, with a
+presence penalty to reduce repetitive thought loops. Keep repeat penalty at
+Qwen's default `1.0` and do not enable DRY by default; local smoke showed those
+controls can corrupt compiler-style anchor text. Do not use hotter
+general-thinking sampling for coding by default; it should be a later
+task-classifier or research-mode policy if benchmarks justify it.
 
 Optional future general/research policy:
 
@@ -60,14 +69,20 @@ Optional future general/research policy:
 
 ## Reasoning Budget Policy
 
-Do not send hard reasoning-token caps for normal Codex runtime. QuantZhai's
-reasoning effort implementation is prompt guidance plus Qwen-aware sampler
-params.
+Do not send per-request hard reasoning-token caps for normal Codex runtime.
+QuantZhai's reasoning effort implementation is prompt guidance plus Qwen-aware
+sampler params.
 
 `thinking_budget_tokens` is not a supported tuning knob for this stack. If a
 caller sends it, the proxy strips it before forwarding the request upstream.
 Status and telemetry may keep a `thinking_budget_tokens` field for schema
 stability, but its value should be `null`.
+
+The llama.cpp backend still has a server-side `--reasoning-budget` launch
+setting. QuantZhai exposes that as `QZ_REASONING_BUDGET`, default `-1`, so the
+backend does not impose a hard reasoning cap unless explicitly configured.
+Use a positive `QZ_REASONING_BUDGET` only for deliberate cap testing, because a
+hard cap can interrupt legitimate long reasoning before answer/tool output.
 
 ## Request Behavior
 
@@ -82,10 +97,9 @@ For each `/v1/responses` request:
 4. Preserve existing tool, SSE, and Responses normalization behavior.
 
 Prompt injection should be system/developer-style context, not appended to the
-user's text. Use plain natural instruction text such as
-`Use high reasoning effort. Reason carefully before acting.` rather than
-XML-like tags or duplicated machine labels. Machine-readable state belongs in
-request metadata and telemetry, not model-visible prompt syntax.
+user's text. Keep prompt-side effort control to the compact labels above.
+Longer reasoning instructions belong in request metadata, telemetry, or future
+backend controls, not repeated model-visible prose.
 
 ## Status And Telemetry
 

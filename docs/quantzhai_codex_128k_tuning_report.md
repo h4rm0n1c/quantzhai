@@ -439,7 +439,7 @@ The backend launch is effectively:
   --main-gpu 0 \
   --kv-unified \
   --reasoning on \
-  --reasoning-budget -1 \
+  --reasoning-budget "$QZ_REASONING_BUDGET" \
   --cache-ram 8192 \
   --cache-reuse 256 \
   --mlock \

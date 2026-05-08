@@ -292,7 +292,7 @@ def _proxy_added_instruction_blocks(existing_blocks):
             if text.startswith("<QZSTATE "):
                 kept.append(text)
                 continue
-            if text.startswith("Use ") and "reasoning effort" in text:
+            if text.startswith("Reasoning effort:") or (text.startswith("Use ") and "reasoning effort" in text):
                 kept.append(text)
                 continue
     return kept
@@ -307,7 +307,7 @@ def _has_non_proxy_instruction_block(existing_blocks):
                 continue
             if text.startswith("<QZSTATE "):
                 continue
-            if text.startswith("Use ") and "reasoning effort" in text:
+            if text.startswith("Reasoning effort:") or (text.startswith("Use ") and "reasoning effort" in text):
                 continue
             return True
     return False

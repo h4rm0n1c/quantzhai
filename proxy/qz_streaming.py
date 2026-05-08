@@ -63,39 +63,50 @@ def is_terminal_stream_event(event_type, payload) -> bool:
     }
 
 
-def public_tool_item_events(item: dict, output_index: int, sequence_start: int = 0):
-    seq = sequence_start
+def _sse_block_with_sequence(event_type: str, payload: dict, sequence: int):
+    payload = dict(payload)
+    payload["type"] = event_type
+    payload["sequence_number"] = sequence
+    return (
+        f"event: {event_type}\n"
+        f"data: {json.dumps(payload)}\n\n"
+    ).encode("utf-8")
 
-    def block(event_type, payload):
-        nonlocal seq
-        seq += 1
-        payload = dict(payload)
-        payload["type"] = event_type
-        payload["sequence_number"] = seq
-        return (
-            f"event: {event_type}\n"
-            f"data: {json.dumps(payload)}\n\n"
-        ).encode("utf-8")
 
+def public_tool_item_started_event(item: dict, output_index: int, sequence_start: int = 0):
+    seq = sequence_start + 1
     item_id = item.get("id") or item.get("call_id") or f"tool_local_{output_index}"
     added_item = dict(item)
     added_item["id"] = item_id
     added_item["status"] = "in_progress"
+    return [
+        _sse_block_with_sequence("response.output_item.added", {
+            "output_index": output_index,
+            "item": added_item,
+        }, seq)
+    ], seq
 
+
+def public_tool_item_done_event(item: dict, output_index: int, sequence_start: int = 0):
+    seq = sequence_start + 1
+    item_id = item.get("id") or item.get("call_id") or f"tool_local_{output_index}"
     done_item = dict(item)
     done_item["id"] = item_id
     done_item.setdefault("status", "completed")
-
     return [
-        block("response.output_item.added", {
-            "output_index": output_index,
-            "item": added_item,
-        }),
-        block("response.output_item.done", {
+        _sse_block_with_sequence("response.output_item.done", {
             "output_index": output_index,
             "item": done_item,
-        }),
+        }, seq)
     ], seq
+
+
+def public_tool_item_events(item: dict, output_index: int, sequence_start: int = 0):
+    seq = sequence_start
+
+    started_chunks, seq = public_tool_item_started_event(item, output_index, seq)
+    done_chunks, seq = public_tool_item_done_event(item, output_index, seq)
+    return started_chunks + done_chunks, seq
 
 
 def rewrite_sse_payload(event_type, payload, output_index_offset: int = 0, prepend_output=None, model=None):

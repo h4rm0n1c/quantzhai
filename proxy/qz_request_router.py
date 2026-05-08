@@ -29,7 +29,15 @@ try:
     from .qz_responses_stream import ResponsesStreamRuntime
     from .qz_sse import _normalize_response_usage, make_sse_block
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
-    from .qz_runtime_io import append_capture, capture_enabled, capture_path, runtime_log, write_capture
+    from .qz_runtime_io import (
+        append_capture,
+        append_request_capture,
+        capture_enabled,
+        capture_path,
+        runtime_log,
+        write_capture,
+        write_request_capture,
+    )
 except ImportError:
     from qz_config_report import effective_config_payload
     from qz_telemetry import TELEMETRY_RECENT_SCHEMA
@@ -50,7 +58,15 @@ except ImportError:
     from qz_responses_stream import ResponsesStreamRuntime
     from qz_sse import _normalize_response_usage, make_sse_block
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
-    from qz_runtime_io import append_capture, capture_enabled, capture_path, runtime_log, write_capture
+    from qz_runtime_io import (
+        append_capture,
+        append_request_capture,
+        capture_enabled,
+        capture_path,
+        runtime_log,
+        write_capture,
+        write_request_capture,
+    )
 
 
 class RequestRouter:
@@ -363,7 +379,19 @@ class RequestRouter:
         sampling = {}
         raw_sampling = qz_reasoning.get("sampling")
         if isinstance(raw_sampling, dict):
-            for key in ("temperature", "top_p", "top_k", "min_p", "presence_penalty", "repeat_penalty"):
+            for key in (
+                "temperature",
+                "top_p",
+                "top_k",
+                "min_p",
+                "presence_penalty",
+                "repeat_penalty",
+                "repeat_last_n",
+                "dry_multiplier",
+                "dry_base",
+                "dry_allowed_length",
+                "dry_penalty_last_n",
+            ):
                 if raw_sampling.get(key) is not None:
                     sampling[key] = raw_sampling.get(key)
 
@@ -562,6 +590,11 @@ class RequestRouter:
         if raw_log is not None:
             raw_log.write(chunk)
             raw_log.flush()
+        if request_id and capture_enabled():
+            try:
+                append_request_capture(request_id, "forwarded-sse.raw", chunk)
+            except Exception:
+                pass
         self.handler._emit_sse_telemetry(chunk, request_id=request_id)
         self.handler.wfile.write(chunk)
         self.handler.wfile.flush()
@@ -674,6 +707,8 @@ class RequestRouter:
 
         try:
             write_capture("latest-request.json", body)
+            write_capture("latest-request-id.txt", request_id)
+            write_request_capture(request_id, "incoming-request.json", body)
         except Exception:
             pass
 
@@ -739,6 +774,8 @@ class RequestRouter:
                 try:
                     write_capture("latest-normalized-request.json", body)
                     write_capture("latest-request-contract.json", self._capture_contract(request_id, prompt_contract, runtime_metrics))
+                    write_request_capture(request_id, "forwarded-request.json", body)
+                    write_request_capture(request_id, "request-contract.json", self._capture_contract(request_id, prompt_contract, runtime_metrics))
                 except Exception:
                     pass
 
@@ -752,6 +789,7 @@ class RequestRouter:
                     self.handler._write_codex_rate_limits_event()
                     stream_result = None
                     try:
+                        write_request_capture(request_id, "forwarded-sse.raw", b"", mode="bytes")
                         stream_result = self._run_responses_streaming_locally(
                             body,
                             client_model,
@@ -954,6 +992,13 @@ class RequestRouter:
                         f"status={status}\ncontent_type={content_type}\nstream=passthrough\nreasoning_stream_format={self.handler.reasoning_stream_format}\nrate_limits=local\n",
                         encoding="utf-8"
                     )
+                    write_request_capture(
+                        request_id,
+                        "upstream-status.txt",
+                        f"status={status}\ncontent_type={content_type}\nstream=passthrough\nreasoning_stream_format={self.handler.reasoning_stream_format}\nrate_limits=local\n",
+                    )
+                    write_request_capture(request_id, "upstream-response.raw", b"", mode="bytes")
+                    write_request_capture(request_id, "forwarded-sse.raw", b"", mode="bytes")
                     raw_log = raw_log_path.open("wb")
                 else:
                     raw_log = None
@@ -1007,6 +1052,8 @@ class RequestRouter:
                     f"status={status}\ncontent_type={content_type}\n",
                     encoding="utf-8"
                 )
+                write_request_capture(request_id, "upstream-response.raw", resp_data, mode="bytes")
+                write_request_capture(request_id, "upstream-status.txt", f"status={status}\ncontent_type={content_type}\n")
             except Exception:
                 pass
 

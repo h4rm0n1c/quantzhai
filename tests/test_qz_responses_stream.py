@@ -250,6 +250,157 @@ def _reasoning_message_stream():
     ]
 
 
+def _long_reasoning_then_message_stream(delta_count=20):
+    chunks = [
+        _sse_block("response.created", {
+            "response": {
+                "id": "resp_fake_long_reasoning",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "in_progress",
+                "model": "fake",
+                "output": [],
+            },
+        }),
+        _sse_block("response.output_item.added", {
+            "output_index": 0,
+            "item": {
+                "id": "rs_long",
+                "type": "reasoning",
+                "status": "in_progress",
+                "summary": [],
+                "content": [],
+            },
+        }),
+    ]
+    for index in range(delta_count):
+        chunks.append(_sse_block("response.reasoning_text.delta", {
+            "item_id": "rs_long",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": f"generated-artifact-body-{index}-",
+        }))
+    chunks.extend([
+        _sse_block("response.output_item.added", {
+            "output_index": 1,
+            "item": {
+                "id": "msg_long",
+                "type": "message",
+                "status": "in_progress",
+                "role": "assistant",
+                "content": [],
+            },
+        }),
+        _sse_block("response.output_text.delta", {
+            "item_id": "msg_long",
+            "output_index": 1,
+            "content_index": 0,
+            "delta": "final answer",
+        }),
+        _sse_block("response.completed", {
+            "response": {
+                "id": "resp_fake_long_reasoning",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "completed",
+                "model": "fake",
+                "output": [{
+                    "id": "rs_long",
+                    "type": "reasoning",
+                    "status": "completed",
+                    "summary": [],
+                    "content": [{"type": "reasoning_text", "text": "generated artifact body"}],
+                }, {
+                    "id": "msg_long",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "final answer", "annotations": []}],
+                }],
+                "usage": {},
+            },
+        }),
+        b"data: [DONE]\n\n",
+    ])
+    return chunks
+
+
+def _stuck_reasoning_only_stream(delta_count=5):
+    chunks = [
+        _sse_block("response.created", {
+            "response": {
+                "id": "resp_fake_stuck_reasoning",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "in_progress",
+                "model": "fake",
+                "output": [],
+            },
+        }),
+        _sse_block("response.output_item.added", {
+            "output_index": 0,
+            "item": {
+                "id": "rs_stuck",
+                "type": "reasoning",
+                "status": "in_progress",
+                "summary": [],
+                "content": [],
+            },
+        }),
+    ]
+    for index in range(delta_count):
+        chunks.append(_sse_block("response.reasoning_text.delta", {
+            "item_id": "rs_stuck",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": f"draft-{index}-",
+        }))
+    return chunks
+
+
+def _reasoning_tool_artifact_stream():
+    artifact = (
+        'json\n'
+        '{\n'
+        '  "operation": {\n'
+        '    "type": "update_file",\n'
+        '    "path": "amber_v4.md",\n'
+        '    "diff": "--- a/amber_v4.md\\n+++ b/amber_v4.md\\n@@ -1,1 +1,2 @@\\n old\\n+new\\n"\n'
+        '  }\n'
+        '}\n'
+    )
+    chunks = [
+        _sse_block("response.created", {
+            "response": {
+                "id": "resp_fake_reasoning_artifact",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "in_progress",
+                "model": "fake",
+                "output": [],
+            },
+        }),
+        _sse_block("response.output_item.added", {
+            "output_index": 0,
+            "item": {
+                "id": "rs_artifact",
+                "type": "reasoning",
+                "status": "in_progress",
+                "summary": [],
+                "content": [],
+            },
+        }),
+    ]
+    for start in range(0, len(artifact), 16):
+        chunks.append(_sse_block("response.reasoning_text.delta", {
+            "item_id": "rs_artifact",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": artifact[start:start + 16],
+        }))
+    return chunks
+
+
 def _apply_patch_call_stream():
     arguments = json.dumps({
         "operation": {
@@ -299,8 +450,107 @@ def _apply_patch_call_stream():
     ]
 
 
+def _exec_command_call_stream():
+    arguments = json.dumps({"cmd": "cat > amber_v2.md", "yield_time_ms": 1000})
+    midpoint = len(arguments) // 2
+    return [
+        _sse_block("response.created", {
+            "response": {
+                "id": "resp_fake_exec",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "in_progress",
+                "model": "fake",
+                "output": [],
+            },
+        }),
+        _sse_block("response.output_item.added", {
+            "output_index": 0,
+            "item": {
+                "id": "fc_exec",
+                "type": "function_call",
+                "status": "in_progress",
+                "call_id": "call_exec",
+                "name": "exec_command",
+                "arguments": "",
+            },
+        }),
+        _sse_block("response.function_call_arguments.delta", {
+            "item_id": "fc_exec",
+            "output_index": 0,
+            "delta": arguments[:midpoint],
+        }),
+        _sse_block("response.function_call_arguments.delta", {
+            "item_id": "fc_exec",
+            "output_index": 0,
+            "delta": arguments[midpoint:],
+        }),
+        _sse_block("response.function_call_arguments.done", {
+            "item_id": "fc_exec",
+            "output_index": 0,
+            "arguments": arguments,
+            "name": "exec_command",
+        }),
+        _sse_block("response.output_item.done", {
+            "output_index": 0,
+            "item": {
+                "id": "fc_exec",
+                "type": "function_call",
+                "status": "completed",
+                "call_id": "call_exec",
+                "name": "exec_command",
+            },
+        }),
+        b"data: [DONE]\n\n",
+    ]
+
+
+def _stuck_function_call_stream(delta_count=5):
+    chunks = [
+        _sse_block("response.created", {
+            "response": {
+                "id": "resp_fake_stuck_tool",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "in_progress",
+                "model": "fake",
+                "output": [],
+            },
+        }),
+        _sse_block("response.output_item.added", {
+            "output_index": 0,
+            "item": {
+                "id": "fc_stuck",
+                "type": "function_call",
+                "status": "in_progress",
+                "call_id": "call_stuck",
+                "name": "apply_patch",
+                "arguments": "",
+            },
+        }),
+    ]
+    for index in range(delta_count):
+        chunks.append(_sse_block("response.function_call_arguments.delta", {
+            "item_id": "fc_stuck",
+            "output_index": 0,
+            "delta": json.dumps({"chunk": index}),
+        }))
+    return chunks
+
+
 class ResponsesStreamRuntimeTests(unittest.TestCase):
-    def _run_runtime(self, opener, web_runtime=None, telemetry=None, reasoning_stream_format="raw", request_id=""):
+    def _run_runtime(
+        self,
+        opener,
+        web_runtime=None,
+        telemetry=None,
+        reasoning_stream_format="raw",
+        request_id="",
+        private_function_call_timeout_s=None,
+        private_function_call_delta_limit=None,
+        reasoning_only_timeout_s=None,
+        reasoning_only_char_limit=None,
+    ):
         chunks = []
         runtime = ResponsesStreamRuntime(
             upstream="http://127.0.0.1:1",
@@ -312,6 +562,10 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             capture_enabled=False,
             telemetry=telemetry,
             request_id=request_id,
+            private_function_call_timeout_s=private_function_call_timeout_s,
+            private_function_call_delta_limit=private_function_call_delta_limit,
+            reasoning_only_timeout_s=reasoning_only_timeout_s,
+            reasoning_only_char_limit=reasoning_only_char_limit,
         )
         runtime.run({
             "model": "test-model.gguf",
@@ -360,6 +614,123 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertIn('"type": "apply_patch_call"', stream_text)
         self.assertNotIn('"type": "function_call"', stream_text)
         self.assertIn("response.completed", stream_text)
+
+    def test_public_function_call_is_buffered_until_arguments_are_complete(self):
+        def opener(body):
+            return FakeStream(_exec_command_call_stream())
+
+        stream_text = self._run_runtime(opener)
+        events = _parse_sse_events(stream_text)
+        names = [event_type for event_type, _payload in events]
+
+        added_index = names.index("response.output_item.added")
+        item_done_index = names.index("response.output_item.done")
+        self.assertLess(added_index, item_done_index)
+        self.assertNotIn("response.function_call_arguments.delta", names)
+        self.assertNotIn("response.function_call_arguments.done", names)
+
+        added_payload = events[added_index][1]
+        self.assertEqual(added_payload["item"]["type"], "function_call")
+        self.assertEqual(added_payload["item"]["status"], "in_progress")
+        self.assertEqual(added_payload["item"]["name"], "exec_command")
+        self.assertIn('"cmd": "cat > amber_v2.md"', added_payload["item"]["arguments"])
+        self.assertIn("cat > amber_v2.md", stream_text)
+
+    def test_stuck_function_call_aborts_instead_of_silent_dead_air(self):
+        telemetry = TelemetryBus()
+
+        def opener(body):
+            return FakeStream(_stuck_function_call_stream(delta_count=4))
+
+        stream_text = self._run_runtime(
+            opener,
+            telemetry=telemetry,
+            request_id="req-stuck-tool",
+            private_function_call_delta_limit=2,
+        )
+        events = telemetry.recent()
+
+        self.assertIn("private tool-call loop", stream_text)
+        self.assertIn("response.completed", stream_text)
+        self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+        self.assertTrue(any(event.get("type") == "private_tool_call_aborted" for event in events))
+        self.assertTrue(any(
+            event.get("type") == "stream_event_timing"
+            and (event.get("payload") or {}).get("suppressed") == "function_call_aborted"
+            for event in events
+        ))
+
+    def test_reasoning_only_stream_aborts_instead_of_never_answering(self):
+        telemetry = TelemetryBus()
+
+        def opener(body):
+            return FakeStream(_stuck_reasoning_only_stream(delta_count=4))
+
+        stream_text = self._run_runtime(
+            opener,
+            telemetry=telemetry,
+            request_id="req-stuck-reasoning",
+            reasoning_stream_format="summary",
+            reasoning_only_char_limit=12,
+        )
+        events = telemetry.recent()
+
+        self.assertIn("reasoning-only stream", stream_text)
+        self.assertIn("response.completed", stream_text)
+        self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+        self.assertTrue(any(event.get("type") == "reasoning_only_aborted" for event in events))
+        self.assertTrue(any(
+            event.get("type") == "stream_event_timing"
+            and (event.get("payload") or {}).get("suppressed") == "reasoning_only_aborted"
+            for event in events
+        ))
+
+    def test_default_reasoning_only_char_limit_does_not_abort_long_active_output(self):
+        telemetry = TelemetryBus()
+
+        def opener(body):
+            return FakeStream(_long_reasoning_then_message_stream(delta_count=100))
+
+        stream_text = self._run_runtime(
+            opener,
+            telemetry=telemetry,
+            request_id="req-long-reasoning",
+            reasoning_stream_format="summary",
+        )
+        events = telemetry.recent()
+
+        self.assertIn("final answer", stream_text)
+        self.assertIn("response.completed", stream_text)
+        self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+        self.assertFalse(any(event.get("type") == "reasoning_only_aborted" for event in events))
+
+    def test_reasoning_tool_artifact_aborts_without_length_limit(self):
+        telemetry = TelemetryBus()
+
+        def opener(body):
+            return FakeStream(_reasoning_tool_artifact_stream())
+
+        stream_text = self._run_runtime(
+            opener,
+            telemetry=telemetry,
+            request_id="req-reasoning-artifact",
+            reasoning_stream_format="summary",
+        )
+        events = telemetry.recent()
+
+        self.assertIn("reasoning channel instead of emitting a real tool call", stream_text)
+        self.assertIn("response.completed", stream_text)
+        self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+        self.assertTrue(any(
+            event.get("type") == "reasoning_only_aborted"
+            and (event.get("payload") or {}).get("reason") == "artifact_tool_payload"
+            for event in events
+        ))
+        self.assertTrue(any(
+            event.get("type") == "stream_event_timing"
+            and (event.get("payload") or {}).get("suppressed") == "reasoning_artifact_aborted"
+            for event in events
+        ))
 
     def test_golden_basic_message_stream_replays_unchanged(self):
         requests = []

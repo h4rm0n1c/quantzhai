@@ -223,6 +223,145 @@ in profile/reasoning preset policy or classify/report reasoning-only
 completions explicitly.
 ```
 
+Update: proxy now classifies this as a reasoning-only stall when a stream emits
+reasoning deltas without any answer/tool item and then makes no progress past
+`QZ_REASONING_ONLY_TIMEOUT_S`. `QZ_REASONING_ONLY_CHAR_LIMIT` is disabled by
+default (`-1`) because llama.cpp can misclassify legitimate generated artifact
+text as `reasoning_text`. Operators can set a positive char limit for aggressive
+local debugging, but production/default behavior must not abort active output
+only because it is long. On abort, the proxy emits a completed fallback answer
+plus `reasoning_only_aborted` telemetry instead of leaving Codex with no final
+status.
+
+Mitigation update: the backend launch exposes llama.cpp's `--reasoning-budget`
+as `QZ_REASONING_BUDGET` and defaults it to `-1`. This is a backend generation
+control, separate from the proxy's fallback watchdog. Positive values are for
+deliberate cap testing only; the default avoids killing legitimate long
+reasoning before answer/tool output.
+
+## 2026-05-08 request-scoped audit result
+
+Added request-scoped captures under:
+
+```text
+var/captures/requests/<request_id>/
+```
+
+This avoids treating `latest-*` files as proof when concurrent Codex, monitor,
+or smoke requests can overwrite them.
+
+Live prompt-compiler probe with `apply_patch` declared:
+
+```text
+request_id: qz_req_1778171144593_2c0
+incoming tools: [{"type":"apply_patch"}]
+forwarded tools: function apply_patch adapter
+tool_choice: auto
+upstream events: 244
+upstream reasoning_text.delta: 187
+upstream output_text.delta: 47
+forwarded events: 245
+forwarded reasoning_summary_text.delta: 187
+forwarded output_text.delta: 47
+client events: 246 including codex.rate_limits and [DONE]
+reasoning chars: 863
+answer chars: 237
+avg parsed_to_forwarded_ms: 0.364
+max parsed_to_forwarded_ms: 3.745
+```
+
+Conclusion: for this path, transport and channel mapping were healthy. The
+proxy translated raw reasoning text to summary text, forwarded normal answer
+deltas, and ended the stream correctly.
+
+Same prompt-compiler probe without tools:
+
+```text
+request_id: qz_req_1778171217515_3a00
+incoming tools: none
+forwarded tools: none
+upstream events before abort: 615
+upstream reasoning_text.delta: 612
+upstream output_text.delta: 0
+forwarded reasoning_summary_text.delta: 611
+forwarded output_text.delta: 0
+reasoning chars at abort: 2502
+reasoning_only_aborted reason: char_limit
+client received response.completed and [DONE]
+fallback answer present in response.completed.output[0]
+avg parsed_to_forwarded_ms: 0.352
+max parsed_to_forwarded_ms: 1.405
+```
+
+Conclusion: the reasoning-only failure reproduces without `apply_patch` or any
+tool declaration. Tool exposure is not the primary cause of this class of stall.
+The likely fault line is prompt/profile + Qwen reasoning behavior + llama.cpp
+Responses channel output, not a Codex tool-policy mismatch.
+
+Follow-up: request `qz_req_1778172550606_da50` showed the 12k char watchdog
+cutting legitimate prompt-compiler output. Upstream emitted about 12,008 chars
+as `response.reasoning_text.delta`, but the tail was artifact/body text rather
+than hidden scratch. The default char watchdog was therefore removed; use the
+idle timeout for true no-progress stalls.
+
+Follow-up: public Codex tool-call state was too coarse, but executable tool
+start events cannot safely be synthesized with empty arguments. A live prompt
+showed Codex treating `response.output_item.added` for `function_call` as
+runnable immediately, before `response.function_call_arguments.done`, which
+produced an empty-argument tool execution and destabilized the next upstream
+request. The proxy therefore buffers upstream executable tool calls until
+arguments are complete, then emits one complete public tool item. Proxy-local
+tools such as `web_search` remain private until the proxy has a completed public
+display item.
+
+The same live run left a malformed empty-argument `function_call` plus Codex's
+local parse-error `function_call_output` in conversation history. Replaying that
+pair to llama.cpp can trigger a 500 on the next request before any stream events
+arrive. Input normalization now drops empty `function_call` history items and
+their parse-error outputs before forwarding to upstream.
+
+Follow-up: request `qz_req_1778177240868_e0d0` showed the model streaming an
+`apply_patch`-shaped JSON/diff payload for `amber_v4.md` entirely through
+`response.reasoning_text.delta`. It never emitted `output_text` or a real
+`function_call`, so the idle timeout did not apply because tokens were still
+arriving. The proxy now treats patch/tool-shaped payloads in reasoning-only
+streams as a protocol failure and emits a completed fallback answer plus
+`reasoning_only_aborted` telemetry with `reason=artifact_tool_payload`. It does
+not execute hidden reasoning as a tool call.
+
+Open compliance wrinkle: the fallback answer is currently present in the
+synthetic `response.completed` output, but not streamed as
+`response.output_text.delta` before completion. Codex can still receive a final
+completed response, but a more standard fallback stream would synthesize a
+message output item and output_text delta/done sequence before
+`response.completed`.
+
+Follow-up prompt-compiler file-write failure:
+
+```text
+request_id: qz_req_1778171634737_8a10
+user request: write compiled output to amber_v2.md
+incoming tools: exec_command, write_stdin, custom apply_patch, ...
+forwarded tools: exec_command, write_stdin, function apply_patch, ...
+upstream reasoning_text.delta: 671
+upstream output_text.delta: 0
+upstream tool call: function_call write_stdin
+upstream function_call_arguments.delta: 1201
+forwarded public tool calls: 0
+telemetry: private_tool_call_aborted reason=delta_limit tool_name=write_stdin
+```
+
+Conclusion: this was not an `apply_patch` adapter failure. The model selected
+`write_stdin`, hallucinated an exec session id, and streamed a shell heredoc
+instead of returning an `apply_patch` call. The proxy correctly avoided
+forwarding an incomplete private tool call, but the request had exposed
+`write_stdin` even though no live exec session was present in request history.
+
+Mitigation: `normalize_tools_for_llamacpp` now drops `write_stdin` unless prior
+request history contains an exec session id from an `exec_command` tool output,
+and adds generic file-edit hints to shell tools. This is a Codex tool-contract
+sanity check, not prompt-compiler-specific policy.
+
 ## Minimal fixes likely needed
 
 ### 1. Coalesce qz-thoughts activity rows
@@ -402,11 +541,22 @@ No malformed sequence numbers caused by transformed events.
 Expected files should remain useful:
 
 ```text
+latest-request-id.txt
 latest-upstream-response.raw
 latest-forwarded.json
 latest-stream-runtime-error.txt
 latest-upstream-status.txt
+requests/<request_id>/incoming-request.json
+requests/<request_id>/forwarded-request.json
+requests/<request_id>/request-contract.json
+requests/<request_id>/upstream-response.raw
+requests/<request_id>/upstream-status.txt
+requests/<request_id>/forwarded-sse.raw
 ```
+
+Request-scoped captures are the audit source of truth when multiple Codex or
+monitor requests are active. `latest-*` files are only a convenience view and
+may be overwritten by later traffic.
 
 If new timing captures are added, they should live under `var/captures/` or structured telemetry, not as another permanent shell script.
 

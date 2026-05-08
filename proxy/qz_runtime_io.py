@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import re
 from pathlib import Path
 
 
@@ -43,11 +44,38 @@ def capture_path(name: str) -> Path:
     return capture_dir() / name
 
 
+def _safe_capture_component(value: str) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"[^A-Za-z0-9_.-]+", "_", text)
+    return text[:160] or "unknown"
+
+
+def request_capture_dir(request_id: str) -> Path:
+    return capture_dir() / "requests" / _safe_capture_component(request_id)
+
+
+def request_capture_path(request_id: str, name: str) -> Path:
+    return request_capture_dir(request_id) / name
+
+
 def write_capture(name: str, payload, mode: str = "text"):
     if not capture_enabled():
         return
     _ensure_capture_dir()
     path = capture_path(name)
+    if mode == "bytes":
+        path.write_bytes(payload)
+    elif isinstance(payload, (dict, list)):
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    else:
+        path.write_text(str(payload), encoding="utf-8")
+
+
+def write_request_capture(request_id: str, name: str, payload, mode: str = "text"):
+    if not request_id or not capture_enabled():
+        return
+    path = request_capture_path(request_id, name)
+    path.parent.mkdir(parents=True, exist_ok=True)
     if mode == "bytes":
         path.write_bytes(payload)
     elif isinstance(payload, (dict, list)):
@@ -62,6 +90,19 @@ def append_capture(name: str, text: str):
     _ensure_capture_dir()
     with capture_path(name).open("a", encoding="utf-8") as handle:
         handle.write(text)
+
+
+def append_request_capture(request_id: str, name: str, text: str | bytes):
+    if not request_id or not capture_enabled():
+        return
+    path = request_capture_path(request_id, name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(text, bytes):
+        with path.open("ab") as handle:
+            handle.write(text)
+        return
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(str(text))
 
 
 def runtime_log(name: str, payload):

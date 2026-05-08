@@ -72,12 +72,13 @@ Current behavior:
 - Exposes profile entries only as symlinks under the model directory.
 - Does not provide synthetic `QwenZhai-*`, `Qwen3.6Turbo-*`, or reasoning-budget
   alias model ids.
-- Keeps low, medium, high, and max profile reasoning choices aligned with the
+- Keeps low, medium, high, and xhigh profile reasoning choices aligned with the
   selected catalog entry's own reasoning policy metadata rather than the
   backend model filename.
 - Applies Qwen-aware sampler defaults and compact effort prompts.
-- Strips `thinking_budget_tokens`; hard reasoning-token caps are not part of
-  the Codex runtime policy.
+- Strips `thinking_budget_tokens`; per-request hard reasoning-token caps are
+  not part of the Codex runtime policy.
+- Uses `QZ_REASONING_BUDGET` for the llama.cpp server-side reasoning budget.
 
 What works well:
 

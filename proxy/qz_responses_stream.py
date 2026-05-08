@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import time
 import urllib.request
 
@@ -10,13 +11,15 @@ try:
         normalize_responses_input_for_qwen,
         normalize_tools_for_llamacpp,
     )
-    from .qz_runtime_io import capture_enabled, capture_path, write_capture
+    from .qz_runtime_io import capture_enabled, capture_path, request_capture_path, write_capture, write_request_capture
     from .qz_sse import _normalize_response_usage, make_sse_block, transform_sse_event
     from .qz_streaming import (
         StreamedFunctionCallAssembler,
         is_function_call_stream_event,
         is_terminal_stream_event,
+        public_tool_item_done_event,
         parse_sse_event_lines,
+        public_tool_item_started_event,
         public_tool_item_events,
         rewrite_sse_payload,
     )
@@ -28,17 +31,78 @@ except ImportError:
         normalize_responses_input_for_qwen,
         normalize_tools_for_llamacpp,
     )
-    from qz_runtime_io import capture_enabled, capture_path, write_capture
+    from qz_runtime_io import capture_enabled, capture_path, request_capture_path, write_capture, write_request_capture
     from qz_sse import _normalize_response_usage, make_sse_block, transform_sse_event
     from qz_streaming import (
         StreamedFunctionCallAssembler,
         is_function_call_stream_event,
         is_terminal_stream_event,
+        public_tool_item_done_event,
         parse_sse_event_lines,
+        public_tool_item_started_event,
         public_tool_item_events,
         rewrite_sse_payload,
     )
     from qz_tool_web import WEB_SEARCH_MAX_HOPS
+
+
+PRIVATE_FUNCTION_CALL_TIMEOUT_S = float(os.environ.get("QZ_PRIVATE_TOOL_CALL_TIMEOUT_S", "120"))
+PRIVATE_FUNCTION_CALL_DELTA_LIMIT = int(os.environ.get("QZ_PRIVATE_TOOL_CALL_DELTA_LIMIT", "1200"))
+REASONING_ONLY_TIMEOUT_S = float(os.environ.get("QZ_REASONING_ONLY_TIMEOUT_S", "120"))
+REASONING_ONLY_CHAR_LIMIT = int(os.environ.get("QZ_REASONING_ONLY_CHAR_LIMIT", "-1"))
+REASONING_ARTIFACT_SCAN_LIMIT = int(os.environ.get("QZ_REASONING_ARTIFACT_SCAN_LIMIT", "8192"))
+
+
+def _looks_like_reasoning_tool_artifact(text: str) -> bool:
+    stripped = (text or "").lstrip()
+    if not stripped:
+        return False
+    lower = stripped.lower()
+    starts_like_payload = (
+        lower.startswith("{")
+        or lower.startswith("json")
+        or lower.startswith("```json")
+        or lower.startswith("```")
+    )
+    if not starts_like_payload:
+        return False
+
+    markers = (
+        '"operation"',
+        '"path"',
+        '"diff"',
+        '"type"',
+        "apply_patch",
+        "update_file",
+        "create_file",
+        "delete_file",
+        "--- a/",
+        "+++ b/",
+        "@@",
+    )
+    hits = sum(1 for marker in markers if marker in lower)
+    has_patch_shape = (
+        ('"operation"' in lower and '"path"' in lower and ('"diff"' in lower or "apply_patch" in lower))
+        or (('"diff"' in lower or "@@" in lower) and ("--- a/" in lower or "+++ b/" in lower))
+    )
+    return has_patch_shape and hits >= 3
+
+
+class _MultiRawLog:
+    def __init__(self, handles):
+        self.handles = [handle for handle in handles if handle is not None]
+
+    def write(self, chunk: bytes):
+        for handle in self.handles:
+            handle.write(chunk)
+
+    def flush(self):
+        for handle in self.handles:
+            handle.flush()
+
+    def close(self):
+        for handle in self.handles:
+            handle.close()
 
 
 class ResponsesStreamRuntime:
@@ -55,6 +119,10 @@ class ResponsesStreamRuntime:
         capture_enabled: bool = True,
         telemetry=None,
         request_id: str = "",
+        private_function_call_timeout_s: float | None = None,
+        private_function_call_delta_limit: int | None = None,
+        reasoning_only_timeout_s: float | None = None,
+        reasoning_only_char_limit: int | None = None,
     ):
         self.upstream = upstream.rstrip("/")
         self.authorization = authorization or "Bearer local"
@@ -65,6 +133,26 @@ class ResponsesStreamRuntime:
         self.capture_enabled = capture_enabled
         self.telemetry = telemetry
         self.request_id = request_id or ""
+        self.private_function_call_timeout_s = (
+            PRIVATE_FUNCTION_CALL_TIMEOUT_S
+            if private_function_call_timeout_s is None
+            else float(private_function_call_timeout_s)
+        )
+        self.private_function_call_delta_limit = (
+            PRIVATE_FUNCTION_CALL_DELTA_LIMIT
+            if private_function_call_delta_limit is None
+            else int(private_function_call_delta_limit)
+        )
+        self.reasoning_only_timeout_s = (
+            REASONING_ONLY_TIMEOUT_S
+            if reasoning_only_timeout_s is None
+            else float(reasoning_only_timeout_s)
+        )
+        self.reasoning_only_char_limit = (
+            REASONING_ONLY_CHAR_LIMIT
+            if reasoning_only_char_limit is None
+            else int(reasoning_only_char_limit)
+        )
 
     def _open_upstream_stream(self, body: dict):
         data = json.dumps(body).encode("utf-8")
@@ -159,6 +247,20 @@ class ResponsesStreamRuntime:
             return normalize_apply_patch_output_for_codex([call], apply_patch_output_style)[0]
         return call
 
+    def _function_call_key(self, payload):
+        if not isinstance(payload, dict):
+            return None
+        item_id = payload.get("item_id")
+        if item_id:
+            return item_id
+        item = payload.get("item")
+        if isinstance(item, dict):
+            return item.get("id") or item.get("call_id")
+        output_index = payload.get("output_index")
+        if output_index is not None:
+            return f"output:{output_index}"
+        return None
+
     def _start_capture(self):
         if not self.capture_enabled or not capture_enabled():
             return
@@ -172,6 +274,17 @@ class ResponsesStreamRuntime:
                 "rate_limits=local\n",
                 encoding="utf-8",
             )
+            if self.request_id:
+                write_request_capture(self.request_id, "upstream-response.raw", b"", mode="bytes")
+                write_request_capture(
+                    self.request_id,
+                    "upstream-status.txt",
+                    "status=streaming\n"
+                    "content_type=text/event-stream\n"
+                    "stream=real\n"
+                    f"reasoning_stream_format={self.reasoning_stream_format}\n"
+                    "rate_limits=local\n",
+                )
         except Exception:
             pass
 
@@ -179,12 +292,26 @@ class ResponsesStreamRuntime:
         if not self.capture_enabled or not capture_enabled():
             return None
         try:
-            return capture_path("latest-upstream-response.raw").open("ab")
+            handles = [capture_path("latest-upstream-response.raw").open("ab")]
+            if self.request_id:
+                request_capture_path(self.request_id, "upstream-response.raw").parent.mkdir(parents=True, exist_ok=True)
+                handles.append(request_capture_path(self.request_id, "upstream-response.raw").open("ab"))
+            return _MultiRawLog(handles)
         except Exception:
             return None
 
     def _emit_public_tool_item(self, item: dict, public_index: int, sequence: int):
         chunks, sequence = public_tool_item_events(item, public_index, sequence)
+        forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(chunks)
+        return sequence, forwarded_chunks, forwarded_bytes
+
+    def _emit_public_tool_item_started(self, item: dict, public_index: int, sequence: int):
+        chunks, sequence = public_tool_item_started_event(item, public_index, sequence)
+        forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(chunks)
+        return sequence, forwarded_chunks, forwarded_bytes
+
+    def _emit_public_tool_item_done(self, item: dict, public_index: int, sequence: int):
+        chunks, sequence = public_tool_item_done_event(item, public_index, sequence)
         forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(chunks)
         return sequence, forwarded_chunks, forwarded_bytes
 
@@ -208,6 +335,77 @@ class ResponsesStreamRuntime:
         ):
             self._write_chunk(out_chunk)
         self._write_chunk(b"data: [DONE]\n\n")
+
+    def _emit_private_tool_call_aborted(
+        self,
+        requested_model: str,
+        summary_started: set,
+        final_usage,
+        reason: str,
+        call_name: str = "",
+    ):
+        text = (
+            "I stopped a private tool-call loop before it could stall the stream. "
+            "No file was changed. Please retry with normal text feedback, or name "
+            "an explicit output path if you want a file written."
+        )
+        output = [{
+            "id": f"msg_local_{_now_ts()}",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{
+                "type": "output_text",
+                "text": text,
+                "annotations": [],
+            }],
+        }]
+        self._emit("private_tool_call_aborted", {
+            "model": requested_model,
+            "reason": reason,
+            "tool_name": call_name or "",
+        })
+        self._emit_completed(requested_model, output, summary_started, usage=final_usage)
+        return output
+
+    def _emit_reasoning_only_aborted(
+        self,
+        requested_model: str,
+        summary_started: set,
+        final_usage,
+        reason: str,
+        reasoning_chars: int,
+    ):
+        if reason == "artifact_tool_payload":
+            text = (
+                "I stopped the stream because the model started writing a tool or patch payload "
+                "inside the reasoning channel instead of emitting a real tool call. No file was "
+                "changed. Please retry the edit so it can be sent as an explicit tool call."
+            )
+        else:
+            text = (
+                "I stopped a reasoning-only stream before it could stall the client. "
+                "No file was changed. Retry with a narrower request, or ask for a "
+                "normal final answer instead of continued internal drafting."
+            )
+        output = [{
+            "id": f"msg_local_{_now_ts()}",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{
+                "type": "output_text",
+                "text": text,
+                "annotations": [],
+            }],
+        }]
+        self._emit("reasoning_only_aborted", {
+            "model": requested_model,
+            "reason": reason,
+            "reasoning_chars": int(reasoning_chars),
+        })
+        self._emit_completed(requested_model, output, summary_started, usage=final_usage)
+        return output
 
     def _emit_stream_completed(self, requested_model: str, output_items: int, started_at: float, fallback: bool = False):
         self._emit("stream_completed", {
@@ -257,6 +455,15 @@ class ResponsesStreamRuntime:
                     event_started_at = None
                     next_input = list(hop_body.get("input") or [])
                     completed_call = None
+                    private_call_started_at = None
+                    private_call_delta_count = 0
+                    private_call_name = ""
+                    reasoning_only_started_at = None
+                    reasoning_only_last_delta_at = None
+                    reasoning_only_chars = 0
+                    reasoning_only_sample = ""
+                    output_text_seen = False
+                    public_item_seen = False
                     max_output_index = -1
 
                     while True:
@@ -284,14 +491,145 @@ class ResponsesStreamRuntime:
                             max_output_index = max(max_output_index, payload["output_index"])
                         if isinstance(payload, dict) and isinstance(payload.get("sequence_number"), int):
                             sequence = max(sequence, payload["sequence_number"])
+                        if event_type == "response.output_text.delta":
+                            output_text_seen = True
+                        if event_type in {
+                            "response.output_item.added",
+                            "response.output_item.done",
+                        } and isinstance(payload, dict):
+                            item = payload.get("item")
+                            if isinstance(item, dict) and item.get("type") not in {"reasoning"}:
+                                public_item_seen = True
                         if event_type == "response.completed":
                             response = payload.get("response") if isinstance(payload, dict) else {}
                             if isinstance(response, dict):
                                 final_usage = _normalize_response_usage(response.get("usage"))
 
                         completed = assembler.observe(event_type, payload)
+                        if is_function_call_stream_event(event_type, payload):
+                            call_key = self._function_call_key(payload)
+                            if private_call_started_at is None:
+                                private_call_started_at = event_received_at
+                            if (
+                                event_type == "response.output_item.added"
+                                and isinstance(payload, dict)
+                                and isinstance(payload.get("item"), dict)
+                            ):
+                                call_item = payload["item"]
+                                private_call_name = call_item.get("name") or private_call_name
+                                # Do not expose executable tool calls until arguments are complete.
+                                # Codex currently treats response.output_item.added for function_call
+                                # as runnable even when arguments are still streaming, which can execute
+                                # an empty-argument command before response.function_call_arguments.done.
+                            if event_type == "response.function_call_arguments.delta":
+                                private_call_delta_count += 1
+                            private_call_elapsed = max(0.0, time.time() - private_call_started_at)
+                            abort_reason = ""
+                            if (
+                                self.private_function_call_timeout_s >= 0
+                                and private_call_elapsed > self.private_function_call_timeout_s
+                            ):
+                                abort_reason = "timeout"
+                            elif (
+                                self.private_function_call_delta_limit >= 0
+                                and private_call_delta_count > self.private_function_call_delta_limit
+                            ):
+                                abort_reason = "delta_limit"
+                            if abort_reason:
+                                forwarded_chunks = 0
+                                forwarded_bytes = 0
+                                self._emit_stream_event_timing(
+                                    event_type,
+                                    event_received_at,
+                                    event_parsed_at,
+                                    time.time() if forwarded_chunks else None,
+                                    forwarded_chunks=forwarded_chunks,
+                                    forwarded_bytes=forwarded_bytes,
+                                    suppressed="function_call_aborted",
+                                )
+                                public_trace.extend(self._emit_private_tool_call_aborted(
+                                    requested_model,
+                                    summary_started,
+                                    final_usage,
+                                    abort_reason,
+                                    private_call_name,
+                                ))
+                                self._emit_stream_completed(requested_model, len(public_trace), started_at, fallback=True)
+                                completed_at = time.time()
+                                return self._build_result(
+                                    requested_model,
+                                    started_at,
+                                    first_output_at,
+                                    completed_at,
+                                    final_usage,
+                                    len(public_trace),
+                                )
+                        if (
+                            event_type in {
+                                "response.reasoning_text.delta",
+                                "response.reasoning_summary_text.delta",
+                            }
+                            and isinstance(payload, dict)
+                            and not output_text_seen
+                            and not public_item_seen
+                        ):
+                            if reasoning_only_started_at is None:
+                                reasoning_only_started_at = event_received_at
+                            delta_text = str(payload.get("delta") or "")
+                            if delta_text:
+                                reasoning_only_last_delta_at = event_received_at
+                                if len(reasoning_only_sample) < REASONING_ARTIFACT_SCAN_LIMIT:
+                                    remaining = REASONING_ARTIFACT_SCAN_LIMIT - len(reasoning_only_sample)
+                                    reasoning_only_sample += delta_text[:remaining]
+                            reasoning_only_chars += len(delta_text)
+                            reasoning_only_progress_at = reasoning_only_last_delta_at or reasoning_only_started_at
+                            reasoning_only_idle = max(0.0, time.time() - reasoning_only_progress_at)
+                            abort_reason = ""
+                            if _looks_like_reasoning_tool_artifact(reasoning_only_sample):
+                                abort_reason = "artifact_tool_payload"
+                            elif (
+                                self.reasoning_only_timeout_s >= 0
+                                and reasoning_only_idle > self.reasoning_only_timeout_s
+                            ):
+                                abort_reason = "timeout"
+                            elif (
+                                self.reasoning_only_char_limit >= 0
+                                and reasoning_only_chars > self.reasoning_only_char_limit
+                            ):
+                                abort_reason = "char_limit"
+                            if abort_reason:
+                                self._emit_stream_event_timing(
+                                    event_type,
+                                    event_received_at,
+                                    event_parsed_at,
+                                    None,
+                                    suppressed=(
+                                        "reasoning_artifact_aborted"
+                                        if abort_reason == "artifact_tool_payload"
+                                        else "reasoning_only_aborted"
+                                    ),
+                                )
+                                public_trace.extend(self._emit_reasoning_only_aborted(
+                                    requested_model,
+                                    summary_started,
+                                    final_usage,
+                                    abort_reason,
+                                    reasoning_only_chars,
+                                ))
+                                self._emit_stream_completed(requested_model, len(public_trace), started_at, fallback=True)
+                                completed_at = time.time()
+                                return self._build_result(
+                                    requested_model,
+                                    started_at,
+                                    first_output_at,
+                                    completed_at,
+                                    final_usage,
+                                    len(public_trace),
+                                    fallback=True,
+                                )
                         if completed:
                             completed_call = completed[0]
+                            completed_key = completed_call.get("id") or completed_call.get("call_id")
                             public_index = completed_call.get("output_index")
                             if not isinstance(public_index, int):
                                 public_index = max_output_index + 1

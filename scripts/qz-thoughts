@@ -90,7 +90,16 @@ def _compact_sampling(sampling: dict) -> str:
     if not isinstance(sampling, dict):
         return ""
     parts = []
-    for key in ("temperature", "top_p", "top_k", "min_p", "repeat_penalty"):
+    for key in (
+        "temperature",
+        "top_p",
+        "top_k",
+        "min_p",
+        "presence_penalty",
+        "repeat_penalty",
+        "repeat_last_n",
+        "dry_multiplier",
+    ):
         value = sampling.get(key)
         if value is not None:
             parts.append(f"{key}={value}")
@@ -544,12 +553,24 @@ def _apply_telemetry_event(state: ThoughtState, event: dict, prefix_rows: List[T
         _append_backend(state, "deprecated", str(payload.get("path", "")))
         return latest_ts
 
+    if ev_type == "stream_event_timing":
+        suppressed = str(payload.get("suppressed") or "")
+        event_type = str(payload.get("event_type") or "")
+        if suppressed == "function_call":
+            _append_activity(state, "tool", f"private {event_type} active")
+        elif suppressed == "function_call_aborted":
+            _append_activity(state, "tool", "private function call aborted")
+        elif suppressed == "reasoning_artifact_aborted":
+            _append_activity(state, "thought", "reasoning tool payload aborted")
+        elif suppressed == "reasoning_only_aborted":
+            _append_activity(state, "thought", "reasoning-only stream aborted")
+        return latest_ts
+
     if ev_type in (
         "request_admitted",
         "request_queued",
         "runtime_snapshot",
         "status_snapshot",
-        "stream_event_timing",
         "throughput_sample",
     ):
         return latest_ts

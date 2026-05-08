@@ -74,7 +74,7 @@ backend_args=(
   --main-gpu "$QZ_MAIN_GPU"
   --kv-unified
   --reasoning on
-  --reasoning-budget -1
+  --reasoning-budget "$QZ_REASONING_BUDGET"
   --cache-ram "$QZ_CACHE_RAM"
   --cache-reuse "$QZ_CACHE_REUSE"
   --mlock

@@ -316,6 +316,9 @@ Important settings:
 - `QZ_TENSOR_SPLIT`: GPU split passed to llama.cpp, default `9,17`.
 - `QZ_CACHE_RAM` / `QZ_CACHE_REUSE`: prompt cache settings, defaults `8192` and `256`.
 - `QZ_KV_KEY` / `QZ_KV_VALUE`: KV cache quant settings.
+- `QZ_REASONING_BUDGET`: llama.cpp server-side Qwen reasoning budget, default
+  `-1` for unlimited backend thinking. Set a positive value only when
+  deliberately testing a hard backend reasoning cap.
 - `SEARXNG_BASE_URL`: optional SearXNG base URL for local web search. Leave empty to disable search.
 - `SEARXNG_POLICY`: search routing policy, default `config/default/search-policy.json`.
 

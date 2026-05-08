@@ -38,6 +38,14 @@ def entry_identity(entry: dict | None) -> str:
     return ""
 
 
+def backend_reasoning_budget() -> int | None:
+    raw = os.environ.get("QZ_REASONING_BUDGET", "-1")
+    try:
+        return int(str(raw).strip())
+    except Exception:
+        return None
+
+
 def profile_backend_error_payload(entry: dict | None, requested_model: str = "") -> dict:
     entry = entry if isinstance(entry, dict) else {}
     profile = (
@@ -348,7 +356,11 @@ class ModelRouter:
             )
 
     def backend_health(self):
-        resp = self.handler._backend().get_health(timeout=10)
+        try:
+            resp = self.handler._backend().get_health(timeout=10)
+        except Exception as exc:
+            self._emit("backend_health_failed", {"error": str(exc)})
+            return 0, {"status": "unreachable", "error": str(exc)}
         try:
             body = json.loads(resp.data.decode("utf-8")) if resp.data else {}
         except Exception:
@@ -652,6 +664,7 @@ class ModelRouter:
                 "selected_reasoning_prompt": reasoning_policy.get("prompt"),
                 "selected_sampling_params": reasoning_policy.get("sampling"),
                 "selected_thinking_budget_tokens": reasoning_policy.get("thinking_budget_tokens"),
+                "backend_reasoning_budget": backend_reasoning_budget(),
                 "selected_context_length": selected_context_length,
                 "selected_context_length_state": selected_context_state,
                 "selected_context_length_source": selected_context_source,
@@ -705,6 +718,7 @@ class ModelRouter:
             "reasoning_prompt": backend.get("selected_reasoning_prompt"),
             "sampling": backend.get("selected_sampling_params") or {},
             "thinking_budget_tokens": backend.get("selected_thinking_budget_tokens"),
+            "backend_reasoning_budget": backend.get("backend_reasoning_budget"),
             "selected_context_length": backend.get("selected_context_length"),
             "selected_context_length_state": backend.get("selected_context_length_state") or "unknown",
             "selected_context_length_source": backend.get("selected_context_length_source") or "",

@@ -77,6 +77,41 @@ META_ASSISTANT_TEXT_MARKERS = (
 )
 
 TOOL_REGISTRY = ToolRegistry((APPLY_PATCH_TOOL_ADAPTER, WEB_SEARCH_TOOL_ADAPTER))
+EXEC_SESSION_OUTPUT_RE = re.compile(r"(?i)\b(?:session_id|session id)\s*[:=]\s*\d+\b")
+FILE_EDIT_TOOL_HINT = (
+    " For file creation or edits, use apply_patch when that tool is available; "
+    "do not use shell redirection, heredocs, or write_stdin for file edits."
+)
+WRITE_STDIN_TOOL_HINT = (
+    " Only use this with an existing running session id from prior exec_command output. "
+    "Do not invent session ids, and do not use write_stdin for file creation or edits."
+)
+
+
+def _input_has_exec_session(input_items) -> bool:
+    if not isinstance(input_items, list):
+        return False
+
+    for item in input_items:
+        if not isinstance(item, dict) or item.get("type") != "function_call_output":
+            continue
+        output = item.get("output")
+        if not isinstance(output, str):
+            continue
+        if EXEC_SESSION_OUTPUT_RE.search(output):
+            return True
+    return False
+
+
+def _append_tool_hint(tool: dict, hint: str) -> dict:
+    description = tool.get("description")
+    if not isinstance(description, str):
+        description = ""
+    if hint.strip() in description:
+        return dict(tool)
+    out = dict(tool)
+    out["description"] = (description.rstrip() + hint).strip()
+    return out
 
 def clean_content(text: str) -> str:
     if not isinstance(text, str):
@@ -136,6 +171,7 @@ def normalize_responses_input_for_qwen(body: dict, selected_model: dict | None =
         return body
 
     clean_input = []
+    dropped_invalid_call_ids = set()
     metadata = body.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
@@ -246,6 +282,25 @@ def normalize_responses_input_for_qwen(body: dict, selected_model: dict | None =
             clean_input.append(adapted_tool_item)
             continue
 
+        if item_type == "function_call":
+            call_id = item.get("call_id") or item.get("id")
+            arguments = item.get("arguments")
+            if not isinstance(arguments, str) or not arguments.strip():
+                if call_id:
+                    dropped_invalid_call_ids.add(call_id)
+                continue
+
+        if item_type == "function_call_output":
+            call_id = item.get("call_id")
+            output = item.get("output")
+            output_text = output if isinstance(output, str) else ""
+            if call_id in dropped_invalid_call_ids:
+                continue
+            if output_text.strip().startswith("failed to parse function arguments:"):
+                if call_id:
+                    dropped_invalid_call_ids.add(call_id)
+                continue
+
         if _is_local_checkpoint_prompt(item):
             continue
 
@@ -288,6 +343,7 @@ def normalize_tools_for_llamacpp(body: dict) -> dict:
     clean = []
     dropped = []
     translated = []
+    has_exec_session = _input_has_exec_session(body.get("input"))
 
     for tool in tools:
         if not isinstance(tool, dict):
@@ -297,6 +353,15 @@ def normalize_tools_for_llamacpp(body: dict) -> dict:
         tool_name = tool.get("name") or tool.get("server_label") or tool_type
 
         if tool_type == "function":
+            if tool_name == "write_stdin" and not has_exec_session:
+                dropped.append("write_stdin(no live exec session)")
+                continue
+            if tool_name == "exec_command":
+                clean.append(_append_tool_hint(tool, FILE_EDIT_TOOL_HINT))
+                continue
+            if tool_name == "write_stdin":
+                clean.append(_append_tool_hint(tool, WRITE_STDIN_TOOL_HINT))
+                continue
             clean.append(tool)
             continue
 

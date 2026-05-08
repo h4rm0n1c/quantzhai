@@ -249,6 +249,7 @@ def main():
             assert snapshot["selected"]["key"] == "model-b.gguf", snapshot
             assert snapshot["backend"]["selected_context_length"] == 131072, snapshot
             assert snapshot["backend"]["backend_context_length"] == 131072, snapshot
+            assert snapshot["backend"]["backend_reasoning_budget"] == -1, snapshot
             assert snapshot["backend"]["backend_context_length_state"] == "confirmed", snapshot
             assert snapshot["prompt"]["schema"] == "qz.prompt.status.v1", snapshot
             assert snapshot["prompt"]["files_missing"], snapshot
@@ -260,6 +261,7 @@ def main():
             assert telemetry["state"]["runtime"]["schema"] == "qz.status.summary.v1", telemetry
             assert telemetry["state"]["runtime"]["selected_context_length"] == 131072, telemetry
             assert telemetry["state"]["runtime"]["backend_context_length"] == 131072, telemetry
+            assert telemetry["state"]["runtime"]["backend_reasoning_budget"] == -1, telemetry
             assert any(event.get("type") == "status_snapshot" for event in telemetry.get("events", [])), telemetry
 
             status, _, telemetry_state = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/state")
@@ -268,6 +270,7 @@ def main():
             assert telemetry_state["runtime"]["schema"] == "qz.status.summary.v1", telemetry_state
             assert telemetry_state["runtime"]["selected_context_length"] == 131072, telemetry_state
             assert telemetry_state["runtime"]["backend_context_length"] == 131072, telemetry_state
+            assert telemetry_state["runtime"]["backend_reasoning_budget"] == -1, telemetry_state
             assert telemetry_state["runtime"]["selected_reasoning_level"] == "medium", telemetry_state
 
             status, _, config_report = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/config/effective")
@@ -302,13 +305,15 @@ def main():
             sent = FakeBackendHandler.requests[-1]["body"]
             assert sent["model"] == "model-a.gguf", sent
             assert "<QZSTATE v=1 ready=1 load=ready ctx=131072 prof=model-a.gguf sel=model-a.gguf>" in sent["instructions"], sent
-            assert "Use high reasoning effort." in sent["instructions"], sent
+            assert "Reasoning effort: high." in sent["instructions"], sent
             assert sent["temperature"] == 0.6, sent
             assert sent["top_p"] == 0.95, sent
             assert sent["top_k"] == 20, sent
             assert sent["min_p"] == 0, sent
-            assert sent["presence_penalty"] == 0, sent
+            assert sent["presence_penalty"] == 1.5, sent
             assert sent["repeat_penalty"] == 1.0, sent
+            assert "repeat_last_n" not in sent, sent
+            assert "dry_multiplier" not in sent, sent
             assert "thinking_budget_tokens" not in sent, sent
             assert sent["metadata"]["qz_runtime"]["schema"] == "qz.runtime.state.v1", sent
             assert sent["metadata"]["qz_runtime"]["ready"] is True, sent

@@ -88,6 +88,7 @@ class ModelStatus:
     reasoning_level: str = ""
     reasoning_policy: str = ""
     sampling: dict = field(default_factory=dict)
+    backend_reasoning_budget: str = ""
     selected_state: str = ""
     selected_context_length: int = 0
     backend_context_length: int = 0
@@ -187,7 +188,16 @@ def _compact_sampling(sampling: dict) -> str:
     if not isinstance(sampling, dict):
         return ""
     parts = []
-    for key in ("temperature", "top_p", "top_k", "min_p", "repeat_penalty"):
+    for key in (
+        "temperature",
+        "top_p",
+        "top_k",
+        "min_p",
+        "presence_penalty",
+        "repeat_penalty",
+        "repeat_last_n",
+        "dry_multiplier",
+    ):
         value = sampling.get(key)
         if value is not None:
             parts.append(f"{key}={value}")
@@ -286,6 +296,7 @@ def model_status_from_proxy(status: Optional[dict]) -> ModelStatus:
         reasoning_level=str(backend.get("selected_reasoning_level") or ""),
         reasoning_policy=str(backend.get("selected_reasoning_policy") or ""),
         sampling=sampling,
+        backend_reasoning_budget=str(backend.get("backend_reasoning_budget") or os.environ.get("QZ_REASONING_BUDGET", "")),
         selected_state=str(backend.get("selected_state") or ""),
         selected_context_length=int(backend.get("selected_context_length") or 0),
         backend_context_length=int(backend.get("backend_context_length") or 0),
@@ -1108,7 +1119,7 @@ def once():
     print()
     print("PROFILE")
     live_ctx = context_display(model_status)
-    print(f"  ctx={live_ctx} np={os.environ.get('QZ_PARALLEL', '?')} split={os.environ.get('QZ_TENSOR_SPLIT', '?')} batch={os.environ.get('QZ_BATCH', '?')} ubatch={os.environ.get('QZ_UBATCH', '?')} cache={human_bytes_from_mib(parse_num(os.environ.get('QZ_CACHE_RAM', '0')))} reuse={os.environ.get('QZ_CACHE_REUSE', '?')} kv={os.environ.get('QZ_KV_KEY', '?')}/{os.environ.get('QZ_KV_VALUE', '?')}")
+    print(f"  ctx={live_ctx} np={os.environ.get('QZ_PARALLEL', '?')} split={os.environ.get('QZ_TENSOR_SPLIT', '?')} batch={os.environ.get('QZ_BATCH', '?')} ubatch={os.environ.get('QZ_UBATCH', '?')} cache={human_bytes_from_mib(parse_num(os.environ.get('QZ_CACHE_RAM', '0')))} reuse={os.environ.get('QZ_CACHE_REUSE', '?')} kv={os.environ.get('QZ_KV_KEY', '?')}/{os.environ.get('QZ_KV_VALUE', '?')} rbudget={model_status.backend_reasoning_budget or '?'}")
     loaded_suffix = f" ({model_status.loaded_count})" if model_status.loaded_count > 1 else ""
     state = model_status.selected_state or model_status.load_state or "unknown"
     profile_bits = [model_status.profile or model_status.selected_key or "?"]

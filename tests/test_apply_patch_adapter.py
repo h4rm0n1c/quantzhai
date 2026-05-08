@@ -29,6 +29,39 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertIn("operation", out["tools"][0]["parameters"]["properties"])
         self.assertEqual(out["tool_choice"], {"type": "function", "name": "apply_patch"})
 
+    def test_write_stdin_is_dropped_without_live_exec_session(self):
+        body = {
+            "input": [],
+            "tools": [
+                {"type": "function", "name": "exec_command", "description": "Runs shell commands."},
+                {"type": "function", "name": "write_stdin", "description": "Writes stdin."},
+                {"type": "custom", "name": "apply_patch"},
+            ],
+        }
+
+        out = normalize_tools_for_llamacpp(body)
+
+        names = [tool.get("name") for tool in out["tools"]]
+        self.assertEqual(names, ["exec_command", "apply_patch"])
+        self.assertIn("use apply_patch", out["tools"][0]["description"])
+
+    def test_write_stdin_is_kept_with_live_exec_session(self):
+        body = {
+            "input": [{
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": "Session ID: 81\nPTY still running.",
+            }],
+            "tools": [
+                {"type": "function", "name": "write_stdin", "description": "Writes stdin."},
+            ],
+        }
+
+        out = normalize_tools_for_llamacpp(body)
+
+        self.assertEqual(out["tools"][0]["name"], "write_stdin")
+        self.assertIn("Do not invent session ids", out["tools"][0]["description"])
+
     def test_apply_patch_call_history_becomes_function_call_history(self):
         item = {
             "id": "apc_1",
@@ -171,6 +204,34 @@ class ApplyPatchAdapterTests(unittest.TestCase):
 
         self.assertEqual(out["input"][0]["type"], "function_call")
         self.assertEqual(out["input"][1]["type"], "function_call_output")
+
+    def test_normalize_responses_input_drops_empty_tool_call_parse_error_pair(self):
+        body = {
+            "input": [
+                {
+                    "type": "function_call",
+                    "name": "exec_command",
+                    "call_id": "call_bad",
+                    "arguments": "",
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_bad",
+                    "output": "failed to parse function arguments: EOF while parsing a value at line 1 column 0",
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "continue"}],
+                },
+            ]
+        }
+
+        out = normalize_responses_input_for_qwen(body)
+
+        self.assertEqual(len(out["input"]), 1)
+        self.assertEqual(out["input"][0]["type"], "message")
+        self.assertEqual(out["input"][0]["role"], "user")
 
     def test_custom_patch_history_becomes_function_history(self):
         call_item = {
