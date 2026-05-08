@@ -654,11 +654,11 @@ broaden tool lifecycle ownership beyond the first internal boundary
 Reason:
 
 ```text
-Streamed call state and public item conversion now have a small internal
-boundary, and completed-call routing now has a first public/proxy-local
-decision point. Tool declaration normalization, result injection, bad-history
-filtering, and capture telemetry are still spread across the proxy flow. Keep
-behaviour stable while moving those contracts behind clearer ownership.
+Streamed call state, public item conversion, completed-call routing, and
+proxy-local continuation shaping now have a small internal boundary. Tool
+declaration normalization, bad-history filtering, adapter ownership, and
+capture telemetry are still spread across the proxy flow. Keep behaviour stable
+while moving those contracts behind clearer ownership.
 ```
 
 Then do:

@@ -6,6 +6,7 @@ from proxy.qz_tool_lifecycle import (
     function_call_key,
     is_proxy_local_function_call,
     public_tool_item_from_function_call,
+    tool_continuation_result,
 )
 
 
@@ -115,6 +116,67 @@ class ToolLifecycleTests(unittest.TestCase):
         self.assertEqual(decision.call, call)
         self.assertEqual(decision.public_item["type"], "custom_tool_call")
         self.assertEqual(decision.public_item["name"], "apply_patch")
+
+    def test_tool_continuation_result_keeps_public_call_out_of_upstream_replay(self):
+        call = {
+            "id": "fc_patch",
+            "type": "function_call",
+            "call_id": "call_patch",
+            "name": "apply_patch",
+            "arguments": "{\"operation\":{\"type\":\"create_file\",\"path\":\"notes.md\",\"diff\":\"@@\\n+ok\\n\"}}",
+        }
+
+        decision = completed_tool_call_decision(call, "native")
+        result = tool_continuation_result(decision)
+
+        self.assertEqual(result.public_item["type"], "apply_patch_call")
+        self.assertEqual(result.upstream_items, ())
+        self.assertEqual(result.sources, ())
+
+    def test_tool_continuation_result_adds_private_call_and_output_for_proxy_local_tool(self):
+        call = {
+            "id": "fc_web",
+            "type": "function_call",
+            "call_id": "call_web",
+            "name": "web_search",
+            "arguments": "{\"query\":\"quantzhai\"}",
+        }
+        public_item = {
+            "id": "wsc_1",
+            "type": "web_search_call",
+            "status": "completed",
+            "call_id": "call_web",
+        }
+        output_item = {
+            "type": "function_call_output",
+            "call_id": "call_web",
+            "output": "{\"ok\":true}",
+        }
+        source = {"url": "https://example.test"}
+
+        decision = completed_tool_call_decision(call, "native")
+        result = tool_continuation_result(
+            decision,
+            proxy_local_executor=lambda tool_call: (public_item, output_item, [source]),
+        )
+
+        self.assertEqual(result.public_item, public_item)
+        self.assertEqual(result.upstream_items, (call, output_item))
+        self.assertEqual(result.sources, (source,))
+
+    def test_tool_continuation_result_requires_executor_for_proxy_local_tool(self):
+        call = {
+            "id": "fc_web",
+            "type": "function_call",
+            "call_id": "call_web",
+            "name": "web_search",
+            "arguments": "{\"query\":\"quantzhai\"}",
+        }
+
+        decision = completed_tool_call_decision(call, "native")
+
+        with self.assertRaises(ValueError):
+            tool_continuation_result(decision)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,13 @@ class CompletedToolCallDecision:
     public_item: dict | None = None
 
 
+@dataclass(frozen=True)
+class ToolContinuationResult:
+    public_item: dict
+    upstream_items: tuple[dict, ...] = ()
+    sources: tuple[dict, ...] = ()
+
+
 def function_call_key(payload):
     if not isinstance(payload, dict):
         return None
@@ -56,6 +63,22 @@ def completed_tool_call_decision(call: dict, apply_patch_output_style: str) -> C
         call=call,
         public_item=public_tool_item_from_function_call(call, apply_patch_output_style),
     )
+
+
+def tool_continuation_result(decision: CompletedToolCallDecision, proxy_local_executor=None) -> ToolContinuationResult:
+    if decision.kind == "proxy_local":
+        if proxy_local_executor is None:
+            raise ValueError("proxy_local_executor is required for proxy-local tool calls")
+        public_item, tool_output_item, sources = proxy_local_executor(decision.call)
+        return ToolContinuationResult(
+            public_item=public_item,
+            upstream_items=(decision.call, tool_output_item),
+            sources=tuple(sources or ()),
+        )
+
+    if decision.public_item is None:
+        raise ValueError("public tool call decision missing public_item")
+    return ToolContinuationResult(public_item=decision.public_item)
 
 
 class StreamToolCallState:

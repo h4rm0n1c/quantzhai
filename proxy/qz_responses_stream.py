@@ -19,7 +19,7 @@ try:
         public_tool_item_events,
         rewrite_sse_payload,
     )
-    from .qz_tool_lifecycle import StreamToolCallState, completed_tool_call_decision
+    from .qz_tool_lifecycle import StreamToolCallState, completed_tool_call_decision, tool_continuation_result
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS
 except ImportError:
     from qz_responses import (
@@ -36,7 +36,7 @@ except ImportError:
         public_tool_item_events,
         rewrite_sse_payload,
     )
-    from qz_tool_lifecycle import StreamToolCallState, completed_tool_call_decision
+    from qz_tool_lifecycle import StreamToolCallState, completed_tool_call_decision, tool_continuation_result
     from qz_tool_web import WEB_SEARCH_MAX_HOPS
 
 
@@ -582,16 +582,19 @@ class ResponsesStreamRuntime:
                                 completed_call,
                                 apply_patch_output_style,
                             )
-
-                            if decision.kind == "proxy_local":
-                                public_item, tool_output_item, _sources = self.web_runtime.execute_web_search_call(
-                                    decision.call,
+                            result = tool_continuation_result(
+                                decision,
+                                proxy_local_executor=lambda call: self.web_runtime.execute_web_search_call(
+                                    call,
                                     counters,
                                     seen_signatures,
-                                )
+                                ),
+                            )
+                            public_item = result.public_item
+
+                            if decision.kind == "proxy_local":
                                 public_trace.append(public_item)
-                                next_input.append(decision.call)
-                                next_input.append(tool_output_item)
+                                next_input.extend(result.upstream_items)
                                 sequence, forwarded_chunks, forwarded_bytes = self._emit_public_tool_item(public_item, public_index, sequence)
                                 self._emit_stream_event_timing(
                                     event_type,
@@ -604,7 +607,6 @@ class ResponsesStreamRuntime:
                                 )
                                 break
 
-                            public_item = decision.public_item
                             public_trace.append(public_item)
                             sequence, forwarded_chunks, forwarded_bytes = self._emit_public_tool_item(public_item, public_index, sequence)
                             self._emit_stream_event_timing(

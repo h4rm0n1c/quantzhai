@@ -28,7 +28,7 @@ try:
     )
     from .qz_responses_stream import ResponsesStreamRuntime
     from .qz_sse import _normalize_response_usage, make_sse_block
-    from .qz_tool_lifecycle import is_proxy_local_function_call
+    from .qz_tool_lifecycle import completed_tool_call_decision, is_proxy_local_function_call, tool_continuation_result
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import (
         append_capture,
@@ -58,7 +58,7 @@ except ImportError:
     )
     from qz_responses_stream import ResponsesStreamRuntime
     from qz_sse import _normalize_response_usage, make_sse_block
-    from qz_tool_lifecycle import is_proxy_local_function_call
+    from qz_tool_lifecycle import completed_tool_call_decision, is_proxy_local_function_call, tool_continuation_result
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import (
         append_capture,
@@ -657,13 +657,23 @@ class RequestRouter:
                 return status, content_type, final_out
 
             next_input = list(hop_body.get("input") or [])
-            next_input.extend(output_items)
+            for item in output_items:
+                if not is_proxy_local_function_call(item):
+                    next_input.append(item)
+                    continue
 
-            for call in web_calls:
-                public_item, tool_output_item, sources = web_runtime.execute_web_search_call(call, counters, seen_signatures)
-                public_trace.append(public_item)
-                gathered_sources.extend(sources)
-                next_input.append(tool_output_item)
+                decision = completed_tool_call_decision(item, apply_patch_output_style)
+                result = tool_continuation_result(
+                    decision,
+                    proxy_local_executor=lambda tool_call: web_runtime.execute_web_search_call(
+                        tool_call,
+                        counters,
+                        seen_signatures,
+                    ),
+                )
+                public_trace.append(result.public_item)
+                gathered_sources.extend(result.sources)
+                next_input.extend(result.upstream_items)
 
             working_body["input"] = next_input
 
