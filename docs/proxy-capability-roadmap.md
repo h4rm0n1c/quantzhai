@@ -24,7 +24,7 @@ It currently covers:
 - Profile-aware `web_search`.
 - Capture files for debugging.
 - Local terminal monitors for stack health, throughput, backend activity, and
-  synthetic Responses thought/output captures.
+  live Responses thought/output telemetry.
 
 It is not yet a complete OpenAI API implementation, a complete Ollama implementation, or a general tool runtime.
 
@@ -123,11 +123,18 @@ Current behavior:
 - Can transform reasoning visibility into raw, summary, or hidden modes.
 - Can synthesize Responses-style stream events from non-streaming upstream responses.
 - Emits local Codex rate-limit style events and headers.
+- Correlates stream telemetry and request-scoped captures by request id.
+- Classifies reasoning-only stalls and artifact/tool-shaped payloads that arrive
+  only through the reasoning channel.
+- Buffers executable public tool-call events until function-call arguments are
+  complete.
 
 What works well:
 
 - Streaming is good enough for interactive local Codex sessions.
 - Reasoning display control is useful when working with Qwen.
+- Normal no-tool output and reasoning summary transforms have been live-audited
+  with low parse-to-forward latency.
 
 What is weak:
 
@@ -141,16 +148,16 @@ What is weak:
 
 Maturity: working beta, needs regression tests.
 
-## Streaming Discovery: Buffered Tool Calls
+## Streaming Discovery: Tool-Call State
 
 Discovered during `qz-thoughts` work on 2026-04-29:
 
-- The current `/v1/responses` local runtime uses a buffered upstream request
-  when it needs to manage local tool/search recursion.
+- The current `/v1/responses` local runtime needs a stronger public/private
+  tool-call state contract when it manages local tool/search recursion.
 - The proxy now keeps streamed SSE on the live path and uses captures only for
   debugging or replay.
 - `scripts/qz-thoughts` can show streamed thought/output activity and live
-  backend state when the stream path is active.
+  backend state from proxy telemetry when the stream path is active.
 - The target is not "streaming or tools"; the target is streamed Responses with
   tool-call continuation.
 
@@ -171,8 +178,12 @@ Required details:
 - Correct `response.output_item.*` ordering.
 - Correct function-call argument delta/done parsing.
 - No duplicated reasoning, message, or tool-call items between hops.
+- No public runnable tool item before arguments are complete.
+- No hidden/private tool call unless its required runtime state exists.
+- Malformed empty tool-call history is filtered before upstream replay.
 - Cancellation and client-disconnect handling.
-- Run-scoped captures instead of latest-only files.
+- Request-scoped captures for streamed requests when capture mode is enabled,
+  with any future run-level grouping layered on top.
 - Golden SSE replay fixtures for normal streaming, tool continuation,
   malformed events, and fallback buffering.
 
@@ -188,13 +199,18 @@ Current behavior:
 - If Codex does not explicitly declare native `apply_patch`, the proxy treats the tool as custom output style so the current CLI harness keeps working.
 - Current Codex CLI custom `apply_patch` calls are translated back into `custom_tool_call` patch envelopes.
 - `apply_patch_call_output` history is translated back into function-call output history for llama.cpp.
+- `write_stdin` is hidden from upstream unless prior request history contains a
+  live exec session id.
+- Empty-argument function-call history and matching parse-error outputs are
+  dropped before replay to llama.cpp.
+- Executable public function calls are buffered until arguments are complete.
 
 Missing or incomplete:
 
 - `apply_patch` has not been tested yet with a live Qwen/TurboQuant model deciding and continuing from a real edit.
 - No proxy-side patch executor exists.
-- Tool-call continuation currently forces the buffered Responses path rather
-  than a live multi-hop stream.
+- Tool-call continuation does not yet have a documented state table or broad
+  golden replay coverage.
 - No shell/exec tool runtime.
 - No computer-use tool runtime.
 - No code interpreter runtime.
@@ -289,12 +305,14 @@ See also: `docs/runtime-observability-notes.md`.
 Current behavior:
 
 - Writes request, forwarded request, upstream response, dropped tools, and search route captures under `var/captures`.
-- Writes `latest-synthetic-sse.raw` for the current synthetic Responses stream.
+- When capture mode is enabled, writes request-scoped streamed captures under
+  `var/captures/requests/<request_id>/` and keeps `latest-*` files as
+  convenience views only.
 - `scripts/qz-top` shows stack health, profile settings, container status, GPU
   state, throughput, recent backend activity, and latest benchmark compression
   summary.
-- `scripts/qz-thoughts` shows synthetic thought/output captures plus live
-  backend activity in a curses-style view.
+- `scripts/qz-thoughts` shows coalesced live thought/output telemetry and
+  backend activity in a curses-style view. Raw capture replay is explicit.
 - Runtime state and logs are intended to live under `var/`.
 - `var/` is ignored by git.
 
@@ -315,11 +333,10 @@ What works well:
 
 What is weak:
 
-- Most captures are latest-only and get overwritten.
 - There is no redaction layer.
-- There is no structured run ID across all captures yet.
-- `qz-thoughts` cannot display token-live reasoning for local Responses runs
-  until streamed tool continuation exists.
+- There is no structured run ID grouping across related request captures yet.
+- `latest-*` captures still exist as convenience views and can be overwritten by
+  later traffic.
 - Log inspection must respect the sudo helper's `docker logs --tail <= 1000`
   boundary; monitors should clamp requested tails rather than surfacing helper
   failures as broken stack state.
@@ -379,7 +396,7 @@ Maturity: working single-backend implementation.
 - Too much compatibility is untested.
 - Tool handling is not generalized.
 - Streaming and Responses behavior need golden fixtures.
-- Responses streaming with local tool/search recursion is buffered today.
+- Responses stream/tool lifecycle needs one documented state contract.
 - Capture files are useful but not systematic.
 - Safety boundaries are not strong enough for proxy-side filesystem tools.
 - Config is still more script-shaped than product-shaped.
@@ -397,7 +414,8 @@ Stable enough for current use:
 Working beta:
 
 - Responses adapter.
-- Streaming adapter for pass-through and synthetic buffered output.
+- Streaming adapter for pass-through, summary transforms, request-scoped
+  captures, and synthetic buffered output.
 - Local compaction.
 - Profile-aware search.
 - Capture-based debugging.
@@ -408,7 +426,7 @@ Partial:
 - Ollama compatibility.
 - Function-tool passthrough.
 - Rate-limit compatibility metadata.
-- Tool normalization.
+- Tool normalization and lifecycle state.
 
 Alpha:
 
@@ -416,7 +434,7 @@ Alpha:
 
 Missing:
 
-- Multi-hop streamed Responses runtime with tool-call continuation.
+- Golden replay coverage for multi-hop streamed Responses tool continuation.
 - General tool runtime.
 - Proxy-side shell/code/computer tool support.
 - MCP/app bridge.
@@ -426,14 +444,17 @@ Missing:
 
 ## Near-Term Roadmap
 
-1. Build a multi-hop streamed Responses runtime with tool-call continuation,
-   starting with no-tool streaming parity, then `web_search` continuation, then
-   patch/tool continuation fixtures.
-2. Add run-scoped streaming captures and wire `qz-thoughts` to follow a selected
-   run instead of only `latest-synthetic-sse.raw`.
-3. Run a live Qwen/TurboQuant patch workflow and capture whether it emits valid patch operations.
-4. Extract tool handling into a small internal boundary.
-5. Add golden tests for Responses normalization and streaming.
+1. Document the Responses stream/tool state table: upstream event, proxy state,
+   Codex-visible event, telemetry, and capture output. Current contract:
+   `docs/responses-stream-tool-state-contract.md`.
+2. Expand golden replay fixtures. Seed fixtures now cover normal output,
+   reasoning-only fallback, artifact-in-reasoning abort, public tool-call
+   buffering, apply_patch rewrite, and web_search continuation. Remaining
+   coverage: malformed empty tool history, long active reasoning, custom
+   apply_patch, and more continuation terminal-edge cases.
+3. Extract tool lifecycle handling into a small internal boundary.
+4. Run a live Qwen/TurboQuant patch workflow and capture whether it emits valid patch operations.
+5. Add broader golden tests for Responses normalization.
 6. Split `proxy/quantzhai_proxy.py` into a conventional Python package.
 7. Add a backend adapter boundary before Fox or Rust work.
 8. Revisit search once the proxy shape is easier to test.
@@ -441,7 +462,7 @@ Missing:
 ## Open Questions
 
 - Should unsupported tools be dropped, converted into no-op tool messages, or surfaced as model-visible limitations?
-- Should captures become run-scoped instead of latest-only?
+- Should request-scoped captures also be grouped under a higher-level run id?
 - Should `qz-thoughts` default to raw reasoning, summary reasoning, hidden
   reasoning with activity only, or a profile-controlled mode?
 - What exact Responses event sequence does Codex tolerate across streamed

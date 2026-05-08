@@ -636,6 +636,32 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertIn('"cmd": "cat > amber_v2.md"', added_payload["item"]["arguments"])
         self.assertIn("cat > amber_v2.md", stream_text)
 
+    def test_golden_public_function_call_buffers_until_arguments_done(self):
+        def opener(body):
+            return FakeStream(_fixture_chunks("public_function_call.raw"))
+
+        stream_text = self._run_runtime(opener)
+        events = _parse_sse_events(stream_text)
+        names = [event_type for event_type, _payload in events]
+        public_call_events = [
+            (event_type, payload)
+            for event_type, payload in events
+            if isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "function_call"
+        ]
+
+        self.assertIn("response.completed", names)
+        self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+        self.assertNotIn("response.function_call_arguments.delta", names)
+        self.assertNotIn("response.function_call_arguments.done", names)
+        self.assertEqual([event_type for event_type, _payload in public_call_events], [
+            "response.output_item.added",
+            "response.output_item.done",
+        ])
+        self.assertEqual(public_call_events[0][1]["item"]["name"], "exec_command")
+        self.assertIn("cat > amber_v2.md", public_call_events[0][1]["item"]["arguments"])
+
     def test_stuck_function_call_aborts_instead_of_silent_dead_air(self):
         telemetry = TelemetryBus()
 
@@ -732,6 +758,58 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             for event in events
         ))
 
+    def test_golden_reasoning_only_abort_replays_fallback(self):
+        telemetry = TelemetryBus()
+
+        def opener(body):
+            return FakeStream(_fixture_chunks("reasoning_only.raw"))
+
+        stream_text = self._run_runtime(
+            opener,
+            telemetry=telemetry,
+            request_id="req-golden-reasoning-only",
+            reasoning_stream_format="summary",
+            reasoning_only_char_limit=12,
+        )
+        events = telemetry.recent()
+
+        self.assertIn("reasoning-only stream", stream_text)
+        self.assertIn("response.completed", stream_text)
+        self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+        self.assertIn("response.reasoning_summary_text.delta", stream_text)
+        self.assertNotIn("response.reasoning_text.delta", stream_text)
+        self.assertTrue(any(
+            event.get("type") == "reasoning_only_aborted"
+            and event.get("request_id") == "req-golden-reasoning-only"
+            for event in events
+        ))
+
+    def test_golden_reasoning_artifact_aborts_without_executing_tool(self):
+        telemetry = TelemetryBus()
+
+        def opener(body):
+            return FakeStream(_fixture_chunks("reasoning_artifact.raw"))
+
+        stream_text = self._run_runtime(
+            opener,
+            telemetry=telemetry,
+            request_id="req-golden-artifact",
+            reasoning_stream_format="summary",
+        )
+        events = telemetry.recent()
+        names = [event_type for event_type, _payload in _parse_sse_events(stream_text)]
+
+        self.assertIn("reasoning channel instead of emitting a real tool call", stream_text)
+        self.assertIn("response.completed", names)
+        self.assertNotIn("response.output_item.done", names)
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+        self.assertTrue(any(
+            event.get("type") == "reasoning_only_aborted"
+            and (event.get("payload") or {}).get("reason") == "artifact_tool_payload"
+            for event in events
+        ))
+
     def test_golden_basic_message_stream_replays_unchanged(self):
         requests = []
 
@@ -746,6 +824,33 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertEqual([event for event, _payload in events].count("response.created"), 1)
         self.assertIn("stream ok", stream_text)
         self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+
+    def test_golden_apply_patch_stream_rewrites_to_apply_patch_call(self):
+        requests = []
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            return FakeStream(_fixture_chunks("apply_patch_call.raw"))
+
+        stream_text = self._run_runtime(opener)
+        events = _parse_sse_events(stream_text)
+        names = [event_type for event_type, _payload in events]
+        patch_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "apply_patch_call"
+        ]
+
+        self.assertEqual(len(requests), 1)
+        self.assertIn("response.completed", names)
+        self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertEqual(len(patch_items), 2)
+        self.assertEqual(patch_items[0]["call_id"], "call_fixture_patch")
+        self.assertEqual(patch_items[0]["operation"]["path"], "tmp/quantzhai-smoke.txt")
 
     def test_stream_adds_done_when_upstream_closes_after_completed(self):
         def opener(body):

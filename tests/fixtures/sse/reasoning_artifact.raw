@@ -1,0 +1,15 @@
+event: response.created
+data: {"response":{"id":"resp_fixture_reasoning_artifact","object":"response","created_at":4102444800,"status":"in_progress","model":"fixture","output":[]},"type":"response.created","sequence_number":1}
+
+event: response.output_item.added
+data: {"output_index":0,"item":{"id":"rs_fixture_artifact","type":"reasoning","status":"in_progress","summary":[],"content":[]},"type":"response.output_item.added","sequence_number":2}
+
+event: response.reasoning_text.delta
+data: {"item_id":"rs_fixture_artifact","output_index":0,"content_index":0,"delta":"json\n{\n  \"operation\": {\n","type":"response.reasoning_text.delta","sequence_number":3}
+
+event: response.reasoning_text.delta
+data: {"item_id":"rs_fixture_artifact","output_index":0,"content_index":0,"delta":"    \"type\": \"update_file\",\n    \"path\": \"amber_v4.md\",\n","type":"response.reasoning_text.delta","sequence_number":4}
+
+event: response.reasoning_text.delta
+data: {"item_id":"rs_fixture_artifact","output_index":0,"content_index":0,"delta":"    \"diff\": \"--- a/amber_v4.md\\n+++ b/amber_v4.md\\n@@ -1,1 +1,2 @@\\n old\\n+new\\n\"\n  }\n}\n","type":"response.reasoning_text.delta","sequence_number":5}
+

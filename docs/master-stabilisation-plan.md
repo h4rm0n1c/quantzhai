@@ -4,9 +4,10 @@
 
 Open master plan. Phase 1 breakage fixes, telemetry schema base, monitor
 fallback cleanup, concurrent monitor smoke, stream timing telemetry, qz-top
-host-local VRAM split, and the first config ownership/layering pass are
-live-smoked. The active engineering focus now moves to reducing duplicated
-shell/config ownership and adding backend telemetry for model/cache VRAM split.
+host-local VRAM split, request-scoped stream captures, reasoning-effort policy,
+and the first config ownership/layering pass are live-smoked. The active
+engineering focus now moves to the Responses stream/tool state machine and
+golden replay fixtures before broader refactors.
 
 This is the controlling map for the current QuantZhai stabilisation work. It ties together the known bug notes, observability agenda, and configuration-contract plan.
 
@@ -107,6 +108,7 @@ Document:
 
 ```text
 docs/bugs/responses-streaming-and-qz-thoughts.md
+docs/responses-stream-tool-state-contract.md
 ```
 
 Status:
@@ -114,9 +116,11 @@ Status:
 ```text
 End-to-end stream audit complete. qz-thoughts delta coalescing, stream timing
 telemetry, runtime summary-mode transformation, synthetic terminal DONE
-forwarding, and request_id correlation for stream telemetry are implemented and
-live-smoked. Remaining work belongs to profile/runtime handling for
-reasoning-only completions.
+forwarding, request_id correlation, request-scoped captures, reasoning-only
+classification, artifact-in-reasoning aborts, tool-call buffering until
+arguments are complete, and malformed empty-tool history filtering are
+implemented and live-smoked. Remaining work is a formal Responses stream/tool
+state contract plus golden replay fixtures.
 ```
 
 Problem:
@@ -147,6 +151,14 @@ qz-thoughts rendering
 Codex-visible behaviour
 ```
 
+Current contract:
+
+```text
+docs/responses-stream-tool-state-contract.md defines the state table for
+upstream SSE, proxy state, Codex-visible events, telemetry, and captures.
+Keep it in sync before extracting tool lifecycle code.
+```
+
 Implemented first fixes:
 
 ```text
@@ -160,6 +172,9 @@ proxy stream path:
   verify normal output_text events are forwarded immediately
   audit reasoning_text -> reasoning_summary_text conversion
   promote request_id into sse_event and stream_event_timing telemetry
+  classify reasoning-only stalls without a default char cap
+  buffer executable tool calls until arguments are complete
+  drop malformed empty tool-call history before forwarding upstream
 ```
 
 ### 3. `/status`, `qz-top`, `qz-thoughts`, and streaming lack one shared telemetry truth
@@ -612,47 +627,53 @@ fold all old script logic into qz-up/qz-down/qz-codex
 Start with:
 
 ```text
-reduce script sprawl around shared config/path ownership
+keep docs/responses-stream-tool-state-contract.md current
+expand golden replay fixtures for the Responses stream/tool state contract
 ```
 
 Reason:
 
 ```text
-Config ownership, prompt/profile reporting, explicit default/example/user
-config paths, generated Codex catalog preparation, and monitor fallback smoke
-are done as a first pass. The remaining risk is duplicated shell ownership:
-qz-env, qz-codex-common, monitor scripts, and helper wrappers still each own
-pieces of config/path/runtime behaviour. Recent smoke caught stale local
-SEARXNG_POLICY compatibility and a generated catalog import bug there.
+Recent failures were not caused by raw HTTP forwarding. They were state
+contract failures: reasoning-only streams carrying artifact text, public tool
+items appearing before arguments were complete, malformed empty tool history
+being replayed upstream, and private tools being exposed when their required
+runtime state did not exist. The next hardening step is a documented event
+contract and replay tests that pin those transitions. Seed fixtures now cover
+normal output, reasoning-only fallback, artifact-in-reasoning abort, public
+tool-call buffering, apply_patch rewrite, and web_search continuation.
 ```
 
 Then do:
 
 ```text
-qz-top backend VRAM telemetry split
+extract tool lifecycle handling into a small internal boundary
 ```
 
 Reason:
 
 ```text
-qz-top now displays host-local used/base/delta VRAM, but the proxy/backend
-telemetry still needs model-vs-cache facts where the backend can expose them.
-This is needed for reliable context/cache limit testing instead of guessing
-from nvidia-smi process totals.
+Tool declaration normalization, private/public stream suppression, argument
+assembly, result injection, bad-history filtering, and capture telemetry are
+still spread across the proxy flow. Keep behaviour stable, but give one module
+ownership of the lifecycle.
 ```
 
 Then do:
 
 ```text
-finer var layout migration
+reduce script/config ownership duplication and continue var layout migration
 ```
 
 Reason:
 
 ```text
-After shared config/path helpers exist, move generated/runtime/cache/debug
-state toward var/generated, var/state, var/cache, var/run, var/logs, and
-var/captures without changing model-dir profiles or Codex-visible slugs.
+The config layering pass is started, but qz-env, qz-codex-common, monitor
+scripts, and helper wrappers still each own pieces of config/path/runtime
+behaviour. After the stream/tool contract has regression coverage, move shared
+behaviour toward importable Python helpers and continue separating generated,
+runtime, cache, log, and capture state without changing model-dir profiles or
+Codex-visible slugs.
 ```
 
 ## Current working principle
@@ -680,6 +701,7 @@ docs/bugs/stale-profile-server-alias.md
 docs/bugs/responses-streaming-and-qz-thoughts.md
 docs/edge-case-config-contract-plan.md
 docs/observability-streaming-bugfix-agenda.md
+docs/responses-stream-tool-state-contract.md
 docs/runtime-observability-notes.md
 docs/README.md
 AGENTS.md

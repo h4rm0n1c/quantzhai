@@ -130,6 +130,10 @@ Do not confuse those views.
 
 A raw SSE delta is not automatically a useful human-facing activity row.
 
+The current stream/tool state contract is documented in
+`docs/responses-stream-tool-state-contract.md`. Use that contract as the next
+source of truth when turning these incident notes into replay fixtures.
+
 ## Required audit
 
 Before patching, capture one real failing session with:
@@ -581,5 +585,6 @@ proxy/qz_streaming.py
 scripts/qz-thoughts
 docs/edge-case-config-contract-plan.md
 docs/observability-streaming-bugfix-agenda.md
+docs/responses-stream-tool-state-contract.md
 docs/runtime-observability-notes.md
 ```

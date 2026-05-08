@@ -7,11 +7,12 @@ Start here when you want to understand the repo without reading every note in th
 1. [Project README](../README.md) — what QuantZhai is, how to start it, what ships, and the known-good local setup.
 2. [Agent instructions](../AGENTS.md) — rules for agents working inside this repo.
 3. [Master stabilisation plan](master-stabilisation-plan.md) — controlling map for the current stabilisation work, bug relationships, and fix order.
-4. [Edge case and config contract plan](edge-case-config-contract-plan.md) — planned audit/refactor for edge cases, compact errors, profile safety, config layout, and script-sprawl reduction.
-5. [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) — current focused TODO/review plan for `/status`, `qz-top`, `qz-thoughts`, profiles, and streaming.
-6. [Benchmark harness](quantzhai-benchmark-harness.md) — how to compare profiles and prove whether changes help.
-7. [Runtime observability notes](runtime-observability-notes.md) — how to inspect live proxy/model behaviour.
-8. [Search roadmap](search-roadmap.md) — local web-search routing plan and policy direction.
+4. [Responses stream and tool state contract](responses-stream-tool-state-contract.md) — current runtime contract for streamed Responses events, tool-call state, telemetry, and captures.
+5. [Edge case and config contract plan](edge-case-config-contract-plan.md) — planned audit/refactor for edge cases, compact errors, profile safety, config layout, and script-sprawl reduction.
+6. [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) — current focused TODO/review plan for `/status`, `qz-top`, `qz-thoughts`, profiles, and streaming.
+7. [Benchmark harness](quantzhai-benchmark-harness.md) — how to compare profiles and prove whether changes help.
+8. [Runtime observability notes](runtime-observability-notes.md) — how to inspect live proxy/model behaviour.
+9. [Search roadmap](search-roadmap.md) — local web-search routing plan and policy direction.
 
 ## Documentation by area
 
@@ -20,6 +21,7 @@ Start here when you want to understand the repo without reading every note in th
 | Project overview | [README](../README.md) | Main setup, architecture, quick start, configuration, troubleshooting, and repo hygiene. |
 | Agent workflow | [AGENTS](../AGENTS.md) | Instructions for Codex/agent contributors working in this tree. |
 | Master plan | [Master stabilisation plan](master-stabilisation-plan.md) | Controlling map for current bugs, contracts, dependencies, and fix order. |
+| Runtime contract | [Responses stream and tool state contract](responses-stream-tool-state-contract.md) | State contract for streamed Responses events, tool calls, telemetry, and captures. |
 | Config and error handling | [Edge case and config contract plan](edge-case-config-contract-plan.md) | Audit/refactor plan for edge cases, compact errors, profile safety, config layering, and reducing script sprawl. |
 | Current bugfix focus | [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) | Triage, review plan, proposed fixes, and acceptance checks for `/status`, monitor tools, profile tuning, and proxy streaming. |
 | Fixed bug / regression guard | [Stale profile symlink bug](bugs/stale-profile-server-alias.md) | Symlink profile contract, compact invalid-profile errors, and `qz-doctor` regression checks. |
@@ -69,7 +71,7 @@ Stale symlink profile validation, compact errors, and doctor checks are done.
 qz-thoughts delta coalescing is done.
 Stream timing telemetry is done.
 Summary-mode SSE transform and missing DONE marker are fixed and live-smoked.
-Next review profile presets or start shared telemetry schema work.
+Next keep the Responses stream/tool contract current, add golden replay fixtures, then extract tool lifecycle handling.
 Do not start broad config movement before auditing data paths.
 ```
 
@@ -95,6 +97,7 @@ Do not add new one-off shell scripts unless there is a strong reason.
 Read:
 
 - [Master stabilisation plan](master-stabilisation-plan.md)
+- [Responses stream and tool state contract](responses-stream-tool-state-contract.md)
 - [Responses streaming and qz-thoughts bug](bugs/responses-streaming-and-qz-thoughts.md)
 - [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md)
 - [Runtime observability notes](runtime-observability-notes.md)
@@ -103,6 +106,7 @@ Focus:
 
 ```text
 Audit upstream SSE, transformed SSE, telemetry, qz-thoughts rendering, and Codex-visible behaviour before patching.
+Never expose runnable tool calls before arguments are complete.
 Do not treat every tiny delta as a human activity event.
 Do not add another one-off shell monitor.
 ```
@@ -182,6 +186,7 @@ docs/proxy-capability-roadmap.md
 docs/quantzhai-benchmark-harness.md
 docs/quantzhai-caveman-profile.md
 docs/qz-caveman-codex-model-instructions-v2.md
+docs/responses-stream-tool-state-contract.md
 docs/runtime-observability-notes.md
 docs/search-roadmap.md
 ```
