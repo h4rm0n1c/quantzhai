@@ -206,6 +206,34 @@ class ModelCatalogProfileValidationTests(unittest.TestCase):
             self.assertIsNotNone(backend)
             self.assertEqual(backend["stem"], "real-backend")
 
+    def test_exact_profile_slug_beats_colliding_label(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            target = model_dir / "real-backend.gguf"
+            _write_gguf(target)
+            (model_dir / "amber.gguf").symlink_to(target)
+            (model_dir / "prompt-compiler.gguf").symlink_to(target)
+            overrides = root / "var" / "model-overrides.json"
+            overrides.parent.mkdir(parents=True, exist_ok=True)
+            overrides.write_text(json.dumps({
+                "models": {
+                    "amber.gguf": {
+                        "label": "prompt-compiler",
+                    },
+                    "prompt-compiler.gguf": {
+                        "label": "prompt-compiler",
+                    },
+                }
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root, overrides))
+            selected, reason = catalog.resolve("prompt-compiler")
+
+            self.assertIsNotNone(selected)
+            self.assertEqual(selected["key"], "prompt-compiler.gguf")
+            self.assertEqual(reason, "matched prompt-compiler")
+
     def test_symlink_target_outside_scanned_models_marks_profile_invalid(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

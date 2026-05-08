@@ -499,8 +499,6 @@ def match_model(entries: List[Dict[str, Any]], query: str) -> Optional[Dict[str,
             entry.get("key"),
             entry.get("filename"),
             entry.get("stem"),
-            entry.get("label"),
-            entry.get("architecture"),
             str(entry.get("path")),
             str(entry.get("source_path")),
         }
@@ -510,8 +508,10 @@ def match_model(entries: List[Dict[str, Any]], query: str) -> Optional[Dict[str,
                 return entry
     for entry in entries:
         haystack = {
+            entry.get("label"),
             entry.get("backend_id"),
             entry.get("name"),
+            entry.get("architecture"),
         }
         for value in haystack:
             if isinstance(value, str) and value.lower() == q:
