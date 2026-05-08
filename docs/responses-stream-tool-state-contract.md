@@ -182,12 +182,14 @@ before broad stream/tool refactors.
 - `apply_patch_call.raw`: function-call patch stream rewritten to `apply_patch_call`
 - `reasoning_only.raw`: reasoning-only fallback path
 - `reasoning_artifact.raw`: artifact-in-reasoning protocol failure
+- `long_active_reasoning.raw`: long reasoning followed by answer is not killed
+  by the default disabled char limit
 - `web_search_call.raw` and `web_search_final.raw`: proxy-local web search continuation
+- `responses_input/malformed_empty_tool_history.json`: empty tool-call plus
+  parse-error output is filtered while valid neighboring history survives
 
 Still needed:
 
-- long active reasoning followed by answer, without default char-limit abort
-- malformed empty tool-call history filtering
 - continuation hop with no duplicate response start beyond web-search coverage
 - custom `apply_patch` envelope adaptation
 - terminal `response.completed` plus `[DONE]` exactly once for more edge cases

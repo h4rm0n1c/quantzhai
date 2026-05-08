@@ -448,10 +448,10 @@ Missing:
    Codex-visible event, telemetry, and capture output. Current contract:
    `docs/responses-stream-tool-state-contract.md`.
 2. Expand golden replay fixtures. Seed fixtures now cover normal output,
-   reasoning-only fallback, artifact-in-reasoning abort, public tool-call
-   buffering, apply_patch rewrite, and web_search continuation. Remaining
-   coverage: malformed empty tool history, long active reasoning, custom
-   apply_patch, and more continuation terminal-edge cases.
+   reasoning-only fallback, artifact-in-reasoning abort, long active reasoning,
+   public tool-call buffering, malformed empty tool history, apply_patch
+   rewrite, and web_search continuation. Remaining coverage: custom
+   apply_patch and more continuation terminal-edge cases.
 3. Extract tool lifecycle handling into a small internal boundary.
 4. Run a live Qwen/TurboQuant patch workflow and capture whether it emits valid patch operations.
 5. Add broader golden tests for Responses normalization.

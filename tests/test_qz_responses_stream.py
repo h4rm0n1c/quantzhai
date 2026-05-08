@@ -730,6 +730,28 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
         self.assertFalse(any(event.get("type") == "reasoning_only_aborted" for event in events))
 
+    def test_golden_long_active_reasoning_reaches_answer_without_default_char_abort(self):
+        telemetry = TelemetryBus()
+
+        def opener(body):
+            return FakeStream(_fixture_chunks("long_active_reasoning.raw"))
+
+        stream_text = self._run_runtime(
+            opener,
+            telemetry=telemetry,
+            request_id="req-golden-long-reasoning",
+            reasoning_stream_format="summary",
+        )
+        events = telemetry.recent()
+        names = [event_type for event_type, _payload in _parse_sse_events(stream_text)]
+
+        self.assertIn("final answer", stream_text)
+        self.assertIn("response.completed", names)
+        self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+        self.assertIn("response.reasoning_summary_text.delta", stream_text)
+        self.assertNotIn("response.reasoning_text.delta", stream_text)
+        self.assertFalse(any(event.get("type") == "reasoning_only_aborted" for event in events))
+
     def test_reasoning_tool_artifact_aborts_without_length_limit(self):
         telemetry = TelemetryBus()
 

@@ -1,5 +1,6 @@
 import json
 import unittest
+from pathlib import Path
 
 from proxy.quantzhai_proxy import (
     _apply_patch_call_to_function_call,
@@ -13,6 +14,8 @@ from proxy.quantzhai_proxy import (
     normalize_responses_input_for_qwen,
     normalize_tools_for_llamacpp,
 )
+
+FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "responses_input"
 
 
 class ApplyPatchAdapterTests(unittest.TestCase):
@@ -232,6 +235,13 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertEqual(len(out["input"]), 1)
         self.assertEqual(out["input"][0]["type"], "message")
         self.assertEqual(out["input"][0]["role"], "user")
+
+    def test_golden_malformed_empty_tool_history_is_filtered(self):
+        fixture = json.loads(FIXTURE_DIR.joinpath("malformed_empty_tool_history.json").read_text())
+
+        out = normalize_responses_input_for_qwen(fixture["body"])
+
+        self.assertEqual(out["input"], fixture["expected_input"])
 
     def test_custom_patch_history_becomes_function_history(self):
         call_item = {

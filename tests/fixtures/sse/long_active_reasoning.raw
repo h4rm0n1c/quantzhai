@@ -1,0 +1,32 @@
+event: response.created
+data: {"response":{"id":"resp_fixture_long_reasoning","object":"response","created_at":4102444800,"status":"in_progress","model":"fixture","output":[]},"type":"response.created","sequence_number":1}
+
+event: response.output_item.added
+data: {"output_index":0,"item":{"id":"rs_fixture_long","type":"reasoning","status":"in_progress","summary":[],"content":[]},"type":"response.output_item.added","sequence_number":2}
+
+event: response.reasoning_text.delta
+data: {"item_id":"rs_fixture_long","output_index":0,"content_index":0,"delta":"generated-artifact-body-0-","type":"response.reasoning_text.delta","sequence_number":3}
+
+event: response.reasoning_text.delta
+data: {"item_id":"rs_fixture_long","output_index":0,"content_index":0,"delta":"generated-artifact-body-1-","type":"response.reasoning_text.delta","sequence_number":4}
+
+event: response.reasoning_text.delta
+data: {"item_id":"rs_fixture_long","output_index":0,"content_index":0,"delta":"generated-artifact-body-2-","type":"response.reasoning_text.delta","sequence_number":5}
+
+event: response.reasoning_text.delta
+data: {"item_id":"rs_fixture_long","output_index":0,"content_index":0,"delta":"generated-artifact-body-3-","type":"response.reasoning_text.delta","sequence_number":6}
+
+event: response.reasoning_text.delta
+data: {"item_id":"rs_fixture_long","output_index":0,"content_index":0,"delta":"generated-artifact-body-4-","type":"response.reasoning_text.delta","sequence_number":7}
+
+event: response.output_item.added
+data: {"output_index":1,"item":{"id":"msg_fixture_long","type":"message","status":"in_progress","role":"assistant","content":[]},"type":"response.output_item.added","sequence_number":8}
+
+event: response.output_text.delta
+data: {"item_id":"msg_fixture_long","output_index":1,"content_index":0,"delta":"final answer","type":"response.output_text.delta","sequence_number":9}
+
+event: response.completed
+data: {"response":{"id":"resp_fixture_long_reasoning","object":"response","created_at":4102444800,"status":"completed","model":"fixture","output":[{"id":"rs_fixture_long","type":"reasoning","status":"completed","summary":[],"content":[{"type":"reasoning_text","text":"generated artifact body"}]},{"id":"msg_fixture_long","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"final answer","annotations":[]}]}],"usage":{}},"type":"response.completed","sequence_number":10}
+
+data: [DONE]
+

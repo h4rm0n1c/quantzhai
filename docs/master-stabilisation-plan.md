@@ -640,8 +640,9 @@ items appearing before arguments were complete, malformed empty tool history
 being replayed upstream, and private tools being exposed when their required
 runtime state did not exist. The next hardening step is a documented event
 contract and replay tests that pin those transitions. Seed fixtures now cover
-normal output, reasoning-only fallback, artifact-in-reasoning abort, public
-tool-call buffering, apply_patch rewrite, and web_search continuation.
+normal output, reasoning-only fallback, artifact-in-reasoning abort, long active
+reasoning, public tool-call buffering, malformed empty tool history,
+apply_patch rewrite, and web_search continuation.
 ```
 
 Then do:
