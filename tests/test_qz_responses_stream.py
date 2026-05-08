@@ -550,6 +550,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         private_function_call_delta_limit=None,
         reasoning_only_timeout_s=None,
         reasoning_only_char_limit=None,
+        apply_patch_output_style="native",
     ):
         chunks = []
         runtime = ResponsesStreamRuntime(
@@ -575,7 +576,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
                 "content": [{"type": "input_text", "text": "test"}],
             }],
             "tools": [{"type": "web_search"}],
-        }, "test-model.gguf")
+        }, "test-model.gguf", apply_patch_output_style)
         return b"".join(chunks).decode("utf-8")
 
     def test_web_search_call_is_public_and_upstream_resumes_with_hidden_output(self):
@@ -873,6 +874,77 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertEqual(len(patch_items), 2)
         self.assertEqual(patch_items[0]["call_id"], "call_fixture_patch")
         self.assertEqual(patch_items[0]["operation"]["path"], "tmp/quantzhai-smoke.txt")
+
+    def test_golden_custom_apply_patch_stream_rewrites_to_custom_tool_call(self):
+        requests = []
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            return FakeStream(_fixture_chunks("custom_apply_patch_call.raw"))
+
+        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        events = _parse_sse_events(stream_text)
+        names = [event_type for event_type, _payload in events]
+        custom_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "custom_tool_call"
+        ]
+
+        self.assertEqual(len(requests), 1)
+        self.assertIn("response.completed", names)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertEqual(len(custom_items), 2)
+        self.assertEqual(custom_items[0]["call_id"], "call_fixture_custom_patch")
+        self.assertEqual(custom_items[0]["name"], "apply_patch")
+        self.assertIn("*** Begin Patch", custom_items[0]["input"])
+        self.assertIn("*** Add File: tmp/quantzhai-custom-smoke.txt", custom_items[0]["input"])
+        self.assertIn("+quantzhai custom apply_patch smoke", custom_items[0]["input"])
+
+    def test_golden_invalid_apply_patch_stream_becomes_message_not_private_call(self):
+        requests = []
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            return FakeStream(_fixture_chunks("invalid_apply_patch_call.raw"))
+
+        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        events = _parse_sse_events(stream_text)
+        message_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type == "response.output_item.done"
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "message"
+        ]
+        completed = next(
+            payload["response"]
+            for event_type, payload in events
+            if event_type == "response.completed" and isinstance(payload, dict)
+        )
+
+        self.assertEqual(len(requests), 1)
+        self.assertIn("invalid patch arguments", stream_text)
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertEqual(len(message_items), 1)
+        self.assertEqual(completed["output"][0]["type"], "message")
+
+    def test_golden_completed_without_done_appends_done_once(self):
+        def opener(body):
+            return FakeStream(_fixture_chunks("completed_without_done.raw"))
+
+        stream_text = self._run_runtime(opener)
+        events = _parse_sse_events(stream_text)
+
+        self.assertEqual([event for event, _payload in events].count("response.completed"), 1)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
 
     def test_stream_adds_done_when_upstream_closes_after_completed(self):
         def opener(body):

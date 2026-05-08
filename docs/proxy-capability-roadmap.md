@@ -460,8 +460,9 @@ Missing:
 2. Expand golden replay fixtures. Seed fixtures now cover normal output,
    reasoning-only fallback, artifact-in-reasoning abort, long active reasoning,
    public tool-call buffering, malformed empty tool history, apply_patch
-   rewrite, and web_search continuation. Remaining coverage: custom
-   apply_patch and more continuation terminal-edge cases.
+   native/custom rewrite, invalid apply_patch rejection, completed-without-DONE
+   terminal closure, and web_search continuation. Remaining coverage: more
+   continuation terminal-edge cases and larger update/delete patch variants.
 3. Broaden the tool lifecycle boundary to cover request normalization,
    history filtering, adapter ownership, and telemetry naming.
 4. Run a live Qwen/TurboQuant patch workflow and capture whether it emits valid patch operations.

@@ -117,7 +117,7 @@ Still pending:
 
 - Preserve the original client tool shape in explicit per-request metadata.
 - Confirm reliability across update/delete operations and larger diffs.
-- Add more negative fixtures for invalid patch operations and Codex parser-failure history.
+- Add more negative fixtures for Codex parser-failure history.
 
 The first implementation does not write files. It only translates tool-call shape.
 
@@ -159,6 +159,8 @@ These tests should not require Docker, Codex, GPU, or a live model.
 Implemented so far:
 
 - Unit tests for native/custom tool normalization, output conversion, input history conversion, invalid operations, and streaming event synthesis.
+- Golden SSE replay fixtures for native patch output, custom patch output, and
+  invalid model-side patch output.
 - Proxy smoke test with fake upstream covering native and custom output styles.
 - Codex CLI smoke test with fake upstream proving current Codex consumes the translated custom `apply_patch` call and creates the expected temp file.
 
