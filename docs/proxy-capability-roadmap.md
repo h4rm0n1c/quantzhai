@@ -198,6 +198,7 @@ Current behavior:
 - Valid model `apply_patch` function calls are translated back into native `apply_patch_call` items.
 - If Codex does not explicitly declare native `apply_patch`, the proxy treats the tool as custom output style so the current CLI harness keeps working.
 - Current Codex CLI custom `apply_patch` calls are translated back into `custom_tool_call` patch envelopes.
+- Invalid model `apply_patch` calls become assistant error messages rather than leaking private JSON function-call arguments back to Codex.
 - `apply_patch_call_output` history is translated back into function-call output history for llama.cpp.
 - `write_stdin` is hidden from upstream unless prior request history contains a
   live exec session id.
@@ -245,6 +246,10 @@ Live smoke note:
   `apply_patch` function-call arguments and the proxy returned a completed
   custom `apply_patch` envelope. Capture:
   `var/captures/requests/qz_req_1778256346716_c050`.
+- A live `qz-codex exec` smoke on 2026-05-09 produced a completed
+  `custom_tool_call` and Codex created
+  `live-codex-apply-patch-smoke.txt` in the temp workspace. Capture:
+  `var/captures/requests/qz_req_1778257008620_8190`.
 
 ## Search
 

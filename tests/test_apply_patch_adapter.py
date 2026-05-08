@@ -30,6 +30,7 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertEqual(out["tools"][0]["type"], "function")
         self.assertEqual(out["tools"][0]["name"], "apply_patch")
         self.assertIn("operation", out["tools"][0]["parameters"]["properties"])
+        self.assertIn("diff", out["tools"][0]["parameters"]["properties"]["operation"]["required"])
         self.assertEqual(out["tool_choice"], {"type": "function", "name": "apply_patch"})
 
     def test_write_stdin_is_dropped_without_live_exec_session(self):
@@ -172,7 +173,7 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertIn("*** Add File: notes.md", out["input"])
         self.assertIn("+hello", out["input"])
 
-    def test_invalid_patch_function_call_is_left_unchanged(self):
+    def test_invalid_patch_function_call_becomes_message_not_private_call(self):
         function_call = {
             "type": "function_call",
             "name": "apply_patch",
@@ -181,7 +182,9 @@ class ApplyPatchAdapterTests(unittest.TestCase):
 
         out = normalize_apply_patch_output_for_codex([function_call])[0]
 
-        self.assertEqual(out, function_call)
+        self.assertEqual(out["type"], "message")
+        self.assertEqual(out["role"], "assistant")
+        self.assertIn("invalid patch arguments", out["content"][0]["text"])
 
     def test_normalize_responses_input_converts_patch_items(self):
         body = {

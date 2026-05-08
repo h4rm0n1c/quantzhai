@@ -18,6 +18,27 @@ ROOT = Path(__file__).resolve().parents[1]
 MODEL = "test-model.gguf"
 
 
+class SmokeModelCatalog:
+    def __init__(self):
+        self.entries = [{
+            "slug": MODEL,
+            "key": MODEL,
+            "backend_id": MODEL,
+            "label": MODEL,
+            "profile_valid": True,
+            "runtime_context_length": 131072,
+            "context_length": 131072,
+        }]
+        self.selected = self.entries[0]
+        self.reason = "smoke"
+        self.cache_path = Path("/tmp/quantzhai-smoke-model-catalog.json")
+
+    def resolve(self, query=""):
+        if not query or query == MODEL:
+            return self.entries[0], "smoke"
+        return None, f"no match for {query}"
+
+
 def _sse_block(event_type, payload):
     payload = dict(payload)
     payload.setdefault("type", event_type)
@@ -208,9 +229,52 @@ def _write_codex_config(codex_home: Path, proxy_port: int):
     sqlite_dir = codex_home / "sqlite"
     catalog_dir.mkdir(parents=True)
     sqlite_dir.mkdir(parents=True)
-
-    catalog_path = catalog_dir / "qwenzhai-models.json"
-    catalog_path.write_text((ROOT / "config" / "example" / "qwenzhai-models.json").read_text(), encoding="utf-8")
+    catalog_path = catalog_dir / "smoke-models.json"
+    catalog = {
+        "models": [
+            {
+                "slug": MODEL,
+                "display_name": "QuantZhai apply_patch smoke",
+                "description": "Hermetic QuantZhai apply_patch Codex smoke model",
+                "default_reasoning_level": "medium",
+                "supported_reasoning_levels": [],
+                "priority": 1000,
+                "label": "QuantZhai apply_patch smoke",
+                "default": True,
+                "shell_type": "shell_command",
+                "visibility": "list",
+                "supported_in_api": True,
+                "additional_speed_tiers": [],
+                "availability_nux": None,
+                "upgrade": None,
+                "base_instructions": "",
+                "model_messages": {
+                    "instructions_template": "",
+                    "instructions_variables": {
+                        "personality_default": "",
+                        "personality_friendly": "",
+                    },
+                },
+                "supports_reasoning_summaries": True,
+                "default_reasoning_summary": "none",
+                "support_verbosity": True,
+                "default_verbosity": "low",
+                "apply_patch_tool_type": "freeform",
+                "supports_parallel_tool_calls": True,
+                "supports_image_detail_original": False,
+                "effective_context_window_percent": 95,
+                "experimental_supported_tools": [],
+                "input_modalities": ["text"],
+                "web_search_tool_type": "text",
+                "supports_search_tool": False,
+                "truncation_policy": {
+                    "mode": "tokens",
+                    "limit": 10000,
+                },
+            },
+        ],
+    }
+    catalog_path.write_text(json.dumps(catalog, indent=2) + "\n", encoding="utf-8")
 
     config = f"""
 model_catalog_json = "{catalog_path}"
@@ -243,6 +307,8 @@ def main():
         ProxyHandler.searxng_capabilities = {}
         ProxyHandler.searxng_base_url = None
         ProxyHandler.searxng_timeout = 1
+        ProxyHandler.model_catalog = SmokeModelCatalog()
+        ProxyHandler.model_catalog_path = str(ProxyHandler.model_catalog.cache_path)
         proxy = _free_server(ProxyHandler)
 
         codex_home = Path(tempfile.mkdtemp(prefix="quantzhai-codex-home-"))

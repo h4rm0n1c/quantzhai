@@ -12,10 +12,11 @@ The near-term target is a protocol adapter: let the local model emit patch inten
 
 - `proxy/quantzhai_proxy.py` recognizes native `{"type": "apply_patch"}` and custom `apply_patch` tools during tool normalization.
 - Patch tools are translated into a normal function tool named `apply_patch` for llama.cpp.
-- The model-facing function schema prefers an `operation` object with `type`, `path`, and optional `diff`.
+- The model-facing function schema prefers an `operation` object with `type`, `path`, and required `diff`; `delete_file` uses an empty string.
 - Follow-up `apply_patch_call` and `apply_patch_call_output` history items are translated back into function-call-shaped history before forwarding to llama.cpp.
 - Current Codex CLI custom `apply_patch` traffic is also supported: custom declarations are translated to a function tool, and model output is translated back to `custom_tool_call` patch envelopes when Codex asked for that shape.
 - Model output `function_call` items named `apply_patch` are translated back into native `apply_patch_call` items or custom `apply_patch` calls when they contain a valid operation.
+- Invalid model `apply_patch` calls are converted into assistant error messages instead of leaking the private function-call shape back to Codex.
 - Streaming synthesis can emit `apply_patch_call` and `custom_tool_call` output items.
 - The local tool loop currently executes `web_search` only.
 - There is no local `apply_patch` executor.
@@ -24,6 +25,7 @@ The near-term target is a protocol adapter: let the local model emit patch inten
 - Codex CLI smoke coverage exists under `tests/smoke_apply_patch_codex_exec.py`.
 - Live Qwen/TurboQuant smoke on 2026-05-09 confirmed custom `apply_patch`
   output from a real streamed function call.
+- Live `qz-codex exec` smoke on 2026-05-09 confirmed Codex consumed the translated custom patch call and created the requested temp-workspace file.
 
 This means QuantZhai now has a first-pass protocol adapter for native and current-Codex custom patch calls. It still does not apply files itself. Codex remains responsible for workspace writes.
 
@@ -81,6 +83,11 @@ Outcome:
   `function_call` arguments for `apply_patch`; the proxy buffered them and
   returned a completed `custom_tool_call` containing a valid
   `*** Begin Patch` envelope.
+- Captured live `qz-codex exec` custom patch request
+  `qz_req_1778257008620_8190`: Codex advertised `apply_patch` as a custom
+  freeform tool, the proxy presented a stricter private function schema to
+  llama.cpp, Qwen emitted a valid operation with `diff`, and Codex applied the
+  returned `custom_tool_call`.
 
 ## Phase 2: Protocol Adapter
 
@@ -103,15 +110,14 @@ Implemented:
 - Patch-call-output history normalization.
 - Function-call-to-`apply_patch_call` output normalization for valid operations.
 - Function-call-to-`custom_tool_call` output normalization for the current Codex CLI.
+- Invalid model-side `apply_patch` output normalization into assistant error messages.
 - Streaming event synthesis for `apply_patch_call` and `custom_tool_call`.
 
 Still pending:
 
 - Preserve the original client tool shape in explicit per-request metadata.
-- Run the same live patch path through an actual `qz-codex` session rather than
-  a direct Responses client.
 - Confirm reliability across update/delete operations and larger diffs.
-- Add more negative fixtures for invalid patch operations.
+- Add more negative fixtures for invalid patch operations and Codex parser-failure history.
 
 The first implementation does not write files. It only translates tool-call shape.
 

@@ -34,10 +34,10 @@ def _apply_patch_function_parameters() -> dict:
                     },
                     "diff": {
                         "type": "string",
-                        "description": "V4A diff for create_file or update_file operations.",
+                        "description": "Required patch payload. For create_file, include the exact full file content; for update_file, include a V4A diff hunk; for delete_file, use an empty string.",
                     },
                 },
-                "required": ["type", "path"],
+                "required": ["type", "path", "diff"],
                 "additionalProperties": False,
             },
             "patch": {
@@ -174,7 +174,7 @@ def _apply_patch_operation_to_patch_text(operation: dict) -> str:
 def _function_call_to_apply_patch_call(item: dict) -> dict:
     operation = _parse_apply_patch_arguments(item.get("arguments") or "{}")
     if not operation:
-        return item
+        return _invalid_apply_patch_call_message(item)
 
     call_id = item.get("call_id") or item.get("id") or f"call_apply_patch_{_now_ts()}"
     item_id = item.get("id") or f"apc_local_{_now_ts()}"
@@ -198,7 +198,7 @@ def _function_call_to_custom_apply_patch_call(item: dict) -> dict:
             return item
         patch_text = data.get("patch") if isinstance(data, dict) else None
         if not isinstance(patch_text, str) or not patch_text.strip():
-            return item
+            return _invalid_apply_patch_call_message(item)
 
     return {
         "type": "custom_tool_call",
@@ -206,6 +206,20 @@ def _function_call_to_custom_apply_patch_call(item: dict) -> dict:
         "call_id": item.get("call_id") or item.get("id") or f"call_apply_patch_{_now_ts()}",
         "name": "apply_patch",
         "input": patch_text,
+    }
+
+
+def _invalid_apply_patch_call_message(item: dict) -> dict:
+    item_id = item.get("id") or item.get("call_id") or f"msg_apply_patch_invalid_{_now_ts()}"
+    return {
+        "id": f"msg_{item_id}",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [{
+            "type": "output_text",
+            "text": "apply_patch call rejected by QuantZhai proxy: model emitted invalid patch arguments.",
+        }],
     }
 
 
