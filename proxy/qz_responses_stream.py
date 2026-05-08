@@ -19,7 +19,7 @@ try:
         public_tool_item_events,
         rewrite_sse_payload,
     )
-    from .qz_tool_lifecycle import StreamToolCallState, public_tool_item_from_function_call
+    from .qz_tool_lifecycle import StreamToolCallState, completed_tool_call_decision
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS
 except ImportError:
     from qz_responses import (
@@ -36,7 +36,7 @@ except ImportError:
         public_tool_item_events,
         rewrite_sse_payload,
     )
-    from qz_tool_lifecycle import StreamToolCallState, public_tool_item_from_function_call
+    from qz_tool_lifecycle import StreamToolCallState, completed_tool_call_decision
     from qz_tool_web import WEB_SEARCH_MAX_HOPS
 
 
@@ -578,14 +578,19 @@ class ResponsesStreamRuntime:
                                 public_index = max_output_index + 1
                             public_index += output_index_offset
 
-                            if completed_call.get("name") == "web_search":
+                            decision = completed_tool_call_decision(
+                                completed_call,
+                                apply_patch_output_style,
+                            )
+
+                            if decision.kind == "proxy_local":
                                 public_item, tool_output_item, _sources = self.web_runtime.execute_web_search_call(
-                                    completed_call,
+                                    decision.call,
                                     counters,
                                     seen_signatures,
                                 )
                                 public_trace.append(public_item)
-                                next_input.append(completed_call)
+                                next_input.append(decision.call)
                                 next_input.append(tool_output_item)
                                 sequence, forwarded_chunks, forwarded_bytes = self._emit_public_tool_item(public_item, public_index, sequence)
                                 self._emit_stream_event_timing(
@@ -599,10 +604,7 @@ class ResponsesStreamRuntime:
                                 )
                                 break
 
-                            public_item = public_tool_item_from_function_call(
-                                completed_call,
-                                apply_patch_output_style,
-                            )
+                            public_item = decision.public_item
                             public_trace.append(public_item)
                             sequence, forwarded_chunks, forwarded_bytes = self._emit_public_tool_item(public_item, public_index, sequence)
                             self._emit_stream_event_timing(

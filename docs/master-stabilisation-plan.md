@@ -655,7 +655,8 @@ Reason:
 
 ```text
 Streamed call state and public item conversion now have a small internal
-boundary. Tool declaration normalization, result injection, bad-history
+boundary, and completed-call routing now has a first public/proxy-local
+decision point. Tool declaration normalization, result injection, bad-history
 filtering, and capture telemetry are still spread across the proxy flow. Keep
 behaviour stable while moving those contracts behind clearer ownership.
 ```

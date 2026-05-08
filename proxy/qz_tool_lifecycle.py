@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from dataclasses import dataclass
 
 try:
     from .qz_responses import normalize_apply_patch_output_for_codex
@@ -6,6 +7,16 @@ try:
 except ImportError:
     from qz_responses import normalize_apply_patch_output_for_codex
     from qz_streaming import StreamedFunctionCallAssembler, is_function_call_stream_event
+
+
+PROXY_LOCAL_FUNCTION_TOOLS = frozenset({"web_search"})
+
+
+@dataclass(frozen=True)
+class CompletedToolCallDecision:
+    kind: str
+    call: dict
+    public_item: dict | None = None
 
 
 def function_call_key(payload):
@@ -27,6 +38,24 @@ def public_tool_item_from_function_call(call: dict, apply_patch_output_style: st
     if call.get("name") == "apply_patch":
         return normalize_apply_patch_output_for_codex([call], apply_patch_output_style)[0]
     return call
+
+
+def is_proxy_local_function_call(call: dict) -> bool:
+    return (
+        isinstance(call, dict)
+        and call.get("type") == "function_call"
+        and call.get("name") in PROXY_LOCAL_FUNCTION_TOOLS
+    )
+
+
+def completed_tool_call_decision(call: dict, apply_patch_output_style: str) -> CompletedToolCallDecision:
+    if is_proxy_local_function_call(call):
+        return CompletedToolCallDecision(kind="proxy_local", call=call)
+    return CompletedToolCallDecision(
+        kind="public",
+        call=call,
+        public_item=public_tool_item_from_function_call(call, apply_patch_output_style),
+    )
 
 
 class StreamToolCallState:

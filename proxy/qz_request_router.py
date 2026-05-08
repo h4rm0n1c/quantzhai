@@ -28,6 +28,7 @@ try:
     )
     from .qz_responses_stream import ResponsesStreamRuntime
     from .qz_sse import _normalize_response_usage, make_sse_block
+    from .qz_tool_lifecycle import is_proxy_local_function_call
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import (
         append_capture,
@@ -57,6 +58,7 @@ except ImportError:
     )
     from qz_responses_stream import ResponsesStreamRuntime
     from qz_sse import _normalize_response_usage, make_sse_block
+    from qz_tool_lifecycle import is_proxy_local_function_call
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import (
         append_capture,
@@ -640,7 +642,7 @@ class RequestRouter:
             output_items = out.get("output") or []
             web_calls = [
                 item for item in output_items
-                if isinstance(item, dict) and item.get("type") == "function_call" and item.get("name") == "web_search"
+                if is_proxy_local_function_call(item)
             ]
 
             if not web_calls:

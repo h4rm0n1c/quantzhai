@@ -277,7 +277,7 @@ def normalize_responses_input_for_qwen(body: dict, selected_model: dict | None =
         if item_type in ("reasoning", "web_search_call"):
             continue
 
-        adapted_tool_item = APPLY_PATCH_TOOL_ADAPTER.input_to_upstream(item)
+        adapted_tool_item = TOOL_REGISTRY.input_to_upstream(item)
         if adapted_tool_item is not None:
             clean_input.append(adapted_tool_item)
             continue

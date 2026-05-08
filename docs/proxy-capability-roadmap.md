@@ -207,6 +207,8 @@ Current behavior:
 - Executable public function calls are buffered until arguments are complete.
 - Streamed tool-call state, guard accounting, and public item conversion now
   live behind `proxy/qz_tool_lifecycle.py`.
+- Completed function calls now pass through a small lifecycle decision boundary
+  that separates proxy-local execution from Codex-visible public tool items.
 
 Missing or incomplete:
 
@@ -464,7 +466,8 @@ Missing:
    terminal closure, and web_search continuation. Remaining coverage: more
    continuation terminal-edge cases and larger update/delete patch variants.
 3. Broaden the tool lifecycle boundary to cover request normalization,
-   history filtering, adapter ownership, and telemetry naming.
+   history filtering, adapter ownership, and telemetry naming. The first small
+   step now centralizes completed-call public/proxy-local decisions.
 4. Run a live Qwen/TurboQuant patch workflow and capture whether it emits valid patch operations.
 5. Add broader golden tests for Responses normalization.
 6. Split `proxy/quantzhai_proxy.py` into a conventional Python package.

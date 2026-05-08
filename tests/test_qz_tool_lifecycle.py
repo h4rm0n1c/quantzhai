@@ -2,7 +2,9 @@ import unittest
 
 from proxy.qz_tool_lifecycle import (
     StreamToolCallState,
+    completed_tool_call_decision,
     function_call_key,
+    is_proxy_local_function_call,
     public_tool_item_from_function_call,
 )
 
@@ -80,6 +82,39 @@ class ToolLifecycleTests(unittest.TestCase):
         }
 
         self.assertEqual(public_tool_item_from_function_call(call, "native"), call)
+
+    def test_completed_tool_call_decision_classifies_proxy_local_web_search(self):
+        call = {
+            "id": "fc_web",
+            "type": "function_call",
+            "call_id": "call_web",
+            "name": "web_search",
+            "arguments": "{\"query\":\"quantzhai\"}",
+        }
+
+        decision = completed_tool_call_decision(call, "native")
+
+        self.assertTrue(is_proxy_local_function_call(call))
+        self.assertEqual(decision.kind, "proxy_local")
+        self.assertEqual(decision.call, call)
+        self.assertIsNone(decision.public_item)
+
+    def test_completed_tool_call_decision_adapts_public_apply_patch(self):
+        call = {
+            "id": "fc_patch",
+            "type": "function_call",
+            "call_id": "call_patch",
+            "name": "apply_patch",
+            "arguments": "{\"operation\":{\"type\":\"create_file\",\"path\":\"notes.md\",\"diff\":\"@@\\n+ok\\n\"}}",
+        }
+
+        decision = completed_tool_call_decision(call, "custom")
+
+        self.assertFalse(is_proxy_local_function_call(call))
+        self.assertEqual(decision.kind, "public")
+        self.assertEqual(decision.call, call)
+        self.assertEqual(decision.public_item["type"], "custom_tool_call")
+        self.assertEqual(decision.public_item["name"], "apply_patch")
 
 
 if __name__ == "__main__":

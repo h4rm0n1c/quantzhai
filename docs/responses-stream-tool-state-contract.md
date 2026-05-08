@@ -32,6 +32,7 @@ proxy/qz_responses_stream.py   streamed Responses runtime and continuation loop
 proxy/qz_streaming.py          SSE parser and streamed function-call assembler
 proxy/qz_responses.py          request normalization, tool filtering, history cleanup
 proxy/qz_tool_lifecycle.py     private streamed tool-call state and public item conversion
+                               plus completed-call public/proxy-local decision
 proxy/qz_tool_apply_patch.py   apply_patch envelope adaptation
 proxy/qz_runtime_io.py         request-scoped capture helpers
 proxy/qz_telemetry.py          status and telemetry events
@@ -196,7 +197,8 @@ before broad stream/tool refactors.
 - `responses_input/malformed_empty_tool_history.json`: empty tool-call plus
   parse-error output is filtered while valid neighboring history survives
 - `tests/test_qz_tool_lifecycle.py`: pins private streamed function-call state,
-  guard accounting, and apply_patch public item conversion
+  guard accounting, completed-call routing decisions, and apply_patch public
+  item conversion
 
 Still needed:
 
@@ -210,8 +212,8 @@ Still needed:
   buffering, web-search continuation, reasoning aborts, and apply_patch
   adaptation, but is not broad enough yet.
 - Tool lifecycle now has an initial internal boundary for streamed call state
-  and public item conversion, but request normalization, adapters, and telemetry
-  still need tighter ownership.
+  public item conversion, and completed-call routing decisions, but request
+  normalization, adapter ownership, and telemetry still need tighter ownership.
 - No redaction layer for captures.
 - Request-scoped captures are not grouped under a higher-level run id.
 - Proxy-side shell/code/computer/MCP execution is not implemented.
