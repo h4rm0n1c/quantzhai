@@ -189,6 +189,8 @@ Problem:
 
 ```text
 /status can show stale or default context/model data.
+/status inside qz-codex does not visibly prove that proxy-calculated token
+and context-window usage are being relayed back to Codex.
 qz-top token-per-second math can be unreliable.
 qz-thoughts has inconsistent telemetry/rendering.
 multiple monitors need to run without conflicting.
@@ -484,6 +486,18 @@ Multiple monitors can run concurrently.
 Readers do not mutate shared telemetry.
 ```
 
+Open Codex-facing status gap:
+
+```text
+qz-codex `/status` should be audited separately from QuantZhai `/qz/status`.
+If Codex CLI expects context-window and token usage through Responses `usage`,
+model catalog metadata, or another client-visible field, the proxy/scripts need
+to populate that path from the same runtime truth used by /qz/status and
+qz-top. If Codex CLI does not expose a supported ingestion path for this, keep
+the limitation documented and make qz-top/qz-status the authoritative local
+runtime usage surfaces.
+```
+
 #### 6. Fix `qz-top` token math
 
 Status:
@@ -643,6 +657,24 @@ contract and replay tests that pin those transitions. Seed fixtures now cover
 normal output, reasoning-only fallback, artifact-in-reasoning abort, long active
 reasoning, public tool-call buffering, malformed empty tool history,
 apply_patch rewrite, and web_search continuation.
+```
+
+Then do:
+
+```text
+audit and improve Codex-facing live lifecycle relay
+```
+
+Reason:
+
+```text
+QuantZhai now has proxy-side telemetry truth, but Codex CLI can still feel
+two-step compared with hosted OpenAI: tool intent may be buffered internally,
+tool execution may not show a prompt start/running/completed lifecycle, and
+Codex `/status` may not show proxy-calculated token/context usage. Audit the
+actual Responses events Codex consumes, then relay request, output item, tool
+call, tool result, usage, and terminal status transitions in the shapes Codex
+expects.
 ```
 
 Then do:

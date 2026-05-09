@@ -21,6 +21,7 @@ try:
         _microcompact_old_tool_results,
         _now_ts,
         clean_content,
+        ensure_apply_patch_tool_policy,
         extract_response_output_text,
         normalize_apply_patch_output_for_codex,
         normalize_responses_input_for_qwen,
@@ -51,6 +52,7 @@ except ImportError:
         _microcompact_old_tool_results,
         _now_ts,
         clean_content,
+        ensure_apply_patch_tool_policy,
         extract_response_output_text,
         normalize_apply_patch_output_for_codex,
         normalize_responses_input_for_qwen,
@@ -773,6 +775,7 @@ class RequestRouter:
 
             if upstream_path == "/v1/responses":
                 body = self.handler._model_router().inject_runtime_state(body, client_model)
+                ensure_apply_patch_tool_policy(body, overwrite=True)
                 apply_patch_output_style = _apply_patch_output_style(body)
                 input_items = body.get("input")
                 if isinstance(input_items, list):

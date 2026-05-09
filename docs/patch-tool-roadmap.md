@@ -112,10 +112,11 @@ Implemented:
 - Function-call-to-`custom_tool_call` output normalization for the current Codex CLI.
 - Invalid model-side `apply_patch` output normalization into assistant error messages.
 - Streaming event synthesis for `apply_patch_call` and `custom_tool_call`.
+- Request-scoped `metadata.qz_tool_policy` records the original Codex-facing
+  apply_patch declaration shape and drives native/custom stream output.
 
 Still pending:
 
-- Preserve the original client tool shape in explicit per-request metadata.
 - Implement and validate move/rename operations if Codex's apply_patch contract
   expects them through this adapter.
 - Add more negative fixtures for Codex parser-failure history.

@@ -14,6 +14,7 @@ from proxy.quantzhai_proxy import (
     normalize_responses_input_for_qwen,
     normalize_tools_for_llamacpp,
 )
+from proxy.qz_tool_apply_patch import ensure_apply_patch_tool_policy
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "responses_input"
 
@@ -32,6 +33,57 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertIn("operation", out["tools"][0]["parameters"]["properties"])
         self.assertIn("diff", out["tools"][0]["parameters"]["properties"]["operation"]["required"])
         self.assertEqual(out["tool_choice"], {"type": "function", "name": "apply_patch"})
+        self.assertEqual(out["metadata"]["qz_tool_policy"]["schema"], "qz.tool_policy.v1")
+        self.assertTrue(out["metadata"]["qz_tool_policy"]["apply_patch_declared"])
+        self.assertEqual(out["metadata"]["qz_tool_policy"]["apply_patch_client_tool_type"], "apply_patch")
+        self.assertEqual(out["metadata"]["qz_tool_policy"]["apply_patch_output_style"], "native")
+
+    def test_custom_tool_declaration_records_client_tool_shape(self):
+        body = {
+            "tools": [{"type": "custom", "name": "apply_patch"}],
+            "tool_choice": {"type": "custom", "name": "apply_patch"},
+        }
+
+        out = normalize_tools_for_llamacpp(body)
+
+        self.assertEqual(out["tools"][0]["type"], "function")
+        self.assertEqual(out["tools"][0]["name"], "apply_patch")
+        self.assertEqual(out["tool_choice"], {"type": "function", "name": "apply_patch"})
+        policy = out["metadata"]["qz_tool_policy"]
+        self.assertTrue(policy["apply_patch_declared"])
+        self.assertEqual(policy["apply_patch_client_tool_type"], "custom")
+        self.assertEqual(policy["apply_patch_output_style"], "custom")
+
+    def test_tool_policy_survives_second_normalization_pass(self):
+        body = {
+            "tools": [{"type": "custom", "name": "apply_patch"}],
+            "metadata": {},
+        }
+
+        first = normalize_tools_for_llamacpp(body)
+        second = normalize_tools_for_llamacpp(first)
+
+        self.assertEqual(second["tools"][0]["type"], "function")
+        self.assertEqual(second["metadata"]["qz_tool_policy"]["apply_patch_client_tool_type"], "custom")
+        self.assertEqual(second["metadata"]["qz_tool_policy"]["apply_patch_output_style"], "custom")
+
+    def test_router_can_overwrite_stale_client_tool_policy(self):
+        body = {
+            "tools": [{"type": "apply_patch"}],
+            "metadata": {
+                "qz_tool_policy": {
+                    "schema": "qz.tool_policy.v1",
+                    "apply_patch_declared": True,
+                    "apply_patch_client_tool_type": "custom",
+                    "apply_patch_output_style": "custom",
+                }
+            },
+        }
+
+        policy = ensure_apply_patch_tool_policy(body, overwrite=True)
+
+        self.assertEqual(policy["apply_patch_client_tool_type"], "apply_patch")
+        self.assertEqual(policy["apply_patch_output_style"], "native")
 
     def test_write_stdin_is_dropped_without_live_exec_session(self):
         body = {

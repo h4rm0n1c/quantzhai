@@ -114,6 +114,59 @@ artifacts are common compatibility traps.
 7. Keep telemetry/status live and request-scoped captures replayable.
 8. Emit one terminal completion path per logical client stream.
 
+## Codex-Facing Live Lifecycle Relay
+
+Status: explicit open hardening task.
+
+Observed gap:
+
+```text
+Hosted OpenAI-backed Codex sessions visibly relay more live state while tools
+run. QuantZhai currently has proxy-local telemetry and replay captures, but the
+Codex-facing SSE stream can still look too two-step: a request starts, internal
+tool/model work happens, and then a completed result appears.
+```
+
+Target behavior:
+
+- Emit `response.created` and `response.in_progress` as one coherent lifecycle.
+- Emit output-item start events with `status: "in_progress"` when Codex can
+  safely render them.
+- For public tool calls, emit a runnable item only after arguments are complete,
+  but preserve the lifecycle shape Codex expects for tool start/running/done.
+- For proxy-local/private tools, emit no unsafe tool call, but do emit useful
+  Codex-visible assistant/progress state if the Responses contract supports it.
+- Emit completed/failed/incomplete terminal status for tool calls and outputs.
+- Preserve final `usage` data in `response.completed` where upstream or proxy
+  accounting can provide it.
+- Audit whether Codex CLI `/status` consumes token/context data from final
+  Responses `usage`, generated model catalog metadata, request metadata, or an
+  undocumented local client state path.
+
+Useful external references:
+
+- OpenAI Responses streaming guide:
+  <https://platform.openai.com/docs/guides/streaming-responses>
+- OpenAI Responses streaming event reference, especially
+  `response.output_item.added`, `response.output_item.done`,
+  `response.function_call_arguments.delta`, and terminal response events:
+  <https://platform.openai.com/docs/api-reference/responses-streaming>
+- OpenAI Responses item schemas for `apply_patch_call`, `shell_call`,
+  `local_shell_call`, and MCP call statuses:
+  <https://platform.openai.com/docs/api-reference/responses>
+- OpenAI shell tool guide, which documents streamed `shell_call` items and
+  `status: "in_progress"` / `status: "completed"` semantics:
+  <https://platform.openai.com/docs/guides/tools-shell>
+- OpenAI Codex agent-loop article, which confirms Codex CLI drives its loop via
+  configurable Responses API endpoints and consumes `instructions`, `tools`,
+  and `input` through that contract:
+  <https://openai.com/index/unrolling-the-codex-agent-loop/>
+
+These references define the protocol shape to emulate. They do not by
+themselves prove which events the current Codex CLI UI renders, so this task
+needs a real Codex capture against hosted/OpenAI-compatible Responses streams
+before changing behavior broadly.
+
 ## State Table
 
 | Upstream signal | Proxy state/action | Codex-visible stream | Telemetry/capture | Evidence |
@@ -125,7 +178,7 @@ artifacts are common compatibility traps.
 | `response.function_call_arguments.delta` | Append argument delta to assembler. | Suppressed until complete. | Captured as upstream protocol. | `tests/test_qz_streaming.py` |
 | `response.function_call_arguments.done` | Validate assembled function name and argument JSON. | Emit one complete public tool item if the call belongs to Codex. | Tool-call telemetry and request captures. | `tests/test_qz_responses_stream.py` |
 | Completed proxy-local `web_search` call | Execute local search and append result into continuation context. | Do not expose half-built private tool events. | Search/tool telemetry and captures. | Existing smoke path plus roadmap. |
-| Completed `apply_patch` call | Adapt native/custom envelope according to incoming declaration. Delegate execution to Codex path unless proxy-side execution is explicitly implemented. | One complete patch tool item/result path. | Adapter captures and tests. | `tests/test_apply_patch_adapter.py` |
+| Completed `apply_patch` call | Adapt native/custom envelope according to request `metadata.qz_tool_policy.apply_patch_output_style`. Delegate execution to Codex path unless proxy-side execution is explicitly implemented. | One complete patch tool item/result path matching the client-declared shape. | Adapter captures and tests. | `tests/test_apply_patch_adapter.py`, `tests/test_qz_responses_stream.py` |
 | Private tool call exceeds guard | Abort private call, do not publish incomplete runnable state. | Completed fallback/error path if needed. | `private_tool_call_aborted`. | `tests/test_qz_responses_stream.py` |
 | Reasoning-only idle stream | If reasoning appears with no answer/tool and no progress past timeout, classify as a stall. | Completed fallback answer plus terminal markers. | `reasoning_only_aborted`. | `tests/test_qz_responses_stream.py` |
 | Tool/artifact payload appears only in reasoning | Treat as protocol failure. Do not execute it. | Completed fallback answer. | `reasoning_only_aborted` with `artifact_tool_payload`. | Request `qz_req_1778177240868_e0d0`. |
@@ -214,6 +267,11 @@ before broad stream/tool refactors.
 - `tests/test_qz_tool_lifecycle.py`: pins private streamed function-call state,
   guard accounting, completed-call routing decisions, apply_patch public item
   conversion, and proxy-local upstream continuation shaping
+- `metadata.qz_tool_policy`: request-scoped proxy-owned tool-shape policy.
+  For apply_patch it records whether the client declared patch support, the
+  original client tool type (`apply_patch`, `custom`, or `absent`), and the
+  Codex-facing output style (`native` or `custom`). Stream conversion reads
+  this metadata instead of re-inferring shape after tool normalization.
 
 Still needed:
 

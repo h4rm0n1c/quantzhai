@@ -551,6 +551,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         reasoning_only_timeout_s=None,
         reasoning_only_char_limit=None,
         apply_patch_output_style="native",
+        metadata=None,
     ):
         chunks = []
         runtime = ResponsesStreamRuntime(
@@ -568,7 +569,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             reasoning_only_timeout_s=reasoning_only_timeout_s,
             reasoning_only_char_limit=reasoning_only_char_limit,
         )
-        runtime.run({
+        body = {
             "model": "test-model.gguf",
             "input": [{
                 "type": "message",
@@ -576,7 +577,10 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
                 "content": [{"type": "input_text", "text": "test"}],
             }],
             "tools": [{"type": "web_search"}],
-        }, "test-model.gguf", apply_patch_output_style)
+        }
+        if metadata is not None:
+            body["metadata"] = metadata
+        runtime.run(body, "test-model.gguf", apply_patch_output_style)
         return b"".join(chunks).decode("utf-8")
 
     def test_web_search_call_is_public_and_upstream_resumes_with_hidden_output(self):
@@ -904,6 +908,26 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertIn("*** Begin Patch", custom_items[0]["input"])
         self.assertIn("*** Add File: tmp/quantzhai-custom-smoke.txt", custom_items[0]["input"])
         self.assertIn("+quantzhai custom apply_patch smoke", custom_items[0]["input"])
+
+    def test_apply_patch_stream_uses_request_tool_policy_metadata(self):
+        def opener(body):
+            return FakeStream(_fixture_chunks("custom_apply_patch_call.raw"))
+
+        stream_text = self._run_runtime(
+            opener,
+            apply_patch_output_style="native",
+            metadata={
+                "qz_tool_policy": {
+                    "schema": "qz.tool_policy.v1",
+                    "apply_patch_declared": True,
+                    "apply_patch_client_tool_type": "custom",
+                    "apply_patch_output_style": "custom",
+                }
+            },
+        )
+
+        self.assertIn('"type": "custom_tool_call"', stream_text)
+        self.assertNotIn('"type": "apply_patch_call"', stream_text)
 
     def test_golden_apply_patch_update_stream_rewrites_to_apply_patch_call(self):
         def opener(body):

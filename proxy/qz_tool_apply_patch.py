@@ -9,6 +9,7 @@ except ImportError:
 
 
 APPLY_PATCH_OPERATION_TYPES = {"create_file", "update_file", "delete_file"}
+TOOL_POLICY_SCHEMA = "qz.tool_policy.v1"
 
 
 def _now_ts() -> int:
@@ -223,13 +224,50 @@ def _invalid_apply_patch_call_message(item: dict) -> dict:
     }
 
 
-def _apply_patch_output_style(body: dict) -> str:
+def _infer_apply_patch_tool_policy(body: dict) -> dict:
     for tool in body.get("tools") or []:
         if isinstance(tool, dict) and tool.get("type") == "custom" and tool.get("name") == "apply_patch":
-            return "custom"
+            return {
+                "schema": TOOL_POLICY_SCHEMA,
+                "apply_patch_declared": True,
+                "apply_patch_client_tool_type": "custom",
+                "apply_patch_output_style": "custom",
+            }
         if isinstance(tool, dict) and tool.get("type") == "apply_patch":
-            return "native"
-    return "custom"
+            return {
+                "schema": TOOL_POLICY_SCHEMA,
+                "apply_patch_declared": True,
+                "apply_patch_client_tool_type": "apply_patch",
+                "apply_patch_output_style": "native",
+            }
+    return {
+        "schema": TOOL_POLICY_SCHEMA,
+        "apply_patch_declared": False,
+        "apply_patch_client_tool_type": "absent",
+        "apply_patch_output_style": "custom",
+    }
+
+
+def ensure_apply_patch_tool_policy(body: dict, overwrite: bool = False) -> dict:
+    metadata = body.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    policy = metadata.get("qz_tool_policy")
+    if overwrite or not isinstance(policy, dict) or policy.get("schema") != TOOL_POLICY_SCHEMA:
+        policy = _infer_apply_patch_tool_policy(body)
+        metadata["qz_tool_policy"] = policy
+        body["metadata"] = metadata
+    return policy
+
+
+def _apply_patch_output_style(body: dict) -> str:
+    metadata = body.get("metadata") if isinstance(body, dict) else None
+    policy = metadata.get("qz_tool_policy") if isinstance(metadata, dict) else None
+    if isinstance(policy, dict):
+        style = policy.get("apply_patch_output_style")
+        if style in {"native", "custom"}:
+            return style
+    return _infer_apply_patch_tool_policy(body).get("apply_patch_output_style", "custom")
 
 
 class ApplyPatchToolAdapter:

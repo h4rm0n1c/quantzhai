@@ -383,6 +383,12 @@ class ResponsesStreamRuntime:
     def run(self, body: dict, requested_model: str, apply_patch_output_style: str = "native"):
         working_body = json.loads(json.dumps(body))
         working_body["stream"] = True
+        metadata = working_body.get("metadata")
+        tool_policy = metadata.get("qz_tool_policy") if isinstance(metadata, dict) else None
+        if isinstance(tool_policy, dict):
+            policy_style = tool_policy.get("apply_patch_output_style")
+            if policy_style in {"native", "custom"}:
+                apply_patch_output_style = policy_style
 
         started_at = time.time()
         first_output_at = None

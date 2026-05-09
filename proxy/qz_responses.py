@@ -12,6 +12,7 @@ try:
         _custom_apply_patch_call_to_function_call,
         _custom_apply_patch_output_to_function_output,
         _parse_apply_patch_arguments,
+        ensure_apply_patch_tool_policy,
         normalize_apply_patch_input_for_llamacpp,
         normalize_apply_patch_output_for_codex,
     )
@@ -28,6 +29,7 @@ except ImportError:
         _custom_apply_patch_call_to_function_call,
         _custom_apply_patch_output_to_function_output,
         _parse_apply_patch_arguments,
+        ensure_apply_patch_tool_policy,
         normalize_apply_patch_input_for_llamacpp,
         normalize_apply_patch_output_for_codex,
     )
@@ -339,6 +341,8 @@ def normalize_tools_for_llamacpp(body: dict) -> dict:
     tools = body.get("tools")
     if not isinstance(tools, list):
         return body
+
+    ensure_apply_patch_tool_policy(body)
 
     clean = []
     dropped = []
