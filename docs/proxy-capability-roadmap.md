@@ -224,10 +224,11 @@ Current behavior:
 - Empty-argument function-call history and matching parse-error outputs are
   dropped before replay to llama.cpp.
 - Executable public function calls are buffered until arguments are complete.
-- Streamed tool-call state, guard accounting, and public item conversion now
-  live behind `proxy/qz_tool_lifecycle.py`.
-- Completed function calls now pass through a small lifecycle decision boundary
-  that separates proxy-local execution from Codex-visible public tool items.
+- Streamed tool-call state and guard accounting now live behind
+  `proxy/qz_tool_lifecycle.py`.
+- Completed function calls now pass through the active proxy tool registry,
+  which separates proxy-local execution from Codex-visible public tool items
+  and applies protocol-adapter output conversion.
 - Proxy-local tool continuation now returns an explicit split between the public
   item Codex sees and the private upstream replay items the model needs for the
   next hop.

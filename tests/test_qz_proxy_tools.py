@@ -103,6 +103,38 @@ class ProxyToolRegistryTests(unittest.TestCase):
         self.assertEqual(patch_decision.kind, "public")
         self.assertEqual(patch_decision.public_item["type"], "apply_patch_call")
 
+    def test_completed_call_decision_keeps_unknown_function_call_public(self):
+        registry = make_proxy_local_tool_registry(FakeWebRuntime())
+        call = {
+            "id": "fc_exec",
+            "type": "function_call",
+            "call_id": "call_exec",
+            "name": "exec_command",
+            "arguments": "{\"cmd\":\"pwd\"}",
+        }
+
+        decision = registry.completed_call_decision(call, "native")
+
+        self.assertEqual(decision.kind, "public")
+        self.assertEqual(decision.public_item, call)
+
+    def test_continuation_result_returns_public_protocol_adapter_item(self):
+        registry = make_proxy_local_tool_registry(FakeWebRuntime())
+        decision = registry.completed_call_decision({
+            "id": "fc_patch",
+            "type": "function_call",
+            "call_id": "call_patch",
+            "name": "apply_patch",
+            "arguments": "{\"operation\":{\"type\":\"create_file\",\"path\":\"notes.md\",\"diff\":\"@@\\n+ok\\n\"}}",
+        }, "custom")
+
+        result = registry.continuation_result(decision)
+
+        self.assertEqual(result.public_item["type"], "custom_tool_call")
+        self.assertEqual(result.public_item["name"], "apply_patch")
+        self.assertEqual(result.upstream_items, ())
+        self.assertEqual(result.sources, ())
+
     def test_execute_returns_public_item_and_hidden_upstream_continuation_items(self):
         web_runtime = FakeWebRuntime()
         registry = make_proxy_local_tool_registry(web_runtime)
@@ -132,6 +164,46 @@ class ProxyToolRegistryTests(unittest.TestCase):
         self.assertEqual(result.upstream_items[0], call)
         self.assertEqual(result.upstream_items[1]["type"], "function_call_output")
         self.assertEqual(result.sources, ({"url": "https://example.test"},))
+
+    def test_continuation_result_executes_proxy_local_tool_with_context(self):
+        web_runtime = FakeWebRuntime()
+        registry = make_proxy_local_tool_registry(web_runtime)
+        call = {
+            "id": "fc_web",
+            "type": "function_call",
+            "call_id": "call_web",
+            "name": "web_search",
+            "arguments": "{\"query\":\"quantzhai\"}",
+        }
+        counters = {"search": 0, "open_page": 0}
+        seen = set()
+        decision = registry.completed_call_decision(call, "native")
+
+        result = registry.continuation_result(
+            decision,
+            ProxyToolExecutionContext(
+                request_id="qz_req_test",
+                counters=counters,
+                seen_signatures=seen,
+            ),
+        )
+
+        self.assertEqual(web_runtime.calls[0]["request_id"], "qz_req_test")
+        self.assertEqual(result.public_item["type"], "web_search_call")
+        self.assertEqual(result.upstream_items[0], call)
+
+    def test_continuation_result_requires_context_for_proxy_local_tool(self):
+        registry = make_proxy_local_tool_registry(FakeWebRuntime())
+        decision = registry.completed_call_decision({
+            "id": "fc_web",
+            "type": "function_call",
+            "call_id": "call_web",
+            "name": "web_search",
+            "arguments": "{\"query\":\"quantzhai\"}",
+        }, "native")
+
+        with self.assertRaises(ValueError):
+            registry.continuation_result(decision)
 
 
 if __name__ == "__main__":

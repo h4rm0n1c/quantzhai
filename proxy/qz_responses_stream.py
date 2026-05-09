@@ -23,7 +23,7 @@ try:
         rewrite_sse_payload,
     )
     from .qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
-    from .qz_tool_lifecycle import StreamToolCallState, tool_continuation_result
+    from .qz_tool_lifecycle import StreamToolCallState
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS
     from .qz_telemetry import RequestTelemetryEmitter
 except ImportError:
@@ -45,7 +45,7 @@ except ImportError:
         rewrite_sse_payload,
     )
     from qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
-    from qz_tool_lifecycle import StreamToolCallState, tool_continuation_result
+    from qz_tool_lifecycle import StreamToolCallState
     from qz_tool_web import WEB_SEARCH_MAX_HOPS
     from qz_telemetry import RequestTelemetryEmitter
 
@@ -715,7 +715,7 @@ class ResponsesStreamRuntime:
                                 )
                                 break
 
-                            result = tool_continuation_result(decision)
+                            result = self.proxy_tool_registry.continuation_result(decision)
                             public_item = result.public_item
                             public_trace.append(public_item)
                             sequence, forwarded_chunks, forwarded_bytes = self._emit_public_tool_item(public_item, public_index, sequence)

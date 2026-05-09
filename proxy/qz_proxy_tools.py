@@ -2,11 +2,18 @@
 from dataclasses import dataclass, field
 
 try:
+    from .qz_tool_apply_patch import APPLY_PATCH_TOOL_ADAPTER
     from .qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
-    from .qz_tool_lifecycle import ToolContinuationResult, completed_tool_call_decision
+    from .qz_tool_lifecycle import CompletedToolCallDecision, ToolContinuationResult
+    from .qz_tools import ToolRegistry
 except ImportError:
+    from qz_tool_apply_patch import APPLY_PATCH_TOOL_ADAPTER
     from qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
-    from qz_tool_lifecycle import ToolContinuationResult, completed_tool_call_decision
+    from qz_tool_lifecycle import CompletedToolCallDecision, ToolContinuationResult
+    from qz_tools import ToolRegistry
+
+
+DEFAULT_TOOL_REGISTRY = ToolRegistry((APPLY_PATCH_TOOL_ADAPTER, WEB_SEARCH_TOOL_ADAPTER))
 
 
 @dataclass
@@ -65,7 +72,8 @@ class WebSearchProxyToolExecutor(ProxyLocalToolExecutor):
 
 
 class ProxyLocalToolRegistry:
-    def __init__(self, executors):
+    def __init__(self, executors, tool_registry=None):
+        self.tool_registry = tool_registry or DEFAULT_TOOL_REGISTRY
         self._executors = {
             executor.function_name: executor
             for executor in executors
@@ -93,7 +101,28 @@ class ProxyLocalToolRegistry:
         )
 
     def completed_call_decision(self, call: dict, apply_patch_output_style: str):
-        return completed_tool_call_decision(call, apply_patch_output_style, self.function_names)
+        if self.is_proxy_local_call(call):
+            return CompletedToolCallDecision(kind="proxy_local", call=call)
+        public_item = self.tool_registry.output_to_codex(call, apply_patch_output_style)
+        return CompletedToolCallDecision(
+            kind="public",
+            call=call,
+            public_item=public_item if public_item is not None else call,
+        )
+
+    def continuation_result(
+        self,
+        decision: CompletedToolCallDecision,
+        context: ProxyToolExecutionContext | None = None,
+    ) -> ToolContinuationResult:
+        if decision.kind == "proxy_local":
+            if context is None:
+                raise ValueError("context is required for proxy-local tool calls")
+            return self.execute(decision.call, context)
+
+        if decision.public_item is None:
+            raise ValueError("public tool call decision missing public_item")
+        return ToolContinuationResult(public_item=decision.public_item)
 
     def executor_for_call(self, call: dict) -> ProxyLocalToolExecutor:
         if not self.is_proxy_local_call(call):

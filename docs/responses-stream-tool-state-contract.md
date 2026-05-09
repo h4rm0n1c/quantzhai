@@ -52,7 +52,8 @@ mode:
   upstream.
 
 Proxy-executed tools have a `ProxyLocalToolRegistry` for completed-call
-classification and execution. The registry also exposes the lifecycle spec used
+classification, public protocol-adapter conversion, proxy-local execution, and
+continuation-result shaping. The registry also exposes the lifecycle spec used
 by streaming code for Codex-visible event shape, continuation hop budget, and
 progress/completed event stages. `web_search` is the first proxy-local executor
 and is used by both streamed and non-streamed `/v1/responses` paths.
@@ -62,10 +63,13 @@ can normalize a list of output items back to the client shape, and the
 non-streamed Responses path uses that registry instead of calling a
 tool-specific patch helper directly.
 
-Proxy-local classification is registry-owned. The lifecycle helpers do not carry
-their own default list of private tool names; streamed and non-streamed runtimes
-ask the active `ProxyLocalToolRegistry` to classify completed calls. This keeps
-future proxy-side tools from requiring a second hard-coded allowlist.
+Completed-call routing is registry-owned. The lifecycle helpers do not carry
+their own default list of private tool names, and the stream runtime does not
+call adapter-specific public-output helpers directly. Streamed runtimes ask the
+active `ProxyLocalToolRegistry` to classify completed calls and return either a
+Codex-visible public item or a proxy-local continuation result. This keeps
+future proxy-side tools from requiring a second hard-coded allowlist or public
+conversion branch.
 
 A proxy-local executor owns:
 
@@ -99,11 +103,11 @@ Implementation:
 proxy/qz_responses_stream.py   streamed Responses runtime and continuation loop
 proxy/qz_streaming.py          SSE parser and streamed function-call assembler
 proxy/qz_responses.py          request normalization, tool filtering, history cleanup
-proxy/qz_proxy_tools.py        proxy-local tool executor registry and execution
-                               context
-proxy/qz_tool_lifecycle.py     private streamed tool-call state, completed-call
-                               routing, public item conversion, and upstream
-                               continuation item shaping
+proxy/qz_proxy_tools.py        completed-call routing, public adapter conversion,
+                               proxy-local tool registry, execution context,
+                               and continuation-result shaping
+proxy/qz_tool_lifecycle.py     private streamed tool-call state and malformed
+                               historical tool-call filtering
 proxy/qz_tool_apply_patch.py   apply_patch envelope adaptation
 proxy/qz_runtime_io.py         request-scoped capture helpers
 proxy/qz_telemetry.py          status and telemetry events
@@ -589,9 +593,11 @@ before broad stream/tool refactors.
 - `responses_input/malformed_empty_tool_history.json`: empty tool-call plus
   parse-error output is filtered while valid neighboring history survives
 - `tests/test_qz_tool_lifecycle.py`: pins private streamed function-call state,
-  guard accounting, malformed historical tool-call filtering, completed-call
-  routing decisions, apply_patch public item conversion, and proxy-local
-  upstream continuation shaping
+  guard accounting, malformed historical tool-call filtering, and legacy
+  lifecycle helper behavior
+- `tests/test_qz_proxy_tools.py`: pins completed-call routing decisions,
+  apply_patch public item conversion, proxy-local execution context, and
+  upstream continuation shaping through the active proxy tool registry
 - `tests/smoke_apply_patch_codex_exec.py`: hermetic fake-upstream Codex exec
   smoke pins the end-to-end apply_patch handoff and public Codex JSONL
   `file_change` started/completed lifecycle
@@ -619,9 +625,9 @@ Still needed:
   headers well enough for Codex to apply the next update patch. Golden replay
   fixtures now cover that metadata normalization for native and custom
   Codex-facing output styles.
-- Tool lifecycle now has an initial internal boundary for streamed call state,
-  malformed historical tool-call filtering, public item conversion,
-  completed-call routing decisions, and proxy-local continuation shaping, but
+- Tool lifecycle now has an internal boundary for streamed call state,
+  malformed historical tool-call filtering, completed-call routing decisions,
+  public protocol-adapter conversion, and proxy-local continuation shaping, but
   some broader request-normalization ownership still needs tightening.
 - No redaction layer for captures.
 - Request-scoped captures are not grouped under a higher-level run id.
