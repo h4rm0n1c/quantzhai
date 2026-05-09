@@ -11,7 +11,7 @@ CAPTURE_CONTRACT_SCHEMA = "qz.capture.contract.v1"
 
 try:
     from .qz_config_report import effective_config_payload
-    from .qz_telemetry import TELEMETRY_RECENT_SCHEMA
+    from .qz_telemetry import TELEMETRY_RECENT_SCHEMA, TELEMETRY_REQUEST_SCHEMA
     from .qz_proxy_config import CURRENT_API_ENDPOINTS, LEGACY_API_ENDPOINTS, api_contract_payload
     from .qz_responses import (
         _apply_patch_output_style,
@@ -42,7 +42,7 @@ try:
     )
 except ImportError:
     from qz_config_report import effective_config_payload
-    from qz_telemetry import TELEMETRY_RECENT_SCHEMA
+    from qz_telemetry import TELEMETRY_RECENT_SCHEMA, TELEMETRY_REQUEST_SCHEMA
     from qz_proxy_config import CURRENT_API_ENDPOINTS, LEGACY_API_ENDPOINTS, api_contract_payload
     from qz_responses import (
         _apply_patch_output_style,
@@ -176,6 +176,25 @@ class RequestRouter:
                 runtime = None
             payload = self.handler.telemetry.recent_payload(limit=limit, runtime=runtime)
             payload["schema"] = TELEMETRY_RECENT_SCHEMA
+            self.handler._send_json(200, payload)
+            return
+
+        if self.handler.path.startswith("/qz/telemetry/request"):
+            limit = 200
+            request_id = ""
+            try:
+                query = self.handler.path.split("?", 1)[1] if "?" in self.handler.path else ""
+                params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
+                request_id = params.get("request_id") or params.get("id") or ""
+                limit = int(params.get("limit", limit))
+            except Exception:
+                limit = 200
+            try:
+                runtime = self.handler._model_router().status_summary(self.handler.path)
+            except Exception:
+                runtime = None
+            payload = self.handler.telemetry.request_payload(request_id, limit=limit, runtime=runtime)
+            payload["schema"] = TELEMETRY_REQUEST_SCHEMA
             self.handler._send_json(200, payload)
             return
 
@@ -671,6 +690,7 @@ class RequestRouter:
                         tool_call,
                         counters,
                         seen_signatures,
+                        request_id=request_id,
                     ),
                 )
                 public_trace.append(result.public_item)

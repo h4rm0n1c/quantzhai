@@ -716,9 +716,14 @@ tools itself. Live `qz-codex exec --json -m prompt-compiler` smoke on
 2026-05-09 confirmed Codex sees `item.started web_search`,
 `item.completed web_search`, the final assistant message, and terminal usage.
 
-Remaining relay gaps are apply_patch handoff edge cases, telemetry retention for
-tool lifecycle rows, TUI rendering, and Codex `/status` token/context usage
-relay.
+Telemetry retention first pass is implemented: the proxy keeps a bounded
+per-request lifecycle summary for important request/tool events and exposes it
+through `/qz/status`, `/qz/telemetry/state`, and
+`/qz/telemetry/request?request_id=<id>`. `qz-top` and `qz-thoughts` merge that
+latest completed request summary with `/qz/telemetry/recent`.
+
+Remaining relay gaps are apply_patch handoff edge cases, TUI rendering, and
+Codex `/status` token/context usage relay.
 ```
 
 Then do:

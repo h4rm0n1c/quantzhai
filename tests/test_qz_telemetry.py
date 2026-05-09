@@ -72,6 +72,43 @@ class TelemetryBusTests(unittest.TestCase):
         self.assertEqual([event["type"] for event in bus.recent()], ["two", "three"])
         self.assertEqual([event["type"] for event in bus.recent(1)], ["three"])
 
+    def test_request_events_survive_recent_ring_eviction(self):
+        bus = TelemetryBus(capacity=2, request_capacity=3, request_event_capacity=5)
+
+        bus.emit("tool_call_started", {"request_id": "req-1", "tool": "web_search"})
+        bus.emit("tool_call_completed", {"request_id": "req-1", "tool": "web_search"})
+        bus.emit("sse_event", {"request_id": "req-1", "type": "response.output_text.delta"})
+        bus.emit("noise", {"request_id": "req-2"})
+        bus.emit("request_completed", {"request_id": "req-1", "status": 200})
+
+        self.assertEqual([event["type"] for event in bus.recent()], ["noise", "request_completed"])
+        self.assertEqual(
+            [event["type"] for event in bus.request_events("req-1")],
+            ["tool_call_started", "tool_call_completed", "request_completed"],
+        )
+
+        latest_request = bus.latest_request_summary()
+        self.assertEqual(latest_request["latest_completed_request_id"], "req-1")
+        self.assertEqual(
+            [event["type"] for event in latest_request["latest_completed_events"]],
+            ["tool_call_started", "tool_call_completed", "request_completed"],
+        )
+
+        payload = bus.request_payload("req-1", limit=2)
+        self.assertEqual(payload["schema"], "qz.telemetry.request.v1")
+        self.assertEqual([event["type"] for event in payload["events"]], ["tool_call_completed", "request_completed"])
+
+    def test_request_event_index_honors_request_capacity(self):
+        bus = TelemetryBus(capacity=10, request_capacity=2, request_event_capacity=5)
+
+        bus.emit("request_started", {"request_id": "req-1"})
+        bus.emit("request_started", {"request_id": "req-2"})
+        bus.emit("request_started", {"request_id": "req-3"})
+
+        self.assertEqual(bus.request_events("req-1"), [])
+        self.assertEqual([event["request_id"] for event in bus.request_events("req-2")], ["req-2"])
+        self.assertEqual([event["request_id"] for event in bus.request_events("req-3")], ["req-3"])
+
     def test_state_and_recent_payload_include_runtime_truth(self):
         bus = TelemetryBus(capacity=3)
         bus.emit("request_completed", {"request_id": "req-1"})
@@ -92,6 +129,7 @@ class TelemetryBusTests(unittest.TestCase):
         latest_request = bus.latest_request_summary()
         self.assertEqual(latest_request["latest_completed_request_id"], "req-1")
         self.assertEqual(latest_request["latest_completed"]["request_id"], "req-1")
+        self.assertEqual([event["type"] for event in latest_request["latest_completed_events"]], ["request_completed"])
 
     def test_stream_open_event_has_schema_and_runtime(self):
         bus = TelemetryBus(capacity=3)

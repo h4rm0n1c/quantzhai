@@ -760,7 +760,7 @@ class WebSearchRuntime:
             "top_k": top_k,
         }
 
-    def execute_web_search_call(self, call_item: dict, counters: dict, seen_signatures: set):
+    def execute_web_search_call(self, call_item: dict, counters: dict, seen_signatures: set, request_id: str = ""):
         args = self._parse_web_search_arguments(call_item.get("arguments") or "{}")
         action = args["action"]
         query = args.get("query")
@@ -783,6 +783,7 @@ class WebSearchRuntime:
 
         started_at = _now_float()
         self._emit("tool_call_started", {
+            "request_id": request_id or call_item.get("request_id") or "",
             "tool": "web_search",
             "action": action,
             "call_id": call_item.get("call_id") or call_item.get("id"),
@@ -887,6 +888,7 @@ class WebSearchRuntime:
         }
 
         self._emit("tool_call_completed", {
+            "request_id": request_id or call_item.get("request_id") or "",
             "tool": "web_search",
             "action": action,
             "call_id": call_item.get("call_id") or call_item.get("id"),

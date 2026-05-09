@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from collections import Counter, deque
+from collections import Counter, OrderedDict, deque
 from contextlib import contextmanager
 from queue import Empty, Full, Queue
 from threading import Lock
@@ -10,15 +10,40 @@ import time
 TELEMETRY_SCHEMA = "qz.telemetry.event.v1"
 TELEMETRY_STATE_SCHEMA = "qz.telemetry.state.v1"
 TELEMETRY_RECENT_SCHEMA = "qz.telemetry.recent.v1"
+TELEMETRY_REQUEST_SCHEMA = "qz.telemetry.request.v1"
 TELEMETRY_STREAM_SCHEMA = "qz.telemetry.stream.v1"
 UNKNOWN_RUNTIME_SCHEMA = "qz.runtime.summary.v1"
 
+REQUEST_RETAINED_EVENT_TYPES = {
+    "prompt_contract",
+    "private_tool_call_aborted",
+    "reasoning_only_aborted",
+    "request_admitted",
+    "request_completed",
+    "request_failed",
+    "request_queued",
+    "request_started",
+    "stream_event_timing",
+    "throughput_sample",
+    "tool_call_completed",
+    "tool_call_started",
+}
+
 
 class TelemetryBus:
-    def __init__(self, capacity: int = 1000, subscriber_queue_size: int = 200):
+    def __init__(
+        self,
+        capacity: int = 1000,
+        subscriber_queue_size: int = 200,
+        request_capacity: int = 50,
+        request_event_capacity: int = 200,
+    ):
         self.capacity = max(1, int(capacity))
         self.subscriber_queue_size = max(1, int(subscriber_queue_size))
+        self.request_capacity = max(1, int(request_capacity))
+        self.request_event_capacity = max(1, int(request_event_capacity))
         self._events = deque(maxlen=self.capacity)
+        self._request_events = OrderedDict()
         self._counters = Counter()
         self._subscribers = set()
         self._seq = itertools.count(1)
@@ -44,6 +69,7 @@ class TelemetryBus:
 
         with self._lock:
             self._events.append(event)
+            self._append_request_event(event)
             self._counters[event["type"]] += 1
             if event["type"] == "request_completed":
                 self._latest_completed = event
@@ -79,6 +105,7 @@ class TelemetryBus:
             latest = self._events[-1] if self._events else None
             latest_completed = self._latest_completed
             latest_throughput = self._latest_throughput
+            latest_completed_events = self._request_events_for_locked(self._event_request_id(latest_completed))
             event_count = len(self._events)
             counters = dict(self._counters)
 
@@ -99,6 +126,7 @@ class TelemetryBus:
             "latest": latest,
             "latest_completed": latest_completed,
             "latest_throughput": latest_throughput,
+            "latest_completed_events": latest_completed_events,
         }
 
     def recent_payload(self, limit: int | None = None, runtime: dict | None = None) -> dict:
@@ -112,10 +140,37 @@ class TelemetryBus:
         with self._lock:
             latest_completed = self._latest_completed
             latest_throughput = self._latest_throughput
+            request_id = self._event_request_id(latest_completed)
+            latest_completed_events = self._request_events_for_locked(request_id)
         return {
-            "latest_completed_request_id": self._event_request_id(latest_completed),
+            "latest_completed_request_id": request_id,
             "latest_completed": latest_completed,
             "latest_throughput": latest_throughput,
+            "latest_completed_events": latest_completed_events,
+        }
+
+    def request_events(self, request_id: str, limit: int | None = None) -> list[dict]:
+        request_id = str(request_id or "")
+        with self._lock:
+            events = self._request_events_for_locked(request_id)
+        if limit is None:
+            return events
+        try:
+            limit = int(limit)
+        except Exception:
+            limit = len(events)
+        limit = max(0, limit)
+        if limit == 0:
+            return []
+        return events[-limit:]
+
+    def request_payload(self, request_id: str, limit: int | None = None, runtime: dict | None = None) -> dict:
+        request_id = str(request_id or "")
+        return {
+            "schema": TELEMETRY_REQUEST_SCHEMA,
+            "request_id": request_id,
+            "events": self.request_events(request_id, limit=limit),
+            "state": self.state(runtime=runtime),
         }
 
     def stream_open_event(self, runtime: dict | None = None) -> dict:
@@ -157,6 +212,33 @@ class TelemetryBus:
             subscriber.put_nowait(event)
         except Full:
             pass
+
+    def _append_request_event(self, event: dict):
+        request_id = event.get("request_id")
+        if not isinstance(request_id, str) or not request_id:
+            return
+        event_type = event.get("type")
+        if event_type not in REQUEST_RETAINED_EVENT_TYPES:
+            return
+
+        events = self._request_events.get(request_id)
+        if events is None:
+            events = deque(maxlen=self.request_event_capacity)
+            self._request_events[request_id] = events
+        else:
+            self._request_events.move_to_end(request_id)
+        events.append(event)
+
+        while len(self._request_events) > self.request_capacity:
+            self._request_events.popitem(last=False)
+
+    def _request_events_for_locked(self, request_id: str) -> list[dict]:
+        if not request_id:
+            return []
+        events = self._request_events.get(request_id)
+        if not events:
+            return []
+        return list(events)
 
     @staticmethod
     def _request_id_from_payload(payload: dict) -> str:

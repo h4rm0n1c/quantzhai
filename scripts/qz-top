@@ -659,7 +659,18 @@ def merge_telemetry(rates: Rates, telemetry: Optional[dict]) -> Rates:
         _apply_throughput_sample_telemetry(rates, latest_throughput.get("payload") if isinstance(latest_throughput.get("payload"), dict) else latest_throughput)
 
     rows = list(rates.recent or [])
-    for event in telemetry.get("events") or []:
+    events = []
+    seen_seq = set()
+    for event in (state.get("latest_completed_events") or []) + (telemetry.get("events") or []):
+        if not isinstance(event, dict):
+            continue
+        seq = event.get("seq")
+        if seq is not None and seq in seen_seq:
+            continue
+        if seq is not None:
+            seen_seq.add(seq)
+        events.append(event)
+    for event in events:
         row = telemetry_row(event)
         if row:
             rows.append(row)

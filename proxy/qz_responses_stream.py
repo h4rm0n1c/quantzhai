@@ -645,6 +645,7 @@ class ResponsesStreamRuntime:
                                         call,
                                         counters,
                                         seen_signatures,
+                                        request_id=self.request_id,
                                     ),
                                 )
                                 public_item = result.public_item

@@ -262,7 +262,22 @@ with `usage.input_tokens=11303`, `usage.output_tokens=6`, and
 therefore present for the proxy-local search path. Request-scoped capture files
 were not retained for this smoke, and `/qz/telemetry/recent` did not retain the
 request's web-search lifecycle rows by the time it was queried, so telemetry
-retention remains a separate observability gap.
+retention was handled as a separate observability gap.
+
+The proxy now retains a bounded per-request lifecycle summary for important
+events such as request start/completion, throughput, prompt contract,
+tool-call start/completion, private tool aborts, and reasoning-only aborts.
+That retained summary is exposed through:
+
+```text
+/qz/status latest_request.latest_completed_events
+/qz/telemetry/state latest_completed_events
+/qz/telemetry/request?request_id=<id>
+```
+
+`qz-top` and `qz-thoughts` merge `state.latest_completed_events` with
+`/qz/telemetry/recent` so completed tool lifecycle rows do not disappear from
+local monitors just because the short recent ring has moved on.
 
 Remaining live-state gaps should be investigated in the harder cases:
 

@@ -607,7 +607,18 @@ def load_telemetry_state(limit: int = 200) -> Optional[ThoughtState]:
     if not isinstance(data, dict):
         return None
 
-    events = [event for event in (data.get("events") or []) if isinstance(event, dict)]
+    telemetry_state = data.get("state") if isinstance(data.get("state"), dict) else {}
+    events = []
+    seen_seq = set()
+    for event in (telemetry_state.get("latest_completed_events") or []) + (data.get("events") or []):
+        if not isinstance(event, dict):
+            continue
+        seq = event.get("seq")
+        if seq is not None and seq in seen_seq:
+            continue
+        if seq is not None:
+            seen_seq.add(seq)
+        events.append(event)
     request_floor_seq = None
     for event in events:
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
@@ -616,7 +627,7 @@ def load_telemetry_state(limit: int = 200) -> Optional[ThoughtState]:
             request_floor_seq = seq
 
     state = ThoughtState(path=Path("proxy-telemetry"))
-    state.status = str((data.get("state") or {}).get("status") or "ok")
+    state.status = str(telemetry_state.get("status") or "ok")
     prefix_rows: List[Tuple[str, str]] = []
     latest_ts = 0.0
     for event in events:
