@@ -47,16 +47,20 @@ def public_tool_item_from_function_call(call: dict, apply_patch_output_style: st
     return call
 
 
-def is_proxy_local_function_call(call: dict) -> bool:
+def is_proxy_local_function_call(call: dict, proxy_local_tool_names=PROXY_LOCAL_FUNCTION_TOOLS) -> bool:
     return (
         isinstance(call, dict)
         and call.get("type") == "function_call"
-        and call.get("name") in PROXY_LOCAL_FUNCTION_TOOLS
+        and call.get("name") in proxy_local_tool_names
     )
 
 
-def completed_tool_call_decision(call: dict, apply_patch_output_style: str) -> CompletedToolCallDecision:
-    if is_proxy_local_function_call(call):
+def completed_tool_call_decision(
+    call: dict,
+    apply_patch_output_style: str,
+    proxy_local_tool_names=PROXY_LOCAL_FUNCTION_TOOLS,
+) -> CompletedToolCallDecision:
+    if is_proxy_local_function_call(call, proxy_local_tool_names):
         return CompletedToolCallDecision(kind="proxy_local", call=call)
     return CompletedToolCallDecision(
         kind="public",

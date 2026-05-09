@@ -746,31 +746,30 @@ while moving those contracts behind clearer ownership.
 Concrete target:
 
 ```text
-Add a proxy-local tool executor registry before adding more proxy-executed
-tools. The registry should make the streaming and non-streaming paths call the
-same interface for:
+A first proxy-local tool executor registry is implemented before adding more
+proxy-executed tools. The streaming and non-streaming paths call the same
+interface for:
 
 - deciding whether a completed function_call is proxy-local
 - executing the tool with request_id, counters, cache, and telemetry context
 - returning the Codex-visible display item and hidden upstream continuation
   items
 - emitting tool_call_started/tool_call_completed or failure telemetry
-- emitting safe Codex-visible lifecycle events for tools that have a supported
-  Responses item shape
 
-Move web_search onto that interface first. Keep apply_patch as a protocol
-adapter and Codex handoff path unless a separate security decision explicitly
-adds proxy-side patch execution.
+web_search is now on that interface. Stream-specific lifecycle event emission
+still lives in the stream runtime because it owns SSE sequencing and forwarded
+byte accounting. Keep apply_patch as a protocol adapter and Codex handoff path
+unless a separate security decision explicitly adds proxy-side patch execution.
 ```
 
 Success criteria:
 
 ```text
-A new proxy-local tool should not require bespoke edits in both
-qz_request_router.py and qz_responses_stream.py. It should provide an executor
-implementation, tests for streaming and non-streaming continuation, and docs for
-its Codex-visible event shape. Tool declaration adapters may still be separate
-when a tool only needs shape conversion rather than proxy execution.
+A new proxy-local tool should provide an executor implementation, tests for
+streaming and non-streaming continuation, and docs for its Codex-visible event
+shape. Some streamed event wiring may remain in qz_responses_stream.py when the
+tool needs custom SSE lifecycle events. Tool declaration adapters may still be
+separate when a tool only needs shape conversion rather than proxy execution.
 ```
 
 Then do:

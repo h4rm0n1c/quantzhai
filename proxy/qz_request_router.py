@@ -29,7 +29,8 @@ try:
     )
     from .qz_responses_stream import ResponsesStreamRuntime
     from .qz_sse import _normalize_response_usage, make_sse_block
-    from .qz_tool_lifecycle import completed_tool_call_decision, is_proxy_local_function_call, tool_continuation_result
+    from .qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
+    from .qz_tool_lifecycle import completed_tool_call_decision
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import (
         append_capture,
@@ -60,7 +61,8 @@ except ImportError:
     )
     from qz_responses_stream import ResponsesStreamRuntime
     from qz_sse import _normalize_response_usage, make_sse_block
-    from qz_tool_lifecycle import completed_tool_call_decision, is_proxy_local_function_call, tool_continuation_result
+    from qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
+    from qz_tool_lifecycle import completed_tool_call_decision
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import (
         append_capture,
@@ -650,6 +652,7 @@ class RequestRouter:
         counters = {"search": 0, "open_page": 0}
         seen_signatures = set()
         web_runtime = self._web_runtime()
+        proxy_tool_registry = make_proxy_local_tool_registry(web_runtime)
 
         for _hop in range(WEB_SEARCH_MAX_HOPS):
             hop_body = json.loads(json.dumps(working_body))
@@ -663,7 +666,7 @@ class RequestRouter:
             output_items = out.get("output") or []
             web_calls = [
                 item for item in output_items
-                if is_proxy_local_function_call(item)
+                if proxy_tool_registry.is_proxy_local_call(item)
             ]
 
             if not web_calls:
@@ -679,18 +682,21 @@ class RequestRouter:
 
             next_input = list(hop_body.get("input") or [])
             for item in output_items:
-                if not is_proxy_local_function_call(item):
+                if not proxy_tool_registry.is_proxy_local_call(item):
                     next_input.append(item)
                     continue
 
-                decision = completed_tool_call_decision(item, apply_patch_output_style)
-                result = tool_continuation_result(
-                    decision,
-                    proxy_local_executor=lambda tool_call: web_runtime.execute_web_search_call(
-                        tool_call,
-                        counters,
-                        seen_signatures,
+                decision = completed_tool_call_decision(
+                    item,
+                    apply_patch_output_style,
+                    proxy_tool_registry.function_names,
+                )
+                result = proxy_tool_registry.execute(
+                    decision.call,
+                    ProxyToolExecutionContext(
                         request_id=request_id,
+                        counters=counters,
+                        seen_signatures=seen_signatures,
                     ),
                 )
                 public_trace.append(result.public_item)

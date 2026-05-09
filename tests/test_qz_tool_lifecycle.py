@@ -100,6 +100,21 @@ class ToolLifecycleTests(unittest.TestCase):
         self.assertEqual(decision.call, call)
         self.assertIsNone(decision.public_item)
 
+    def test_completed_tool_call_decision_uses_supplied_proxy_local_names(self):
+        call = {
+            "id": "fc_custom",
+            "type": "function_call",
+            "call_id": "call_custom",
+            "name": "custom_local",
+            "arguments": "{}",
+        }
+
+        decision = completed_tool_call_decision(call, "native", frozenset({"custom_local"}))
+
+        self.assertTrue(is_proxy_local_function_call(call, frozenset({"custom_local"})))
+        self.assertEqual(decision.kind, "proxy_local")
+        self.assertEqual(decision.call, call)
+
     def test_completed_tool_call_decision_adapts_public_apply_patch(self):
         call = {
             "id": "fc_patch",

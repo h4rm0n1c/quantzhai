@@ -25,30 +25,30 @@ tested as proxy-executed tools.
 
 ## Proxy-Local Tool Boundary
 
-Status: planned hardening target.
+Status: first pass implemented.
 
 QuantZhai currently has a `ToolAdapter` registry for declaration and item-shape
-normalization. That is not yet a full proxy-local execution interface.
-`web_search` is the first proxy-executed tool, but its execution and public
-lifecycle wiring still touch both the streaming and non-streaming response
-paths.
+normalization. Proxy-executed tools now have a separate `ProxyLocalToolRegistry`
+for completed-call classification and execution. `web_search` is the first
+proxy-local executor and is used by both streamed and non-streamed
+`/v1/responses` paths.
 
-Before adding more proxy-executed tools, introduce a proxy-local tool executor
-registry. A proxy-local executor should own:
+A proxy-local executor owns:
 
 - the model-facing function name
 - completed-call classification
 - argument validation
 - local execution
 - hidden upstream continuation items
-- Codex-visible display/progress items
+- Codex-visible display items
 - request-scoped telemetry
 - failure-to-message behavior
 
-The same executor must be used by streamed and non-streamed `/v1/responses`
-paths. `web_search` should move onto this interface first. `apply_patch` should
-remain a protocol adapter and Codex execution handoff path unless a separate
-security review explicitly adds proxy-side filesystem writes.
+Stream-specific lifecycle event emission still lives in `qz_responses_stream.py`
+because SSE sequence numbers and forwarded byte accounting are owned by the
+stream runtime. `apply_patch` remains a protocol adapter and Codex execution
+handoff path unless a separate security review explicitly adds proxy-side
+filesystem writes.
 
 ## Source of Truth
 
@@ -58,6 +58,8 @@ Implementation:
 proxy/qz_responses_stream.py   streamed Responses runtime and continuation loop
 proxy/qz_streaming.py          SSE parser and streamed function-call assembler
 proxy/qz_responses.py          request normalization, tool filtering, history cleanup
+proxy/qz_proxy_tools.py        proxy-local tool executor registry and execution
+                               context
 proxy/qz_tool_lifecycle.py     private streamed tool-call state, completed-call
                                routing, public item conversion, and upstream
                                continuation item shaping
@@ -72,6 +74,7 @@ Regression tests:
 ```text
 tests/test_qz_responses_stream.py
 tests/test_qz_streaming.py
+tests/test_qz_proxy_tools.py
 tests/test_qz_tool_lifecycle.py
 tests/test_apply_patch_adapter.py
 tests/test_qz_runtime_io.py

@@ -22,6 +22,7 @@ try:
         rewrite_sse_payload,
         web_search_call_lifecycle_event,
     )
+    from .qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
     from .qz_tool_lifecycle import StreamToolCallState, completed_tool_call_decision, tool_continuation_result
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS
 except ImportError:
@@ -42,6 +43,7 @@ except ImportError:
         rewrite_sse_payload,
         web_search_call_lifecycle_event,
     )
+    from qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
     from qz_tool_lifecycle import StreamToolCallState, completed_tool_call_decision, tool_continuation_result
     from qz_tool_web import WEB_SEARCH_MAX_HOPS
 
@@ -127,12 +129,12 @@ class ResponsesStreamRuntime:
         self.upstream = upstream.rstrip("/")
         self.authorization = authorization or "Bearer local"
         self.reasoning_stream_format = reasoning_stream_format
-        self.web_runtime = web_runtime
         self.chunk_writer = chunk_writer
         self.stream_opener = stream_opener or self._open_upstream_stream
         self.capture_enabled = capture_enabled
         self.telemetry = telemetry
         self.request_id = request_id or ""
+        self.proxy_tool_registry = make_proxy_local_tool_registry(web_runtime)
         self.private_function_call_timeout_s = (
             PRIVATE_FUNCTION_CALL_TIMEOUT_S
             if private_function_call_timeout_s is None
@@ -287,13 +289,8 @@ class ResponsesStreamRuntime:
         return sequence, forwarded_chunks, forwarded_bytes
 
     def _emit_proxy_web_search_started(self, call: dict, public_index: int, sequence: int):
-        item_id = call.get("id") or call.get("call_id") or f"web_search_local_{public_index}"
-        public_item = {
-            "id": item_id,
-            "type": "web_search_call",
-            "status": "in_progress",
-            "call_id": call.get("call_id"),
-        }
+        public_item = self.proxy_tool_registry.started_public_item(call, public_index)
+        item_id = public_item["id"]
         chunks, sequence = public_tool_item_started_event(public_item, public_index, sequence)
         for stage in ("in_progress", "searching"):
             stage_chunks, sequence = web_search_call_lifecycle_event(stage, item_id, public_index, sequence)
@@ -617,6 +614,7 @@ class ResponsesStreamRuntime:
                             decision = completed_tool_call_decision(
                                 completed_call,
                                 apply_patch_output_style,
+                                self.proxy_tool_registry.function_names,
                             )
 
                             if decision.kind == "proxy_local":
@@ -639,13 +637,12 @@ class ResponsesStreamRuntime:
                                     forwarded_bytes=started_bytes,
                                     suppressed="function_call_private_started",
                                 )
-                                result = tool_continuation_result(
-                                    decision,
-                                    proxy_local_executor=lambda call: self.web_runtime.execute_web_search_call(
-                                        call,
-                                        counters,
-                                        seen_signatures,
+                                result = self.proxy_tool_registry.execute(
+                                    completed_call,
+                                    ProxyToolExecutionContext(
                                         request_id=self.request_id,
+                                        counters=counters,
+                                        seen_signatures=seen_signatures,
                                     ),
                                 )
                                 public_item = result.public_item

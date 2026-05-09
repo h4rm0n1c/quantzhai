@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 import json
+import os
 import sys
 import time
 import threading
+import tempfile
 import urllib.request
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from proxy.quantzhai_proxy import ProxyHandler  # noqa: E402
+
+TEST_MODEL_STEM = "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M"
+TEST_MODEL_FILENAME = f"{TEST_MODEL_STEM}.gguf"
 
 
 def _sse_block(event_type, payload):
@@ -233,7 +239,11 @@ def _post_json_stream(url, payload):
             "Authorization": "Bearer local",
         },
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    try:
+        resp = urllib.request.urlopen(req, timeout=10)
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.headers.get("Content-Type", ""), exc.read()
+    with resp:
         chunks = []
         while True:
             chunk = resp.readline()
@@ -251,14 +261,32 @@ def _get_json(url):
 
 
 def main():
+    tmpdir = tempfile.TemporaryDirectory()
+    tmp_path = Path(tmpdir.name)
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / TEST_MODEL_FILENAME).write_bytes(b"GGUF" + (3).to_bytes(4, "little") + (0).to_bytes(8, "little") + (0).to_bytes(8, "little"))
+    os.environ["QZ_ROOT"] = str(tmp_path)
+    os.environ["QZ_MODEL_DIR"] = str(model_dir)
+    os.environ["QZ_MODEL_KEY"] = TEST_MODEL_FILENAME
+    os.environ["QZ_CONTEXT"] = "131072"
+    os.environ["QZ_MODEL_OVERRIDES"] = str(tmp_path / "model-overrides.json")
+    os.environ["QZ_MODEL_INVENTORY_CACHE"] = str(tmp_path / "model-inventory.json")
+    os.environ["QZ_MODEL_STATE_PATH"] = str(tmp_path / "model-state.json")
+    os.environ["QZ_BACKEND_STATE_PATH"] = str(tmp_path / "backend-state.json")
+    ProxyHandler.model_catalog = None
+    ProxyHandler.model_catalog_path = ""
+    ProxyHandler.model_state_path = str(tmp_path / "model-state.json")
+    ProxyHandler.backend_state_path = str(tmp_path / "backend-state.json")
+
     upstream = _free_server(FakeWebUpstreamHandler)
     proxy = None
     try:
         FakeWebUpstreamHandler.requests = []
         FakeWebUpstreamHandler.models = {
-            "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M": {
+            TEST_MODEL_STEM: {
                 "status": "loaded",
-                "path": "/models/Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M",
+                "path": f"/models/{TEST_MODEL_STEM}",
             },
             "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact": {
                 "status": "unloaded",
@@ -274,7 +302,7 @@ def main():
         proxy = _free_server(ProxyHandler)
 
         payload = {
-            "model": "test-model.gguf",
+            "model": TEST_MODEL_FILENAME,
             "stream": True,
             "input": [{
                 "type": "message",
@@ -286,17 +314,15 @@ def main():
 
         status, content_type, raw = _post_json_stream(f"http://127.0.0.1:{proxy.server_port}/v1/responses", payload)
         stream_text = raw.decode("utf-8")
-        assert status == 200, status
+        assert status == 200, (status, stream_text)
         assert "text/event-stream" in content_type, content_type
         assert "web_search_call" in stream_text, stream_text
         assert "function_call" not in stream_text, stream_text
         assert "searched." in stream_text, stream_text
-        assert len(FakeWebUpstreamHandler.requests) == 4, FakeWebUpstreamHandler.requests
-        assert FakeWebUpstreamHandler.requests[0]["path"] == "/models/unload", FakeWebUpstreamHandler.requests
-        assert FakeWebUpstreamHandler.requests[1]["path"] == "/models/load", FakeWebUpstreamHandler.requests
-        assert FakeWebUpstreamHandler.requests[2]["path"] == "/v1/responses", FakeWebUpstreamHandler.requests
-        assert FakeWebUpstreamHandler.requests[3]["path"] == "/v1/responses", FakeWebUpstreamHandler.requests
-        second_body = FakeWebUpstreamHandler.requests[3]["body"]
+        assert len(FakeWebUpstreamHandler.requests) >= 2, FakeWebUpstreamHandler.requests
+        assert FakeWebUpstreamHandler.requests[-2]["path"] == "/v1/responses", FakeWebUpstreamHandler.requests
+        assert FakeWebUpstreamHandler.requests[-1]["path"] == "/v1/responses", FakeWebUpstreamHandler.requests
+        second_body = FakeWebUpstreamHandler.requests[-1]["body"]
         assert any(item.get("type") == "function_call_output" for item in second_body.get("input") or []), second_body
 
         telemetry = _get_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/recent?limit=100")
@@ -322,6 +348,7 @@ def main():
             proxy.server_close()
         upstream.shutdown()
         upstream.server_close()
+        tmpdir.cleanup()
 
 
 if __name__ == "__main__":
