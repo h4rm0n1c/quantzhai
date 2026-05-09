@@ -45,6 +45,176 @@ class RequestNormalizationTests(unittest.TestCase):
         self.assertEqual(out["metadata"]["qz_prompt_policy"]["mode"], "replace_client")
         self.assertTrue(out["metadata"]["qz_prompt_policy"]["replaced_client"])
 
+    def test_turn_harness_injects_into_latest_user_when_prompt_stack_absent(self):
+        body = {
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "old turn"}],
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "old answer"}],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "continue"}],
+                },
+            ],
+        }
+
+        out = normalize_responses_input_for_qwen(
+            body,
+            selected_model={"overrides": {"turn_harnesses": ["roleplay-private-thoughts"]}},
+        )
+
+        first_user = out["input"][0]["content"][0]["text"]
+        latest_user = out["input"][2]["content"][0]["text"]
+        self.assertEqual(first_user, "old turn")
+        self.assertNotIn("Behavioral guidance:", latest_user)
+        self.assertIn("Keep internal reasoning", latest_user)
+        self.assertIn("User message:", latest_user)
+        self.assertTrue(latest_user.endswith("continue"))
+        self.assertTrue(out["metadata"]["qz_turn_harness"]["applied"])
+        self.assertEqual(out["metadata"]["qz_turn_harness"]["active"], ["roleplay-private-thoughts"])
+
+    def test_turn_harness_skips_on_first_user_turn_even_with_system_prompt_stack(self):
+        body = {
+            "instructions": "native client prompt",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}],
+            }],
+        }
+
+        out = normalize_responses_input_for_qwen(
+            body,
+            selected_model={
+                "overrides": {
+                    "system_prompt": "profile system prompt",
+                    "prompt_append": "initial roleplay harness",
+                    "turn_harnesses": ["roleplay-private-thoughts"],
+                },
+            },
+        )
+
+        self.assertIn("profile system prompt", out["instructions"])
+        self.assertIn("initial roleplay harness", out["instructions"])
+        self.assertEqual(out["input"][0]["content"][0]["text"], "hello")
+        self.assertFalse(out["metadata"]["qz_turn_harness"]["applied"])
+        self.assertEqual(out["metadata"]["qz_turn_harness"]["skipped_reason"], "first_turn")
+
+    def test_turn_harness_applies_after_first_turn_with_system_prompt_stack(self):
+        body = {
+            "instructions": "native client prompt",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hello"}],
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "hi"}],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "later turn"}],
+                },
+            ],
+        }
+
+        out = normalize_responses_input_for_qwen(
+            body,
+            selected_model={
+                "overrides": {
+                    "system_prompt": "profile system prompt",
+                    "turn_harnesses": ["caveman-ultra-lock"],
+                },
+            },
+        )
+
+        self.assertIn("profile system prompt", out["instructions"])
+        self.assertTrue(out["metadata"]["qz_turn_harness"]["applied"])
+        self.assertEqual(out["input"][0]["content"][0]["text"], "hello")
+        self.assertIn("Caveman ultra is ON and locked", out["input"][2]["content"][0]["text"])
+
+    def test_turn_harness_dedupes_and_reports_unknown_names(self):
+        body = {
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "old"}],
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "old answer"}],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "fix this"}],
+                },
+            ],
+        }
+
+        out = normalize_responses_input_for_qwen(
+            body,
+            selected_model={
+                "overrides": {
+                    "turn_harness": "caveman-ultra-lock",
+                    "turn_harnesses": ["caveman-ultra-lock", "missing-harness"],
+                },
+            },
+        )
+
+        text = out["input"][2]["content"][0]["text"]
+        self.assertEqual(text.count("Caveman ultra is ON and locked"), 1)
+        self.assertEqual(out["metadata"]["qz_turn_harness"]["active"], ["caveman-ultra-lock"])
+        self.assertEqual(out["metadata"]["qz_turn_harness"]["unknown"], ["missing-harness"])
+
+    def test_turn_harness_strips_old_replayed_harness_blocks(self):
+        body = {
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": "Behavioral guidance:\nold reminder\n\nUser message:\nold turn",
+                    }],
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "old answer"}],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "new turn"}],
+                },
+            ],
+        }
+
+        out = normalize_responses_input_for_qwen(
+            body,
+            selected_model={"overrides": {"turn_harnesses": ["caveman-ultra-lock"]}},
+        )
+
+        self.assertEqual(out["input"][0]["content"][0]["text"], "old turn")
+        self.assertNotIn("Behavioral guidance:", out["input"][2]["content"][0]["text"])
+        self.assertEqual(out["input"][2]["content"][0]["text"].count("User message:"), 1)
+        self.assertTrue(out["input"][2]["content"][0]["text"].endswith("new turn"))
+
     def test_recursive_clean_removes_think_and_scratchpad_text(self):
         body = {
             "output": [

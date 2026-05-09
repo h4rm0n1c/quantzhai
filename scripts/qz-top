@@ -476,6 +476,7 @@ def telemetry_row(event: dict) -> Optional[Tuple[str, str]]:
         backend = contract.get("selected_backend_id") or ""
         prompt_files = contract.get("prompt_files") if isinstance(contract.get("prompt_files"), list) else []
         policy = contract.get("prompt_policy") if isinstance(contract.get("prompt_policy"), dict) else {}
+        turn_harness = contract.get("turn_harness") if isinstance(contract.get("turn_harness"), dict) else {}
         bits = []
         if profile:
             bits.append(str(profile))
@@ -489,6 +490,10 @@ def telemetry_row(event: dict) -> Optional[Tuple[str, str]]:
             bits.append("replaced")
         if policy.get("synthesized_missing_client"):
             bits.append("synthesized")
+        if turn_harness.get("applied"):
+            bits.append("harness=applied")
+        elif turn_harness.get("available"):
+            bits.append(f"harness={turn_harness.get('skipped_reason') or 'skipped'}")
         return ("prompt", " ".join(bits).strip() or "prompt contract")
     if ev_type == "request_completed":
         path = payload.get("path", "")

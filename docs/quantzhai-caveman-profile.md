@@ -1,34 +1,47 @@
 # QuantZhai Caveman Codex Profile
 
-`caveman` is an experimental Codex launcher profile for testing compact agent
-instructions without changing the live model inventory.
+`caveman` is an experimental Codex model/profile for testing compact agent
+instructions without changing the real backend model identity.
 
 Use:
 
 ```bash
-scripts/qz-codex caveman
+scripts/qz-codex
+# then select caveman in the model picker
+
+scripts/qz-codex exec -m caveman --json --ephemeral 'Say caveman status.'
 ```
 
 Runtime behavior:
 
 - Uses the same local TurboQuant backend as the other QuantZhai Codex profiles.
+- Exposes `caveman` through `var/models/caveman.gguf`, normally a symlink to a
+  real GGUF under `var/models/`.
+- For behavior-only testing, point that symlink at the same backend GGUF already
+  used by the normal profile. Pointing it at a different GGUF is a deliberate
+  model-swap profile and will make llama.cpp load that other backend.
 - The Codex model picker now lists the actual GGUF models from `var/models`,
   and the per-model reasoning screen is generated from that same inventory.
 - Low/medium/high/max now map to Qwen reasoning policy metadata. The proxy
   injects effort guidance and sampler params. No hard thinking-token cap is
   sent.
-- Loads `docs/qz-caveman-codex-model-instructions-v2.md` through
-  `model_instructions_file` when launched by `scripts/qz-codex caveman`. This
-  appends the caveman behavior harness to the active Codex instruction stack;
-  it is not a replacement system prompt.
-- Starts each session with caveman chat mode on; the user can say `normal mode`
-  or `caveman off` to switch back during the session.
+- Loads `config/default/prompts/caveman-mode.md` as a per-profile
+  `prompt_append_files` entry. This appends the caveman behavior harness to the
+  active Codex instruction stack; it is not a replacement system prompt.
+- Reinforces later turns with `caveman-ultra-lock` through the static
+  turn-harness system.
+- Keeps client-visible reasoning summaries visible by default. Caveman is a
+  coding-agent profile; hidden reasoning is for roleplay/private-thought
+  profiles, not the normal compact coding workflow.
+- Starts each session with caveman ultra mode on and locked; the user can say
+  `normal mode`, `plain English`, `verbose mode`, `caveman off`, or
+  `stop caveman` to switch back during the session.
 - The model catalog now defaults to `medium` verbosity instead of `low`, so the
   coding agent starts with a less clipped answer style.
 
 Manual test:
 
-1. Start a fresh session with `scripts/qz-codex caveman`.
+1. Start a fresh session with `scripts/qz-codex` and select `caveman`.
 2. Ask `how are you?`.
 3. Expected response is compressed, for example `good. need what?`.
 4. Say `normal mode`, then ask another ordinary question.
@@ -49,8 +62,10 @@ Prompt-chain contract:
 
 - The generated Codex model catalog provides model selection metadata and
   reasoning policy defaults.
-- The caveman launcher adds `model_instructions_file` as a compression and
-  style harness on top of the active Codex instructions.
+- The caveman profile adds `prompt_append_files` as a compression and style
+  harness on top of the active Codex instructions.
+- Static turn harnesses are injected before eligible later user turns, not the
+  first turn immediately following a fresh system prompt.
 - Proxy-side reasoning policy may prepend small effort guidance and sampler
   metadata for the active reasoning level.
 - The harness must preserve Codex tool behavior, AGENTS compliance, escalation,

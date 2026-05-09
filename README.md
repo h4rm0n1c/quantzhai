@@ -186,7 +186,7 @@ These aliases currently map to these Codex model names:
 ```text
 low -> Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ4_NL
 medium -> Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M
-caveman -> Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M
+caveman -> configured local symlink target, normally the same backend used for behavior-only testing
 high -> Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact
 max -> Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact
 ```
@@ -248,6 +248,47 @@ Relative `search.policy_file` paths are resolved from `config/user/`, then the
 repo root, then `config/default/`. The selected policy must still use the same
 `web_search_profiles` shape as `config/default/search-policy.json`.
 
+Profiles may also enable static turn harnesses. These are short profile-local
+reminders injected into the newest user turn after the first user turn in a
+session. They are not QZ STATE, not memory, and not tool instructions.
+
+```json
+{
+  "turn_harness_definitions": {
+    "roleplay-private-thoughts": "Profile reminder: Continue roleplay. Keep internal reasoning, planning, uncertainty, and self-checks private. Reply only in the established character format.",
+    "caveman-ultra-lock": "Profile reminder: Caveman ultra is ON and locked. Keep visible reasoning compact: no repeated drafts, no style analysis for simple chat, decide once then answer. Use ultra-terse fragments, abbreviations, and arrows where clear; preserve exact technical facts, code, paths, commands, errors, and quoted text; keep produced artifacts in normal project style unless the user explicitly asks otherwise."
+  },
+  "models": {
+    "roleplay-character.gguf": {
+      "system_prompt_file": "config/user/prompts/character.md",
+      "prompt_append_files": ["config/user/prompts/roleplay-initial-harness.md"],
+      "turn_harnesses": ["roleplay-private-thoughts"],
+      "default_reasoning_level": "low",
+      "allow_client_reasoning_override": false,
+      "reasoning_stream_format": "hidden"
+    },
+    "caveman.gguf": {
+      "prompt_append_files": ["config/default/prompts/caveman-mode.md"],
+      "turn_harnesses": ["caveman-ultra-lock"]
+    }
+  }
+}
+```
+
+Default static harness definitions include `roleplay-private-thoughts` and
+`caveman-ultra-lock`; user config can override or add names through
+`turn_harness_definitions`. Harness text is emitted directly, followed by a
+plain `User message:` separator. Old guidance blocks are stripped from replayed
+history before the newest eligible user turn is reinjected, so reminders do not
+accumulate across turns.
+
+Roleplay and other private-thought profiles can also hide client-visible
+reasoning summaries with `reasoning_stream_format: "hidden"`. The default proxy
+mode remains `summary`, which is useful for coding profiles because Codex shows
+grey progress/thought blocks. `allow_client_reasoning_override: false` pins the
+profile default reasoning level so client-sent `reasoning.effort` cannot silently
+raise a low-reasoning character profile back to medium or high.
+
 Profiles are valid only when the symlink target resolves to a real GGUF scanned
 under `var/models/`. If a target is missing or outside that directory, the
 profile is hidden from generated Codex catalogs or rejected with a compact
@@ -264,10 +305,17 @@ scripts/qz-proxy
 QZ_DOCTOR_PROMPT_SMOKE=1 scripts/qz-doctor
 ```
 
-`caveman` is an experimental compact-instructions profile. Select it from the
-Codex model/profile UI or pass Codex's profile flag directly, for example
-`scripts/qz-codex -p quantzhai-caveman`. Reasoning effort and prompt policy are
-the supported tuning knobs, not hard output-token caps.
+`caveman` is an experimental compact-instructions profile. It should be exposed
+as `var/models/caveman.gguf`, usually a symlink to the real backend GGUF, and
+configured through `config/user/model-overrides.json`. Select it from the Codex
+model picker or use `scripts/qz-codex exec -m caveman ...`. Reasoning effort,
+prompt append files, and static turn harnesses are the supported tuning knobs,
+not hard output-token caps. Caveman is a coding profile, so client-visible
+reasoning summaries stay visible unless a local profile explicitly changes that.
+
+For behavior-only testing, point `var/models/caveman.gguf` at the same backend
+GGUF you already keep loaded for the normal Codex profile. Pointing it at a
+different GGUF is valid, but it intentionally triggers a backend model swap.
 
 `scripts/qz-codex` passes arguments through to Codex. Non-interactive
 `scripts/qz-codex exec` runs must specify `-m/--model` or `-p/--profile`, because

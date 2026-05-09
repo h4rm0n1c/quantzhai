@@ -48,7 +48,58 @@ class FakeHandler:
         raise AssertionError("invalid profile selection must not touch backend")
 
 
+class FakeBackend:
+    def __init__(self, models):
+        self.models = models
+        self.load_calls = []
+
+    def get_models(self):
+        data = []
+        for model_id, state in self.models.items():
+            data.append({
+                "id": model_id,
+                "status": {
+                    "value": state,
+                    "args": ["--ctx-size=131072"],
+                },
+            })
+        return {"data": data}
+
+    def load_model(self, model_id, timeout=120):
+        self.load_calls.append(model_id)
+        raise AssertionError(f"loaded backend model should be reused without POST /models/load: {model_id}")
+
+
+class FakeLoadHandler:
+    model_load_timeout = 120.0
+    model_load_state = "idle"
+    model_load_error = None
+    model_load_started_at = None
+    model_load_finished_at = None
+    model_load_model = None
+    model_load_health = None
+
+    def __init__(self, catalog, backend):
+        self.catalog = catalog
+        self.backend = backend
+        self.telemetry = None
+
+    def _model_catalog(self):
+        return self.catalog
+
+    def _backend(self):
+        return self.backend
+
+
 class ModelCatalogProfileValidationTests(unittest.TestCase):
+    def setUp(self):
+        FakeLoadHandler.model_load_state = "idle"
+        FakeLoadHandler.model_load_error = None
+        FakeLoadHandler.model_load_started_at = None
+        FakeLoadHandler.model_load_finished_at = None
+        FakeLoadHandler.model_load_model = None
+        FakeLoadHandler.model_load_health = None
+
     def test_load_manifest_uses_config_default_layer(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -206,6 +257,35 @@ class ModelCatalogProfileValidationTests(unittest.TestCase):
             self.assertIsNotNone(backend)
             self.assertEqual(backend["stem"], "real-backend")
 
+    def test_profile_override_sets_default_reasoning_level(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            target = model_dir / "real-backend.gguf"
+            _write_gguf(target)
+            (model_dir / "roleplay.gguf").symlink_to(target)
+            overrides = root / "var" / "model-overrides.json"
+            overrides.parent.mkdir(parents=True, exist_ok=True)
+            overrides.write_text(json.dumps({
+                "models": {
+                    "roleplay.gguf": {
+                        "label": "roleplay",
+                        "default_reasoning_level": "low",
+                    }
+                }
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root, overrides))
+            profile, _ = catalog.resolve("roleplay")
+
+            self.assertEqual(profile["default_reasoning_level"], "low")
+            default_levels = [
+                item["effort"]
+                for item in profile["supported_reasoning_levels"]
+                if item.get("default")
+            ]
+            self.assertEqual(default_levels, ["low"])
+
     def test_exact_profile_slug_beats_colliding_label(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -317,6 +397,34 @@ class ModelCatalogProfileValidationTests(unittest.TestCase):
 
             self.assertIsNone(selected)
             self.assertEqual(reason, "no match for Qwen3.6Turbo-high")
+
+    def test_router_reuses_loaded_backend_without_marking_new_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            target = model_dir / "qwen-backend.gguf"
+            _write_gguf(target)
+            (model_dir / "caveman.gguf").symlink_to(target)
+            overrides = root / "config" / "user" / "model-overrides.json"
+            overrides.parent.mkdir(parents=True, exist_ok=True)
+            overrides.write_text(json.dumps({
+                "models": {
+                    "caveman.gguf": {
+                        "label": "caveman",
+                    }
+                }
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+            backend = FakeBackend({"qwen-backend": "loaded"})
+            selected, reason = ModelRouter(FakeLoadHandler(catalog, backend)).resolve_model_selection("caveman")
+
+            self.assertEqual(selected["key"], "caveman.gguf")
+            self.assertEqual(selected["backend_id"], "qwen-backend")
+            self.assertEqual(backend.load_calls, [])
+            self.assertIsNone(FakeLoadHandler.model_load_started_at)
+            self.assertIsNone(FakeLoadHandler.model_load_finished_at)
+            self.assertEqual(FakeLoadHandler.model_load_state, "idle")
 
     def test_compact_error_payload_shape(self):
         payload = profile_backend_error_payload({

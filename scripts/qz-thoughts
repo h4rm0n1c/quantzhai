@@ -129,6 +129,7 @@ def _contract_rows(payload: dict) -> List[Tuple[str, str]]:
         rows.append(("profile", " ".join(profile_bits)))
 
     prompt_policy = payload.get("prompt_policy") if isinstance(payload.get("prompt_policy"), dict) else {}
+    turn_harness = payload.get("turn_harness") if isinstance(payload.get("turn_harness"), dict) else {}
     prompt_files = payload.get("prompt_files") if isinstance(payload.get("prompt_files"), list) else []
     if prompt_files:
         rows.append(("prompt", ", ".join(str(item) for item in prompt_files[:3])))
@@ -153,6 +154,20 @@ def _contract_rows(payload: dict) -> List[Tuple[str, str]]:
             policy_bits.append(label)
     if policy_bits:
         rows.append(("policy", " ".join(policy_bits)))
+
+    harness_bits = []
+    for name in turn_harness.get("active") or []:
+        harness_bits.append(str(name))
+    if turn_harness.get("applied"):
+        harness_bits.append("applied")
+    elif turn_harness.get("available"):
+        skipped = turn_harness.get("skipped_reason") or "skipped"
+        harness_bits.append(f"skipped={skipped}")
+    unknown = turn_harness.get("unknown") or []
+    if unknown:
+        harness_bits.append(f"unknown={','.join(str(item) for item in unknown[:2])}")
+    if harness_bits:
+        rows.append(("harness", " ".join(harness_bits)))
 
     reason_bits = []
     if payload.get("reasoning_level"):

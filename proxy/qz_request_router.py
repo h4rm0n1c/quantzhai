@@ -8,6 +8,7 @@ from pathlib import Path
 RUNTIME_METRICS_SCHEMA = "qz.runtime.metrics.v1"
 PROMPT_CONTRACT_SCHEMA = "qz.prompt.contract.v1"
 CAPTURE_CONTRACT_SCHEMA = "qz.capture.contract.v1"
+REASONING_STREAM_FORMATS = {"raw", "summary", "hidden"}
 
 try:
     from .qz_config_report import effective_config_payload
@@ -75,6 +76,31 @@ except ImportError:
         write_dual_capture,
         write_request_capture,
     )
+
+
+def normalize_reasoning_stream_format(value, default: str = "raw") -> str:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in REASONING_STREAM_FORMATS:
+            return normalized
+    return default if default in REASONING_STREAM_FORMATS else "raw"
+
+
+def profile_reasoning_stream_format(selected_model, fallback: str = "raw") -> str:
+    fallback = normalize_reasoning_stream_format(fallback, "raw")
+    selected_model = selected_model if isinstance(selected_model, dict) else {}
+    overrides = selected_model.get("overrides")
+    overrides = overrides if isinstance(overrides, dict) else {}
+
+    if overrides.get("hide_reasoning_stream") is True:
+        return "hidden"
+
+    for key in ("reasoning_stream_format", "client_reasoning_stream_format"):
+        value = overrides.get(key)
+        if isinstance(value, str) and value.strip():
+            return normalize_reasoning_stream_format(value, fallback)
+
+    return fallback
 
 
 class _MultiRawLog:
@@ -362,6 +388,9 @@ class RequestRouter:
             "runtime_truth_source": "selected_default",
         }
 
+    def _effective_reasoning_stream_format(self, selected_model=None) -> str:
+        return profile_reasoning_stream_format(selected_model, self.handler.reasoning_stream_format)
+
     def _promote_prompt_contract_runtime_truth(self, runtime_metrics: dict, prompt_contract: dict) -> dict:
         if not isinstance(runtime_metrics, dict):
             runtime_metrics = {}
@@ -397,6 +426,8 @@ class RequestRouter:
         runtime_metrics["sampling"] = dict(active_sampling)
         runtime_metrics["thinking_budget_tokens"] = prompt_contract.get("thinking_budget_tokens")
         runtime_metrics["runtime_truth_source"] = "prompt_contract"
+        if prompt_contract.get("reasoning_stream_format"):
+            runtime_metrics["reasoning_stream_format"] = prompt_contract.get("reasoning_stream_format")
         return runtime_metrics
 
     def _prompt_contract(self, body: dict, selected_model: dict, client_model: str, backend_model: str) -> dict:
@@ -406,6 +437,7 @@ class RequestRouter:
             selected_model = {}
         metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
         prompt_policy = metadata.get("qz_prompt_policy") if isinstance(metadata.get("qz_prompt_policy"), dict) else {}
+        turn_harness = metadata.get("qz_turn_harness") if isinstance(metadata.get("qz_turn_harness"), dict) else {}
         qz_runtime = metadata.get("qz_runtime") if isinstance(metadata.get("qz_runtime"), dict) else {}
         qz_reasoning = metadata.get("qz_reasoning") if isinstance(metadata.get("qz_reasoning"), dict) else {}
 
@@ -479,9 +511,17 @@ class RequestRouter:
                 "prompt_files_failed": _strings(prompt_policy.get("prompt_files_failed")),
                 "replacement_files_failed": _strings(prompt_policy.get("replacement_files_failed")),
             },
+            "turn_harness": {
+                "available": bool(turn_harness.get("available")),
+                "applied": bool(turn_harness.get("applied")),
+                "skipped_reason": turn_harness.get("skipped_reason") or "",
+                "active": _strings(turn_harness.get("active")),
+                "unknown": _strings(turn_harness.get("unknown")),
+            },
             "prompt_files": prompt_files,
             "reasoning_level": qz_reasoning.get("level") or qz_runtime.get("reasoning_level") or "",
             "reasoning_policy": qz_reasoning.get("policy") or qz_runtime.get("reasoning_policy") or "",
+            "reasoning_stream_format": metadata.get("qz_reasoning_stream_format") or "",
             "thinking_budget_tokens": qz_reasoning.get("thinking_budget_tokens"),
             "sampling": sampling,
             "context_length": qz_runtime.get("context_length"),
@@ -531,6 +571,7 @@ class RequestRouter:
             "selected_key": prompt_contract.get("selected_key") or runtime_metrics.get("selected_key") or "",
             "selected_backend_id": prompt_contract.get("selected_backend_id") or runtime_metrics.get("selected_backend_id") or "",
             "prompt_policy": prompt_contract.get("prompt_policy") or {},
+            "turn_harness": prompt_contract.get("turn_harness") or {},
             "runtime_metrics": runtime_metrics,
         }
 
@@ -664,12 +705,16 @@ class RequestRouter:
         apply_patch_output_style: str = "native",
         request_id: str = "",
         selected_model=None,
+        reasoning_stream_format: str | None = None,
     ):
         web_runtime = self._web_runtime(selected_model)
         runtime = ResponsesStreamRuntime(
             upstream=self.handler.upstream,
             authorization=self.handler.headers.get("Authorization", "Bearer local"),
-            reasoning_stream_format=self.handler.reasoning_stream_format,
+            reasoning_stream_format=normalize_reasoning_stream_format(
+                reasoning_stream_format,
+                self.handler.reasoning_stream_format,
+            ),
             web_runtime=web_runtime,
             chunk_writer=lambda chunk: self._write_sse_chunk(chunk, request_id=request_id),
             telemetry=self.handler.telemetry,
@@ -839,6 +884,10 @@ class RequestRouter:
             body["metadata"] = metadata
             body["model"] = backend_model
             body = self.handler._model_router().apply_reasoning_policy(body, selected_model)
+            effective_reasoning_stream_format = self._effective_reasoning_stream_format(selected_model)
+            metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
+            metadata["qz_reasoning_stream_format"] = effective_reasoning_stream_format
+            body["metadata"] = metadata
 
             if upstream_path == "/v1/responses":
                 body = self.handler._model_router().inject_runtime_state(body, client_model)
@@ -877,6 +926,7 @@ class RequestRouter:
                             apply_patch_output_style,
                             request_id=request_id,
                             selected_model=selected_model,
+                            reasoning_stream_format=effective_reasoning_stream_format,
                         )
                         self._emit_request_telemetry(
                             "request_completed",

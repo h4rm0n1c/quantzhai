@@ -70,6 +70,9 @@ Problem:
 ```text
 Codex-visible profile: prompt-compiler
 Prompt override:        prompt-compiler.gguf / system_prompt_file
+Prompt append:          optional prompt_append / prompt_append_files
+Turn harness:           optional static turn_harness / turn_harnesses via turn_harness_definitions
+Reasoning visibility:   optional per-profile reasoning_stream_format / allow_client_reasoning_override
 Backend target:         resolved symlink target GGUF stem
 ```
 
@@ -847,6 +850,7 @@ source/user config
   -> validated effective config
     -> generated Codex view
       -> proxy routing and prompt policy
+        -> optional static turn harness
         -> backend state
           -> structured telemetry
             -> read-only status and monitor tools

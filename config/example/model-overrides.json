@@ -22,6 +22,24 @@
       "notes": "Example v2 compiler profile. Create var/models/prompt-compiler.gguf as a symlink to a real GGUF in var/models/; routing uses the symlink target, while Codex sees prompt-compiler.",
       "runtime_context_length": 131072,
       "system_prompt_file": "config/example/prompts/prompt-compiler.md"
+    },
+    "roleplay-character.gguf": {
+      "label": "roleplay-character",
+      "notes": "Example private-character profile shape. Keep private prompts under config/user or var; this only documents the generic harness knobs.",
+      "system_prompt_file": "config/user/prompts/character.md",
+      "prompt_append_files": ["config/user/prompts/roleplay-initial-harness.md"],
+      "turn_harnesses": ["roleplay-private-thoughts"],
+      "default_reasoning_level": "low",
+      "allow_client_reasoning_override": false,
+      "reasoning_stream_format": "hidden"
+    },
+    "caveman.gguf": {
+      "label": "caveman",
+      "notes": "Example compact Codex profile. Create var/models/caveman.gguf as a symlink to a real GGUF; routing uses the symlink target while Codex sees caveman. For behavior-only testing, point the symlink at the same backend GGUF already used by the normal profile; a different target intentionally triggers a backend swap.",
+      "runtime_context_length": 262144,
+      "default_reasoning_level": "medium",
+      "prompt_append_files": ["config/default/prompts/caveman-mode.md"],
+      "turn_harnesses": ["caveman-ultra-lock"]
     }
   }
 }

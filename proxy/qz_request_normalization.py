@@ -2,16 +2,17 @@
 import re
 
 try:
-    from .qz_prompt_policy import assemble_instruction_stack
+    from .qz_prompt_policy import assemble_instruction_stack, selected_turn_harnesses
     from .qz_proxy_tools import DEFAULT_TOOL_REGISTRY
     from .qz_tool_lifecycle import ToolHistoryReplayFilter
 except ImportError:
-    from qz_prompt_policy import assemble_instruction_stack
+    from qz_prompt_policy import assemble_instruction_stack, selected_turn_harnesses
     from qz_proxy_tools import DEFAULT_TOOL_REGISTRY
     from qz_tool_lifecycle import ToolHistoryReplayFilter
 
 
 CHECKPOINT_MARKER = "CONTEXT CHECKPOINT COMPACTION"
+TURN_HARNESS_USER_HEADER = "User message:"
 
 HARNESS_TEXT_MARKERS = (
     "<permissions instructions>",
@@ -205,6 +206,74 @@ def _canonicalize_message(item):
     return {"type": "message", "role": role, "content": parts}
 
 
+def _strip_turn_harness_text(text: str, harness_blocks=None) -> str:
+    if not isinstance(text, str):
+        return text
+    stripped = text
+    for harness in harness_blocks or []:
+        harness_text = harness.strip() if isinstance(harness, str) else ""
+        if not harness_text:
+            continue
+        pattern = re.compile(
+            rf"^\s*{re.escape(harness_text)}\s*\n\s*{re.escape(TURN_HARNESS_USER_HEADER)}\s*\n",
+            re.DOTALL,
+        )
+        stripped = pattern.sub("", stripped).strip()
+    legacy_pattern = re.compile(
+        rf"^\s*Behavioral guidance:\s*\n.*?\n\s*{re.escape(TURN_HARNESS_USER_HEADER)}\s*\n",
+        re.DOTALL,
+    )
+    return legacy_pattern.sub("", stripped).strip()
+
+
+def _strip_turn_harnesses(input_items, harness_blocks=None):
+    for item in input_items:
+        if not isinstance(item, dict) or item.get("type") != "message" or item.get("role") != "user":
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "input_text" and isinstance(part.get("text"), str):
+                part["text"] = _strip_turn_harness_text(part["text"], harness_blocks=harness_blocks)
+
+
+def _inject_turn_harness(input_items, harness_blocks):
+    if not harness_blocks:
+        return False
+    for item in reversed(input_items):
+        if not isinstance(item, dict) or item.get("type") != "message" or item.get("role") != "user":
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "input_text" and isinstance(part.get("text"), str):
+                original = _strip_turn_harness_text(part["text"], harness_blocks=harness_blocks)
+                harness = "\n".join(harness_blocks).strip()
+                part["text"] = f"{harness}\n\n{TURN_HARNESS_USER_HEADER}\n{original}".strip()
+                return True
+    return False
+
+
+def _has_prior_dialogue_before_latest_user(input_items):
+    latest_user_index = None
+    for index, item in enumerate(input_items):
+        if isinstance(item, dict) and item.get("type") == "message" and item.get("role") == "user":
+            latest_user_index = index
+    if latest_user_index is None:
+        return False
+
+    for item in input_items[:latest_user_index]:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        item_type = item.get("type")
+        if role in ("assistant", "tool") or item_type in ("function_call", "function_call_output"):
+            return True
+    return False
+
+
 def normalize_responses_input_for_qwen(body: dict, selected_model: dict | None = None) -> dict:
     """
     Canonicalize replayed Codex Responses history for the local llama.cpp/Qwen bridge.
@@ -274,10 +343,27 @@ def normalize_responses_input_for_qwen(body: dict, selected_model: dict | None =
     if assembled_instructions:
         body["instructions"] = assembled_instructions
 
+    harness_blocks, turn_harness_report = selected_turn_harnesses(selected_model)
+    _strip_turn_harnesses(clean_input, harness_blocks=harness_blocks)
+    if not turn_harness_report["available"]:
+        turn_harness_report["applied"] = False
+        turn_harness_report["skipped_reason"] = "not_configured"
+    elif not harness_blocks:
+        turn_harness_report["applied"] = False
+        turn_harness_report["skipped_reason"] = "unknown_harness"
+    elif not _has_prior_dialogue_before_latest_user(clean_input):
+        turn_harness_report["applied"] = False
+        turn_harness_report["skipped_reason"] = "first_turn"
+    else:
+        applied = _inject_turn_harness(clean_input, harness_blocks)
+        turn_harness_report["applied"] = applied
+        turn_harness_report["skipped_reason"] = "" if applied else "no_user_text"
+
     metadata = body.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
     metadata["qz_prompt_policy"] = prompt_policy_report
+    metadata["qz_turn_harness"] = turn_harness_report
     body["metadata"] = metadata
 
     body["input"] = clean_input

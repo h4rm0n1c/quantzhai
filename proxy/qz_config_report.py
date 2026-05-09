@@ -86,6 +86,9 @@ def _iter_prompt_refs(manifest: Dict[str, Any]):
         "prompt_files",
         "prepend_prompt_files",
         "append_prompt_files",
+        "prompt_prepend_files",
+        "prompt_append_files",
+        "prompt_replace_files",
     }
     stack = [manifest]
     while stack:

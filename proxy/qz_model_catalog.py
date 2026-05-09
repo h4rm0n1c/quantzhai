@@ -177,6 +177,13 @@ def infer_model_name(metadata: Dict[str, Any], stem: str) -> str:
 
 
 def infer_reasoning_level(entry: Dict[str, Any]) -> str:
+    overrides = entry.get("overrides")
+    if isinstance(overrides, dict):
+        for key in ("default_reasoning_level", "reasoning_level", "reasoning_effort"):
+            value = overrides.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip().lower()
+
     text = " ".join(
         str(value).lower()
         for value in (
@@ -616,10 +623,11 @@ def plain_listing(entries: List[Dict[str, Any]], selected: Optional[Dict[str, An
 
 
 class ModelCatalog:
-    def __init__(self, root: Path, model_dir: Path, manifest: Dict[str, Any]):
+    def __init__(self, root: Path, model_dir: Path, manifest: Dict[str, Any], reload_manifest_on_refresh: bool = False):
         self.root = root
         self.model_dir = model_dir
         self.manifest = manifest
+        self.reload_manifest_on_refresh = reload_manifest_on_refresh
         self.entries: List[Dict[str, Any]] = []
         self.errors: List[Dict[str, Any]] = []
         self.selected: Optional[Dict[str, Any]] = None
@@ -631,9 +639,11 @@ class ModelCatalog:
     def from_env(cls, root: Path) -> "ModelCatalog":
         model_dir = Path(os.environ.get("QZ_MODEL_DIR", str(root / "var" / "models")))
         manifest = load_manifest(root)
-        return cls(root, model_dir, manifest)
+        return cls(root, model_dir, manifest, reload_manifest_on_refresh=True)
 
     def refresh(self, query: Optional[str] = None) -> None:
+        if self.reload_manifest_on_refresh:
+            self.manifest = load_manifest(self.root)
         self.entries, self.errors = scan_models(self.model_dir, self.manifest)
         requested = query or os.environ.get("QZ_MODEL_KEY")
         last_selected = "" if requested else load_last_selected_model(self.root)

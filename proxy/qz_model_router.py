@@ -501,9 +501,14 @@ class ModelRouter:
 
     def selected_reasoning_policy(self, selected: dict | None = None, body: dict | None = None):
         selected = selected if isinstance(selected, dict) else self.selected_model_entry()
+        overrides = selected.get("overrides") if isinstance(selected, dict) else {}
+        overrides = overrides if isinstance(overrides, dict) else {}
+        allow_client_override = overrides.get("allow_client_reasoning_override")
+        if allow_client_override is None:
+            allow_client_override = not bool(overrides.get("force_default_reasoning_level"))
         default_level = self.selected_reasoning_level(selected)
         level = default_level
-        if isinstance(body, dict):
+        if allow_client_override and isinstance(body, dict):
             reasoning = body.get("reasoning")
             if isinstance(reasoning, dict) and reasoning.get("effort"):
                 level = normalize_reasoning_level(reasoning.get("effort"))
@@ -512,6 +517,8 @@ class ModelRouter:
         policy = reasoning_policy_for_level(level)
         policy["mode"] = reasoning_policy_mode()
         policy["thinking_budget_tokens"] = None
+        policy["client_override_allowed"] = bool(allow_client_override)
+        policy["default_effort"] = default_level
         return policy
 
     def selected_prompt_status(self, selected: dict | None = None) -> dict:
@@ -580,6 +587,8 @@ class ModelRouter:
         metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
         qz_reasoning = metadata.get("qz_reasoning") if isinstance(metadata.get("qz_reasoning"), dict) else {}
         qz_reasoning["thinking_budget_tokens"] = policy.get("thinking_budget_tokens")
+        qz_reasoning["client_override_allowed"] = bool(policy.get("client_override_allowed"))
+        qz_reasoning["default_level"] = policy.get("default_effort")
         metadata["qz_reasoning"] = qz_reasoning
         result["metadata"] = metadata
         return result
@@ -802,15 +811,12 @@ class ModelRouter:
         if not model_id:
             return
         cls = self.handler.__class__
-        cls.model_load_model = model_id
-        cls.model_load_started_at = time.time()
-        cls.model_load_finished_at = None
-        cls.model_load_error = None
 
         existing_state = self.backend_model_state(model_id)
         if existing_state == "loaded":
+            cls.model_load_model = model_id
             cls.model_load_state = "ready"
-            cls.model_load_finished_at = time.time()
+            cls.model_load_error = None
             self._persist_backend_state(
                 selected={"backend_id": model_id, "key": model_id},
                 context_length=self.backend_context_length(),
@@ -836,7 +842,9 @@ class ModelRouter:
             })
             return
         if existing_state == "loading":
+            cls.model_load_model = model_id
             cls.model_load_state = "loading"
+            cls.model_load_error = None
             self._emit("model_load_pending", {
                 "model": model_id,
                 "wait": bool(wait),
@@ -882,9 +890,13 @@ class ModelRouter:
                     "health_status": cls.model_load_health,
                     "wait": True,
                     "cached": True,
-                })
+            })
             return
 
+        cls.model_load_model = model_id
+        cls.model_load_started_at = time.time()
+        cls.model_load_finished_at = None
+        cls.model_load_error = None
         self._emit("model_load_started", {
             "model": model_id,
             "wait": bool(wait),
@@ -1061,7 +1073,7 @@ class ModelRouter:
         desired_context_length = self.selected_context_length(selected)
         if self.backend_model_control_available(backend_inventory):
             current_backend_id = self.selected_backend_id()
-            current_context_length = self.backend_context_length()
+            current_context_length = self.backend_context_length(backend_inventory, current_backend_id)
             if desired_context_length != current_context_length:
                 try:
                     backend_timeout = float(getattr(self.handler.__class__, "model_load_timeout", 600.0))
@@ -1088,9 +1100,12 @@ class ModelRouter:
                         })
                         return None, f"{reason}; current {current_backend_id} not unloaded ({current_state})"
 
-            self.load_backend_model(target_backend_id, wait=True)
+            target_state = backend_inventory.get(target_backend_id, {}).get("state") or "unknown"
+            if target_state != "loaded":
+                self.load_backend_model(target_backend_id, wait=True)
+                backend_inventory = self.backend_models()
 
-            backend_state = self.backend_model_state(target_backend_id)
+            backend_state = backend_inventory.get(target_backend_id, {}).get("state") or self.backend_model_state(target_backend_id)
             if backend_state != "loaded":
                 self._emit("model_load_failed", {
                     "model": target_backend_id,

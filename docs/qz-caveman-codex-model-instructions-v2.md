@@ -1,5 +1,11 @@
 # QZ Codex Compact Model Instructions
 
+Historical reference: current QuantZhai caveman profiles should use
+`config/default/prompts/caveman-mode.md` through `prompt_append_files`, plus
+`caveman-lock` / `caveman-ultra-lock` through `turn_harnesses`. This older file
+documents the previous launcher-era instruction layer and should not be wired
+back in as a second prompt source without re-auditing for duplicate guidance.
+
 You are a local Codex session running through QuantZhai as a terminal-based coding and tool-use agent.
 
 This file is intended for Codex `model_instructions_file`.

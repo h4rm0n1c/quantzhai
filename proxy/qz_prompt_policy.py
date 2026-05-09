@@ -17,7 +17,6 @@ DEFAULT_PROMPT_POLICY = {
     "synthesize_missing_client": True,
 }
 
-
 def _root_dir() -> Path:
     raw = os.environ.get("QZ_ROOT")
     if isinstance(raw, str) and raw.strip():
@@ -238,6 +237,75 @@ def _dedupe_preserve_order(blocks):
         seen.add(text)
         out.append(text)
     return out
+
+
+def _names(value):
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, list):
+        out = []
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                out.append(item.strip())
+        return out
+    return []
+
+
+def _turn_harness_names(manifest, model_overrides):
+    return _dedupe_preserve_order(
+        _names(manifest.get("turn_harness"))
+        + _names(manifest.get("turn_harnesses"))
+        + _names(model_overrides.get("turn_harness"))
+        + _names(model_overrides.get("turn_harnesses"))
+    )
+
+
+def _turn_harness_definitions(manifest):
+    definitions = manifest.get("turn_harness_definitions")
+    if not isinstance(definitions, dict):
+        return {}
+    out = {}
+    for name, content in definitions.items():
+        name_text = _clean_text(name)
+        content_text = _clean_text(content)
+        if name_text and content_text:
+            out[name_text] = content_text
+    return out
+
+
+def selected_turn_harnesses(selected_model=None):
+    manifest = _load_manifest()
+    model_overrides = _selected_overrides(selected_model, manifest)
+    definitions = _turn_harness_definitions(manifest)
+    names = _turn_harness_names(manifest, model_overrides)
+    unknown = [name for name in names if name not in definitions]
+    active = [name for name in names if name in definitions]
+    return [definitions[name] for name in active], {
+        "available": bool(names),
+        "active": active,
+        "unknown": unknown,
+    }
+
+
+def prompt_stack_applied(report: dict) -> bool:
+    if not isinstance(report, dict):
+        return False
+    if report.get("replacement_available") and (
+        report.get("replacement_already_present")
+        or report.get("replaced_client")
+        or report.get("reused_existing_replacement")
+    ):
+        return True
+    for key in (
+        "global_prepend_blocks",
+        "global_append_blocks",
+        "model_prepend_blocks",
+        "model_append_blocks",
+    ):
+        if int(report.get(key) or 0) > 0:
+            return True
+    return False
 
 
 def _replacement_prompt(report, manifest, policy, model_overrides):
