@@ -412,6 +412,10 @@ Malformed empty function-call items and their parse-error outputs are removed
 before upstream replay. This avoids a 500 or repeated bad-call loop when the
 previous stream had already failed.
 
+Ownership: `ToolHistoryReplayFilter` in `proxy/qz_tool_lifecycle.py` owns the
+stateful malformed-history drop decision. `normalize_responses_input_for_qwen`
+invokes it while replaying request history upstream.
+
 ## Golden Fixture Checklist
 
 Current seed fixtures live under `tests/fixtures/sse/`. Keep adding fixtures
@@ -457,8 +461,9 @@ before broad stream/tool refactors.
 - `responses_input/malformed_empty_tool_history.json`: empty tool-call plus
   parse-error output is filtered while valid neighboring history survives
 - `tests/test_qz_tool_lifecycle.py`: pins private streamed function-call state,
-  guard accounting, completed-call routing decisions, apply_patch public item
-  conversion, and proxy-local upstream continuation shaping
+  guard accounting, malformed historical tool-call filtering, completed-call
+  routing decisions, apply_patch public item conversion, and proxy-local
+  upstream continuation shaping
 - `metadata.qz_tool_policy`: request-scoped proxy-owned tool-shape policy.
   For apply_patch it records whether the client declared patch support, the
   original client tool type (`apply_patch`, `custom`, or `absent`), and the
@@ -485,9 +490,10 @@ Still needed:
   fixtures now cover that metadata normalization for native and custom
   Codex-facing output styles.
 - Tool lifecycle now has an initial internal boundary for streamed call state,
-  public item conversion, completed-call routing decisions, and proxy-local
-  continuation shaping, but request normalization, adapter ownership, and
-  telemetry still need tighter ownership.
+  malformed historical tool-call filtering, public item conversion,
+  completed-call routing decisions, and proxy-local continuation shaping, but
+  telemetry and some broader request-normalization ownership still need
+  tightening.
 - No redaction layer for captures.
 - Request-scoped captures are not grouped under a higher-level run id.
 - Proxy-side shell/code/computer/MCP execution is not implemented.

@@ -23,6 +23,41 @@ class ToolContinuationResult:
     sources: tuple[dict, ...] = ()
 
 
+class ToolHistoryReplayFilter:
+    """Drops malformed historical tool items before upstream replay."""
+
+    def __init__(self):
+        self.dropped_invalid_call_ids = set()
+
+    def should_drop(self, item: dict) -> bool:
+        if not isinstance(item, dict):
+            return False
+
+        item_type = item.get("type")
+        if item_type == "function_call":
+            call_id = item.get("call_id") or item.get("id")
+            arguments = item.get("arguments")
+            if not isinstance(arguments, str) or not arguments.strip():
+                if call_id:
+                    self.dropped_invalid_call_ids.add(call_id)
+                return True
+            return False
+
+        if item_type == "function_call_output":
+            call_id = item.get("call_id")
+            output = item.get("output")
+            output_text = output if isinstance(output, str) else ""
+            if call_id in self.dropped_invalid_call_ids:
+                return True
+            if output_text.strip().startswith("failed to parse function arguments:"):
+                if call_id:
+                    self.dropped_invalid_call_ids.add(call_id)
+                return True
+            return False
+
+        return False
+
+
 def function_call_key(payload):
     if not isinstance(payload, dict):
         return None

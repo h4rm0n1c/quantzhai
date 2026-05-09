@@ -17,6 +17,7 @@ try:
         normalize_apply_patch_output_for_codex,
     )
     from .qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
+    from .qz_tool_lifecycle import ToolHistoryReplayFilter
     from .qz_runtime_io import capture_enabled, capture_path, write_capture
     from .qz_prompt_policy import assemble_instruction_stack
     from .qz_tools import ToolRegistry
@@ -34,6 +35,7 @@ except ImportError:
         normalize_apply_patch_output_for_codex,
     )
     from qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
+    from qz_tool_lifecycle import ToolHistoryReplayFilter
     from qz_runtime_io import capture_enabled, capture_path, write_capture
     from qz_prompt_policy import assemble_instruction_stack
     from qz_tools import ToolRegistry
@@ -177,7 +179,7 @@ def normalize_responses_input_for_qwen(body: dict, selected_model: dict | None =
         return body
 
     clean_input = []
-    dropped_invalid_call_ids = set()
+    tool_history_filter = ToolHistoryReplayFilter()
     metadata = body.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
@@ -288,24 +290,8 @@ def normalize_responses_input_for_qwen(body: dict, selected_model: dict | None =
             clean_input.append(adapted_tool_item)
             continue
 
-        if item_type == "function_call":
-            call_id = item.get("call_id") or item.get("id")
-            arguments = item.get("arguments")
-            if not isinstance(arguments, str) or not arguments.strip():
-                if call_id:
-                    dropped_invalid_call_ids.add(call_id)
-                continue
-
-        if item_type == "function_call_output":
-            call_id = item.get("call_id")
-            output = item.get("output")
-            output_text = output if isinstance(output, str) else ""
-            if call_id in dropped_invalid_call_ids:
-                continue
-            if output_text.strip().startswith("failed to parse function arguments:"):
-                if call_id:
-                    dropped_invalid_call_ids.add(call_id)
-                continue
+        if tool_history_filter.should_drop(item):
+            continue
 
         if _is_local_checkpoint_prompt(item):
             continue

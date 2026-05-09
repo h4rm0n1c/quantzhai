@@ -2,6 +2,7 @@ import unittest
 
 from proxy.qz_tool_lifecycle import (
     StreamToolCallState,
+    ToolHistoryReplayFilter,
     completed_tool_call_decision,
     function_call_key,
     is_proxy_local_function_call,
@@ -11,6 +12,57 @@ from proxy.qz_tool_lifecycle import (
 
 
 class ToolLifecycleTests(unittest.TestCase):
+    def test_tool_history_replay_filter_drops_empty_call_and_matching_output(self):
+        history_filter = ToolHistoryReplayFilter()
+
+        self.assertTrue(history_filter.should_drop({
+            "type": "function_call",
+            "id": "fc_empty",
+            "call_id": "call_empty",
+            "name": "apply_patch",
+            "arguments": "",
+        }))
+        self.assertTrue(history_filter.should_drop({
+            "type": "function_call_output",
+            "call_id": "call_empty",
+            "output": "result that should not be replayed",
+        }))
+
+    def test_tool_history_replay_filter_drops_parse_error_and_later_output(self):
+        history_filter = ToolHistoryReplayFilter()
+
+        self.assertTrue(history_filter.should_drop({
+            "type": "function_call_output",
+            "call_id": "call_bad_args",
+            "output": "failed to parse function arguments: EOF while parsing",
+        }))
+        self.assertTrue(history_filter.should_drop({
+            "type": "function_call_output",
+            "call_id": "call_bad_args",
+            "output": "late output for bad call",
+        }))
+
+    def test_tool_history_replay_filter_keeps_valid_call_and_unrelated_output(self):
+        history_filter = ToolHistoryReplayFilter()
+
+        self.assertFalse(history_filter.should_drop({
+            "type": "function_call",
+            "id": "fc_ok",
+            "call_id": "call_ok",
+            "name": "exec_command",
+            "arguments": "{\"cmd\":\"pwd\"}",
+        }))
+        self.assertFalse(history_filter.should_drop({
+            "type": "function_call_output",
+            "call_id": "call_ok",
+            "output": "ok",
+        }))
+        self.assertFalse(history_filter.should_drop({
+            "type": "function_call_output",
+            "call_id": "call_other",
+            "output": "failed command, not failed to parse function arguments:",
+        }))
+
     def test_function_call_key_uses_item_id_then_item_then_output_index(self):
         self.assertEqual(function_call_key({"item_id": "fc_1"}), "fc_1")
         self.assertEqual(function_call_key({"item": {"id": "fc_2", "call_id": "call_2"}}), "fc_2")
