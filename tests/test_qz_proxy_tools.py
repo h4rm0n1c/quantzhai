@@ -1,9 +1,13 @@
 import unittest
 
 from proxy.qz_proxy_tools import (
+    ProxyLocalToolExecutor,
+    ProxyLocalToolRegistry,
     ProxyToolExecutionContext,
     make_proxy_local_tool_registry,
 )
+from proxy.qz_tool_lifecycle import ToolContinuationResult
+from proxy.qz_tools import ToolLifecycleSpec
 
 
 class FakeWebRuntime:
@@ -30,6 +34,57 @@ class FakeWebRuntime:
                 "output": "{\"ok\":true}",
             },
             [{"url": "https://example.test"}],
+        )
+
+
+class ProbeProxyToolExecutor(ProxyLocalToolExecutor):
+    function_name = "qz_probe"
+    lifecycle = ToolLifecycleSpec(
+        name="qz_probe",
+        execution="proxy_local",
+        public_item_type="qz_probe_call",
+        telemetry_name="qz_probe",
+        continuation_hops=2,
+        lifecycle_event_prefix="response.qz_probe_call",
+        lifecycle_start_stages=("in_progress", "working"),
+        lifecycle_done_stages=("completed",),
+    )
+
+    def __init__(self):
+        self.calls = []
+
+    def started_public_item(self, call: dict, public_index: int) -> dict:
+        return {
+            "id": call.get("id") or f"qz_probe_{public_index}",
+            "type": "qz_probe_call",
+            "status": "in_progress",
+            "call_id": call.get("call_id"),
+        }
+
+    def execute(self, call: dict, context: ProxyToolExecutionContext) -> ToolContinuationResult:
+        self.calls.append({
+            "call": call,
+            "request_id": context.request_id,
+            "counters": context.counters,
+            "seen_signatures": context.seen_signatures,
+        })
+        return ToolContinuationResult(
+            public_item={
+                "id": call.get("id") or "qz_probe_0",
+                "type": "qz_probe_call",
+                "status": "completed",
+                "call_id": call.get("call_id"),
+                "output": "probe ok",
+            },
+            upstream_items=(
+                call,
+                {
+                    "type": "function_call_output",
+                    "call_id": call.get("call_id"),
+                    "output": "{\"probe\":\"ok\"}",
+                },
+            ),
+            sources=({"url": "probe://local", "title": "probe"},),
         )
 
 
@@ -292,6 +347,50 @@ class ProxyToolRegistryTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             registry.continuation_result(decision)
+
+    def test_registry_lifecycle_is_not_web_search_specific(self):
+        executor = ProbeProxyToolExecutor()
+        registry = ProxyLocalToolRegistry([executor])
+        call = {
+            "id": "fc_probe",
+            "type": "function_call",
+            "call_id": "call_probe",
+            "name": "qz_probe",
+            "arguments": "{\"value\":1}",
+        }
+
+        self.assertEqual(registry.function_names, frozenset({"qz_probe"}))
+        self.assertEqual(registry.max_continuation_hops, 2)
+        self.assertTrue(registry.is_proxy_local_call(call))
+
+        started_item = registry.started_public_item(call, public_index=7)
+        self.assertEqual(started_item["type"], "qz_probe_call")
+        self.assertEqual(started_item["status"], "in_progress")
+
+        start_chunks, sequence = registry.lifecycle_start_event_chunks(call, "qz_probe_1", 7, 20)
+        done_chunks, sequence = registry.lifecycle_done_event_chunks(call, "qz_probe_1", 7, sequence)
+        lifecycle_text = b"".join(start_chunks + done_chunks).decode("utf-8")
+        self.assertIn("response.qz_probe_call.in_progress", lifecycle_text)
+        self.assertIn("response.qz_probe_call.working", lifecycle_text)
+        self.assertIn("response.qz_probe_call.completed", lifecycle_text)
+        self.assertEqual(sequence, 23)
+
+        result = registry.execute(
+            call,
+            ProxyToolExecutionContext(
+                request_id="qz_req_probe",
+                counters={"probe": 0},
+                seen_signatures=set(),
+            ),
+        )
+        telemetry = registry.telemetry_payload(call, result=result)
+        self.assertEqual(executor.calls[0]["request_id"], "qz_req_probe")
+        self.assertEqual(result.public_item["type"], "qz_probe_call")
+        self.assertEqual(result.upstream_items[1]["type"], "function_call_output")
+        self.assertEqual(telemetry["tool"], "qz_probe")
+        self.assertEqual(telemetry["public_item_type"], "qz_probe_call")
+        self.assertEqual(telemetry["sources"], 1)
+        self.assertEqual(registry.terminal_suppression_reason(call), "qz_probe_terminal")
 
 
 if __name__ == "__main__":

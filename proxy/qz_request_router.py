@@ -316,6 +316,12 @@ class RequestRouter:
             policy_selection=selection.metadata(),
         )
 
+    def _proxy_tool_registry(self, web_runtime):
+        factory = getattr(self.handler, "proxy_tool_registry_factory", None)
+        if callable(factory):
+            return factory(web_runtime)
+        return make_proxy_local_tool_registry(web_runtime)
+
     def _runtime_metrics(self, selected_model=None):
         try:
             snapshot = self.handler._model_router().status_snapshot()
@@ -659,18 +665,27 @@ class RequestRouter:
         request_id: str = "",
         selected_model=None,
     ):
+        web_runtime = self._web_runtime(selected_model)
         runtime = ResponsesStreamRuntime(
             upstream=self.handler.upstream,
             authorization=self.handler.headers.get("Authorization", "Bearer local"),
             reasoning_stream_format=self.handler.reasoning_stream_format,
-            web_runtime=self._web_runtime(selected_model),
+            web_runtime=web_runtime,
             chunk_writer=lambda chunk: self._write_sse_chunk(chunk, request_id=request_id),
             telemetry=self.handler.telemetry,
             request_id=request_id,
+            proxy_tool_registry=self._proxy_tool_registry(web_runtime),
         )
         return runtime.run(body, requested_model, apply_patch_output_style)
 
-    def _run_responses_locally(self, body: dict, requested_model: str, apply_patch_output_style: str = "native", selected_model=None):
+    def _run_responses_locally(
+        self,
+        body: dict,
+        requested_model: str,
+        apply_patch_output_style: str = "native",
+        selected_model=None,
+        request_id: str = "",
+    ):
         url = self.handler.upstream + "/v1/responses"
         working_body = json.loads(json.dumps(body))
         working_body["stream"] = False
@@ -680,7 +695,7 @@ class RequestRouter:
         counters = {"search": 0, "open_page": 0}
         seen_signatures = set()
         web_runtime = self._web_runtime(selected_model)
-        proxy_tool_registry = make_proxy_local_tool_registry(web_runtime)
+        proxy_tool_registry = self._proxy_tool_registry(web_runtime)
 
         for _hop in range(WEB_SEARCH_MAX_HOPS):
             hop_body = json.loads(json.dumps(working_body))
@@ -934,6 +949,7 @@ class RequestRouter:
                         client_model,
                         apply_patch_output_style,
                         selected_model=selected_model,
+                        request_id=request_id,
                     )
                     if status >= 400:
                         try:

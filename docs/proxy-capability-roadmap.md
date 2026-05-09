@@ -525,8 +525,10 @@ Missing:
    history filtering, stream telemetry payload shaping, and tool request
    normalization now have explicit ownership boundaries. Proxy-local telemetry
    payloads, terminal-suppression labels, and continuation-limit fallback text
-   are registry-owned. Current weak spot: repeat the registry checklist for
-   the next proxy-executed tool to prove the interface is not web_search-only.
+   are registry-owned. A test-only proxy-local executor now proves the generic
+   registry path for streaming and non-streaming continuation is not
+   web_search-only. Current weak spot: repeat the live/golden checklist for the
+   next real proxy-executed tool.
 4. Run a live Qwen/TurboQuant patch workflow and capture whether it emits valid
    patch operations. Done on 2026-05-09 with request
    `qz_req_1778312516589_af70`.

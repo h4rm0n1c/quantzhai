@@ -29,8 +29,10 @@ progress.
 - **Tool handling:** 68%
   `web_search` proxy-local path works. `apply_patch` protocol adapter works,
   including move/rename. Generic registry/lifecycle boundary is much better.
-  Proxy-local lifecycle event chunks are now registry-owned. Still not one
-  complete state machine; no MCP/shell/code/computer proxy runtime.
+  Proxy-local lifecycle event chunks are now registry-owned, and a test-only
+  proxy-local executor proves the streaming and non-streaming registry path is
+  not web_search-only. Still not one complete state machine; no
+  MCP/shell/code/computer proxy runtime.
 - **Observability/status:** 65%
   `/qz/status`, telemetry, `qz-top`, and `qz-thoughts` are much better. Codex
   `/status` has catalog metadata plus terminal usage working. Live progress

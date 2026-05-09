@@ -58,6 +58,8 @@ by streaming code for Codex-visible event shape, continuation hop budget, and
 progress/completed event stages. The registry builds proxy-local start/done
 lifecycle SSE chunks from that spec. `web_search` is the first proxy-local
 executor and is used by both streamed and non-streamed `/v1/responses` paths.
+The registry path is also pinned with a test-only `qz_probe` executor so the
+contract is not only proven through web-search-specific behavior.
 
 Codex-facing output adaptation is adapter-owned. The generic `ToolRegistry`
 can normalize a list of output items back to the client shape, and the
@@ -507,13 +509,13 @@ change only when code, fixtures, live captures, or tests change.
 
 | State | Coverage | Why | Next gap |
 | --- | --- | --- | --- |
-| Response start | Strong fixture coverage | Duplicate start suppression is pinned through proxy-local continuation tests. | Add a non-web continuation fixture only when another proxy-local tool exists. |
+| Response start | Strong fixture coverage | Duplicate start suppression is pinned through proxy-local continuation tests. A test-only non-web proxy-local executor pins the generic registry path. | Add a golden non-web continuation fixture only when another real proxy-local tool exists. |
 | Reasoning stream | Strong for transform/guards, live-backed for latency | Summary-mode transform, long active reasoning, and reasoning-only guard behavior are tested. The low-latency claim comes from the 2026-05-07 audit. | Add an automated timing regression only if test flake risk is acceptable. |
 | Answer stream | Strong event-order coverage, live-backed latency | Normal streams and a direct writer-order test show answer deltas are written before terminal completion. The 2026-05-07 audit backs the low-latency timing claim. | Add a deterministic fake-clock timing test only if latency regresses in live use. |
 | Function call assembly | Strong | Unit and stream tests pin buffering until arguments are complete and no private argument deltas reach Codex. | None before adding a new tool class. |
 | Completed public function call | Strong for passthrough shape | Unknown public calls are left public and streamed as one complete item. | Add one fixture for a public call with large arguments if a real Codex tool needs it. |
 | Completed protocol adapter call | Strong for `apply_patch` | Native/custom, update/delete/move/rename, invalid operations, and live Codex handoff are covered. | Add more negative parser-failure history fixtures if Qwen emits new bad patch shapes. |
-| Completed proxy-local call | Strong for `web_search` | Unit, fixture, multi-hop, telemetry, and live smoke evidence exist. | Repeat the same checklist for any future proxy-local tool; do not assume `web_search` generalizes. |
+| Completed proxy-local call | Strong for `web_search`; generic path unit-covered | Unit, fixture, multi-hop, telemetry, and live smoke evidence exist for `web_search`. Test-only `qz_probe` coverage proves the registry lifecycle, streaming continuation, and non-streaming continuation path are not web-search-only. | Repeat the live/golden checklist for any future real proxy-local tool. |
 | Private tool-call guard | Strong | Delta-limit and timeout abort paths are both pinned at stream level, and both avoid leaking private function-call state. | Add a fake-clock variant only if wall-clock flake appears. |
 | Reasoning-only guard | Strong for current policy | Timeout fallback, disabled default char cap, and long active reasoning are pinned. | Keep live Qwen captures when profile prompts change reasoning behavior. |
 | Artifact in reasoning | Strong | Synthetic and golden artifact streams show no tool execution and correct telemetry reason. | Expand marker detection only from real captures, not guesses. |
@@ -708,7 +710,8 @@ Still needed:
   public protocol-adapter conversion, proxy-local continuation shaping, and
   registry-owned proxy-local lifecycle SSE chunk construction. Tool request
   normalization and non-tool request normalization each have their own module
-  boundary.
+  boundary. A test-only proxy-local executor now pins the same registry path
+  for both streamed and non-streamed `/v1/responses`.
 - Capture mode interpretation and latest/request-scoped dual writes now have a
   runtime IO boundary.
 - No redaction layer for captures.

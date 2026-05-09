@@ -2,8 +2,11 @@ import json
 import unittest
 from pathlib import Path
 
+from proxy.qz_proxy_tools import ProxyLocalToolExecutor, ProxyLocalToolRegistry
 from proxy.qz_responses_stream import ClientStreamDisconnected, ResponsesStreamRuntime
 from proxy.qz_telemetry import TelemetryBus
+from proxy.qz_tool_lifecycle import ToolContinuationResult
+from proxy.qz_tools import ToolLifecycleSpec
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "sse"
 
@@ -88,12 +91,60 @@ class FakeWebRuntime:
         return public_item, output_item, [{"url": "https://example.test", "title": "QuantZhai"}]
 
 
+class ProbeProxyToolExecutor(ProxyLocalToolExecutor):
+    function_name = "qz_probe"
+    lifecycle = ToolLifecycleSpec(
+        name="qz_probe",
+        execution="proxy_local",
+        public_item_type="qz_probe_call",
+        telemetry_name="qz_probe",
+        continuation_hops=2,
+        lifecycle_event_prefix="response.qz_probe_call",
+        lifecycle_start_stages=("in_progress", "working"),
+        lifecycle_done_stages=("completed",),
+    )
+
+    def execute(self, call, context):
+        return ToolContinuationResult(
+            public_item={
+                "id": "qz_probe_public",
+                "type": "qz_probe_call",
+                "status": "completed",
+                "call_id": call.get("call_id"),
+            },
+            upstream_items=(
+                call,
+                {
+                    "type": "function_call_output",
+                    "call_id": call.get("call_id"),
+                    "output": "{\"probe\":\"ok\"}",
+                },
+            ),
+        )
+
+    def started_public_item(self, call, public_index):
+        return {
+            "id": call.get("id") or f"qz_probe_{public_index}",
+            "type": "qz_probe_call",
+            "status": "in_progress",
+            "call_id": call.get("call_id"),
+        }
+
+
 def _web_call_stream():
     arguments = json.dumps({"action": "search", "query": "quantzhai"})
     return _named_web_call_stream("fc_web", "call_web", arguments)
 
 
+def _probe_call_stream():
+    return _named_function_call_stream("fc_probe", "call_probe", "qz_probe", json.dumps({"value": 1}))
+
+
 def _named_web_call_stream(item_id, call_id, arguments):
+    return _named_function_call_stream(item_id, call_id, "web_search", arguments)
+
+
+def _named_function_call_stream(item_id, call_id, name, arguments):
     return [
         _sse_block("response.created", {
             "response": {
@@ -112,7 +163,7 @@ def _named_web_call_stream(item_id, call_id, arguments):
                 "type": "function_call",
                 "status": "in_progress",
                 "call_id": call_id,
-                "name": "web_search",
+                "name": name,
                 "arguments": "",
             },
         }),
@@ -128,7 +179,7 @@ def _named_web_call_stream(item_id, call_id, arguments):
                 "type": "function_call",
                 "status": "completed",
                 "call_id": call_id,
-                "name": "web_search",
+                "name": name,
             },
         }),
         b"data: [DONE]\n\n",
@@ -613,6 +664,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         reasoning_only_char_limit=None,
         apply_patch_output_style="native",
         metadata=None,
+        proxy_tool_registry=None,
     ):
         chunks = []
         runtime = ResponsesStreamRuntime(
@@ -629,6 +681,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             private_function_call_delta_limit=private_function_call_delta_limit,
             reasoning_only_timeout_s=reasoning_only_timeout_s,
             reasoning_only_char_limit=reasoning_only_char_limit,
+            proxy_tool_registry=proxy_tool_registry,
         )
         body = {
             "model": "test-model.gguf",
@@ -666,6 +719,40 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertIn("searched.", stream_text)
         self.assertNotIn('"type": "function_call"', stream_text)
         self.assertTrue(any(item.get("type") == "function_call_output" for item in requests[1]["input"]))
+
+    def test_proxy_local_streaming_lifecycle_is_not_web_search_specific(self):
+        requests = []
+        registry = ProxyLocalToolRegistry([ProbeProxyToolExecutor()])
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            has_tool_output = any(
+                isinstance(item, dict)
+                and item.get("type") == "function_call_output"
+                and item.get("call_id") == "call_probe"
+                for item in body.get("input") or []
+            )
+            return FakeStream(_final_message_stream() if has_tool_output else _probe_call_stream())
+
+        telemetry = TelemetryBus()
+        stream_text = self._run_runtime(opener, telemetry=telemetry, proxy_tool_registry=registry)
+
+        self.assertEqual(len(requests), 2)
+        self.assertIn('"type": "qz_probe_call"', stream_text)
+        self.assertIn("response.qz_probe_call.in_progress", stream_text)
+        self.assertIn("response.qz_probe_call.working", stream_text)
+        self.assertIn("response.qz_probe_call.completed", stream_text)
+        self.assertIn("searched.", stream_text)
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertTrue(any(item.get("type") == "function_call_output" for item in requests[1]["input"]))
+
+        telemetry_events = telemetry.recent()
+        started = [event for event in telemetry_events if event["type"] == "tool_call_started"][0]["payload"]
+        completed = [event for event in telemetry_events if event["type"] == "tool_call_completed"][0]["payload"]
+        self.assertEqual(started["tool"], "qz_probe")
+        self.assertEqual(started["public_item_type"], "qz_probe_call")
+        self.assertEqual(completed["tool"], "qz_probe")
+        self.assertEqual(completed["upstream_items"], 2)
 
     def test_apply_patch_call_is_rewritten_as_public_tool_item(self):
         requests = []

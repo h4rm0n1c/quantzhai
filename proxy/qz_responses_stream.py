@@ -129,6 +129,7 @@ class ResponsesStreamRuntime:
         private_function_call_delta_limit: int | None = None,
         reasoning_only_timeout_s: float | None = None,
         reasoning_only_char_limit: int | None = None,
+        proxy_tool_registry=None,
     ):
         self.upstream = upstream.rstrip("/")
         self.authorization = authorization or "Bearer local"
@@ -139,7 +140,7 @@ class ResponsesStreamRuntime:
         self.telemetry = telemetry
         self.request_id = request_id or ""
         self.telemetry_emitter = RequestTelemetryEmitter(telemetry, self.request_id)
-        self.proxy_tool_registry = make_proxy_local_tool_registry(web_runtime)
+        self.proxy_tool_registry = proxy_tool_registry or make_proxy_local_tool_registry(web_runtime)
         self.private_function_call_timeout_s = (
             PRIVATE_FUNCTION_CALL_TIMEOUT_S
             if private_function_call_timeout_s is None
