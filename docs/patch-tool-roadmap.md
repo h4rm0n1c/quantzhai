@@ -116,7 +116,8 @@ Implemented:
 Still pending:
 
 - Preserve the original client tool shape in explicit per-request metadata.
-- Confirm reliability across larger multi-hunk diffs and move operations.
+- Implement and validate move/rename operations if Codex's apply_patch contract
+  expects them through this adapter.
 - Add more negative fixtures for Codex parser-failure history.
 
 The first implementation does not write files. It only translates tool-call shape.
@@ -161,6 +162,10 @@ Implemented so far:
 - Unit tests for native/custom tool normalization, output conversion, input history conversion, invalid operations, and streaming event synthesis.
 - Golden SSE replay fixtures for native/custom create, update, and delete
   patch output, and invalid model-side patch output.
+- Golden SSE replay fixtures for native/custom multi-hunk update output.
+- Golden SSE replay fixture documenting the current unsupported move/rename
+  operation behavior: unsupported operation types are converted into an
+  assistant error message, not exposed as runnable tool calls.
 - Proxy smoke test with fake upstream covering native and custom output styles.
 - Codex CLI smoke test with fake upstream proving current Codex consumes the translated custom `apply_patch` call and creates the expected temp file.
 
@@ -189,3 +194,26 @@ Once implemented, document:
 Current maturity: alpha protocol adapter with passing smoke coverage.
 
 The protocol path is now proven with fake upstreams and local Codex CLI. It is not fully supported until a live Qwen/TurboQuant run reliably emits valid patch operations and continues correctly from Codex's patch result.
+
+## Move/Rename Follow-Up
+
+Move/rename support is a planned adapter expansion, not current behavior.
+
+Current behavior:
+
+- Model-facing `apply_patch` operation types are `create_file`, `update_file`,
+  and `delete_file`.
+- A streamed operation with `type: "move_file"` is rejected and converted into
+  an assistant error message.
+- The proxy still does not execute filesystem changes itself.
+
+Implementation requirements before enabling move/rename:
+
+- Confirm the exact Codex-native shape for move/rename patch calls.
+- Extend the model-facing operation schema without breaking current
+  create/update/delete behavior.
+- Add native and custom SSE fixtures for successful move/rename conversion.
+- Add negative fixtures for missing destination, traversal, absolute paths, and
+  invalid source/destination combinations.
+- Keep Codex as the writer unless a separate local patch harness is explicitly
+  implemented and sandboxed.

@@ -949,6 +949,55 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertIn("-old line", custom_items[0]["input"])
         self.assertIn("+new line", custom_items[0]["input"])
 
+    def test_golden_apply_patch_multihunk_update_stream_rewrites_to_apply_patch_call(self):
+        def opener(body):
+            return FakeStream(_fixture_chunks("apply_patch_multihunk_update_call.raw"))
+
+        stream_text = self._run_runtime(opener)
+        events = _parse_sse_events(stream_text)
+        patch_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "apply_patch_call"
+        ]
+
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertEqual(len(patch_items), 2)
+        self.assertEqual(patch_items[0]["operation"]["type"], "update_file")
+        self.assertEqual(patch_items[0]["operation"]["path"], "tmp/quantzhai-multihunk.txt")
+        self.assertIn("-old alpha", patch_items[0]["operation"]["diff"])
+        self.assertIn("+new alpha", patch_items[0]["operation"]["diff"])
+        self.assertIn("-old beta", patch_items[0]["operation"]["diff"])
+        self.assertIn("+new beta", patch_items[0]["operation"]["diff"])
+
+    def test_golden_custom_apply_patch_multihunk_update_stream_rewrites_to_patch_envelope(self):
+        def opener(body):
+            return FakeStream(_fixture_chunks("custom_apply_patch_multihunk_update_call.raw"))
+
+        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        events = _parse_sse_events(stream_text)
+        custom_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "custom_tool_call"
+        ]
+
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertEqual(len(custom_items), 2)
+        self.assertIn("*** Update File: tmp/quantzhai-multihunk.txt", custom_items[0]["input"])
+        self.assertIn("-old alpha", custom_items[0]["input"])
+        self.assertIn("+new alpha", custom_items[0]["input"])
+        self.assertIn("-old beta", custom_items[0]["input"])
+        self.assertIn("+new beta", custom_items[0]["input"])
+
     def test_golden_apply_patch_delete_stream_rewrites_to_apply_patch_call(self):
         def opener(body):
             return FakeStream(_fixture_chunks("apply_patch_delete_call.raw"))
@@ -1019,6 +1068,26 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
         self.assertEqual(len(message_items), 1)
         self.assertEqual(completed["output"][0]["type"], "message")
+
+    def test_golden_unsupported_apply_patch_move_stream_becomes_message(self):
+        def opener(body):
+            return FakeStream(_fixture_chunks("invalid_apply_patch_move_call.raw"))
+
+        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        events = _parse_sse_events(stream_text)
+        message_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type == "response.output_item.done"
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "message"
+        ]
+
+        self.assertIn("invalid patch arguments", stream_text)
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertEqual(len(message_items), 1)
 
     def test_golden_completed_without_done_appends_done_once(self):
         def opener(body):
@@ -1111,6 +1180,72 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertNotIn('"type": "function_call"', stream_text)
         self.assertIn(1, output_indexes)
         self.assertEqual(completed["model"], "test-model.gguf")
+        self.assertEqual(completed["output"][0]["type"], "web_search_call")
+
+    def test_web_search_continuation_suppresses_duplicate_response_start(self):
+        telemetry = TelemetryBus()
+        requests = []
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            has_tool_output = any(
+                isinstance(item, dict)
+                and item.get("type") == "function_call_output"
+                and item.get("call_id") == "call_fixture_web"
+                for item in body.get("input") or []
+            )
+            fixture = "web_search_final.raw" if has_tool_output else "web_search_call.raw"
+            return FakeStream(_fixture_chunks(fixture))
+
+        stream_text = self._run_runtime(
+            opener,
+            telemetry=telemetry,
+            request_id="req-web-duplicate-start",
+        )
+        events = _parse_sse_events(stream_text)
+        timing_events = [
+            event
+            for event in telemetry.recent()
+            if event.get("type") == "stream_event_timing"
+        ]
+
+        self.assertEqual(len(requests), 2)
+        self.assertEqual([event for event, _payload in events].count("response.created"), 1)
+        self.assertEqual([event for event, _payload in events].count("response.completed"), 1)
+        self.assertTrue(any(
+            (event.get("payload") or {}).get("event_type") == "response.created"
+            and (event.get("payload") or {}).get("suppressed") == "duplicate_response_start"
+            for event in timing_events
+        ))
+
+    def test_web_search_continuation_final_completed_without_done_appends_done_once(self):
+        requests = []
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            has_tool_output = any(
+                isinstance(item, dict)
+                and item.get("type") == "function_call_output"
+                and item.get("call_id") == "call_fixture_web"
+                for item in body.get("input") or []
+            )
+            if has_tool_output:
+                return FakeStream(_fixture_chunks("completed_without_done.raw"))
+            return FakeStream(_fixture_chunks("web_search_call.raw"))
+
+        stream_text = self._run_runtime(opener)
+        events = _parse_sse_events(stream_text)
+        completed = next(
+            payload["response"]
+            for event, payload in events
+            if event == "response.completed" and isinstance(payload, dict)
+        )
+
+        self.assertEqual(len(requests), 2)
+        self.assertEqual([event for event, _payload in events].count("response.created"), 1)
+        self.assertEqual([event for event, _payload in events].count("response.completed"), 1)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
         self.assertEqual(completed["output"][0]["type"], "web_search_call")
 
 

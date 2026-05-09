@@ -1,7 +1,7 @@
 # Responses Stream and Tool State Contract
 
 Status: living contract for QuantZhai's current `/v1/responses` streamed path.
-Last reconciled: 2026-05-08.
+Last reconciled: 2026-05-09.
 
 This document defines how QuantZhai should translate upstream llama.cpp/TurboQuant
 SSE into Codex-visible Responses events, local telemetry, and debug captures. It
@@ -186,13 +186,19 @@ before broad stream/tool refactors.
 - `apply_patch_call.raw`: function-call patch stream rewritten to `apply_patch_call`
 - `apply_patch_update_call.raw` and `apply_patch_delete_call.raw`: native
   update/delete patch operations rewritten to `apply_patch_call`
+- `apply_patch_multihunk_update_call.raw`: larger native multi-hunk update
+  operation rewritten to `apply_patch_call`
 - `custom_apply_patch_call.raw`: function-call patch stream rewritten to Codex
   custom `apply_patch` envelope
 - `custom_apply_patch_update_call.raw` and `custom_apply_patch_delete_call.raw`:
   update/delete patch operations rewritten to Codex custom `apply_patch`
   envelopes
+- `custom_apply_patch_multihunk_update_call.raw`: larger multi-hunk update
+  operation rewritten to a Codex custom `apply_patch` envelope
 - `invalid_apply_patch_call.raw`: malformed model-side patch operation becomes
   an assistant error message, not a runnable private tool call
+- `invalid_apply_patch_move_call.raw`: move/rename-style operations are
+  rejected because the current adapter supports create/update/delete only
 - `completed_without_done.raw`: upstream `response.completed` without `[DONE]`
   is closed with exactly one terminal `[DONE]`
 - `reasoning_only.raw`: reasoning-only fallback path
@@ -200,6 +206,9 @@ before broad stream/tool refactors.
 - `long_active_reasoning.raw`: long reasoning followed by answer is not killed
   by the default disabled char limit
 - `web_search_call.raw` and `web_search_final.raw`: proxy-local web search continuation
+  including duplicate `response.created` suppression across continuation hops
+- `web_search_call.raw` plus `completed_without_done.raw`: continuation final hop
+  appends exactly one terminal `[DONE]` when upstream completes without one
 - `responses_input/malformed_empty_tool_history.json`: empty tool-call plus
   parse-error output is filtered while valid neighboring history survives
 - `tests/test_qz_tool_lifecycle.py`: pins private streamed function-call state,
@@ -208,9 +217,11 @@ before broad stream/tool refactors.
 
 Still needed:
 
-- continuation hop with no duplicate response start beyond web-search coverage
-- more continuation terminal-edge cases
-- larger multi-hunk and move patch variants
+- explicit move/rename support; current behavior is a pinned rejection until
+  the model-facing schema and Codex-facing adapter are expanded beyond
+  create/update/delete
+- more non-web-search continuation terminal-edge cases if another proxy-local
+  continuation tool is added
 
 ## Known Gaps
 

@@ -1,0 +1,19 @@
+event: response.created
+data: {"response":{"id":"resp_fixture_custom_patch_multihunk_update","object":"response","created_at":4102444800,"status":"in_progress","model":"fixture","output":[]},"type":"response.created","sequence_number":1}
+
+event: response.in_progress
+data: {"response":{"id":"resp_fixture_custom_patch_multihunk_update","object":"response","created_at":4102444800,"status":"in_progress","model":"fixture","output":[]},"type":"response.in_progress","sequence_number":2}
+
+event: response.output_item.added
+data: {"output_index":0,"item":{"id":"fc_fixture_custom_patch_multihunk_update","type":"function_call","status":"in_progress","call_id":"call_fixture_custom_patch_multihunk_update","name":"apply_patch","arguments":""},"type":"response.output_item.added","sequence_number":3}
+
+event: response.function_call_arguments.delta
+data: {"item_id":"fc_fixture_custom_patch_multihunk_update","output_index":0,"delta":"{\"operation\":{\"type\":\"update_file\",\"path\":\"tmp/quantzhai-multihunk.txt\",\"diff\":\"@@\\n-old alpha\\n+new alpha\\n@@\\n-old beta\\n+new beta\\n\"}}","type":"response.function_call_arguments.delta","sequence_number":4}
+
+event: response.function_call_arguments.done
+data: {"item_id":"fc_fixture_custom_patch_multihunk_update","output_index":0,"arguments":"{\"operation\":{\"type\":\"update_file\",\"path\":\"tmp/quantzhai-multihunk.txt\",\"diff\":\"@@\\n-old alpha\\n+new alpha\\n@@\\n-old beta\\n+new beta\\n\"}}","name":"apply_patch","type":"response.function_call_arguments.done","sequence_number":5}
+
+event: response.output_item.done
+data: {"output_index":0,"item":{"id":"fc_fixture_custom_patch_multihunk_update","type":"function_call","status":"completed","call_id":"call_fixture_custom_patch_multihunk_update","name":"apply_patch"},"type":"response.output_item.done","sequence_number":6}
+
+data: [DONE]
