@@ -9,9 +9,22 @@ from proxy.qz_tool_lifecycle import (
     public_tool_item_from_function_call,
     tool_continuation_result,
 )
+from proxy.qz_tool_apply_patch import APPLY_PATCH_TOOL_ADAPTER
+from proxy.qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
+from proxy.qz_tools import ToolRegistry
 
 
 class ToolLifecycleTests(unittest.TestCase):
+    def test_tool_registry_exposes_protocol_and_proxy_local_specs(self):
+        registry = ToolRegistry((APPLY_PATCH_TOOL_ADAPTER, WEB_SEARCH_TOOL_ADAPTER))
+
+        specs = {spec.name: spec for spec in registry.specs()}
+
+        self.assertEqual(specs["apply_patch"].execution, "protocol_adapter")
+        self.assertEqual(specs["apply_patch"].public_item_type, "apply_patch_call")
+        self.assertEqual(specs["web_search"].execution, "proxy_local")
+        self.assertTrue(specs["web_search"].emits_continuation)
+
     def test_tool_history_replay_filter_drops_empty_call_and_matching_output(self):
         history_filter = ToolHistoryReplayFilter()
 

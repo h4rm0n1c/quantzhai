@@ -101,16 +101,34 @@ def public_tool_item_done_event(item: dict, output_index: int, sequence_start: i
     ], seq
 
 
-def web_search_call_lifecycle_event(stage: str, item_id: str, output_index: int, sequence_start: int = 0):
-    if stage not in {"in_progress", "searching", "completed"}:
-        raise ValueError(f"unsupported web_search_call lifecycle stage: {stage}")
+def public_tool_lifecycle_event(
+    event_prefix: str,
+    allowed_stages,
+    stage: str,
+    item_id: str,
+    output_index: int,
+    sequence_start: int = 0,
+):
+    if stage not in set(allowed_stages or ()):
+        raise ValueError(f"unsupported tool lifecycle stage for {event_prefix}: {stage}")
     seq = sequence_start + 1
     return [
-        _sse_block_with_sequence(f"response.web_search_call.{stage}", {
+        _sse_block_with_sequence(f"{event_prefix}.{stage}", {
             "output_index": output_index,
             "item_id": item_id,
         }, seq)
     ], seq
+
+
+def web_search_call_lifecycle_event(stage: str, item_id: str, output_index: int, sequence_start: int = 0):
+    return public_tool_lifecycle_event(
+        "response.web_search_call",
+        {"in_progress", "searching", "completed"},
+        stage,
+        item_id,
+        output_index,
+        sequence_start,
+    )
 
 
 def public_tool_item_events(item: dict, output_index: int, sequence_start: int = 0):

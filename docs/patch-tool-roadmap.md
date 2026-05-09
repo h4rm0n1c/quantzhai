@@ -39,6 +39,11 @@ The near-term target is a protocol adapter: let the local model emit patch inten
 
 This means QuantZhai now has a first-pass protocol adapter for native and current-Codex custom patch calls. It still does not apply files itself. Codex remains responsible for workspace writes.
 
+`apply_patch` is intentionally a protocol adapter, not a proxy-local executor.
+This follows the broader tool rule: when Codex already provides a safe built-in
+execution path, QuantZhai should translate the protocol and let Codex keep
+authority over sandboxing, approvals, workspace writes, and result history.
+
 ## References
 
 - OpenAI Apply Patch guide: `https://developers.openai.com/api/docs/guides/tools-apply-patch`

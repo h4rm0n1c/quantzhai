@@ -38,6 +38,9 @@ class ProxyToolRegistryTests(unittest.TestCase):
         registry = make_proxy_local_tool_registry(FakeWebRuntime())
 
         self.assertEqual(registry.function_names, frozenset({"web_search"}))
+        self.assertEqual(registry.max_continuation_hops, 6)
+        self.assertEqual(registry.specs[0].execution, "proxy_local")
+        self.assertEqual(registry.specs[0].lifecycle_event_prefix, "response.web_search_call")
         self.assertTrue(registry.is_proxy_local_call({
             "type": "function_call",
             "name": "web_search",
@@ -61,6 +64,22 @@ class ProxyToolRegistryTests(unittest.TestCase):
         self.assertEqual(item["type"], "web_search_call")
         self.assertEqual(item["status"], "in_progress")
         self.assertEqual(item["call_id"], "call_web")
+
+    def test_spec_for_call_exposes_generic_lifecycle_contract(self):
+        registry = make_proxy_local_tool_registry(FakeWebRuntime())
+
+        spec = registry.spec_for_call({
+            "id": "fc_web",
+            "type": "function_call",
+            "call_id": "call_web",
+            "name": "web_search",
+        })
+
+        self.assertEqual(spec.name, "web_search")
+        self.assertEqual(spec.public_item_type, "web_search_call")
+        self.assertEqual(spec.telemetry_name, "web_search")
+        self.assertEqual(spec.lifecycle_start_stages, ("in_progress", "searching"))
+        self.assertEqual(spec.lifecycle_done_stages, ("completed",))
 
     def test_completed_call_decision_uses_registered_proxy_local_names(self):
         registry = make_proxy_local_tool_registry(FakeWebRuntime())

@@ -18,9 +18,9 @@ try:
         parse_sse_event_lines,
         public_tool_item_done_event,
         public_tool_item_events,
+        public_tool_lifecycle_event,
         public_tool_item_started_event,
         rewrite_sse_payload,
-        web_search_call_lifecycle_event,
     )
     from .qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
     from .qz_tool_lifecycle import StreamToolCallState, tool_continuation_result
@@ -40,9 +40,9 @@ except ImportError:
         parse_sse_event_lines,
         public_tool_item_done_event,
         public_tool_item_events,
+        public_tool_lifecycle_event,
         public_tool_item_started_event,
         rewrite_sse_payload,
-        web_search_call_lifecycle_event,
     )
     from qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
     from qz_tool_lifecycle import StreamToolCallState, tool_continuation_result
@@ -285,20 +285,43 @@ class ResponsesStreamRuntime:
         forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(chunks)
         return sequence, forwarded_chunks, forwarded_bytes
 
-    def _emit_proxy_web_search_started(self, call: dict, public_index: int, sequence: int):
+    def _emit_proxy_local_started(self, call: dict, public_index: int, sequence: int):
         public_item = self.proxy_tool_registry.started_public_item(call, public_index)
         item_id = public_item["id"]
         chunks, sequence = public_tool_item_started_event(public_item, public_index, sequence)
-        for stage in ("in_progress", "searching"):
-            stage_chunks, sequence = web_search_call_lifecycle_event(stage, item_id, public_index, sequence)
-            chunks.extend(stage_chunks)
+        spec = self.proxy_tool_registry.spec_for_call(call)
+        allowed_stages = tuple(spec.lifecycle_start_stages) + tuple(spec.lifecycle_done_stages)
+        if spec.lifecycle_event_prefix:
+            for stage in spec.lifecycle_start_stages:
+                stage_chunks, sequence = public_tool_lifecycle_event(
+                    spec.lifecycle_event_prefix,
+                    allowed_stages,
+                    stage,
+                    item_id,
+                    public_index,
+                    sequence,
+                )
+                chunks.extend(stage_chunks)
         forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(chunks)
         return sequence, forwarded_chunks, forwarded_bytes, item_id
 
-    def _emit_proxy_web_search_completed(self, item: dict, public_index: int, sequence: int, item_id: str):
+    def _emit_proxy_local_completed(self, call: dict, item: dict, public_index: int, sequence: int, item_id: str):
         item = dict(item)
         item["id"] = item_id
-        completed_chunks, sequence = web_search_call_lifecycle_event("completed", item_id, public_index, sequence)
+        spec = self.proxy_tool_registry.spec_for_call(call)
+        allowed_stages = tuple(spec.lifecycle_start_stages) + tuple(spec.lifecycle_done_stages)
+        completed_chunks = []
+        if spec.lifecycle_event_prefix:
+            for stage in spec.lifecycle_done_stages:
+                stage_chunks, sequence = public_tool_lifecycle_event(
+                    spec.lifecycle_event_prefix,
+                    allowed_stages,
+                    stage,
+                    item_id,
+                    public_index,
+                    sequence,
+                )
+                completed_chunks.extend(stage_chunks)
         chunks, sequence = public_tool_item_done_event(item, public_index, sequence)
         chunks = completed_chunks + chunks
         forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(chunks)
@@ -431,11 +454,11 @@ class ResponsesStreamRuntime:
         self._emit("stream_started", {
             "model": requested_model,
             "apply_patch_output_style": apply_patch_output_style,
-            "tool_hops_max": WEB_SEARCH_MAX_HOPS,
+            "tool_hops_max": self.proxy_tool_registry.max_continuation_hops or WEB_SEARCH_MAX_HOPS,
         })
 
         try:
-            for _hop in range(WEB_SEARCH_MAX_HOPS):
+            for _hop in range(self.proxy_tool_registry.max_continuation_hops or WEB_SEARCH_MAX_HOPS):
                 hop_body = json.loads(json.dumps(working_body))
                 hop_body["stream"] = True
                 hop_body = normalize_responses_input_for_qwen(hop_body)
@@ -618,8 +641,8 @@ class ResponsesStreamRuntime:
                                     sequence,
                                     started_chunks,
                                     started_bytes,
-                                    web_search_item_id,
-                                ) = self._emit_proxy_web_search_started(
+                                    proxy_local_item_id,
+                                ) = self._emit_proxy_local_started(
                                     completed_call,
                                     public_index,
                                     sequence,
@@ -642,14 +665,15 @@ class ResponsesStreamRuntime:
                                     ),
                                 )
                                 public_item = result.public_item
-                                public_item["id"] = web_search_item_id
+                                public_item["id"] = proxy_local_item_id
                                 public_trace.append(public_item)
                                 next_input.extend(result.upstream_items)
-                                sequence, forwarded_chunks, forwarded_bytes = self._emit_proxy_web_search_completed(
+                                sequence, forwarded_chunks, forwarded_bytes = self._emit_proxy_local_completed(
+                                    completed_call,
                                     public_item,
                                     public_index,
                                     sequence,
-                                    web_search_item_id,
+                                    proxy_local_item_id,
                                 )
                                 self._emit_stream_event_timing(
                                     event_type,
@@ -698,7 +722,11 @@ class ResponsesStreamRuntime:
                             event_lines = []
                             continue
 
-                        if is_terminal_stream_event(event_type, payload) and completed_call and completed_call.get("name") == "web_search":
+                        if (
+                            is_terminal_stream_event(event_type, payload)
+                            and completed_call
+                            and self.proxy_tool_registry.is_proxy_local_call(completed_call)
+                        ):
                             self._emit_stream_event_timing(
                                 event_type,
                                 event_received_at,
@@ -770,7 +798,7 @@ class ResponsesStreamRuntime:
                     if resp is not None:
                         resp.close()
 
-                if completed_call and completed_call.get("name") == "web_search":
+                if completed_call and self.proxy_tool_registry.is_proxy_local_call(completed_call):
                     if max_output_index >= 0:
                         output_index_offset += max_output_index + 1
                     working_body["input"] = next_input

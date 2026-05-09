@@ -5,6 +5,26 @@ from dataclasses import dataclass
 from typing import Protocol
 
 
+@dataclass(frozen=True)
+class ToolLifecycleSpec:
+    name: str
+    execution: str = "protocol_adapter"
+    public_item_type: str = ""
+    telemetry_name: str = ""
+    continuation_hops: int = 0
+    lifecycle_event_prefix: str = ""
+    lifecycle_start_stages: tuple[str, ...] = ()
+    lifecycle_done_stages: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        if self.execution not in {"protocol_adapter", "proxy_local"}:
+            raise ValueError(f"unsupported tool execution mode: {self.execution}")
+
+    @property
+    def emits_continuation(self) -> bool:
+        return self.execution == "proxy_local" and self.continuation_hops > 0
+
+
 def function_tool(name: str, description: str, parameters: dict) -> dict:
     return {
         "type": "function",
@@ -16,6 +36,7 @@ def function_tool(name: str, description: str, parameters: dict) -> dict:
 
 class ToolAdapter(Protocol):
     upstream_name: str
+    lifecycle: ToolLifecycleSpec
 
     def accepts_tool(self, tool: dict) -> bool:
         ...
@@ -36,6 +57,19 @@ class ToolAdapter(Protocol):
 @dataclass(frozen=True)
 class ToolRegistry:
     adapters: tuple[ToolAdapter, ...]
+
+    def specs(self) -> tuple[ToolLifecycleSpec, ...]:
+        return tuple(
+            adapter.lifecycle
+            for adapter in self.adapters
+            if isinstance(getattr(adapter, "lifecycle", None), ToolLifecycleSpec)
+        )
+
+    def spec_for_name(self, name: str):
+        for spec in self.specs():
+            if spec.name == name:
+                return spec
+        return None
 
     def adapter_for_tool(self, tool: dict):
         for adapter in self.adapters:

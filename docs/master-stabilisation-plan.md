@@ -764,8 +764,18 @@ Concrete target:
 
 ```text
 A first proxy-local tool executor registry is implemented before adding more
-proxy-executed tools. The streaming and non-streaming paths call the same
-interface for:
+proxy-executed tools. Tool support is split into two explicit classes:
+
+- protocol adapters, such as `apply_patch`, where QuantZhai translates the
+  shape and Codex keeps execution authority
+- proxy-local executors, such as `web_search`, where QuantZhai executes locally
+  and feeds hidden continuation state back to the model
+
+Default rule: if Codex already has a safe built-in execution path, keep
+execution with Codex and build a protocol adapter unless a separate documented
+reason justifies proxy execution.
+
+The streaming and non-streaming paths call the same interface for:
 
 - deciding whether a completed function_call is proxy-local
 - executing the tool with request_id, counters, cache, and telemetry context
@@ -775,8 +785,10 @@ interface for:
 
 web_search is now on that interface. Stream-specific lifecycle event emission
 still lives in the stream runtime because it owns SSE sequencing and forwarded
-byte accounting. Keep apply_patch as a protocol adapter and Codex handoff path
-unless a separate security decision explicitly adds proxy-side patch execution.
+byte accounting, but the stream runtime now reads tool lifecycle metadata from
+the active registry instead of branching directly on the `web_search` name. Keep
+apply_patch as a protocol adapter and Codex handoff path unless a separate
+security decision explicitly adds proxy-side patch execution.
 ```
 
 Success criteria:

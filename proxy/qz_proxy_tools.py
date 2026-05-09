@@ -2,8 +2,10 @@
 from dataclasses import dataclass, field
 
 try:
+    from .qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
     from .qz_tool_lifecycle import ToolContinuationResult, completed_tool_call_decision
 except ImportError:
+    from qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
     from qz_tool_lifecycle import ToolContinuationResult, completed_tool_call_decision
 
 
@@ -16,6 +18,7 @@ class ProxyToolExecutionContext:
 
 class ProxyLocalToolExecutor:
     function_name = ""
+    lifecycle = None
 
     def is_call(self, call: dict) -> bool:
         return (
@@ -33,6 +36,7 @@ class ProxyLocalToolExecutor:
 
 class WebSearchProxyToolExecutor(ProxyLocalToolExecutor):
     function_name = "web_search"
+    lifecycle = WEB_SEARCH_TOOL_ADAPTER.lifecycle
 
     def __init__(self, web_runtime):
         self.web_runtime = web_runtime
@@ -68,6 +72,18 @@ class ProxyLocalToolRegistry:
             if executor.function_name
         }
         self.function_names = frozenset(self._executors)
+        self.specs = tuple(
+            executor.lifecycle
+            for executor in self._executors.values()
+            if executor.lifecycle is not None
+        )
+        self.max_continuation_hops = max(
+            (int(getattr(spec, "continuation_hops", 0) or 0) for spec in self.specs),
+            default=0,
+        )
+
+    def spec_for_call(self, call: dict):
+        return self.executor_for_call(call).lifecycle
 
     def is_proxy_local_call(self, call: dict) -> bool:
         return (

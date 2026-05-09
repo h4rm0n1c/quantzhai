@@ -193,6 +193,21 @@ Required details:
 
 ## Tool Handling
 
+QuantZhai has two tool-handler classes:
+
+- **Protocol adapters** translate between Codex's client-facing tool shape and
+  the model-facing function-call shape Qwen can reliably emit. They do not
+  execute the tool in the proxy. `apply_patch` is the current example: Codex
+  remains responsible for workspace writes, sandboxing, approvals, and result
+  history.
+- **Proxy-local executors** translate the declaration, execute the tool inside
+  QuantZhai, append private upstream continuation items, and expose a safe
+  Codex-visible progress/result shape. `web_search` is the current example.
+
+Rule: if Codex already provides a safe built-in execution path for a tool,
+QuantZhai should prefer protocol adaptation and keep execution with Codex unless
+there is a strong, documented reason to move execution into the proxy.
+
 Current behavior:
 
 - Normal function tools can pass through.
@@ -216,6 +231,11 @@ Current behavior:
 - Proxy-local tool continuation now returns an explicit split between the public
   item Codex sees and the private upstream replay items the model needs for the
   next hop.
+- Tool adapters now expose `ToolLifecycleSpec`, covering execution mode,
+  Codex-visible item type, telemetry name, continuation hop budget, and optional
+  SSE lifecycle event stages.
+- Streamed proxy-local lifecycle handling now asks the active registry for
+  lifecycle metadata instead of hard-coding `web_search` branching.
 
 Missing or incomplete:
 
@@ -226,7 +246,8 @@ Missing or incomplete:
 - No computer-use tool runtime.
 - No code interpreter runtime.
 - No MCP/app tool bridge.
-- No generic custom-tool execution framework.
+- The generic bridge exists for current tools, but needs more fixture coverage
+  before adding new tool classes.
 
 What works well:
 
@@ -236,10 +257,12 @@ What works well:
 
 What is weak:
 
-- Tool handling is not yet a clean module or interface.
-- Each tool path is too embedded in the proxy flow.
+- Tool handling has a shared contract, but some request-policy details still
+  live near the Responses normalizer.
 - There is no shared tool-call lifecycle for request normalization, execution, result injection, streaming, and capture.
-- Tool execution and streaming are not yet one state machine.
+- Tool execution and streaming share specs, but are not yet one state machine.
+- The adapter/executor split is now the design rule, but not every code path is
+  routed through that boundary yet.
 
 Maturity:
 

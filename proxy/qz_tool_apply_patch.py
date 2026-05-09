@@ -4,9 +4,9 @@ import re
 import time
 
 try:
-    from .qz_tools import ToolRegistry, function_tool
+    from .qz_tools import ToolLifecycleSpec, ToolRegistry, function_tool
 except ImportError:
-    from qz_tools import ToolRegistry, function_tool
+    from qz_tools import ToolLifecycleSpec, ToolRegistry, function_tool
 
 
 APPLY_PATCH_OPERATION_TYPES = {"create_file", "update_file", "delete_file", "move_file", "rename_file"}
@@ -378,6 +378,12 @@ def _apply_patch_output_style(body: dict) -> str:
 
 class ApplyPatchToolAdapter:
     upstream_name = "apply_patch"
+    lifecycle = ToolLifecycleSpec(
+        name="apply_patch",
+        execution="protocol_adapter",
+        public_item_type="apply_patch_call",
+        telemetry_name="apply_patch",
+    )
 
     def accepts_tool(self, tool: dict) -> bool:
         if not isinstance(tool, dict):

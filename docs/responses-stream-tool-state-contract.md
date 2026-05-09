@@ -27,11 +27,35 @@ tested as proxy-executed tools.
 
 Status: first pass implemented.
 
+QuantZhai distinguishes protocol adapters from proxy-local executors.
+
+Protocol adapters translate between Codex's client-facing tool contract and a
+Qwen-friendly function-call contract, then hand execution back to Codex. They
+must not execute the tool in the proxy. `apply_patch` is the current protocol
+adapter and keeps filesystem writes under Codex's sandbox and approval model.
+
+Proxy-local executors are tools QuantZhai actually runs. They own local
+execution, hidden upstream continuation items, Codex-visible display items, and
+tool telemetry. `web_search` is the current proxy-local executor.
+
+If Codex already has a safe built-in execution path for a tool, prefer a
+protocol adapter. Add a proxy-local executor only when local execution is
+required and its safety, telemetry, replay, and event shape are documented and
+tested.
+
 QuantZhai currently has a `ToolAdapter` registry for declaration and item-shape
-normalization. Proxy-executed tools now have a separate `ProxyLocalToolRegistry`
-for completed-call classification and execution. `web_search` is the first
-proxy-local executor and is used by both streamed and non-streamed
-`/v1/responses` paths.
+normalization. Each adapter exposes a `ToolLifecycleSpec` with one execution
+mode:
+
+- `protocol_adapter`: QuantZhai adapts the tool shape and Codex executes it.
+- `proxy_local`: QuantZhai executes the tool and sends hidden continuation state
+  upstream.
+
+Proxy-executed tools have a `ProxyLocalToolRegistry` for completed-call
+classification and execution. The registry also exposes the lifecycle spec used
+by streaming code for Codex-visible event shape, continuation hop budget, and
+progress/completed event stages. `web_search` is the first proxy-local executor
+and is used by both streamed and non-streamed `/v1/responses` paths.
 
 Codex-facing output adaptation is adapter-owned. The generic `ToolRegistry`
 can normalize a list of output items back to the client shape, and the
@@ -46,6 +70,7 @@ future proxy-side tools from requiring a second hard-coded allowlist.
 A proxy-local executor owns:
 
 - the model-facing function name
+- its `ToolLifecycleSpec`
 - completed-call classification
 - argument validation
 - local execution

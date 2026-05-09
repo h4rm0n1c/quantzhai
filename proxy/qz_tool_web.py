@@ -11,10 +11,10 @@ from pathlib import Path
 
 try:
     from .qz_runtime_io import runtime_log
-    from .qz_tools import function_tool
+    from .qz_tools import ToolLifecycleSpec, function_tool
 except ImportError:
     from qz_runtime_io import runtime_log
-    from qz_tools import function_tool
+    from qz_tools import ToolLifecycleSpec, function_tool
 
 
 def _now_ts() -> int:
@@ -36,6 +36,16 @@ def _truncate(text: str, limit: int) -> str:
 
 class WebSearchToolAdapter:
     upstream_name = "web_search"
+    lifecycle = ToolLifecycleSpec(
+        name="web_search",
+        execution="proxy_local",
+        public_item_type="web_search_call",
+        telemetry_name="web_search",
+        continuation_hops=6,
+        lifecycle_event_prefix="response.web_search_call",
+        lifecycle_start_stages=("in_progress", "searching"),
+        lifecycle_done_stages=("completed",),
+    )
 
     def accepts_tool(self, tool: dict) -> bool:
         return isinstance(tool, dict) and tool.get("type") == "web_search"
@@ -108,7 +118,7 @@ WEB_SEARCH_TOOL_ADAPTER = WebSearchToolAdapter()
 WEB_SEARCH_SEARCH_CACHE_TTL = 300
 WEB_SEARCH_PAGE_CACHE_TTL = 900
 WEB_SEARCH_MAX_RESULTS = 8
-WEB_SEARCH_MAX_HOPS = 6
+WEB_SEARCH_MAX_HOPS = WEB_SEARCH_TOOL_ADAPTER.lifecycle.continuation_hops
 WEB_SEARCH_MAX_SEARCHES = 4
 WEB_SEARCH_MAX_OPENS = 3
 WEB_SEARCH_USER_AGENT = "qwen36turbo-web-runtime/1.0"
