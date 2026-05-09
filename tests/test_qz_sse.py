@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from proxy.qz_sse import make_response_stream_events, transform_sse_event
+from proxy.qz_sse import _normalize_response_usage, make_response_stream_events, transform_sse_event
 
 
 def _event(event_type, payload):
@@ -15,6 +15,60 @@ def _event(event_type, payload):
 
 
 class SseTests(unittest.TestCase):
+    def test_usage_normalizer_maps_legacy_and_detail_fields(self):
+        usage = _normalize_response_usage({
+            "prompt_tokens": 12,
+            "completion_tokens": 4,
+            "prompt_tokens_details": {"cached_tokens": 9},
+            "completion_tokens_details": {"reasoning_tokens": 3},
+        })
+
+        self.assertEqual(usage["input_tokens"], 12)
+        self.assertEqual(usage["output_tokens"], 4)
+        self.assertEqual(usage["total_tokens"], 16)
+        self.assertEqual(usage["input_tokens_details"]["cached_tokens"], 9)
+        self.assertEqual(usage["output_tokens_details"]["reasoning_tokens"], 3)
+
+    def test_usage_normalizer_maps_llamacpp_token_fields(self):
+        usage = _normalize_response_usage({
+            "prompt_eval_count": 7,
+            "eval_count": 5,
+            "cached_tokens": 6,
+            "reasoning_tokens": 2,
+        })
+
+        self.assertEqual(usage["input_tokens"], 7)
+        self.assertEqual(usage["output_tokens"], 5)
+        self.assertEqual(usage["total_tokens"], 12)
+        self.assertEqual(usage["input_tokens_details"]["cached_tokens"], 6)
+        self.assertEqual(usage["output_tokens_details"]["reasoning_tokens"], 2)
+
+    def test_completed_event_usage_is_normalized_for_status_clients(self):
+        chunks = transform_sse_event(
+            _event("response.completed", {
+                "response": {
+                    "id": "resp_1",
+                    "status": "completed",
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 3,
+                        "prompt_tokens_details": {"cached_tokens": 8},
+                        "completion_tokens_details": {"reasoning_tokens": 2},
+                    },
+                },
+            }),
+            set(),
+            "summary",
+        )
+
+        payload = json.loads(b"".join(chunks).decode("utf-8").split("data: ", 1)[1])
+        usage = payload["response"]["usage"]
+        self.assertEqual(usage["input_tokens"], 10)
+        self.assertEqual(usage["output_tokens"], 3)
+        self.assertEqual(usage["total_tokens"], 13)
+        self.assertEqual(usage["input_tokens_details"]["cached_tokens"], 8)
+        self.assertEqual(usage["output_tokens_details"]["reasoning_tokens"], 2)
+
     def test_response_stream_synthesizes_message_events(self):
         out = {
             "id": "resp_1",

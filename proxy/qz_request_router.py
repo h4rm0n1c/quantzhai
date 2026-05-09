@@ -503,13 +503,13 @@ class RequestRouter:
         if not isinstance(payload, dict):
             return
 
-        usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+        usage = _normalize_response_usage(payload.get("usage") if isinstance(payload.get("usage"), dict) else {})
         try:
-            prompt_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+            prompt_tokens = int(usage.get("input_tokens") or 0)
         except Exception:
             prompt_tokens = 0
         try:
-            gen_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+            gen_tokens = int(usage.get("output_tokens") or 0)
         except Exception:
             gen_tokens = 0
         try:

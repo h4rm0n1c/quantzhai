@@ -135,7 +135,8 @@ def _named_web_call_stream(item_id, call_id, arguments):
     ]
 
 
-def _final_message_stream():
+def _final_message_stream(usage=None):
+    usage = usage if isinstance(usage, dict) else {}
     return [
         _sse_block("response.created", {
             "response": {
@@ -177,7 +178,7 @@ def _final_message_stream():
                     "role": "assistant",
                     "content": [{"type": "output_text", "text": "searched.", "annotations": []}],
                 }],
-                "usage": {},
+                "usage": usage,
             },
         }),
         b"data: [DONE]\n\n",
@@ -1486,6 +1487,40 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             for item in requests[2]["input"]
             if isinstance(item, dict) and item.get("type") == "function_call_output"
         ))
+
+    def test_proxy_local_final_usage_is_normalized_for_codex_status(self):
+        def opener(body):
+            outputs = [
+                item
+                for item in body.get("input") or []
+                if isinstance(item, dict) and item.get("type") == "function_call_output"
+            ]
+            if not outputs:
+                return FakeStream(_named_web_call_stream(
+                    "fc_web_one",
+                    "call_web_one",
+                    json.dumps({"action": "search", "query": "one"}),
+                ))
+            return FakeStream(_final_message_stream({
+                "prompt_tokens": 10,
+                "completion_tokens": 4,
+                "prompt_tokens_details": {"cached_tokens": 7},
+                "completion_tokens_details": {"reasoning_tokens": 2},
+            }))
+
+        stream_text = self._run_runtime(opener, web_runtime=FakeWebRuntime())
+        completed = next(
+            payload["response"]
+            for event, payload in _parse_sse_events(stream_text)
+            if event == "response.completed" and isinstance(payload, dict)
+        )
+        usage = completed["usage"]
+
+        self.assertEqual(usage["input_tokens"], 10)
+        self.assertEqual(usage["output_tokens"], 4)
+        self.assertEqual(usage["total_tokens"], 14)
+        self.assertEqual(usage["input_tokens_details"]["cached_tokens"], 7)
+        self.assertEqual(usage["output_tokens_details"]["reasoning_tokens"], 2)
 
     def test_web_search_continuation_suppresses_duplicate_response_start(self):
         telemetry = TelemetryBus()

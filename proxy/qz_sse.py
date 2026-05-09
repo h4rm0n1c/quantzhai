@@ -10,23 +10,60 @@ def _token_count(value, fallback: int = 0) -> int:
     return max(0, count)
 
 
+def _first_token_count(source: dict, names, fallback: int = 0) -> int:
+    for name in names:
+        if name in source:
+            return _token_count(source.get(name), fallback)
+    return fallback
+
+
 def _normalize_response_usage(usage) -> dict:
     source = usage if isinstance(usage, dict) else {}
     normalized = dict(source)
 
-    input_tokens = _token_count(source.get("input_tokens"), _token_count(source.get("prompt_tokens")))
-    output_tokens = _token_count(source.get("output_tokens"), _token_count(source.get("completion_tokens")))
+    input_tokens = _first_token_count(
+        source,
+        ("input_tokens", "prompt_tokens", "prompt_eval_count"),
+    )
+    output_tokens = _first_token_count(
+        source,
+        ("output_tokens", "completion_tokens", "eval_count"),
+    )
     total_tokens = _token_count(source.get("total_tokens"), input_tokens + output_tokens)
     if total_tokens < input_tokens + output_tokens:
         total_tokens = input_tokens + output_tokens
 
+    input_details = (
+        source.get("input_tokens_details")
+        if isinstance(source.get("input_tokens_details"), dict)
+        else source.get("prompt_tokens_details")
+        if isinstance(source.get("prompt_tokens_details"), dict)
+        else {}
+    )
+    output_details = (
+        source.get("output_tokens_details")
+        if isinstance(source.get("output_tokens_details"), dict)
+        else source.get("completion_tokens_details")
+        if isinstance(source.get("completion_tokens_details"), dict)
+        else {}
+    )
+
+    input_details = dict(input_details)
+    output_details = dict(output_details)
+    input_details["cached_tokens"] = _token_count(
+        input_details.get("cached_tokens"),
+        _token_count(source.get("cached_tokens")),
+    )
+    output_details["reasoning_tokens"] = _token_count(
+        output_details.get("reasoning_tokens"),
+        _token_count(source.get("reasoning_tokens")),
+    )
+
     normalized["input_tokens"] = input_tokens
     normalized["output_tokens"] = output_tokens
     normalized["total_tokens"] = total_tokens
-    if not isinstance(normalized.get("input_tokens_details"), dict):
-        normalized["input_tokens_details"] = {"cached_tokens": 0}
-    if not isinstance(normalized.get("output_tokens_details"), dict):
-        normalized["output_tokens_details"] = {"reasoning_tokens": 0}
+    normalized["input_tokens_details"] = input_details
+    normalized["output_tokens_details"] = output_details
     return normalized
 
 
@@ -69,9 +106,6 @@ def _convert_reasoning_item_to_summary(item):
 
 
 def transform_sse_event(event_lines, summary_started, mode):
-    if mode == "raw":
-        return [b"".join(event_lines)]
-
     parse_lines = []
     for line in event_lines or []:
         if isinstance(line, str):
@@ -99,6 +133,15 @@ def transform_sse_event(event_lines, summary_started, mode):
 
     event_type = event_type or obj.get("type")
     if not isinstance(event_type, str):
+        return [b"".join(event_lines)]
+
+    response = obj.get("response")
+    if event_type == "response.completed" and isinstance(response, dict):
+        response["usage"] = _normalize_response_usage(response.get("usage"))
+        if mode == "raw":
+            return [make_sse_block(obj.get("type", event_type), obj)]
+
+    if mode == "raw":
         return [b"".join(event_lines)]
 
     if mode == "hidden":
@@ -150,7 +193,6 @@ def transform_sse_event(event_lines, summary_started, mode):
     if isinstance(item, dict) and item.get("type") == "reasoning":
         _convert_reasoning_item_to_summary(item)
 
-    response = obj.get("response")
     if isinstance(response, dict) and isinstance(response.get("output"), list):
         for item in response["output"]:
             _convert_reasoning_item_to_summary(item)
