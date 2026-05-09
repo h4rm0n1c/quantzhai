@@ -1,0 +1,186 @@
+{
+  "body": {
+    "input": [
+      {
+        "type": "message",
+        "role": "system",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Fallback system instruction from replay."
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "developer",
+        "content": "Fallback developer instruction from replay."
+      },
+      {
+        "type": "reasoning",
+        "summary": [
+          {
+            "type": "summary_text",
+            "text": "Do not replay private reasoning."
+          }
+        ]
+      },
+      {
+        "type": "web_search_call",
+        "id": "ws_old",
+        "status": "completed"
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "<permissions instructions> stale harness block"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Here is the system prompt you asked for."
+          }
+        ]
+      },
+      "plain string user item",
+      {
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "assistant text from older shape"
+          }
+        ]
+      },
+      {
+        "type": "apply_patch_call",
+        "id": "apc_1",
+        "status": "completed",
+        "call_id": "call_patch_native",
+        "operation": {
+          "type": "update_file",
+          "path": "notes.md",
+          "diff": "@@\n-old\n+new\n"
+        }
+      },
+      {
+        "type": "apply_patch_call_output",
+        "call_id": "call_patch_native",
+        "status": "completed",
+        "output": "Updated notes.md"
+      },
+      {
+        "type": "custom_tool_call",
+        "id": "ctc_1",
+        "call_id": "call_patch_custom",
+        "name": "apply_patch",
+        "input": "*** Begin Patch\n*** Add File: extra.md\n+hello\n*** End Patch\n"
+      },
+      {
+        "type": "custom_tool_call_output",
+        "call_id": "call_patch_custom",
+        "output": "{\"output\":\"Success\"}"
+      },
+      {
+        "type": "function_call",
+        "name": "exec_command",
+        "call_id": "call_good",
+        "arguments": "{\"cmd\":\"pwd\"}"
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call_good",
+        "output": "{\"output\":\"/work\\n\",\"metadata\":{\"exit_code\":0}}"
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "continue"
+          }
+        ]
+      }
+    ]
+  },
+  "expected_input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "plain string user item"
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "assistant text from older shape",
+          "annotations": []
+        }
+      ]
+    },
+    {
+      "id": "apc_1",
+      "type": "function_call",
+      "status": "completed",
+      "call_id": "call_patch_native",
+      "name": "apply_patch",
+      "arguments": "{\"operation\": {\"type\": \"update_file\", \"path\": \"notes.md\", \"diff\": \"@@\\n-old\\n+new\\n\"}}"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_patch_native",
+      "output": "{\"status\": \"completed\", \"output\": \"Updated notes.md\"}"
+    },
+    {
+      "id": "ctc_1",
+      "type": "function_call",
+      "status": "completed",
+      "call_id": "call_patch_custom",
+      "name": "apply_patch",
+      "arguments": "{\"patch\": \"*** Begin Patch\\n*** Add File: extra.md\\n+hello\\n*** End Patch\\n\"}"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_patch_custom",
+      "output": "{\"output\":\"Success\"}"
+    },
+    {
+      "type": "function_call",
+      "name": "exec_command",
+      "call_id": "call_good",
+      "arguments": "{\"cmd\":\"pwd\"}"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_good",
+      "output": "{\"output\":\"/work\\n\",\"metadata\":{\"exit_code\":0}}"
+    },
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "continue"
+        }
+      ]
+    }
+  ]
+}

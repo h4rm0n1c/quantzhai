@@ -486,8 +486,13 @@ Missing:
    public/proxy-local decisions, proxy-local continuation shaping, malformed
    history filtering, and stream telemetry payload shaping now have explicit
    ownership boundaries.
-4. Run a live Qwen/TurboQuant patch workflow and capture whether it emits valid patch operations.
-5. Add broader golden tests for Responses normalization.
+4. Run a live Qwen/TurboQuant patch workflow and capture whether it emits valid
+   patch operations. Done on 2026-05-09 with request
+   `qz_req_1778312516589_af70`.
+5. Add broader golden tests for Responses normalization. Seed fixtures now pin
+   mixed replay-history cleanup and tool declaration normalization, including
+   stale harness/reasoning drops, native/custom apply_patch history adaptation,
+   `write_stdin` gating, web_search translation, and apply_patch tool policy.
 6. Split `proxy/quantzhai_proxy.py` into a conventional Python package.
 7. Add a backend adapter boundary before Fox or Rust work.
 8. Revisit search once the proxy shape is easier to test.

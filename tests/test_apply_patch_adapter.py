@@ -353,6 +353,27 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         out = normalize_responses_input_for_qwen(fixture["body"])
 
         self.assertEqual(out["input"], fixture["expected_input"])
+        self.assertIn("qz_prompt_policy", out["metadata"])
+
+    def test_golden_mixed_history_is_normalized_for_qwen(self):
+        fixture = json.loads(FIXTURE_DIR.joinpath("mixed_history_normalization.json").read_text())
+
+        out = normalize_responses_input_for_qwen(fixture["body"])
+
+        self.assertEqual(out["input"], fixture["expected_input"])
+        self.assertIn("qz_prompt_policy", out["metadata"])
+        self.assertTrue(out["metadata"]["qz_prompt_policy"]["mode"])
+
+    def test_golden_tool_declarations_are_normalized_for_llamacpp(self):
+        fixture = json.loads(FIXTURE_DIR.joinpath("tool_declaration_normalization.json").read_text())
+
+        out = normalize_tools_for_llamacpp(fixture["body"])
+
+        self.assertEqual([tool.get("name") for tool in out["tools"]], fixture["expected_tool_names"])
+        self.assertEqual([tool.get("type") for tool in out["tools"]], ["function", "function", "function"])
+        self.assertEqual(out["tool_choice"], fixture["expected_tool_choice"])
+        self.assertEqual(out["metadata"]["qz_tool_policy"], fixture["expected_policy"])
+        self.assertIn("use apply_patch", out["tools"][0]["description"])
 
     def test_custom_patch_history_becomes_function_history(self):
         call_item = {

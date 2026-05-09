@@ -1,0 +1,45 @@
+{
+  "body": {
+    "input": [],
+    "tools": [
+      {
+        "type": "function",
+        "name": "exec_command",
+        "description": "Runs a shell command."
+      },
+      {
+        "type": "function",
+        "name": "write_stdin",
+        "description": "Writes stdin to an existing session."
+      },
+      {
+        "type": "web_search"
+      },
+      {
+        "type": "apply_patch"
+      },
+      {
+        "type": "custom",
+        "name": "unsupported_custom"
+      }
+    ],
+    "tool_choice": {
+      "type": "apply_patch"
+    }
+  },
+  "expected_tool_names": [
+    "exec_command",
+    "web_search",
+    "apply_patch"
+  ],
+  "expected_tool_choice": {
+    "type": "function",
+    "name": "apply_patch"
+  },
+  "expected_policy": {
+    "schema": "qz.tool_policy.v1",
+    "apply_patch_declared": true,
+    "apply_patch_client_tool_type": "apply_patch",
+    "apply_patch_output_style": "native"
+  }
+}

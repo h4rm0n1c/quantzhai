@@ -97,6 +97,20 @@ tests/test_qz_runtime_io.py
 tests/test_qz_thoughts_cli.py
 ```
 
+Responses normalization fixtures:
+
+```text
+tests/fixtures/responses_input/malformed_empty_tool_history.json
+tests/fixtures/responses_input/mixed_history_normalization.json
+tests/fixtures/responses_input/tool_declaration_normalization.json
+```
+
+These pin replay cleanup before Qwen sees the request: malformed empty tool
+history is removed, stale harness/meta/reasoning items are dropped, message
+content is canonicalized, supported tool declarations are converted to
+llama.cpp-friendly function tools, and client-facing apply_patch history is
+adapted back to upstream function-call history.
+
 Useful forensic captures retained locally:
 
 ```text
