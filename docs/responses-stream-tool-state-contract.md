@@ -102,7 +102,10 @@ Implementation:
 ```text
 proxy/qz_responses_stream.py   streamed Responses runtime and continuation loop
 proxy/qz_streaming.py          SSE parser and streamed function-call assembler
-proxy/qz_responses.py          request normalization, tool filtering, history cleanup
+proxy/qz_responses.py          input history normalization and compaction helpers
+proxy/qz_tool_request.py       tool declaration normalization, tool-choice
+                               adaptation, write_stdin gating, tool policy
+                               metadata, and capture notes
 proxy/qz_proxy_tools.py        completed-call routing, public adapter conversion,
                                proxy-local tool registry, execution context,
                                and continuation-result shaping
@@ -598,6 +601,9 @@ before broad stream/tool refactors.
 - `tests/test_qz_proxy_tools.py`: pins completed-call routing decisions,
   apply_patch public item conversion, proxy-local execution context, and
   upstream continuation shaping through the active proxy tool registry
+- `tests/test_qz_tool_request.py`: pins tool declaration normalization,
+  `write_stdin` gating, tool-choice adaptation, request-scoped
+  `qz_tool_policy`, and capture-note output
 - `tests/smoke_apply_patch_codex_exec.py`: hermetic fake-upstream Codex exec
   smoke pins the end-to-end apply_patch handoff and public Codex JSONL
   `file_change` started/completed lifecycle
@@ -625,10 +631,11 @@ Still needed:
   headers well enough for Codex to apply the next update patch. Golden replay
   fixtures now cover that metadata normalization for native and custom
   Codex-facing output styles.
-- Tool lifecycle now has an internal boundary for streamed call state,
+- Tool lifecycle now has internal boundaries for streamed call state,
   malformed historical tool-call filtering, completed-call routing decisions,
-  public protocol-adapter conversion, and proxy-local continuation shaping, but
-  some broader request-normalization ownership still needs tightening.
+  public protocol-adapter conversion, proxy-local continuation shaping, and
+  tool request normalization. Broader non-tool request normalization still
+  needs tightening.
 - No redaction layer for captures.
 - Request-scoped captures are not grouped under a higher-level run id.
 - Proxy-side shell/code/computer/MCP execution is not implemented.

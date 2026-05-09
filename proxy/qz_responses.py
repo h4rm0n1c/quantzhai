@@ -5,7 +5,6 @@ import re
 
 try:
     from .qz_tool_apply_patch import (
-        APPLY_PATCH_TOOL_ADAPTER,
         _apply_patch_call_to_function_call,
         _apply_patch_output_style,
         _apply_patch_output_to_function_output,
@@ -16,14 +15,12 @@ try:
         normalize_apply_patch_input_for_llamacpp,
         normalize_apply_patch_output_for_codex,
     )
-    from .qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
     from .qz_tool_lifecycle import ToolHistoryReplayFilter
-    from .qz_runtime_io import capture_enabled, capture_path, write_capture
     from .qz_prompt_policy import assemble_instruction_stack
-    from .qz_tools import ToolRegistry
+    from .qz_proxy_tools import DEFAULT_TOOL_REGISTRY
+    from .qz_tool_request import normalize_tools_for_llamacpp
 except ImportError:
     from qz_tool_apply_patch import (
-        APPLY_PATCH_TOOL_ADAPTER,
         _apply_patch_call_to_function_call,
         _apply_patch_output_style,
         _apply_patch_output_to_function_output,
@@ -34,11 +31,10 @@ except ImportError:
         normalize_apply_patch_input_for_llamacpp,
         normalize_apply_patch_output_for_codex,
     )
-    from qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
     from qz_tool_lifecycle import ToolHistoryReplayFilter
-    from qz_runtime_io import capture_enabled, capture_path, write_capture
     from qz_prompt_policy import assemble_instruction_stack
-    from qz_tools import ToolRegistry
+    from qz_proxy_tools import DEFAULT_TOOL_REGISTRY
+    from qz_tool_request import normalize_tools_for_llamacpp
 
 LOCAL_COMPACTION_PREFIX = "localcmp:v1:"
 COMPACTION_CONFIG = {
@@ -80,46 +76,9 @@ META_ASSISTANT_TEXT_MARKERS = (
     "the recursion is indeed funny",
 )
 
-TOOL_REGISTRY = ToolRegistry((APPLY_PATCH_TOOL_ADAPTER, WEB_SEARCH_TOOL_ADAPTER))
-EXEC_SESSION_OUTPUT_RE = re.compile(r"(?i)\b(?:session_id|session id)\s*[:=]\s*\d+\b")
-FILE_EDIT_TOOL_HINT = (
-    " For file creation or edits, use apply_patch when that tool is available; "
-    "do not use shell redirection, heredocs, or write_stdin for file edits."
-)
-WRITE_STDIN_TOOL_HINT = (
-    " Only use this with an existing running session id from prior exec_command output. "
-    "Do not invent session ids, and do not use write_stdin for file creation or edits."
-)
-
 
 def normalize_tool_output_for_codex(output_items, output_style: str = "native"):
-    return TOOL_REGISTRY.output_items_to_codex(output_items, output_style)
-
-
-def _input_has_exec_session(input_items) -> bool:
-    if not isinstance(input_items, list):
-        return False
-
-    for item in input_items:
-        if not isinstance(item, dict) or item.get("type") != "function_call_output":
-            continue
-        output = item.get("output")
-        if not isinstance(output, str):
-            continue
-        if EXEC_SESSION_OUTPUT_RE.search(output):
-            return True
-    return False
-
-
-def _append_tool_hint(tool: dict, hint: str) -> dict:
-    description = tool.get("description")
-    if not isinstance(description, str):
-        description = ""
-    if hint.strip() in description:
-        return dict(tool)
-    out = dict(tool)
-    out["description"] = (description.rstrip() + hint).strip()
-    return out
+    return DEFAULT_TOOL_REGISTRY.output_items_to_codex(output_items, output_style)
 
 def clean_content(text: str) -> str:
     if not isinstance(text, str):
@@ -285,7 +244,7 @@ def normalize_responses_input_for_qwen(body: dict, selected_model: dict | None =
         if item_type in ("reasoning", "web_search_call"):
             continue
 
-        adapted_tool_item = TOOL_REGISTRY.input_to_upstream(item)
+        adapted_tool_item = DEFAULT_TOOL_REGISTRY.input_to_upstream(item)
         if adapted_tool_item is not None:
             clean_input.append(adapted_tool_item)
             continue
@@ -326,74 +285,6 @@ def normalize_responses_input_for_qwen(body: dict, selected_model: dict | None =
 
     body["input"] = clean_input
     return body
-
-def normalize_tools_for_llamacpp(body: dict) -> dict:
-    tools = body.get("tools")
-    if not isinstance(tools, list):
-        return body
-
-    ensure_apply_patch_tool_policy(body)
-
-    clean = []
-    dropped = []
-    translated = []
-    has_exec_session = _input_has_exec_session(body.get("input"))
-
-    for tool in tools:
-        if not isinstance(tool, dict):
-            continue
-
-        tool_type = tool.get("type")
-        tool_name = tool.get("name") or tool.get("server_label") or tool_type
-
-        if tool_type == "function":
-            if tool_name == "write_stdin" and not has_exec_session:
-                dropped.append("write_stdin(no live exec session)")
-                continue
-            if tool_name == "exec_command":
-                clean.append(_append_tool_hint(tool, FILE_EDIT_TOOL_HINT))
-                continue
-            if tool_name == "write_stdin":
-                clean.append(_append_tool_hint(tool, WRITE_STDIN_TOOL_HINT))
-                continue
-            clean.append(tool)
-            continue
-
-        tool_adapter = TOOL_REGISTRY.adapter_for_tool(tool)
-        if tool_adapter:
-            clean.append(tool_adapter.to_upstream_tool(tool))
-            translated.append(tool_adapter.upstream_name)
-            continue
-
-        dropped.append(str(tool_name))
-
-    body["tools"] = clean
-
-    if capture_enabled():
-        try:
-            notes = []
-            if translated:
-                notes.append("translated: " + ", ".join(translated))
-            if dropped:
-                notes.append("dropped: " + ", ".join(dropped))
-            capture_path("latest-dropped-tools.txt").write_text(
-                "\n".join(notes) + ("\n" if notes else ""),
-                encoding="utf-8"
-            )
-            write_capture("latest-forwarded.json", body)
-        except Exception:
-            pass
-
-    if isinstance(body.get("tool_choice"), dict):
-        tool_choice_type = body["tool_choice"].get("type")
-        adapted_choice = TOOL_REGISTRY.normalize_tool_choice(body["tool_choice"])
-        if adapted_choice is not None:
-            body["tool_choice"] = adapted_choice
-        elif tool_choice_type not in (None, "function"):
-            body["tool_choice"] = "auto"
-
-    return body
-
 
 def recursive_clean(obj):
     if isinstance(obj, dict):

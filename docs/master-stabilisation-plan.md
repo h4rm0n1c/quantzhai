@@ -753,11 +753,11 @@ broaden tool lifecycle ownership beyond the first internal boundary
 Reason:
 
 ```text
-Streamed call state, public item conversion, completed-call routing, and
-proxy-local continuation shaping now have a small internal boundary. Tool
-declaration normalization, bad-history filtering, adapter ownership, and
-capture telemetry are still spread across the proxy flow. Keep behaviour stable
-while moving those contracts behind clearer ownership.
+Streamed call state, public item conversion, completed-call routing,
+proxy-local continuation shaping, bad-history filtering, and tool declaration
+normalization now have internal boundaries. Keep behaviour stable while moving
+the remaining non-tool request-normalization and capture contracts behind
+clearer ownership.
 ```
 
 Concrete target:
@@ -782,13 +782,16 @@ The streaming and non-streaming paths call the same interface for:
 - returning the Codex-visible display item and hidden upstream continuation
   items
 - emitting tool_call_started/tool_call_completed or failure telemetry
+- normalizing tool declarations, tool_choice, write_stdin exposure, and
+  request-scoped tool policy metadata before forwarding to llama.cpp
 
 web_search is now on that interface. Stream-specific lifecycle event emission
 still lives in the stream runtime because it owns SSE sequencing and forwarded
 byte accounting, but the stream runtime now reads tool lifecycle metadata from
-the active registry instead of branching directly on the `web_search` name. Keep
-apply_patch as a protocol adapter and Codex handoff path unless a separate
-security decision explicitly adds proxy-side patch execution.
+the active registry instead of branching directly on the `web_search` name. Tool
+request normalization now lives in `proxy/qz_tool_request.py`. Keep apply_patch
+as a protocol adapter and Codex handoff path unless a separate security decision
+explicitly adds proxy-side patch execution.
 ```
 
 Success criteria:
