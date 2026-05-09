@@ -357,11 +357,12 @@ runtime surface.
 | Reasoning-only idle stream | If reasoning appears with no answer/tool and no progress past timeout, classify as a stall. | Completed fallback answer plus terminal markers. | `reasoning_only_aborted`. | `tests/test_qz_responses_stream.py` |
 | Tool/artifact payload appears only in reasoning | Treat as protocol failure. Do not execute it. | Completed fallback answer. | `reasoning_only_aborted` with `artifact_tool_payload`. | Request `qz_req_1778177240868_e0d0`. |
 | Malformed empty historical function call | Filter bad pair before upstream replay. | No malformed replay visible to model. | Dropped-history diagnostics when capture is enabled. | `tests/test_qz_responses_stream.py` |
+| Downstream client disconnects during write | Stop streaming, close the upstream response, and re-raise as a client disconnect. | No synthetic completion or fallback is emitted after the write failure. | `client_disconnected`. | `tests/test_qz_responses_stream.py` |
 | Upstream `response.completed` or close | Finish transformed stream once and append `[DONE]` if needed. | `response.completed` and one `data: [DONE]`. | Status/capture terminal record. | 2026-05-07 audit in bug note. |
 
 Stream telemetry names currently owned by the proxy are:
-`stream_event_timing`, `stream_completed`, `private_tool_call_aborted`, and
-`reasoning_only_aborted`. Proxy-local tool runtimes also emit
+`stream_event_timing`, `stream_completed`, `client_disconnected`,
+`private_tool_call_aborted`, and `reasoning_only_aborted`. Proxy-local tool runtimes also emit
 `tool_call_started` and `tool_call_completed` for monitor/status consumers.
 
 ## Scenario Contracts
@@ -426,6 +427,14 @@ previous stream had already failed.
 Ownership: `ToolHistoryReplayFilter` in `proxy/qz_tool_lifecycle.py` owns the
 stateful malformed-history drop decision. `normalize_responses_input_for_qwen`
 invokes it while replaying request history upstream.
+
+### Client Disconnect
+
+If the downstream client closes while the proxy is writing a streamed chunk,
+the stream runtime classifies the write failure as `client_disconnected`, closes
+the upstream response in its normal cleanup path, and lets the router handle the
+broken client connection. The runtime must not emit a synthetic
+`response.completed`, fallback answer, or `[DONE]` after a failed client write.
 
 ## Golden Fixture Checklist
 

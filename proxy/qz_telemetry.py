@@ -15,6 +15,7 @@ TELEMETRY_STREAM_SCHEMA = "qz.telemetry.stream.v1"
 UNKNOWN_RUNTIME_SCHEMA = "qz.runtime.summary.v1"
 
 REQUEST_RETAINED_EVENT_TYPES = {
+    "client_disconnected",
     "prompt_contract",
     "private_tool_call_aborted",
     "reasoning_only_aborted",

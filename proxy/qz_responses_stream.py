@@ -57,6 +57,10 @@ REASONING_ONLY_CHAR_LIMIT = int(os.environ.get("QZ_REASONING_ONLY_CHAR_LIMIT", "
 REASONING_ARTIFACT_SCAN_LIMIT = int(os.environ.get("QZ_REASONING_ARTIFACT_SCAN_LIMIT", "8192"))
 
 
+class ClientStreamDisconnected(BrokenPipeError):
+    """Raised when the downstream client closes while streaming."""
+
+
 def _looks_like_reasoning_tool_artifact(text: str) -> bool:
     stripped = (text or "").lstrip()
     if not stripped:
@@ -174,7 +178,10 @@ class ResponsesStreamRuntime:
         return urllib.request.urlopen(req, timeout=900)
 
     def _write_chunk(self, chunk: bytes):
-        self.chunk_writer(chunk)
+        try:
+            self.chunk_writer(chunk)
+        except (BrokenPipeError, ConnectionResetError, OSError) as exc:
+            raise ClientStreamDisconnected(str(exc) or exc.__class__.__name__) from exc
 
     def _emit(self, event_type: str, payload: dict | None = None):
         self.telemetry_emitter.emit(event_type, payload)
@@ -782,6 +789,14 @@ class ResponsesStreamRuntime:
                     final_usage,
                     len(public_trace),
                 )
+        except ClientStreamDisconnected as exc:
+            self._emit("client_disconnected", {
+                "model": requested_model,
+                "phase": "stream_write",
+                "error": str(exc),
+                "duration_ms": round((time.time() - started_at) * 1000.0, 2),
+            })
+            raise
         except Exception as exc:
             self._emit("stream_failed", {
                 "model": requested_model,

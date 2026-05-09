@@ -2,7 +2,7 @@ import json
 import unittest
 from pathlib import Path
 
-from proxy.qz_responses_stream import ResponsesStreamRuntime
+from proxy.qz_responses_stream import ClientStreamDisconnected, ResponsesStreamRuntime
 from proxy.qz_telemetry import TelemetryBus
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "sse"
@@ -852,6 +852,50 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertEqual([event for event, _payload in events].count("response.created"), 1)
         self.assertIn("stream ok", stream_text)
         self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+
+    def test_client_disconnect_closes_upstream_and_emits_cancel_telemetry(self):
+        telemetry = TelemetryBus()
+        upstream_stream = FakeStream(_fixture_chunks("basic_message.raw"))
+        written = []
+
+        def writer(chunk):
+            if written:
+                raise BrokenPipeError("client closed")
+            written.append(chunk)
+
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=writer,
+            stream_opener=lambda body: upstream_stream,
+            capture_enabled=False,
+            telemetry=telemetry,
+            request_id="req-disconnect",
+        )
+        body = {
+            "model": "test-model.gguf",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "test"}],
+            }],
+        }
+
+        with self.assertRaises(ClientStreamDisconnected):
+            runtime.run(body, "test-model.gguf")
+
+        events = telemetry.recent()
+        self.assertTrue(upstream_stream.closed)
+        self.assertTrue(any(
+            event.get("type") == "client_disconnected"
+            and event.get("request_id") == "req-disconnect"
+            and (event.get("payload") or {}).get("phase") == "stream_write"
+            for event in events
+        ))
+        self.assertFalse(any(event.get("type") == "stream_failed" for event in events))
+        self.assertNotIn(b"response.completed", b"".join(written))
 
     def test_golden_apply_patch_stream_rewrites_to_apply_patch_call(self):
         requests = []
