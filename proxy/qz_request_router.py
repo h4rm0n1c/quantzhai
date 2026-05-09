@@ -732,7 +732,7 @@ class RequestRouter:
                 "role": "assistant",
                 "content": [{
                     "type": "output_text",
-                    "text": "I stopped the web tool loop after hitting the safety limit for repeated search/open actions.",
+                    "text": proxy_tool_registry.continuation_limit_message(),
                     "annotations": [],
                 }],
             }],

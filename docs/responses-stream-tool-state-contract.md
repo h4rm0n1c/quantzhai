@@ -95,6 +95,11 @@ stream runtime. `apply_patch` remains a protocol adapter and Codex execution
 handoff path unless a separate security review explicitly adds proxy-side
 filesystem writes.
 
+Proxy-local telemetry payloads, terminal-suppression reason names, and
+continuation-limit fallback text are registry-owned. Stream and non-stream
+runtime paths should ask `ProxyLocalToolRegistry` for those values instead of
+adding tool-name-specific branches.
+
 ## Source of Truth
 
 Implementation:

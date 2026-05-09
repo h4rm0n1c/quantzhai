@@ -81,6 +81,61 @@ class ProxyToolRegistryTests(unittest.TestCase):
         self.assertEqual(spec.lifecycle_start_stages, ("in_progress", "searching"))
         self.assertEqual(spec.lifecycle_done_stages, ("completed",))
 
+    def test_proxy_local_telemetry_payload_comes_from_lifecycle_spec(self):
+        registry = make_proxy_local_tool_registry(FakeWebRuntime())
+        call = {
+            "id": "fc_web",
+            "type": "function_call",
+            "call_id": "call_web",
+            "name": "web_search",
+            "arguments": "{\"query\":\"quantzhai\"}",
+        }
+
+        started = registry.telemetry_payload(call)
+
+        self.assertEqual(started["tool"], "web_search")
+        self.assertEqual(started["function_name"], "web_search")
+        self.assertEqual(started["call_id"], "call_web")
+        self.assertEqual(started["execution"], "proxy_local")
+        self.assertEqual(started["public_item_type"], "web_search_call")
+        self.assertNotIn("sources", started)
+
+    def test_proxy_local_completed_telemetry_includes_result_counts(self):
+        registry = make_proxy_local_tool_registry(FakeWebRuntime())
+        call = {
+            "id": "fc_web",
+            "type": "function_call",
+            "call_id": "call_web",
+            "name": "web_search",
+            "arguments": "{\"query\":\"quantzhai\"}",
+        }
+        result = registry.execute(
+            call,
+            ProxyToolExecutionContext(
+                request_id="qz_req_test",
+                counters={},
+                seen_signatures=set(),
+            ),
+        )
+
+        completed = registry.telemetry_payload(call, result=result)
+
+        self.assertEqual(completed["sources"], 1)
+        self.assertEqual(completed["upstream_items"], 2)
+
+    def test_proxy_local_stream_reasons_are_registry_owned(self):
+        registry = make_proxy_local_tool_registry(FakeWebRuntime())
+        call = {
+            "id": "fc_web",
+            "type": "function_call",
+            "call_id": "call_web",
+            "name": "web_search",
+            "arguments": "{\"query\":\"quantzhai\"}",
+        }
+
+        self.assertEqual(registry.terminal_suppression_reason(call), "web_search_terminal")
+        self.assertIn("web_search", registry.continuation_limit_message())
+
     def test_completed_call_decision_uses_registered_proxy_local_names(self):
         registry = make_proxy_local_tool_registry(FakeWebRuntime())
 

@@ -515,7 +515,9 @@ Missing:
    history filtering, adapter ownership, and telemetry naming. Completed-call
    public/proxy-local decisions, proxy-local continuation shaping, malformed
    history filtering, stream telemetry payload shaping, and tool request
-   normalization now have explicit ownership boundaries.
+   normalization now have explicit ownership boundaries. Proxy-local telemetry
+   payloads, terminal-suppression labels, and continuation-limit fallback text
+   are registry-owned.
 4. Run a live Qwen/TurboQuant patch workflow and capture whether it emits valid
    patch operations. Done on 2026-05-09 with request
    `qz_req_1778312516589_af70`.

@@ -93,6 +93,43 @@ class ProxyLocalToolRegistry:
     def spec_for_call(self, call: dict):
         return self.executor_for_call(call).lifecycle
 
+    def telemetry_payload(
+        self,
+        call: dict,
+        result: ToolContinuationResult | None = None,
+        error: str = "",
+    ) -> dict:
+        spec = self.spec_for_call(call)
+        payload = {
+            "tool": spec.telemetry_name or call.get("name") or "",
+            "function_name": call.get("name") or "",
+            "call_id": call.get("call_id") or call.get("id") or "",
+            "execution": spec.execution,
+            "public_item_type": spec.public_item_type,
+        }
+        if result is not None:
+            payload.update({
+                "sources": len(result.sources),
+                "upstream_items": len(result.upstream_items),
+            })
+        if error:
+            payload["error"] = error
+        return payload
+
+    def terminal_suppression_reason(self, call: dict) -> str:
+        spec = self.spec_for_call(call)
+        tool_name = spec.telemetry_name or call.get("name") or "proxy_local"
+        return f"{tool_name}_terminal"
+
+    def continuation_limit_message(self) -> str:
+        names = sorted(self.function_names)
+        if not names:
+            return "I stopped the proxy-local tool loop after hitting the continuation safety limit."
+        return (
+            "I stopped the proxy-local tool loop after hitting the continuation "
+            f"safety limit for {', '.join(names)}."
+        )
+
     def is_proxy_local_call(self, call: dict) -> bool:
         return (
             isinstance(call, dict)

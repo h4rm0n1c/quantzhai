@@ -649,15 +649,10 @@ class ResponsesStreamRuntime:
                                     forwarded_bytes=started_bytes,
                                     suppressed="function_call_private_started",
                                 )
-                                tool_spec = self.proxy_tool_registry.spec_for_call(completed_call)
-                                tool_name = tool_spec.telemetry_name or completed_call.get("name") or ""
-                                self._emit("tool_call_started", {
-                                    "tool": tool_name,
-                                    "function_name": completed_call.get("name") or "",
-                                    "call_id": completed_call.get("call_id") or completed_call.get("id") or "",
-                                    "execution": tool_spec.execution,
-                                    "public_item_type": tool_spec.public_item_type,
-                                })
+                                self._emit(
+                                    "tool_call_started",
+                                    self.proxy_tool_registry.telemetry_payload(completed_call),
+                                )
                                 try:
                                     result = self.proxy_tool_registry.execute(
                                         completed_call,
@@ -668,24 +663,21 @@ class ResponsesStreamRuntime:
                                         ),
                                     )
                                 except Exception as exc:
-                                    self._emit("tool_call_failed", {
-                                        "tool": tool_name,
-                                        "function_name": completed_call.get("name") or "",
-                                        "call_id": completed_call.get("call_id") or completed_call.get("id") or "",
-                                        "execution": tool_spec.execution,
-                                        "public_item_type": tool_spec.public_item_type,
-                                        "error": str(exc),
-                                    })
+                                    self._emit(
+                                        "tool_call_failed",
+                                        self.proxy_tool_registry.telemetry_payload(
+                                            completed_call,
+                                            error=str(exc),
+                                        ),
+                                    )
                                     raise
-                                self._emit("tool_call_completed", {
-                                    "tool": tool_name,
-                                    "function_name": completed_call.get("name") or "",
-                                    "call_id": completed_call.get("call_id") or completed_call.get("id") or "",
-                                    "execution": tool_spec.execution,
-                                    "public_item_type": tool_spec.public_item_type,
-                                    "sources": len(result.sources),
-                                    "upstream_items": len(result.upstream_items),
-                                })
+                                self._emit(
+                                    "tool_call_completed",
+                                    self.proxy_tool_registry.telemetry_payload(
+                                        completed_call,
+                                        result=result,
+                                    ),
+                                )
                                 public_item = result.public_item
                                 public_item["id"] = proxy_local_item_id
                                 public_trace.append(public_item)
@@ -754,7 +746,7 @@ class ResponsesStreamRuntime:
                                 event_received_at,
                                 event_parsed_at,
                                 None,
-                                suppressed="web_search_terminal",
+                                suppressed=self.proxy_tool_registry.terminal_suppression_reason(completed_call),
                             )
                             event_lines = []
                             continue
@@ -906,13 +898,13 @@ class ResponsesStreamRuntime:
             "id": f"msg_local_{_now_ts()}",
             "type": "message",
             "status": "completed",
-            "role": "assistant",
-            "content": [{
-                "type": "output_text",
-                "text": "I stopped the web tool loop after hitting the safety limit for repeated search/open actions.",
-                "annotations": [],
-            }],
-        }]
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": self.proxy_tool_registry.continuation_limit_message(),
+                    "annotations": [],
+                }],
+            }]
         self._emit_stream_completed(requested_model, len(fallback_output), started_at, fallback=True)
         self._emit_completed(requested_model, fallback_output, summary_started, usage=final_usage)
         return self._build_result(

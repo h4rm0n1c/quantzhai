@@ -789,11 +789,13 @@ The streaming and non-streaming paths call the same interface for:
 web_search is now on that interface. Stream-specific lifecycle event emission
 still lives in the stream runtime because it owns SSE sequencing and forwarded
 byte accounting, but the stream runtime now reads tool lifecycle metadata from
-the active registry instead of branching directly on the `web_search` name. Tool
-request normalization now lives in `proxy/qz_tool_request.py`. Keep apply_patch
-as a protocol adapter and Codex handoff path unless a separate security decision
-explicitly adds proxy-side patch execution. Non-tool Responses input cleanup now
-lives in `proxy/qz_request_normalization.py`, while `proxy/qz_responses.py`
+the active registry instead of branching directly on the `web_search` name.
+Proxy-local telemetry payloads, terminal-suppression labels, and
+continuation-limit fallback text are also registry-owned. Tool request
+normalization now lives in `proxy/qz_tool_request.py`. Keep apply_patch as a
+protocol adapter and Codex handoff path unless a separate security decision
+explicitly adds proxy-side patch execution. Non-tool Responses input cleanup
+now lives in `proxy/qz_request_normalization.py`, while `proxy/qz_responses.py`
 keeps compatibility exports and local compaction helpers. Capture pairing now
 lives behind `proxy/qz_runtime_io.py` helpers such as `write_dual_capture()` and
 `open_dual_capture_append()`.
