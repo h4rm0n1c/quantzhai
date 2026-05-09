@@ -1,9 +1,68 @@
 import unittest
 
-from proxy.qz_telemetry import TelemetryBus
+from proxy.qz_telemetry import RequestTelemetryEmitter, TelemetryBus
 
 
 class TelemetryBusTests(unittest.TestCase):
+    def test_request_telemetry_emitter_injects_request_id(self):
+        bus = TelemetryBus(capacity=3)
+        emitter = RequestTelemetryEmitter(bus, "req-emitter")
+
+        event = emitter.emit("tool_call_started", {"tool": "web_search"})
+
+        self.assertEqual(event["request_id"], "req-emitter")
+        self.assertEqual(event["payload"]["request_id"], "req-emitter")
+        self.assertEqual(event["payload"]["tool"], "web_search")
+
+    def test_request_telemetry_emitter_preserves_payload_request_id(self):
+        bus = TelemetryBus(capacity=3)
+        emitter = RequestTelemetryEmitter(bus, "req-emitter")
+
+        event = emitter.emit("tool_call_started", {"request_id": "req-payload"})
+
+        self.assertEqual(event["request_id"], "req-payload")
+        self.assertEqual(event["payload"]["request_id"], "req-payload")
+
+    def test_request_telemetry_emitter_shapes_stream_timing_payload(self):
+        bus = TelemetryBus(capacity=3)
+        emitter = RequestTelemetryEmitter(bus, "req-stream")
+
+        event = emitter.emit_stream_event_timing(
+            "response.output_text.delta",
+            received_at=10.0,
+            parsed_at=10.125,
+            forwarded_at=10.25,
+            forwarded_chunks=2,
+            forwarded_bytes=42,
+            suppressed="",
+        )
+
+        payload = event["payload"]
+        self.assertEqual(event["type"], "stream_event_timing")
+        self.assertEqual(event["request_id"], "req-stream")
+        self.assertEqual(payload["event_type"], "response.output_text.delta")
+        self.assertEqual(payload["received_to_parsed_ms"], 125.0)
+        self.assertEqual(payload["parsed_to_forwarded_ms"], 125.0)
+        self.assertEqual(payload["forwarded_chunks"], 2)
+        self.assertEqual(payload["forwarded_bytes"], 42)
+        self.assertNotIn("suppressed", payload)
+
+    def test_request_telemetry_emitter_stream_timing_records_suppression(self):
+        bus = TelemetryBus(capacity=3)
+        emitter = RequestTelemetryEmitter(bus, "req-stream")
+
+        event = emitter.emit_stream_event_timing(
+            "response.function_call_arguments.delta",
+            received_at=10.0,
+            parsed_at=10.1,
+            forwarded_at=None,
+            suppressed="function_call",
+        )
+
+        payload = event["payload"]
+        self.assertIsNone(payload["parsed_to_forwarded_ms"])
+        self.assertEqual(payload["suppressed"], "function_call")
+
     def test_emit_updates_recent_and_state(self):
         bus = TelemetryBus(capacity=3)
 

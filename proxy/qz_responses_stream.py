@@ -25,6 +25,7 @@ try:
     from .qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
     from .qz_tool_lifecycle import StreamToolCallState, tool_continuation_result
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS
+    from .qz_telemetry import RequestTelemetryEmitter
 except ImportError:
     from qz_responses import (
         _now_ts,
@@ -46,6 +47,7 @@ except ImportError:
     from qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
     from qz_tool_lifecycle import StreamToolCallState, tool_continuation_result
     from qz_tool_web import WEB_SEARCH_MAX_HOPS
+    from qz_telemetry import RequestTelemetryEmitter
 
 
 PRIVATE_FUNCTION_CALL_TIMEOUT_S = float(os.environ.get("QZ_PRIVATE_TOOL_CALL_TIMEOUT_S", "120"))
@@ -134,6 +136,7 @@ class ResponsesStreamRuntime:
         self.capture_enabled = capture_enabled
         self.telemetry = telemetry
         self.request_id = request_id or ""
+        self.telemetry_emitter = RequestTelemetryEmitter(telemetry, self.request_id)
         self.proxy_tool_registry = make_proxy_local_tool_registry(web_runtime)
         self.private_function_call_timeout_s = (
             PRIVATE_FUNCTION_CALL_TIMEOUT_S
@@ -174,15 +177,7 @@ class ResponsesStreamRuntime:
         self.chunk_writer(chunk)
 
     def _emit(self, event_type: str, payload: dict | None = None):
-        if not self.telemetry:
-            return
-        try:
-            event_payload = dict(payload) if isinstance(payload, dict) else {}
-            if self.request_id and not event_payload.get("request_id"):
-                event_payload["request_id"] = self.request_id
-            self.telemetry.emit(event_type, event_payload)
-        except Exception:
-            pass
+        self.telemetry_emitter.emit(event_type, payload)
 
     def _emit_stream_event_timing(
         self,
@@ -195,20 +190,15 @@ class ResponsesStreamRuntime:
         forwarded_bytes: int = 0,
         suppressed: str = "",
     ):
-        emitted_at = time.time()
-        payload = {
-            "event_type": event_type or "event",
-            "received_to_parsed_ms": round(max(0.0, parsed_at - received_at) * 1000.0, 3),
-            "parsed_to_forwarded_ms": None,
-            "received_to_telemetry_ms": round(max(0.0, emitted_at - received_at) * 1000.0, 3),
-            "forwarded_chunks": int(forwarded_chunks),
-            "forwarded_bytes": int(forwarded_bytes),
-        }
-        if forwarded_at is not None:
-            payload["parsed_to_forwarded_ms"] = round(max(0.0, forwarded_at - parsed_at) * 1000.0, 3)
-        if suppressed:
-            payload["suppressed"] = suppressed
-        self._emit("stream_event_timing", payload)
+        self.telemetry_emitter.emit_stream_event_timing(
+            event_type,
+            received_at,
+            parsed_at,
+            forwarded_at,
+            forwarded_chunks=forwarded_chunks,
+            forwarded_bytes=forwarded_bytes,
+            suppressed=suppressed,
+        )
 
     def _write_transformed_chunks(self, chunks):
         forwarded_chunks = 0

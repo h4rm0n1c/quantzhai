@@ -54,6 +54,12 @@ A proxy-local executor owns:
 - request-scoped telemetry
 - failure-to-message behavior
 
+Request-scoped telemetry payload shaping is owned by
+`RequestTelemetryEmitter` in `proxy/qz_telemetry.py`. Stream runtimes use that
+helper to inject the active `request_id`, build standard
+`stream_event_timing` payloads, and keep telemetry failures from breaking the
+client stream.
+
 Stream-specific lifecycle event emission still lives in `qz_responses_stream.py`
 because SSE sequence numbers and forwarded byte accounting are owned by the
 stream runtime. `apply_patch` remains a protocol adapter and Codex execution
@@ -353,6 +359,11 @@ runtime surface.
 | Malformed empty historical function call | Filter bad pair before upstream replay. | No malformed replay visible to model. | Dropped-history diagnostics when capture is enabled. | `tests/test_qz_responses_stream.py` |
 | Upstream `response.completed` or close | Finish transformed stream once and append `[DONE]` if needed. | `response.completed` and one `data: [DONE]`. | Status/capture terminal record. | 2026-05-07 audit in bug note. |
 
+Stream telemetry names currently owned by the proxy are:
+`stream_event_timing`, `stream_completed`, `private_tool_call_aborted`, and
+`reasoning_only_aborted`. Proxy-local tool runtimes also emit
+`tool_call_started` and `tool_call_completed` for monitor/status consumers.
+
 ## Scenario Contracts
 
 ### Normal Assistant Answer
@@ -492,8 +503,7 @@ Still needed:
 - Tool lifecycle now has an initial internal boundary for streamed call state,
   malformed historical tool-call filtering, public item conversion,
   completed-call routing decisions, and proxy-local continuation shaping, but
-  telemetry and some broader request-normalization ownership still need
-  tightening.
+  some broader request-normalization ownership still needs tightening.
 - No redaction layer for captures.
 - Request-scoped captures are not grouped under a higher-level run id.
 - Proxy-side shell/code/computer/MCP execution is not implemented.

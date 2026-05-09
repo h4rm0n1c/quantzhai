@@ -23,11 +23,57 @@ REQUEST_RETAINED_EVENT_TYPES = {
     "request_failed",
     "request_queued",
     "request_started",
+    "stream_completed",
     "stream_event_timing",
     "throughput_sample",
     "tool_call_completed",
     "tool_call_started",
 }
+
+
+class RequestTelemetryEmitter:
+    """Request-scoped telemetry helper that owns common payload shaping."""
+
+    def __init__(self, telemetry=None, request_id: str = ""):
+        self.telemetry = telemetry
+        self.request_id = request_id or ""
+
+    def emit(self, event_type: str, payload: dict | None = None):
+        if not self.telemetry:
+            return None
+        try:
+            event_payload = dict(payload) if isinstance(payload, dict) else {}
+            if self.request_id and not event_payload.get("request_id"):
+                event_payload["request_id"] = self.request_id
+            return self.telemetry.emit(event_type, event_payload)
+        except Exception:
+            return None
+
+    def emit_stream_event_timing(
+        self,
+        event_type: str,
+        received_at: float,
+        parsed_at: float,
+        forwarded_at: float | None,
+        *,
+        forwarded_chunks: int = 0,
+        forwarded_bytes: int = 0,
+        suppressed: str = "",
+    ):
+        emitted_at = time.time()
+        payload = {
+            "event_type": event_type or "event",
+            "received_to_parsed_ms": round(max(0.0, parsed_at - received_at) * 1000.0, 3),
+            "parsed_to_forwarded_ms": None,
+            "received_to_telemetry_ms": round(max(0.0, emitted_at - received_at) * 1000.0, 3),
+            "forwarded_chunks": int(forwarded_chunks),
+            "forwarded_bytes": int(forwarded_bytes),
+        }
+        if forwarded_at is not None:
+            payload["parsed_to_forwarded_ms"] = round(max(0.0, forwarded_at - parsed_at) * 1000.0, 3)
+        if suppressed:
+            payload["suppressed"] = suppressed
+        return self.emit("stream_event_timing", payload)
 
 
 class TelemetryBus:
