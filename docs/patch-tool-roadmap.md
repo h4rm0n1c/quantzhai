@@ -187,6 +187,9 @@ Implemented so far:
 - Golden SSE replay fixtures for native/custom create, update, and delete
   patch output, and invalid model-side patch output.
 - Golden SSE replay fixtures for native/custom multi-hunk update output.
+- Golden SSE replay fixtures for native/custom Qwen-style unified-diff update
+  output, where file-level metadata and numbered hunk headers are normalized
+  before Codex-facing output.
 - Golden SSE replay fixture documenting the current unsupported move/rename
   operation behavior: unsupported operation types are converted into an
   assistant error message, not exposed as runnable tool calls.

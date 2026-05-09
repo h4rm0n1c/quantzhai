@@ -251,6 +251,36 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertNotIn("--- a/patch_target.txt", patch)
         self.assertNotIn("+++ b/patch_target.txt", patch)
 
+    def test_native_update_patch_strips_unified_diff_file_headers(self):
+        function_call = {
+            "id": "fc_1",
+            "type": "function_call",
+            "status": "completed",
+            "call_id": "call_1",
+            "name": "apply_patch",
+            "arguments": json.dumps({
+                "operation": {
+                    "type": "update_file",
+                    "path": "patch_target.txt",
+                    "diff": (
+                        "--- a/patch_target.txt\n"
+                        "+++ b/patch_target.txt\n"
+                        "@@ -1,5 +1,6 @@\n"
+                        "-alpha\n"
+                        "+ALPHA\n"
+                    ),
+                }
+            }),
+        }
+
+        out = normalize_apply_patch_output_for_codex([function_call], "native")[0]
+
+        self.assertEqual(out["type"], "apply_patch_call")
+        self.assertIn("@@\n-alpha\n+ALPHA", out["operation"]["diff"])
+        self.assertNotIn("@@ -1,5 +1,6 @@", out["operation"]["diff"])
+        self.assertNotIn("--- a/patch_target.txt", out["operation"]["diff"])
+        self.assertNotIn("+++ b/patch_target.txt", out["operation"]["diff"])
+
     def test_invalid_patch_function_call_becomes_message_not_private_call(self):
         function_call = {
             "type": "function_call",

@@ -421,9 +421,15 @@ before broad stream/tool refactors.
   envelopes
 - `custom_apply_patch_multihunk_update_call.raw`: larger multi-hunk update
   operation rewritten to a Codex custom `apply_patch` envelope
+- `apply_patch_unified_diff_update_call.raw` and
+  `custom_apply_patch_unified_diff_update_call.raw`: Qwen-style streamed
+  `update_file.diff` payloads containing file-level unified-diff metadata
+  (`diff --git`, `index`, `---/+++`) and numbered hunk headers are normalized
+  before either native `apply_patch_call` output or Codex custom patch-envelope
+  output
 - `tests/test_apply_patch_adapter.py`: pins normalization of file-level
   unified-diff metadata and line-number hunk headers from model
-  `update_file.diff` payloads before Codex custom patch-envelope synthesis
+  `update_file.diff` payloads before Codex-facing native/custom output
 - `invalid_apply_patch_call.raw`: malformed model-side patch operation becomes
   an assistant error message, not a runnable private tool call
 - `invalid_apply_patch_move_call.raw`: move/rename-style operations are
@@ -465,7 +471,9 @@ Still needed:
 - Live Qwen update-patch behavior can still emit one malformed attempt before
   converging, but follow-up validation through a temporary proxy confirmed the
   adapter now handles leaked unified-diff file headers and line-number hunk
-  headers well enough for Codex to apply the next update patch.
+  headers well enough for Codex to apply the next update patch. Golden replay
+  fixtures now cover that metadata normalization for native and custom
+  Codex-facing output styles.
 - Tool lifecycle now has an initial internal boundary for streamed call state,
   public item conversion, completed-call routing decisions, and proxy-local
   continuation shaping, but request normalization, adapter ownership, and

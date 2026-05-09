@@ -999,6 +999,37 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertIn("-old beta", patch_items[0]["operation"]["diff"])
         self.assertIn("+new beta", patch_items[0]["operation"]["diff"])
 
+    def test_golden_apply_patch_unified_diff_update_stream_strips_metadata(self):
+        def opener(body):
+            return FakeStream(_fixture_chunks("apply_patch_unified_diff_update_call.raw"))
+
+        stream_text = self._run_runtime(opener)
+        events = _parse_sse_events(stream_text)
+        patch_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "apply_patch_call"
+        ]
+
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertEqual(len(patch_items), 2)
+        self.assertEqual(patch_items[0]["operation"]["type"], "update_file")
+        self.assertEqual(patch_items[0]["operation"]["path"], "tmp/quantzhai-unified.txt")
+        diff = patch_items[0]["operation"]["diff"]
+        self.assertIn("@@\n-old alpha\n+new alpha", diff)
+        self.assertIn("@@\n-old beta\n+new beta", diff)
+        self.assertIn("+new tail", diff)
+        self.assertNotIn("diff --git", diff)
+        self.assertNotIn("index 1111111", diff)
+        self.assertNotIn("--- a/tmp/quantzhai-unified.txt", diff)
+        self.assertNotIn("+++ b/tmp/quantzhai-unified.txt", diff)
+        self.assertNotIn("@@ -1,4 +1,4 @@", diff)
+        self.assertNotIn("@@ -8,3 +8,4 @@", diff)
+
     def test_golden_custom_apply_patch_multihunk_update_stream_rewrites_to_patch_envelope(self):
         def opener(body):
             return FakeStream(_fixture_chunks("custom_apply_patch_multihunk_update_call.raw"))
@@ -1022,6 +1053,36 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertIn("+new alpha", custom_items[0]["input"])
         self.assertIn("-old beta", custom_items[0]["input"])
         self.assertIn("+new beta", custom_items[0]["input"])
+
+    def test_golden_custom_apply_patch_unified_diff_update_stream_strips_metadata(self):
+        def opener(body):
+            return FakeStream(_fixture_chunks("custom_apply_patch_unified_diff_update_call.raw"))
+
+        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        events = _parse_sse_events(stream_text)
+        custom_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "custom_tool_call"
+        ]
+
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertEqual(len(custom_items), 2)
+        patch = custom_items[0]["input"]
+        self.assertIn("*** Update File: tmp/quantzhai-unified.txt", patch)
+        self.assertIn("@@\n-old alpha\n+new alpha", patch)
+        self.assertIn("@@\n-old beta\n+new beta", patch)
+        self.assertIn("+new tail", patch)
+        self.assertNotIn("diff --git", patch)
+        self.assertNotIn("index 1111111", patch)
+        self.assertNotIn("--- a/tmp/quantzhai-unified.txt", patch)
+        self.assertNotIn("+++ b/tmp/quantzhai-unified.txt", patch)
+        self.assertNotIn("@@ -1,4 +1,4 @@", patch)
+        self.assertNotIn("@@ -8,3 +8,4 @@", patch)
 
     def test_golden_apply_patch_delete_stream_rewrites_to_apply_patch_call(self):
         def opener(body):

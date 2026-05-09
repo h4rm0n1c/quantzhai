@@ -174,8 +174,15 @@ def _apply_patch_operation_to_patch_text(operation: dict) -> str:
     return f"*** Begin Patch\n*** Update File: {path}\n{diff.rstrip()}\n*** End Patch\n"
 
 
+def _normalize_apply_patch_operation_for_codex(operation: dict) -> dict:
+    operation = dict(operation)
+    if operation.get("type") == "update_file":
+        operation["diff"] = _strip_unified_diff_headers(operation.get("diff") or "", operation.get("path"))
+    return operation
+
+
 def _strip_unified_diff_headers(diff: str, path: str | None = None) -> str:
-    """Drop file-level unified diff metadata before Codex patch wrapping."""
+    """Drop file-level unified diff metadata before Codex-facing output."""
     lines = diff.splitlines()
     if not lines:
         return diff
@@ -224,6 +231,7 @@ def _function_call_to_apply_patch_call(item: dict) -> dict:
     operation = _parse_apply_patch_arguments(item.get("arguments") or "{}")
     if not operation:
         return _invalid_apply_patch_call_message(item)
+    operation = _normalize_apply_patch_operation_for_codex(operation)
 
     call_id = item.get("call_id") or item.get("id") or f"call_apply_patch_{_now_ts()}"
     item_id = item.get("id") or f"apc_local_{_now_ts()}"
