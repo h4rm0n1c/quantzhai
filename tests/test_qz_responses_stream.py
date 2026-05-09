@@ -1638,6 +1638,96 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
         self.assertEqual(completed["output"][0]["type"], "web_search_call")
 
+    def test_web_search_continuation_final_empty_close_emits_completed_once(self):
+        requests = []
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            has_tool_output = any(
+                isinstance(item, dict)
+                and item.get("type") == "function_call_output"
+                and item.get("call_id") == "call_fixture_web"
+                for item in body.get("input") or []
+            )
+            if has_tool_output:
+                return FakeStream([])
+            return FakeStream(_fixture_chunks("web_search_call.raw"))
+
+        stream_text = self._run_runtime(opener)
+        events = _parse_sse_events(stream_text)
+        completed = [
+            payload["response"]
+            for event, payload in events
+            if event == "response.completed" and isinstance(payload, dict)
+        ]
+
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+        self.assertEqual(completed[0]["output"][0]["type"], "web_search_call")
+        self.assertNotIn('"type": "function_call"', stream_text)
+
+    def test_web_search_continuation_final_done_only_emits_completed_once(self):
+        requests = []
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            has_tool_output = any(
+                isinstance(item, dict)
+                and item.get("type") == "function_call_output"
+                and item.get("call_id") == "call_fixture_web"
+                for item in body.get("input") or []
+            )
+            if has_tool_output:
+                return FakeStream(_fixture_chunks("done_only.raw"))
+            return FakeStream(_fixture_chunks("web_search_call.raw"))
+
+        stream_text = self._run_runtime(opener)
+        events = _parse_sse_events(stream_text)
+        completed = [
+            payload["response"]
+            for event, payload in events
+            if event == "response.completed" and isinstance(payload, dict)
+        ]
+
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+        self.assertEqual(completed[0]["output"][0]["type"], "web_search_call")
+        self.assertNotIn('"type": "function_call"', stream_text)
+
+    def test_web_search_continuation_malformed_terminal_emits_completed_once(self):
+        requests = []
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            has_tool_output = any(
+                isinstance(item, dict)
+                and item.get("type") == "function_call_output"
+                and item.get("call_id") == "call_fixture_web"
+                for item in body.get("input") or []
+            )
+            if has_tool_output:
+                return FakeStream(_fixture_chunks("malformed_terminal.raw"))
+            return FakeStream(_fixture_chunks("web_search_call.raw"))
+
+        stream_text = self._run_runtime(opener)
+        events = _parse_sse_events(stream_text)
+        completed = [
+            payload["response"]
+            for event, payload in events
+            if event == "response.completed" and isinstance(payload, dict)
+        ]
+
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+        self.assertEqual(completed[0]["output"][0]["type"], "web_search_call")
+        self.assertNotIn('"type": "function_call"', stream_text)
+
 
 if __name__ == "__main__":
     unittest.main()

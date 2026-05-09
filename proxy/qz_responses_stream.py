@@ -780,6 +780,45 @@ class ResponsesStreamRuntime:
                             sent_response_start = True
 
                         if is_terminal_stream_event(event_type, payload):
+                            if (
+                                event_type in {"response.completed", "response.failed", "response.cancelled", "response.incomplete"}
+                                and payload is None
+                                and public_trace
+                                and not sent_terminal
+                            ):
+                                self._emit_stream_event_timing(
+                                    event_type,
+                                    event_received_at,
+                                    event_parsed_at,
+                                    None,
+                                    suppressed="malformed_terminal",
+                                )
+                                self._emit_stream_completed(requested_model, len(public_trace), started_at)
+                                completed_at = time.time()
+                                self._emit_completed(requested_model, public_trace, summary_started, usage=final_usage)
+                                sent_terminal = True
+                                sent_done = True
+                                event_lines = []
+                                continue
+                            if (
+                                (event_type == "done" or payload == "[DONE]")
+                                and public_trace
+                                and not sent_terminal
+                            ):
+                                self._emit_stream_event_timing(
+                                    event_type,
+                                    event_received_at,
+                                    event_parsed_at,
+                                    None,
+                                    suppressed="done_without_completed",
+                                )
+                                self._emit_stream_completed(requested_model, len(public_trace), started_at)
+                                completed_at = time.time()
+                                self._emit_completed(requested_model, public_trace, summary_started, usage=final_usage)
+                                sent_terminal = True
+                                sent_done = True
+                                event_lines = []
+                                continue
                             forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(self._transformed_chunks(
                                 event_type,
                                 payload,
@@ -835,6 +874,13 @@ class ResponsesStreamRuntime:
 
                 if sent_terminal and not sent_done:
                     self._write_chunk(b"data: [DONE]\n\n")
+                    sent_done = True
+
+                if public_trace and not sent_terminal and not sent_done:
+                    self._emit_stream_completed(requested_model, len(public_trace), started_at)
+                    completed_at = time.time()
+                    self._emit_completed(requested_model, public_trace, summary_started, usage=final_usage)
+                    sent_terminal = True
                     sent_done = True
 
                 completed_at = time.time()

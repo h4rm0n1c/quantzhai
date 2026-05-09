@@ -440,7 +440,7 @@ reasoning item, then emitted `file_change` started/completed, final
 | Tool/artifact payload appears only in reasoning | Treat as protocol failure. Do not execute it. | Completed fallback answer. | `reasoning_only_aborted` with `artifact_tool_payload`. | Request `qz_req_1778177240868_e0d0`. |
 | Malformed empty historical function call | Filter bad pair before upstream replay. | No malformed replay visible to model. | Dropped-history diagnostics when capture is enabled. | `tests/test_qz_responses_stream.py` |
 | Downstream client disconnects during write | Stop streaming, close the upstream response, and re-raise as a client disconnect. | No synthetic completion or fallback is emitted after the write failure. | `client_disconnected`. | `tests/test_qz_responses_stream.py` |
-| Upstream `response.completed` or close | Finish transformed stream once and append `[DONE]` if needed. | `response.completed` and one `data: [DONE]`. | Status/capture terminal record. | 2026-05-07 audit in bug note. |
+| Upstream `response.completed`, bare `[DONE]`, malformed terminal event, or close | Finish transformed stream once and append `[DONE]` if needed. For proxy-local continuation, synthesize a clean completed response if the final hop does not provide one. | `response.completed` and one `data: [DONE]`. | Status/capture terminal record; malformed/bare terminal suppression timing when applicable. | `tests/test_qz_responses_stream.py` |
 
 Stream telemetry names currently owned by the proxy are:
 `stream_event_timing`, `stream_completed`, `client_disconnected`,
@@ -564,6 +564,10 @@ before broad stream/tool refactors.
   calls
 - `completed_without_done.raw`: upstream `response.completed` without `[DONE]`
   is closed with exactly one terminal `[DONE]`
+- `done_only.raw`: final continuation hop with only `[DONE]` is converted into
+  one clean completed response plus one `[DONE]`
+- `malformed_terminal.raw`: malformed final continuation terminal bytes are
+  suppressed and replaced with one clean completed response plus one `[DONE]`
 - `reasoning_only.raw`: reasoning-only fallback path
 - `reasoning_artifact.raw`: artifact-in-reasoning protocol failure
 - `long_active_reasoning.raw`: long reasoning followed by answer is not killed

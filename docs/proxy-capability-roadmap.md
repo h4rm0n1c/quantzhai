@@ -505,8 +505,9 @@ Missing:
    terminal closure, web_search continuation, proxy-local web_search
    in-progress/searching/completed lifecycle events, multi-hop proxy-local
    continuation with raw fixture replay, client-disconnect cleanup, and
-   terminal usage normalization for Codex `/status`. Remaining coverage: more
-   continuation terminal-edge cases and larger multi-hunk/move patch variants.
+   terminal usage normalization for Codex `/status`, plus continuation final-hop
+   empty-close, bare-DONE, and malformed-terminal recovery. Remaining coverage:
+   larger multi-hunk/move patch variants.
 3. Broaden the tool lifecycle boundary to cover request normalization,
    history filtering, adapter ownership, and telemetry naming. Completed-call
    public/proxy-local decisions, proxy-local continuation shaping, malformed
