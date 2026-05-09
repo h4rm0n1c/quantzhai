@@ -231,10 +231,41 @@ turn.completed    usage={input_tokens,cached_input_tokens,output_tokens,reasonin
 
 Implication: the basic Codex shell-command start/completed lifecycle is already
 visible through the QZ path in `codex exec --json`, including a command that
-runs for multiple seconds. Remaining live-state gaps should be investigated in
-the harder cases:
+runs for multiple seconds.
 
-- proxy-local/private tools such as `web_search`
+Proxy-local `web_search` was live-smoked through `qz-codex exec` on
+2026-05-09 with an explicit `-m prompt-compiler` model selection:
+
+```bash
+./scripts/qz-codex exec -m prompt-compiler --json --ephemeral \
+  --skip-git-repo-check --ignore-rules --sandbox read-only \
+  -c approval_policy="never" -C /tmp \
+  "Use web_search exactly once to search for QuantZhai. Then answer in one sentence with one result title or say no result."
+```
+
+Observed public JSONL shape:
+
+```text
+thread.started
+turn.started
+item.completed    reasoning
+item.started      web_search action=search queries=["QuantZhai"]
+item.completed    web_search action=search queries=["QuantZhai"]
+item.completed    agent_message
+turn.completed    usage={input_tokens,cached_input_tokens,output_tokens,reasoning_output_tokens}
+```
+
+The matching `/qz/status` latest request was
+`qz_req_1778292797704_7860`, status 200, model `prompt-compiler`,
+with `usage.input_tokens=11303`, `usage.output_tokens=6`, and
+`runtime_metrics.selected_context_length=262144`. The public Codex lifecycle is
+therefore present for the proxy-local search path. Request-scoped capture files
+were not retained for this smoke, and `/qz/telemetry/recent` did not retain the
+request's web-search lifecycle rows by the time it was queried, so telemetry
+retention remains a separate observability gap.
+
+Remaining live-state gaps should be investigated in the harder cases:
+
 - streamed `apply_patch` shape conversion and Codex execution handoff
 - TUI rendering and `/status` consumption of token/context data
 - long-running tool calls where progress is available only inside proxy

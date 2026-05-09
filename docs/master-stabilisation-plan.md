@@ -712,10 +712,13 @@ The proxy-local web_search relay now emits Responses built-in web-search
 progress events before proxy execution, then emits the completed public
 web_search_call after local execution. It still suppresses the private upstream
 function_call and arguments, so Codex is not asked to execute proxy-private
-tools itself.
+tools itself. Live `qz-codex exec --json -m prompt-compiler` smoke on
+2026-05-09 confirmed Codex sees `item.started web_search`,
+`item.completed web_search`, the final assistant message, and terminal usage.
 
-Remaining relay gaps are apply_patch handoff edge cases, TUI rendering, and
-Codex `/status` token/context usage relay.
+Remaining relay gaps are apply_patch handoff edge cases, telemetry retention for
+tool lifecycle rows, TUI rendering, and Codex `/status` token/context usage
+relay.
 ```
 
 Then do:
