@@ -181,7 +181,9 @@ Required details:
 - No public runnable tool item before arguments are complete.
 - No hidden/private tool call unless its required runtime state exists.
 - Malformed empty tool-call history is filtered before upstream replay.
-- Cancellation and client-disconnect handling.
+- Cancellation and client-disconnect handling: implemented for downstream
+  stream write failures, with upstream cleanup and `client_disconnected`
+  telemetry.
 - Request-scoped captures for streamed requests when capture mode is enabled,
   with any future run-level grouping layered on top.
 - Golden SSE replay fixtures for normal streaming, tool continuation,
@@ -467,12 +469,14 @@ Missing:
    public tool-call buffering, malformed empty tool history, apply_patch
    native/custom rewrite, invalid apply_patch rejection, completed-without-DONE
    terminal closure, web_search continuation, and proxy-local web_search
-   in-progress/searching/completed lifecycle events. Remaining coverage: more
-   continuation terminal-edge cases and larger multi-hunk/move patch variants.
+   in-progress/searching/completed lifecycle events, and client-disconnect
+   cleanup. Remaining coverage: more continuation terminal-edge cases and
+   larger multi-hunk/move patch variants.
 3. Broaden the tool lifecycle boundary to cover request normalization,
    history filtering, adapter ownership, and telemetry naming. Completed-call
-   public/proxy-local decisions and proxy-local continuation shaping are now
-   centralized.
+   public/proxy-local decisions, proxy-local continuation shaping, malformed
+   history filtering, and stream telemetry payload shaping now have explicit
+   ownership boundaries.
 4. Run a live Qwen/TurboQuant patch workflow and capture whether it emits valid patch operations.
 5. Add broader golden tests for Responses normalization.
 6. Split `proxy/quantzhai_proxy.py` into a conventional Python package.

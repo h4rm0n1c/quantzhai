@@ -443,6 +443,9 @@ before broad stream/tool refactors.
 
 - `basic_message.raw`: normal output and terminal `[DONE]`
 - `public_function_call.raw`: public function call buffered until arguments are complete
+- `public_function_call_without_done.raw`: public function call reaches a
+  completed call item and the upstream closes without `[DONE]`; the proxy still
+  emits one local `response.completed` and one `[DONE]`
 - `apply_patch_call.raw`: function-call patch stream rewritten to `apply_patch_call`
 - `apply_patch_update_call.raw` and `apply_patch_delete_call.raw`: native
   update/delete patch operations rewritten to `apply_patch_call`

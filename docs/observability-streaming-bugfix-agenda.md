@@ -497,6 +497,9 @@ Result:
 - Forwarding delay stayed low: average `parsed_to_forwarded_ms` was `0.172`,
   max was `2.717`.
 - `qz-top` and `qz-thoughts` read the proxy telemetry surfaces concurrently.
+- Downstream stream write failures are classified as `client_disconnected`;
+  the upstream stream is closed and no synthetic completion is emitted after
+  the failed write.
 
 Remaining issue:
 

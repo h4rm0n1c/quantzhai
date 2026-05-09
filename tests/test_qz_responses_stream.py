@@ -668,6 +668,31 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertEqual(public_call_events[0][1]["item"]["name"], "exec_command")
         self.assertIn("cat > amber_v2.md", public_call_events[0][1]["item"]["arguments"])
 
+    def test_golden_public_function_call_without_done_still_completes_once(self):
+        def opener(body):
+            return FakeStream(_fixture_chunks("public_function_call_without_done.raw"))
+
+        stream_text = self._run_runtime(opener)
+        events = _parse_sse_events(stream_text)
+        names = [event_type for event_type, _payload in events]
+        public_call_events = [
+            (event_type, payload)
+            for event_type, payload in events
+            if isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "function_call"
+        ]
+
+        self.assertEqual(names.count("response.completed"), 1)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+        self.assertNotIn("response.function_call_arguments.delta", names)
+        self.assertNotIn("response.function_call_arguments.done", names)
+        self.assertEqual([event_type for event_type, _payload in public_call_events], [
+            "response.output_item.added",
+            "response.output_item.done",
+        ])
+
     def test_stuck_function_call_aborts_instead_of_silent_dead_air(self):
         telemetry = TelemetryBus()
 

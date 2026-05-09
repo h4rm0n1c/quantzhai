@@ -118,11 +118,12 @@ End-to-end stream audit complete. qz-thoughts delta coalescing, stream timing
 telemetry, runtime summary-mode transformation, synthetic terminal DONE
 forwarding, request_id correlation, request-scoped captures, reasoning-only
 classification, artifact-in-reasoning aborts, tool-call buffering until
-arguments are complete, and malformed empty-tool history filtering are
-implemented and live-smoked. The formal Responses stream/tool state contract
-and golden replay fixtures now cover normal output, public function calls,
-native/custom apply_patch conversion, multi-hunk patches, unsupported move
-operations, reasoning-only stalls, and artifact-in-reasoning failures.
+arguments are complete, malformed empty-tool history filtering, and downstream
+client-disconnect classification are implemented and live-smoked. The formal
+Responses stream/tool state contract and golden replay fixtures now cover
+normal output, public function calls, native/custom apply_patch conversion,
+multi-hunk patches, unsupported move operations, reasoning-only stalls,
+artifact-in-reasoning failures, and client disconnect cleanup.
 
 A supported `codex exec --json --ephemeral` comparison against hosted
 OpenAI-backed Codex showed that the basic shell-command lifecycle already
@@ -723,8 +724,11 @@ through `/qz/status`, `/qz/telemetry/state`, and
 `/qz/telemetry/request?request_id=<id>`. `qz-top` and `qz-thoughts` merge that
 latest completed request summary with `/qz/telemetry/recent`.
 
-Remaining relay gaps are apply_patch handoff edge cases, TUI rendering, and
-Codex `/status` token/context usage relay.
+Downstream client-disconnect handling now classifies write failures as
+`client_disconnected`, closes the upstream stream through normal cleanup, and
+does not emit synthetic completion after the failed write. Remaining relay gaps
+are apply_patch handoff edge cases, TUI rendering, and Codex `/status`
+token/context usage relay.
 ```
 
 Then do:
