@@ -90,6 +90,10 @@ class FakeWebRuntime:
 
 def _web_call_stream():
     arguments = json.dumps({"action": "search", "query": "quantzhai"})
+    return _named_web_call_stream("fc_web", "call_web", arguments)
+
+
+def _named_web_call_stream(item_id, call_id, arguments):
     return [
         _sse_block("response.created", {
             "response": {
@@ -104,26 +108,26 @@ def _web_call_stream():
         _sse_block("response.output_item.added", {
             "output_index": 0,
             "item": {
-                "id": "fc_web",
+                "id": item_id,
                 "type": "function_call",
                 "status": "in_progress",
-                "call_id": "call_web",
+                "call_id": call_id,
                 "name": "web_search",
                 "arguments": "",
             },
         }),
         _sse_block("response.function_call_arguments.delta", {
-            "item_id": "fc_web",
+            "item_id": item_id,
             "output_index": 0,
             "delta": arguments,
         }),
         _sse_block("response.output_item.done", {
             "output_index": 0,
             "item": {
-                "id": "fc_web",
+                "id": item_id,
                 "type": "function_call",
                 "status": "completed",
-                "call_id": "call_web",
+                "call_id": call_id,
                 "name": "web_search",
             },
         }),
@@ -1350,6 +1354,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             self.assertIn("forwarded_bytes", payload)
 
     def test_golden_web_search_stream_replays_with_continuation(self):
+        telemetry = TelemetryBus()
         requests = []
         web_runtime = FakeWebRuntime()
 
@@ -1364,8 +1369,14 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             fixture = "web_search_final.raw" if has_tool_output else "web_search_call.raw"
             return FakeStream(_fixture_chunks(fixture))
 
-        stream_text = self._run_runtime(opener, web_runtime=web_runtime)
+        stream_text = self._run_runtime(
+            opener,
+            web_runtime=web_runtime,
+            telemetry=telemetry,
+            request_id="req-web-golden",
+        )
         events = _parse_sse_events(stream_text)
+        telemetry_events = telemetry.recent()
         output_indexes = [
             payload.get("output_index")
             for _event, payload in events
@@ -1403,6 +1414,78 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             event_names.index("response.web_search_call.in_progress"),
             event_names.index("response.web_search_call.completed"),
         )
+        started = [
+            event for event in telemetry_events
+            if event.get("type") == "tool_call_started"
+        ]
+        completed_events = [
+            event for event in telemetry_events
+            if event.get("type") == "tool_call_completed"
+        ]
+        self.assertEqual(len(started), 1)
+        self.assertEqual(len(completed_events), 1)
+        self.assertEqual(started[0]["request_id"], "req-web-golden")
+        self.assertEqual(started[0]["payload"]["tool"], "web_search")
+        self.assertEqual(started[0]["payload"]["execution"], "proxy_local")
+        self.assertEqual(started[0]["payload"]["public_item_type"], "web_search_call")
+        self.assertEqual(completed_events[0]["payload"]["tool"], "web_search")
+        self.assertEqual(completed_events[0]["payload"]["upstream_items"], 2)
+
+    def test_proxy_local_continuation_can_multi_hop_from_registry_lifecycle(self):
+        requests = []
+        web_runtime = FakeWebRuntime()
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            outputs = [
+                item
+                for item in body.get("input") or []
+                if isinstance(item, dict) and item.get("type") == "function_call_output"
+            ]
+            if len(outputs) == 0:
+                return FakeStream(_named_web_call_stream(
+                    "fc_web_one",
+                    "call_web_one",
+                    json.dumps({"action": "search", "query": "one"}),
+                ))
+            if len(outputs) == 1:
+                return FakeStream(_named_web_call_stream(
+                    "fc_web_two",
+                    "call_web_two",
+                    json.dumps({"action": "search", "query": "two"}),
+                ))
+            return FakeStream(_final_message_stream())
+
+        stream_text = self._run_runtime(opener, web_runtime=web_runtime)
+        events = _parse_sse_events(stream_text)
+        event_names = [event for event, _payload in events]
+        completed = next(
+            payload["response"]
+            for event, payload in events
+            if event == "response.completed" and isinstance(payload, dict)
+        )
+
+        self.assertEqual(len(requests), 3)
+        self.assertEqual(len(web_runtime.calls), 2)
+        self.assertEqual(web_runtime.calls[0]["call_item"]["call_id"], "call_web_one")
+        self.assertEqual(web_runtime.calls[1]["call_item"]["call_id"], "call_web_two")
+        self.assertEqual(event_names.count("response.web_search_call.in_progress"), 2)
+        self.assertEqual(event_names.count("response.web_search_call.completed"), 2)
+        self.assertEqual(event_names.count("response.created"), 1)
+        self.assertEqual(event_names.count("response.completed"), 1)
+        self.assertEqual(completed["output"][0]["type"], "web_search_call")
+        self.assertEqual(completed["output"][1]["type"], "web_search_call")
+        self.assertIn("searched.", stream_text)
+        self.assertTrue(any(
+            item.get("call_id") == "call_web_one"
+            for item in requests[1]["input"]
+            if isinstance(item, dict) and item.get("type") == "function_call_output"
+        ))
+        self.assertTrue(any(
+            item.get("call_id") == "call_web_two"
+            for item in requests[2]["input"]
+            if isinstance(item, dict) and item.get("type") == "function_call_output"
+        ))
 
     def test_web_search_continuation_suppresses_duplicate_response_start(self):
         telemetry = TelemetryBus()

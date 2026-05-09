@@ -197,6 +197,21 @@ class ToolLifecycleTests(unittest.TestCase):
         self.assertEqual(decision.public_item["type"], "custom_tool_call")
         self.assertEqual(decision.public_item["name"], "apply_patch")
 
+    def test_completed_tool_call_decision_leaves_normal_public_function_call_public(self):
+        call = {
+            "id": "fc_exec",
+            "type": "function_call",
+            "call_id": "call_exec",
+            "name": "exec_command",
+            "arguments": "{\"cmd\":\"pwd\"}",
+        }
+
+        decision = completed_tool_call_decision(call, "native", frozenset({"web_search"}))
+
+        self.assertEqual(decision.kind, "public")
+        self.assertEqual(decision.call, call)
+        self.assertEqual(decision.public_item, call)
+
     def test_tool_continuation_result_keeps_public_call_out_of_upstream_replay(self):
         call = {
             "id": "fc_patch",

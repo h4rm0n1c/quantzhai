@@ -28,6 +28,7 @@ REQUEST_RETAINED_EVENT_TYPES = {
     "stream_event_timing",
     "throughput_sample",
     "tool_call_completed",
+    "tool_call_failed",
     "tool_call_started",
 }
 

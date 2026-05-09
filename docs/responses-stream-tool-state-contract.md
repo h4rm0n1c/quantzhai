@@ -136,6 +136,22 @@ content is canonicalized, supported tool declarations are converted to
 llama.cpp-friendly function tools, and client-facing apply_patch history is
 adapted back to upstream function-call history.
 
+Stream/tool fixtures:
+
+```text
+tests/fixtures/sse/web_search_call.raw
+tests/fixtures/sse/web_search_final.raw
+tests/fixtures/sse/public_function_call.raw
+tests/fixtures/sse/apply_patch_call.raw
+tests/fixtures/sse/custom_apply_patch_call.raw
+```
+
+These pin streamed proxy-local continuation, normal public function passthrough,
+and protocol-adapted `apply_patch`. `tests/test_qz_responses_stream.py` also
+pins multi-hop proxy-local continuation through the generic registry lifecycle
+rather than direct `web_search` branching, plus `tool_call_started` and
+`tool_call_completed` telemetry from the lifecycle spec.
+
 Useful forensic captures retained locally:
 
 ```text

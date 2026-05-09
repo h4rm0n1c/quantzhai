@@ -795,8 +795,9 @@ Success criteria:
 
 ```text
 A new proxy-local tool should provide an executor implementation, tests for
-streaming and non-streaming continuation, and docs for its Codex-visible event
-shape. Some streamed event wiring may remain in qz_responses_stream.py when the
+streaming and non-streaming continuation, lifecycle-spec telemetry, multi-hop
+continuation when it resumes upstream, and docs for its Codex-visible event
+shape. Some streamed event wiring may remain in qz_responses_stream.py when a
 tool needs custom SSE lifecycle events. Tool declaration adapters may still be
 separate when a tool only needs shape conversion rather than proxy execution.
 ```

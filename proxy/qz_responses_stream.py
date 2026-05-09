@@ -656,14 +656,43 @@ class ResponsesStreamRuntime:
                                     forwarded_bytes=started_bytes,
                                     suppressed="function_call_private_started",
                                 )
-                                result = self.proxy_tool_registry.execute(
-                                    completed_call,
-                                    ProxyToolExecutionContext(
-                                        request_id=self.request_id,
-                                        counters=counters,
-                                        seen_signatures=seen_signatures,
-                                    ),
-                                )
+                                tool_spec = self.proxy_tool_registry.spec_for_call(completed_call)
+                                tool_name = tool_spec.telemetry_name or completed_call.get("name") or ""
+                                self._emit("tool_call_started", {
+                                    "tool": tool_name,
+                                    "function_name": completed_call.get("name") or "",
+                                    "call_id": completed_call.get("call_id") or completed_call.get("id") or "",
+                                    "execution": tool_spec.execution,
+                                    "public_item_type": tool_spec.public_item_type,
+                                })
+                                try:
+                                    result = self.proxy_tool_registry.execute(
+                                        completed_call,
+                                        ProxyToolExecutionContext(
+                                            request_id=self.request_id,
+                                            counters=counters,
+                                            seen_signatures=seen_signatures,
+                                        ),
+                                    )
+                                except Exception as exc:
+                                    self._emit("tool_call_failed", {
+                                        "tool": tool_name,
+                                        "function_name": completed_call.get("name") or "",
+                                        "call_id": completed_call.get("call_id") or completed_call.get("id") or "",
+                                        "execution": tool_spec.execution,
+                                        "public_item_type": tool_spec.public_item_type,
+                                        "error": str(exc),
+                                    })
+                                    raise
+                                self._emit("tool_call_completed", {
+                                    "tool": tool_name,
+                                    "function_name": completed_call.get("name") or "",
+                                    "call_id": completed_call.get("call_id") or completed_call.get("id") or "",
+                                    "execution": tool_spec.execution,
+                                    "public_item_type": tool_spec.public_item_type,
+                                    "sources": len(result.sources),
+                                    "upstream_items": len(result.upstream_items),
+                                })
                                 public_item = result.public_item
                                 public_item["id"] = proxy_local_item_id
                                 public_trace.append(public_item)

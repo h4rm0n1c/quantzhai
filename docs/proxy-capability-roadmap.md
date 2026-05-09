@@ -246,8 +246,9 @@ Missing or incomplete:
 - No computer-use tool runtime.
 - No code interpreter runtime.
 - No MCP/app tool bridge.
-- The generic bridge exists for current tools, but needs more fixture coverage
-  before adding new tool classes.
+- The generic bridge exists for current tools and has fixture coverage for
+  proxy-local multi-hop continuation, normal public function passthrough,
+  protocol-adapted `apply_patch`, and proxy-local lifecycle telemetry.
 
 What works well:
 
