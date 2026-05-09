@@ -11,6 +11,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from proxy.quantzhai_proxy import ProxyHandler  # noqa: E402
 
 
+MODEL = "test-model.gguf"
+
+
+class SmokeModelCatalog:
+    def __init__(self):
+        self.entries = [{
+            "slug": MODEL,
+            "key": MODEL,
+            "backend_id": MODEL,
+            "label": MODEL,
+            "profile_valid": True,
+            "runtime_context_length": 131072,
+            "context_length": 131072,
+        }]
+        self.selected = self.entries[0]
+        self.reason = "smoke"
+        self.cache_path = Path("/tmp/quantzhai-smoke-model-catalog.json")
+
+    def resolve(self, query=""):
+        if not query or query == MODEL:
+            return self.entries[0], "smoke"
+        return None, f"no match for {query}"
+
+
 def _sse_block(event_type, payload):
     payload = dict(payload)
     payload.setdefault("type", event_type)
@@ -177,10 +201,12 @@ def main():
         ProxyHandler.searxng_capabilities = {}
         ProxyHandler.searxng_base_url = None
         ProxyHandler.searxng_timeout = 1
+        ProxyHandler.model_catalog = SmokeModelCatalog()
+        ProxyHandler.model_catalog_path = str(ProxyHandler.model_catalog.cache_path)
         proxy = _free_server(ProxyHandler)
 
         payload = {
-            "model": "test-model.gguf",
+            "model": MODEL,
             "stream": False,
             "input": [{
                 "type": "message",
@@ -219,7 +245,7 @@ def main():
         assert "response.output_item.done" in stream_text, stream_text
 
         followup_payload = {
-            "model": "test-model.gguf",
+            "model": MODEL,
             "input": [{
                 "type": "apply_patch_call_output",
                 "call_id": "call_fake_apply_patch",
@@ -234,7 +260,7 @@ def main():
         assert followup_body["input"][0]["call_id"] == "call_fake_apply_patch", followup_body["input"]
 
         custom_payload = {
-            "model": "test-model.gguf",
+            "model": MODEL,
             "stream": False,
             "input": [{
                 "type": "message",

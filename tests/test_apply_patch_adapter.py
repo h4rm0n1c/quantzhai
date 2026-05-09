@@ -33,7 +33,9 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertEqual(out["tools"][0]["type"], "function")
         self.assertEqual(out["tools"][0]["name"], "apply_patch")
         self.assertIn("operation", out["tools"][0]["parameters"]["properties"])
-        self.assertIn("diff", out["tools"][0]["parameters"]["properties"]["operation"]["required"])
+        operation_schema = out["tools"][0]["parameters"]["properties"]["operation"]
+        self.assertIn("destination", operation_schema["properties"])
+        self.assertNotIn("diff", operation_schema["required"])
         self.assertEqual(out["tool_choice"], {"type": "function", "name": "apply_patch"})
         self.assertEqual(out["metadata"]["qz_tool_policy"]["schema"], "qz.tool_policy.v1")
         self.assertTrue(out["metadata"]["qz_tool_policy"]["apply_patch_declared"])
@@ -226,6 +228,87 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertEqual(out["name"], "apply_patch")
         self.assertIn("*** Add File: notes.md", out["input"])
         self.assertIn("+hello", out["input"])
+
+    def test_model_function_call_becomes_native_move_apply_patch_call(self):
+        function_call = {
+            "id": "fc_1",
+            "type": "function_call",
+            "status": "completed",
+            "call_id": "call_1",
+            "name": "apply_patch",
+            "arguments": json.dumps({
+                "operation": {
+                    "type": "move_file",
+                    "path": "old.md",
+                    "destination": "new.md",
+                }
+            }),
+        }
+
+        out = normalize_apply_patch_output_for_codex([function_call], "native")[0]
+
+        self.assertEqual(out["type"], "apply_patch_call")
+        self.assertEqual(out["operation"], {
+            "type": "move_file",
+            "path": "old.md",
+            "destination": "new.md",
+        })
+
+    def test_rename_operation_alias_becomes_custom_move_patch(self):
+        function_call = {
+            "id": "fc_1",
+            "type": "function_call",
+            "status": "completed",
+            "call_id": "call_1",
+            "name": "apply_patch",
+            "arguments": json.dumps({
+                "operation": {
+                    "type": "rename_file",
+                    "path": "old.md",
+                    "new_path": "new.md",
+                    "diff": "@@\n unchanged context\n",
+                }
+            }),
+        }
+
+        out = normalize_apply_patch_output_for_codex([function_call], "custom")[0]
+
+        self.assertEqual(out["type"], "custom_tool_call")
+        self.assertIn("*** Update File: old.md", out["input"])
+        self.assertIn("*** Move to: new.md", out["input"])
+        self.assertIn(" unchanged context", out["input"])
+
+    def test_custom_move_without_diff_becomes_assistant_error(self):
+        function_call = {
+            "id": "fc_1",
+            "type": "function_call",
+            "status": "completed",
+            "call_id": "call_1",
+            "name": "apply_patch",
+            "arguments": json.dumps({
+                "operation": {
+                    "type": "move_file",
+                    "path": "old.md",
+                    "destination": "new.md",
+                }
+            }),
+        }
+
+        out = normalize_apply_patch_output_for_codex([function_call], "custom")[0]
+
+        self.assertEqual(out["type"], "message")
+        self.assertIn("apply_patch call rejected", out["content"][0]["text"])
+
+    def test_move_operation_requires_destination(self):
+        operation = _parse_apply_patch_arguments(json.dumps({
+            "operation": {
+                "type": "move_file",
+                "path": "old.md",
+                "diff": "new.md",
+            }
+        }))
+
+        self.assertIsNone(operation)
 
     def test_custom_update_patch_strips_unified_diff_file_headers(self):
         patch = _apply_patch_operation_to_patch_text({

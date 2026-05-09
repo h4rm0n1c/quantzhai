@@ -1198,6 +1198,51 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertEqual(len(custom_items), 2)
         self.assertIn("*** Delete File: tmp/quantzhai-delete.txt", custom_items[0]["input"])
 
+    def test_golden_apply_patch_move_stream_rewrites_to_apply_patch_call(self):
+        def opener(body):
+            return FakeStream(_fixture_chunks("apply_patch_move_call.raw"))
+
+        stream_text = self._run_runtime(opener)
+        events = _parse_sse_events(stream_text)
+        patch_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "apply_patch_call"
+        ]
+
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertEqual(len(patch_items), 2)
+        self.assertEqual(patch_items[0]["operation"], {
+            "type": "move_file",
+            "path": "tmp/quantzhai-old-name.txt",
+            "destination": "tmp/quantzhai-new-name.txt",
+        })
+
+    def test_golden_custom_apply_patch_move_stream_rewrites_to_patch_envelope(self):
+        def opener(body):
+            return FakeStream(_fixture_chunks("custom_apply_patch_move_call.raw"))
+
+        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        events = _parse_sse_events(stream_text)
+        custom_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "custom_tool_call"
+        ]
+
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertEqual(len(custom_items), 2)
+        self.assertIn("*** Update File: tmp/quantzhai-old-name.txt", custom_items[0]["input"])
+        self.assertIn("*** Move to: tmp/quantzhai-new-name.txt", custom_items[0]["input"])
+
     def test_golden_invalid_apply_patch_stream_becomes_message_not_private_call(self):
         requests = []
 
@@ -1228,7 +1273,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertEqual(len(message_items), 1)
         self.assertEqual(completed["output"][0]["type"], "message")
 
-    def test_golden_unsupported_apply_patch_move_stream_becomes_message(self):
+    def test_golden_invalid_apply_patch_move_without_destination_stream_becomes_message(self):
         def opener(body):
             return FakeStream(_fixture_chunks("invalid_apply_patch_move_call.raw"))
 

@@ -155,13 +155,24 @@ class FakeCodexUpstreamHandler(BaseHTTPRequestHandler):
                 b"data: [DONE]\n\n",
             ]
         else:
-            arguments = json.dumps({
-                "operation": {
-                    "type": "create_file",
-                    "path": "codex-patch-smoke.txt",
-                    "diff": "@@\n+quantzhai codex apply_patch smoke\n",
-                }
-            })
+            prompt_text = _input_text(body.get("input")).lower()
+            if "rename" in prompt_text or "move" in prompt_text:
+                arguments = json.dumps({
+                    "operation": {
+                        "type": "move_file",
+                        "path": "codex-patch-move-old.txt",
+                        "destination": "codex-patch-move-new.txt",
+                        "diff": "@@\n quantzhai codex apply_patch move smoke\n",
+                    }
+                })
+            else:
+                arguments = json.dumps({
+                    "operation": {
+                        "type": "create_file",
+                        "path": "codex-patch-smoke.txt",
+                        "diff": "@@\n+quantzhai codex apply_patch smoke\n",
+                    }
+                })
             chunks = [
                 _sse_block("response.created", {
                     "response": {
@@ -215,6 +226,17 @@ def _has_tool_output(value):
     if value.get("type") in ("function_call_output", "apply_patch_call_output"):
         return True
     return any(_has_tool_output(item) for item in value.values())
+
+
+def _input_text(value):
+    if isinstance(value, list):
+        return "\n".join(_input_text(item) for item in value)
+    if not isinstance(value, dict):
+        return ""
+    text = value.get("text")
+    if isinstance(text, str):
+        return text
+    return "\n".join(_input_text(item) for item in value.values())
 
 
 def _free_server(handler):
@@ -334,104 +356,37 @@ def main():
             "never",
             "-",
         ]
+
         prompt = "Create codex-patch-smoke.txt with the exact text provided by the tool call."
         target = workspace / "codex-patch-smoke.txt"
         expected = "quantzhai codex apply_patch smoke\n"
-
-        process = subprocess.Popen(
+        create_run = _run_codex_patch_command(
             command,
-            cwd=str(ROOT),
-            env=env,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
+            env,
+            prompt,
+            workspace,
+            target,
+            lambda: target.exists() and target.read_text(encoding="utf-8") == expected,
         )
-        stdout_lines = []
-        stderr_lines = []
-        stdout_thread = threading.Thread(target=_read_lines, args=(process.stdout, stdout_lines), daemon=True)
-        stderr_thread = threading.Thread(target=_read_lines, args=(process.stderr, stderr_lines), daemon=True)
-        stdout_thread.start()
-        stderr_thread.start()
 
-        assert process.stdin is not None
-        process.stdin.write(prompt)
-        process.stdin.close()
-
-        created = False
-        deadline = time.monotonic() + 90
-        while time.monotonic() < deadline:
-            if target.exists() and target.read_text(encoding="utf-8") == expected:
-                created = True
-            if process.poll() is not None:
-                break
-            time.sleep(0.1)
-
-        if process.poll() is None:
-            print("codex stdout:")
-            print("".join(stdout_lines))
-            print("codex stderr:")
-            print("".join(stderr_lines))
-            print(f"workspace={workspace}")
-            print(f"codex_home={codex_home}")
-            print(f"requests={json.dumps(FakeCodexUpstreamHandler.requests, indent=2)}")
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
-            raise AssertionError("Codex CLI did not finish after apply_patch smoke")
-        else:
-            process.wait(timeout=5)
-
-        stdout_thread.join(timeout=2)
-        stderr_thread.join(timeout=2)
-
-        if not created:
-            print("codex stdout:")
-            print("".join(stdout_lines))
-            print("codex stderr:")
-            print("".join(stderr_lines))
-            print(f"workspace={workspace}")
-            print(f"codex_home={codex_home}")
-            print(f"requests={json.dumps(FakeCodexUpstreamHandler.requests, indent=2)}")
-            raise AssertionError("Codex CLI did not create the apply_patch smoke file")
-
-        if process.returncode != 0:
-            print("codex stdout:")
-            print("".join(stdout_lines))
-            print("codex stderr:")
-            print("".join(stderr_lines))
-            print(f"workspace={workspace}")
-            print(f"codex_home={codex_home}")
-            print(f"requests={json.dumps(FakeCodexUpstreamHandler.requests, indent=2)}")
-            raise AssertionError(f"Codex CLI exited nonzero: {process.returncode}")
-
-        codex_events = _parse_codex_jsonl(stdout_lines)
-        started_patch_items = _codex_patch_items(codex_events, "item.started", target)
-        completed_patch_items = _codex_patch_items(codex_events, "item.completed", target)
-        turn_completed = next((event for event in codex_events if event.get("type") == "turn.completed"), {})
-        usage = turn_completed.get("usage") if isinstance(turn_completed, dict) else None
-        lifecycle_ok = (
-            started_patch_items
-            and completed_patch_items
-            and started_patch_items[0].get("status") == "in_progress"
-            and completed_patch_items[0].get("status") == "completed"
-            and isinstance(usage, dict)
-            and {"input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens"}.issubset(usage)
+        old_target = workspace / "codex-patch-move-old.txt"
+        new_target = workspace / "codex-patch-move-new.txt"
+        old_target.write_text("quantzhai codex apply_patch move smoke\n", encoding="utf-8")
+        move_run = _run_codex_patch_command(
+            command,
+            env,
+            "Rename codex-patch-move-old.txt to codex-patch-move-new.txt using the patch tool.",
+            workspace,
+            new_target,
+            lambda: (
+                not old_target.exists()
+                and new_target.exists()
+                and new_target.read_text(encoding="utf-8") == "quantzhai codex apply_patch move smoke\n"
+            ),
         )
-        if not lifecycle_ok:
-            print("codex stdout:")
-            print("".join(stdout_lines))
-            print("codex stderr:")
-            print("".join(stderr_lines))
-            print(f"workspace={workspace}")
-            print(f"codex_home={codex_home}")
-            print(f"requests={json.dumps(FakeCodexUpstreamHandler.requests, indent=2)}")
-            print(f"codex_events={json.dumps(codex_events, indent=2)}")
-            raise AssertionError("Codex JSONL did not expose apply_patch file_change lifecycle and terminal usage")
+
+        _assert_codex_lifecycle(create_run["events"], [target], workspace, codex_home, create_run)
+        _assert_codex_lifecycle(move_run["events"], [old_target, new_target], workspace, codex_home, move_run)
 
         assert len(FakeCodexUpstreamHandler.requests) >= 2, FakeCodexUpstreamHandler.requests
 
@@ -451,7 +406,8 @@ def main():
         print(f"codex_home={codex_home}")
         print(f"requests={len(FakeCodexUpstreamHandler.requests)}")
         print(f"created={target}")
-        print(f"codex_exit={process.returncode}")
+        print(f"moved={old_target} -> {new_target}")
+        print(f"codex_exit=create:{create_run['returncode']} move:{move_run['returncode']}")
     finally:
         if proxy is not None:
             proxy.shutdown()
@@ -470,6 +426,101 @@ def _read_lines(pipe, lines):
         pipe.close()
 
 
+def _run_codex_patch_command(command, env, prompt, workspace, target, success_check):
+    process = subprocess.Popen(
+        command,
+        cwd=str(ROOT),
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    stdout_lines = []
+    stderr_lines = []
+    stdout_thread = threading.Thread(target=_read_lines, args=(process.stdout, stdout_lines), daemon=True)
+    stderr_thread = threading.Thread(target=_read_lines, args=(process.stderr, stderr_lines), daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+
+    assert process.stdin is not None
+    process.stdin.write(prompt)
+    process.stdin.close()
+
+    succeeded = False
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
+        if success_check():
+            succeeded = True
+        if process.poll() is not None:
+            break
+        time.sleep(0.1)
+
+    if process.poll() is None:
+        _dump_codex_run(stdout_lines, stderr_lines, workspace)
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+        raise AssertionError(f"Codex CLI did not finish after apply_patch smoke for {target}")
+    process.wait(timeout=5)
+
+    stdout_thread.join(timeout=2)
+    stderr_thread.join(timeout=2)
+
+    if not succeeded:
+        _dump_codex_run(stdout_lines, stderr_lines, workspace)
+        raise AssertionError(f"Codex CLI did not apply patch for {target}")
+
+    if process.returncode != 0:
+        _dump_codex_run(stdout_lines, stderr_lines, workspace)
+        raise AssertionError(f"Codex CLI exited nonzero for {target}: {process.returncode}")
+
+    return {
+        "stdout": stdout_lines,
+        "stderr": stderr_lines,
+        "events": _parse_codex_jsonl(stdout_lines),
+        "returncode": process.returncode,
+    }
+
+
+def _dump_codex_run(stdout_lines, stderr_lines, workspace):
+    print("codex stdout:")
+    print("".join(stdout_lines))
+    print("codex stderr:")
+    print("".join(stderr_lines))
+    print(f"workspace={workspace}")
+    print(f"requests={json.dumps(FakeCodexUpstreamHandler.requests, indent=2)}")
+
+
+def _assert_codex_lifecycle(codex_events, targets, workspace, codex_home, run):
+    started_patch_items = _codex_patch_items(codex_events, "item.started", targets)
+    completed_patch_items = _codex_patch_items(codex_events, "item.completed", targets)
+    turn_completed = next((event for event in codex_events if event.get("type") == "turn.completed"), {})
+    usage = turn_completed.get("usage") if isinstance(turn_completed, dict) else None
+    lifecycle_ok = (
+        started_patch_items
+        and completed_patch_items
+        and started_patch_items[0].get("status") == "in_progress"
+        and completed_patch_items[0].get("status") == "completed"
+        and isinstance(usage, dict)
+        and {"input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens"}.issubset(usage)
+    )
+    if not lifecycle_ok:
+        print("codex stdout:")
+        print("".join(run["stdout"]))
+        print("codex stderr:")
+        print("".join(run["stderr"]))
+        print(f"workspace={workspace}")
+        print(f"codex_home={codex_home}")
+        print(f"requests={json.dumps(FakeCodexUpstreamHandler.requests, indent=2)}")
+        print(f"codex_events={json.dumps(codex_events, indent=2)}")
+        raise AssertionError(f"Codex JSONL did not expose apply_patch lifecycle and terminal usage for {targets}")
+
+
 def _parse_codex_jsonl(lines):
     events = []
     for line in lines:
@@ -485,7 +536,8 @@ def _parse_codex_jsonl(lines):
     return events
 
 
-def _codex_patch_items(events, event_type, target: Path):
+def _codex_patch_items(events, event_type, targets):
+    target_paths = {str(target) for target in targets}
     items = []
     for event in events:
         if event.get("type") != event_type:
@@ -498,7 +550,7 @@ def _codex_patch_items(events, event_type, target: Path):
             continue
         if item.get("type") == "file_change":
             changes = item.get("changes") or []
-            if any(change.get("path") == str(target) for change in changes if isinstance(change, dict)):
+            if any(change.get("path") in target_paths for change in changes if isinstance(change, dict)):
                 items.append(item)
     return items
 

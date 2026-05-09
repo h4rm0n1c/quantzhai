@@ -505,6 +505,11 @@ before broad stream/tool refactors.
   (`diff --git`, `index`, `---/+++`) and numbered hunk headers are normalized
   before either native `apply_patch_call` output or Codex custom patch-envelope
   output
+- `apply_patch_move_call.raw`: streamed `move_file` operation rewritten to a
+  native Codex `apply_patch_call` with explicit `path` and `destination`
+- `custom_apply_patch_move_call.raw`: streamed `rename_file` alias rewritten to
+  a Codex custom `apply_patch` envelope using `*** Update File:` plus
+  `*** Move to:` and a non-empty context hunk
 - `tests/test_apply_patch_adapter.py`: pins normalization of file-level
   unified-diff metadata and line-number hunk headers from model
   `update_file.diff` payloads before Codex-facing native/custom output
@@ -513,8 +518,9 @@ before broad stream/tool refactors.
   `normalize_responses_input_for_qwen` and `normalize_tools_for_llamacpp`
 - `invalid_apply_patch_call.raw`: malformed model-side patch operation becomes
   an assistant error message, not a runnable private tool call
-- `invalid_apply_patch_move_call.raw`: move/rename-style operations are
-  rejected because the current adapter supports create/update/delete only
+- `invalid_apply_patch_move_call.raw`: move/rename-style operations without an
+  explicit destination are rejected instead of being exposed as runnable tool
+  calls
 - `completed_without_done.raw`: upstream `response.completed` without `[DONE]`
   is closed with exactly one terminal `[DONE]`
 - `reasoning_only.raw`: reasoning-only fallback path
@@ -542,9 +548,8 @@ before broad stream/tool refactors.
 
 Still needed:
 
-- explicit move/rename support; current behavior is a pinned rejection until
-  the model-facing schema and Codex-facing adapter are expanded beyond
-  create/update/delete
+- additional move/rename negative fixtures for traversal, absolute paths, and
+  invalid source/destination combinations if a local patch harness is added
 - more non-web-search continuation terminal-edge cases if another proxy-local
   continuation tool is added
 

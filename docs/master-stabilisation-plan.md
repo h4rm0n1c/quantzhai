@@ -122,7 +122,8 @@ arguments are complete, malformed empty-tool history filtering, and downstream
 client-disconnect classification are implemented and live-smoked. The formal
 Responses stream/tool state contract and golden replay fixtures now cover
 normal output, public function calls, native/custom apply_patch conversion,
-multi-hunk patches, unsupported move operations, reasoning-only stalls,
+multi-hunk patches, move/rename operations, invalid move operations,
+reasoning-only stalls,
 artifact-in-reasoning failures, and client disconnect cleanup.
 
 A supported `codex exec --json --ephemeral` comparison against hosted

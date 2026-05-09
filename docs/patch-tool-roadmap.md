@@ -131,6 +131,8 @@ Implemented:
 - Patch-call-output history normalization.
 - Function-call-to-`apply_patch_call` output normalization for valid operations.
 - Function-call-to-`custom_tool_call` output normalization for the current Codex CLI.
+- Move/rename operation normalization. `move_file` is canonical; `rename_file`
+  is accepted as a model-facing alias and converted to `move_file`.
 - Unified-diff metadata normalization for model `update_file.diff` payloads
   before custom Codex patch-envelope synthesis.
 - Invalid model-side `apply_patch` output normalization into assistant error messages.
@@ -140,8 +142,6 @@ Implemented:
 
 Still pending:
 
-- Implement and validate move/rename operations if Codex's apply_patch contract
-  expects them through this adapter.
 - Add more negative fixtures for Codex parser-failure history.
 
 The first implementation does not write files. It only translates tool-call shape.
@@ -190,9 +190,13 @@ Implemented so far:
 - Golden SSE replay fixtures for native/custom Qwen-style unified-diff update
   output, where file-level metadata and numbered hunk headers are normalized
   before Codex-facing output.
-- Golden SSE replay fixture documenting the current unsupported move/rename
-  operation behavior: unsupported operation types are converted into an
-  assistant error message, not exposed as runnable tool calls.
+- Golden SSE replay fixtures for native/custom move/rename output. Native
+  output is a structured `apply_patch_call.operation` with `type: move_file`,
+  `path`, and `destination`. Custom output is the Codex patch envelope:
+  `*** Update File: old` followed by `*** Move to: new`.
+- Golden SSE replay fixture documenting invalid move/rename behavior:
+  `move_file` without an explicit destination is converted into an assistant
+  error message, not exposed as a runnable tool call.
 - Proxy smoke test with fake upstream covering native and custom output styles.
 - Codex CLI smoke test with fake upstream proving current Codex consumes the translated custom `apply_patch` call and creates the expected temp file.
 
@@ -222,25 +226,34 @@ Current maturity: alpha protocol adapter with passing smoke coverage.
 
 The protocol path is now proven with fake upstreams and local Codex CLI. It is not fully supported until a live Qwen/TurboQuant run reliably emits valid patch operations and continues correctly from Codex's patch result.
 
-## Move/Rename Follow-Up
+## Move/Rename Support
 
-Move/rename support is a planned adapter expansion, not current behavior.
+Move/rename support is implemented as protocol adaptation. The proxy still does
+not execute filesystem changes itself.
 
 Current behavior:
 
 - Model-facing `apply_patch` operation types are `create_file`, `update_file`,
-  and `delete_file`.
-- A streamed operation with `type: "move_file"` is rejected and converted into
-  an assistant error message.
+  `delete_file`, `move_file`, and `rename_file`.
+- `move_file` is the canonical operation type passed back to Codex.
+- `rename_file` is accepted as a synonym and normalized to `move_file`.
+- Move/rename requires an explicit destination path via `destination`,
+  `new_path`, `to`, `move_to`, or `target_path`.
+- Native Codex-facing output keeps the structured operation:
+  `{"type":"move_file","path":"old","destination":"new"}`.
+- Custom Codex-facing output emits the patch grammar form:
+  `*** Update File: old` plus `*** Move to: new`, and requires a
+  non-empty V4A hunk in `diff`. Live Codex CLI smoke showed that the custom
+  patch verifier rejects a bare move body as an empty update hunk.
+- A streamed `move_file` without an explicit destination is rejected and
+  converted into an assistant error message.
+- A custom-output `move_file` without a hunk is rejected before Codex receives
+  it. This avoids forwarding a patch body the Codex client will fail to apply.
 - The proxy still does not execute filesystem changes itself.
 
-Implementation requirements before enabling move/rename:
+Still pending:
 
-- Confirm the exact Codex-native shape for move/rename patch calls.
-- Extend the model-facing operation schema without breaking current
-  create/update/delete behavior.
-- Add native and custom SSE fixtures for successful move/rename conversion.
-- Add negative fixtures for missing destination, traversal, absolute paths, and
-  invalid source/destination combinations.
+- Add negative fixtures for traversal, absolute paths, and invalid
+  source/destination combinations if a local patch harness is ever added.
 - Keep Codex as the writer unless a separate local patch harness is explicitly
   implemented and sandboxed.

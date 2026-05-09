@@ -22,6 +22,8 @@ It currently covers:
 - Streaming adaptation.
 - Local compaction.
 - Profile-aware `web_search`.
+- Protocol adaptation for Codex `apply_patch` create, update, delete, and
+  move/rename calls. Codex remains the filesystem writer.
 - Capture files for debugging.
 - Local terminal monitors for stack health, throughput, backend activity, and
   live Responses thought/output telemetry.

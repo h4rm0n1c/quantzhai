@@ -9,7 +9,8 @@ except ImportError:
     from qz_tools import ToolRegistry, function_tool
 
 
-APPLY_PATCH_OPERATION_TYPES = {"create_file", "update_file", "delete_file"}
+APPLY_PATCH_OPERATION_TYPES = {"create_file", "update_file", "delete_file", "move_file", "rename_file"}
+APPLY_PATCH_DESTINATION_KEYS = ("destination", "new_path", "to", "move_to", "target_path")
 TOOL_POLICY_SCHEMA = "qz.tool_policy.v1"
 
 
@@ -36,10 +37,30 @@ def _apply_patch_function_parameters() -> dict:
                     },
                     "diff": {
                         "type": "string",
-                        "description": "Required patch payload. For create_file, include the exact full file content; for update_file, include a V4A diff hunk; for delete_file, use an empty string.",
+                        "description": "Patch payload. For create_file, include the exact full file content. For update_file, include a V4A diff hunk. For move_file/rename_file in Codex custom patch mode, include a V4A context hunk for the source file. For delete_file, omit or use an empty string.",
+                    },
+                    "destination": {
+                        "type": "string",
+                        "description": "Required workspace-relative destination path for move_file or rename_file operations.",
+                    },
+                    "new_path": {
+                        "type": "string",
+                        "description": "Alias for destination on move_file or rename_file operations.",
+                    },
+                    "to": {
+                        "type": "string",
+                        "description": "Alias for destination on move_file or rename_file operations.",
+                    },
+                    "move_to": {
+                        "type": "string",
+                        "description": "Alias for destination on move_file or rename_file operations.",
+                    },
+                    "target_path": {
+                        "type": "string",
+                        "description": "Alias for destination on move_file or rename_file operations.",
                     },
                 },
-                "required": ["type", "path", "diff"],
+                "required": ["type", "path"],
                 "additionalProperties": False,
             },
             "patch": {
@@ -58,21 +79,37 @@ def _coerce_apply_patch_operation(value) -> dict | None:
     operation_type = value.get("type")
     path = value.get("path")
     diff = value.get("diff")
+    destination = next(
+        (
+            value.get(key)
+            for key in APPLY_PATCH_DESTINATION_KEYS
+            if isinstance(value.get(key), str) and value.get(key).strip()
+        ),
+        None,
+    )
 
     if operation_type not in APPLY_PATCH_OPERATION_TYPES:
         return None
     if not isinstance(path, str) or not path.strip():
         return None
+    if operation_type == "rename_file":
+        operation_type = "move_file"
 
     operation = {
         "type": operation_type,
         "path": path.strip(),
     }
 
-    if operation_type != "delete_file":
+    if operation_type in {"create_file", "update_file"}:
         if not isinstance(diff, str):
             return None
         operation["diff"] = diff
+    elif operation_type == "move_file":
+        if not isinstance(destination, str) or not destination.strip():
+            return None
+        operation["destination"] = destination.strip()
+        if isinstance(diff, str) and diff:
+            operation["diff"] = diff
     elif isinstance(diff, str) and diff:
         operation["diff"] = diff
 
@@ -170,13 +207,23 @@ def _apply_patch_operation_to_patch_text(operation: dict) -> str:
     if operation_type == "delete_file":
         return f"*** Begin Patch\n*** Delete File: {path}\n*** End Patch\n"
 
+    if operation_type == "move_file":
+        destination = operation.get("destination")
+        if not diff:
+            raise ValueError("custom apply_patch move_file requires a diff/context hunk")
+        lines = ["*** Begin Patch", f"*** Update File: {path}", f"*** Move to: {destination}"]
+        diff = _strip_unified_diff_headers(diff, path)
+        lines.append(diff.rstrip())
+        lines.append("*** End Patch")
+        return "\n".join(lines) + "\n"
+
     diff = _strip_unified_diff_headers(diff, path)
     return f"*** Begin Patch\n*** Update File: {path}\n{diff.rstrip()}\n*** End Patch\n"
 
 
 def _normalize_apply_patch_operation_for_codex(operation: dict) -> dict:
     operation = dict(operation)
-    if operation.get("type") == "update_file":
+    if operation.get("type") in {"update_file", "move_file"} and operation.get("diff"):
         operation["diff"] = _strip_unified_diff_headers(operation.get("diff") or "", operation.get("path"))
     return operation
 
@@ -247,7 +294,10 @@ def _function_call_to_apply_patch_call(item: dict) -> dict:
 def _function_call_to_custom_apply_patch_call(item: dict) -> dict:
     operation = _parse_apply_patch_arguments(item.get("arguments") or "{}")
     if operation:
-        patch_text = _apply_patch_operation_to_patch_text(operation)
+        try:
+            patch_text = _apply_patch_operation_to_patch_text(operation)
+        except ValueError:
+            return _invalid_apply_patch_call_message(item)
     else:
         try:
             data = json.loads(item.get("arguments") or "{}")
