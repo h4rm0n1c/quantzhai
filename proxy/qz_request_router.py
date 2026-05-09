@@ -23,8 +23,8 @@ try:
         clean_content,
         ensure_apply_patch_tool_policy,
         extract_response_output_text,
-        normalize_apply_patch_output_for_codex,
         normalize_responses_input_for_qwen,
+        normalize_tool_output_for_codex,
         normalize_tools_for_llamacpp,
     )
     from .qz_responses_stream import ResponsesStreamRuntime
@@ -54,8 +54,8 @@ except ImportError:
         clean_content,
         ensure_apply_patch_tool_policy,
         extract_response_output_text,
-        normalize_apply_patch_output_for_codex,
         normalize_responses_input_for_qwen,
+        normalize_tool_output_for_codex,
         normalize_tools_for_llamacpp,
     )
     from qz_responses_stream import ResponsesStreamRuntime
@@ -669,7 +669,7 @@ class RequestRouter:
 
             if not web_calls:
                 final_out = dict(out)
-                final_out["output"] = public_trace + normalize_apply_patch_output_for_codex(
+                final_out["output"] = public_trace + normalize_tool_output_for_codex(
                     output_items,
                     apply_patch_output_style,
                 )

@@ -33,6 +33,11 @@ for completed-call classification and execution. `web_search` is the first
 proxy-local executor and is used by both streamed and non-streamed
 `/v1/responses` paths.
 
+Codex-facing output adaptation is adapter-owned. The generic `ToolRegistry`
+can normalize a list of output items back to the client shape, and the
+non-streamed Responses path uses that registry instead of calling a
+tool-specific patch helper directly.
+
 Proxy-local classification is registry-owned. The lifecycle helpers do not carry
 their own default list of private tool names; streamed and non-streamed runtimes
 ask the active `ProxyLocalToolRegistry` to classify completed calls. This keeps

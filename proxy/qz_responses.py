@@ -90,6 +90,10 @@ WRITE_STDIN_TOOL_HINT = (
 )
 
 
+def normalize_tool_output_for_codex(output_items, output_style: str = "native"):
+    return TOOL_REGISTRY.output_items_to_codex(output_items, output_style)
+
+
 def _input_has_exec_session(input_items) -> bool:
     if not isinstance(input_items, list):
         return False

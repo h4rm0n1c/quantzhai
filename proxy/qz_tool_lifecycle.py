@@ -2,10 +2,10 @@
 from dataclasses import dataclass
 
 try:
-    from .qz_responses import normalize_apply_patch_output_for_codex
+    from .qz_tool_apply_patch import APPLY_PATCH_TOOL_ADAPTER
     from .qz_streaming import StreamedFunctionCallAssembler, is_function_call_stream_event
 except ImportError:
-    from qz_responses import normalize_apply_patch_output_for_codex
+    from qz_tool_apply_patch import APPLY_PATCH_TOOL_ADAPTER
     from qz_streaming import StreamedFunctionCallAssembler, is_function_call_stream_event
 
 
@@ -40,7 +40,7 @@ def function_call_key(payload):
 
 def public_tool_item_from_function_call(call: dict, apply_patch_output_style: str):
     if call.get("name") == "apply_patch":
-        return normalize_apply_patch_output_for_codex([call], apply_patch_output_style)[0]
+        return APPLY_PATCH_TOOL_ADAPTER.output_to_codex(call, apply_patch_output_style)
     return call
 
 

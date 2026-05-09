@@ -17,6 +17,23 @@ class ToolRegistryTests(unittest.TestCase):
         self.assertEqual(adapted["name"], "apply_patch")
         self.assertEqual(choice, {"type": "function", "name": "apply_patch"})
 
+    def test_registry_adapts_output_items_to_codex(self):
+        registry = ToolRegistry((APPLY_PATCH_TOOL_ADAPTER,))
+        passthrough = {"type": "message", "role": "assistant", "content": []}
+        patch_call = {
+            "id": "fc_patch",
+            "type": "function_call",
+            "call_id": "call_patch",
+            "name": "apply_patch",
+            "arguments": "{\"operation\":{\"type\":\"create_file\",\"path\":\"notes.md\",\"diff\":\"@@\\n+ok\\n\"}}",
+        }
+
+        out = registry.output_items_to_codex([passthrough, patch_call], "native")
+
+        self.assertEqual(out[0], passthrough)
+        self.assertEqual(out[1]["type"], "apply_patch_call")
+        self.assertEqual(out[1]["call_id"], "call_patch")
+
     def test_registry_adapts_web_search_tool_and_choice(self):
         registry = ToolRegistry((APPLY_PATCH_TOOL_ADAPTER, WEB_SEARCH_TOOL_ADAPTER))
         tool = {"type": "web_search"}

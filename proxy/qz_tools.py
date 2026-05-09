@@ -63,3 +63,12 @@ class ToolRegistry:
             if normalized is not None:
                 return normalized
         return None
+
+    def output_items_to_codex(self, items, output_style: str = "native"):
+        if not isinstance(items, list):
+            return items
+        out = []
+        for item in items:
+            normalized = self.output_to_codex(item, output_style)
+            out.append(normalized if normalized is not None else item)
+        return out

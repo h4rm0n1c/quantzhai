@@ -4,9 +4,9 @@ import re
 import time
 
 try:
-    from .qz_tools import function_tool
+    from .qz_tools import ToolRegistry, function_tool
 except ImportError:
-    from qz_tools import function_tool
+    from qz_tools import ToolRegistry, function_tool
 
 
 APPLY_PATCH_OPERATION_TYPES = {"create_file", "update_file", "delete_file"}
@@ -381,14 +381,7 @@ APPLY_PATCH_TOOL_ADAPTER = ApplyPatchToolAdapter()
 
 
 def normalize_apply_patch_output_for_codex(output_items, output_style: str = "native"):
-    if not isinstance(output_items, list):
-        return output_items
-
-    normalized = []
-    for item in output_items:
-        adapted = APPLY_PATCH_TOOL_ADAPTER.output_to_codex(item, output_style)
-        normalized.append(adapted if adapted is not None else item)
-    return normalized
+    return ToolRegistry((APPLY_PATCH_TOOL_ADAPTER,)).output_items_to_codex(output_items, output_style)
 
 
 def normalize_apply_patch_input_for_llamacpp(input_items):
