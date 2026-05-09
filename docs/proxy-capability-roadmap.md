@@ -302,6 +302,7 @@ Current behavior:
 - Local `web_search` supports `search`, `open_page`, and `find_in_page`.
 - SearXNG base URL is configurable.
 - Policy-driven profiles exist for broad, coding, sysadmin, research, news, AI/model, and reference searches.
+- Model overrides can select a search policy file and default policy profile.
 - Low-result fallback routing exists.
 - The latest route is captured under `var/captures/latest-web-search-route.json`.
 
@@ -310,6 +311,8 @@ What works well:
 - Search is now useful enough for normal local-agent work.
 - Profile routing avoids treating every search like a coding search.
 - Debug captures make routing decisions inspectable.
+- Local agent profiles can carry their own search scope without adding new
+  public tool names.
 
 What is weak:
 

@@ -228,6 +228,26 @@ Optional profile metadata lives in `config/user/model-overrides.json`:
 }
 ```
 
+Profiles may also select a search policy and default search profile:
+
+```json
+{
+  "models": {
+    "research-agent.gguf": {
+      "system_prompt_file": "prompts/research-agent.md",
+      "search": {
+        "policy_file": "research-search-policy.json",
+        "default_profile": "deep_research"
+      }
+    }
+  }
+}
+```
+
+Relative `search.policy_file` paths are resolved from `config/user/`, then the
+repo root, then `config/default/`. The selected policy must still use the same
+`web_search_profiles` shape as `config/default/search-policy.json`.
+
 Profiles are valid only when the symlink target resolves to a real GGUF scanned
 under `var/models/`. If a target is missing or outside that directory, the
 profile is hidden from generated Codex catalogs or rejected with a compact
@@ -364,6 +384,9 @@ Normal use should leave `profile` as `auto`. The proxy routes the query through 
 ```text
 var/captures/latest-web-search-route.json
 ```
+
+Local policies may define additional profile names. Per-model overrides can set
+`search.default_profile` so `profile=auto` starts from that policy profile.
 
 Example `.env` setting:
 

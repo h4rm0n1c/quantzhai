@@ -68,8 +68,7 @@ class WebSearchToolAdapter:
                     },
                     "profile": {
                         "type": "string",
-                        "enum": ["auto", "broad", "coding", "research", "news", "ai_models", "reference", "sysadmin"],
-                        "description": "Search profile used to select SearXNG categories and engines.",
+                        "description": "Search profile used to select SearXNG categories and engines. Common profiles: auto, broad, coding, research, news, ai_models, reference, sysadmin. Local policy may define more.",
                     },
                     "url": {
                         "type": "string",
@@ -271,7 +270,19 @@ def _extract_page_text(raw: bytes, content_type: str):
     return title, text
 
 class WebSearchRuntime:
-    def __init__(self, base_url=None, timeout=15.0, policy=None, capabilities=None, search_cache=None, opened_page_cache=None, telemetry=None):
+    def __init__(
+        self,
+        base_url=None,
+        timeout=15.0,
+        policy=None,
+        capabilities=None,
+        search_cache=None,
+        opened_page_cache=None,
+        telemetry=None,
+        policy_path: str = "",
+        default_profile: str = "",
+        policy_selection=None,
+    ):
         self.searxng_base_url = base_url
         self.searxng_timeout = timeout
         self.searxng_policy = policy or {}
@@ -279,6 +290,9 @@ class WebSearchRuntime:
         self.web_search_cache = search_cache if search_cache is not None else {}
         self.opened_page_cache = opened_page_cache if opened_page_cache is not None else {}
         self.telemetry = telemetry
+        self.searxng_policy_path = policy_path or ""
+        self.default_search_profile = str(default_profile or "").strip()
+        self.search_policy_selection = policy_selection if isinstance(policy_selection, dict) else {}
 
     def _emit(self, event_type: str, payload: dict | None = None):
         if not self.telemetry:
@@ -314,6 +328,19 @@ class WebSearchRuntime:
                 ok.add(item["name"])
         return ok
 
+    def _valid_profiles(self):
+        profiles = set(VALID_WEB_SEARCH_PROFILES)
+        policy_profiles = (self.searxng_policy or {}).get("web_search_profiles") or {}
+        if isinstance(policy_profiles, dict):
+            profiles.update(
+                name for name in policy_profiles.keys()
+                if isinstance(name, str) and name.strip()
+            )
+        return profiles
+
+    def _is_valid_profile(self, profile: str):
+        return profile in self._valid_profiles()
+
     def _policy_get_path(self, dotted, default=None):
         obj = self.searxng_policy or {}
         for part in str(dotted or "").split("."):
@@ -348,6 +375,8 @@ class WebSearchRuntime:
         return filtered
 
     def _infer_search_profile(self, query: str):
+        if self.default_search_profile and self.default_search_profile != "auto" and self._is_valid_profile(self.default_search_profile):
+            return self.default_search_profile
         routing = (self.searxng_policy or {}).get("routing") or {}
         keywords = routing.get("auto_keywords") or {}
         precedence = _string_list(routing.get("auto_precedence")) or [
@@ -361,20 +390,20 @@ class WebSearchRuntime:
         ]
         text = _normalize_ws(query or "").lower()
         for profile in precedence:
-            if profile not in VALID_WEB_SEARCH_PROFILES or profile == "auto":
+            if not self._is_valid_profile(profile) or profile == "auto":
                 continue
             for keyword in _string_list(keywords.get(profile)):
                 if keyword.lower() in text:
                     return profile
         default_profile = str(routing.get("default_profile") or "broad").strip()
-        return default_profile if default_profile in VALID_WEB_SEARCH_PROFILES and default_profile != "auto" else "broad"
+        return default_profile if self._is_valid_profile(default_profile) and default_profile != "auto" else "broad"
 
     def _profile_config(self, profile: str, query: str):
         requested_profile = str(profile or "auto").strip()
-        if requested_profile not in VALID_WEB_SEARCH_PROFILES:
+        if not self._is_valid_profile(requested_profile):
             requested_profile = "auto"
         actual_profile = self._infer_search_profile(query) if requested_profile == "auto" else requested_profile
-        if actual_profile not in VALID_WEB_SEARCH_PROFILES or actual_profile == "auto":
+        if not self._is_valid_profile(actual_profile) or actual_profile == "auto":
             actual_profile = "broad"
 
         profiles = (self.searxng_policy or {}).get("web_search_profiles") or {}
@@ -393,7 +422,7 @@ class WebSearchRuntime:
 
         fallback_profiles = [
             item for item in _string_list(cfg.get("fallback_profiles"))
-            if item in VALID_WEB_SEARCH_PROFILES and item != "auto" and item != actual_profile
+            if self._is_valid_profile(item) and item != "auto" and item != actual_profile
         ]
 
         if not categories and actual_profile == "coding":
@@ -554,6 +583,7 @@ class WebSearchRuntime:
             "query": query,
             "requested_profile": route["requested_profile"],
             "selected_profile": route["profile"],
+            "search_policy": self.search_policy_selection,
             "categories": primary_categories,
             "query_categories": query_categories,
             "engines": primary_engines,
@@ -566,6 +596,7 @@ class WebSearchRuntime:
         result.update({
             "requested_profile": route["requested_profile"],
             "profile": route["profile"],
+            "search_policy": self.search_policy_selection,
             "fallback_used": None,
             "fallback_profiles": route["fallback_profiles"],
             "categories": primary_categories,
@@ -577,6 +608,7 @@ class WebSearchRuntime:
             "query": query,
             "requested_profile": route["requested_profile"],
             "selected_profile": route["profile"],
+            "search_policy": self.search_policy_selection,
             "categories": primary_categories,
             "query_categories": query_categories,
             "engines": primary_engines,
@@ -616,6 +648,7 @@ class WebSearchRuntime:
                 fallback.update({
                     "requested_profile": route["requested_profile"],
                     "profile": fallback_route["profile"],
+                    "search_policy": self.search_policy_selection,
                     "fallback_used": fallback_route["profile"],
                     "fallback_profiles": route["fallback_profiles"],
                     "primary_profile": route["profile"],
@@ -747,7 +780,7 @@ class WebSearchRuntime:
         action = str(data.get("action") or "").strip() or "search"
         query = data.get("query")
         profile = str(data.get("profile") or "auto").strip()
-        if profile not in VALID_WEB_SEARCH_PROFILES:
+        if not self._is_valid_profile(profile):
             profile = "auto"
         url = data.get("url")
         page_id = data.get("page_id")

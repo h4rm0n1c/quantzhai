@@ -21,6 +21,10 @@ The recommended change is to keep one tool named `web_search`, then add a `profi
 
 The proxy maps `profile` to SearXNG categories and engines.
 
+Profiles are policy-defined. The built-in names are `auto`, `broad`, `coding`,
+`research`, `news`, `ai_models`, `reference`, and `sysadmin`, but a local policy
+may add more names for a specific model profile.
+
 ## Why this design
 
 Do not create separate tool names like `coding_search`, `news_search`, and `research_search`.
@@ -93,24 +97,29 @@ Recommended engines: wiktionary, wikibooks, wikisource, wikiquote, wolframalpha,
 
 ## Tool schema change
 
-In `normalize_tools_for_llamacpp()`, add:
+In the `web_search` adapter, expose `profile` as a string:
 
 ```python
 "profile": {
     "type": "string",
-    "enum": ["auto", "broad", "coding", "research", "news", "ai_models", "reference", "sysadmin"],
-    "description": "Search profile used to select SearXNG categories and engines."
+    "description": "Search profile used to select SearXNG categories and engines. Common profiles: auto, broad, coding, research, news, ai_models, reference, sysadmin. Local policy may define more."
 }
 ```
 
 The existing `categories` and `engines` fields should remain as expert overrides.
+
+Do not hard-code an enum in the model-facing schema. Custom search policies need
+custom profile names, while runtime validation still rejects names missing from
+the active policy.
 
 ## Runtime behaviour
 
 For a search call:
 
 1. Parse `profile`, defaulting to `auto`.
-2. If `profile == "auto"`, infer from query keywords.
+2. If `profile == "auto"` and the selected model override has
+   `search.default_profile`, use that profile. Otherwise infer from query
+   keywords.
 3. Resolve that profile to categories and engines from policy JSON.
 4. Remove engines in `disabled_even_if_configured`, `quarantine_until_fixed`, `never_for_coding_agent` when profile is `coding`, and `non_text_engines_disabled_for_current_web_search_tool`.
 5. Run primary search.
@@ -140,3 +149,22 @@ config/default/search-policy.json
 ```
 
 It keeps the legacy keys your current proxy expects, but adds `web_search_profiles`, `targeted_engines`, `routing`, `quality_rules`, `quarantine_until_fixed`, and `non_text_engines_disabled_for_current_web_search_tool`.
+
+Per-model override:
+
+```json
+{
+  "models": {
+    "research-agent.gguf": {
+      "search": {
+        "policy_file": "research-search-policy.json",
+        "default_profile": "deep_research"
+      }
+    }
+  }
+}
+```
+
+Relative `search.policy_file` paths resolve from `config/user/`, then the repo
+root, then `config/default/`. Bad override files fall back to the base
+`SEARXNG_POLICY` policy and record the error in search route metadata.

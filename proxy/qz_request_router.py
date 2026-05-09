@@ -30,6 +30,7 @@ try:
     from .qz_responses_stream import ResponsesStreamRuntime
     from .qz_sse import _normalize_response_usage, make_sse_block
     from .qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
+    from .qz_search_policy import resolve_search_policy_selection
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import (
         append_capture,
@@ -62,8 +63,9 @@ except ImportError:
     from qz_responses_stream import ResponsesStreamRuntime
     from qz_sse import _normalize_response_usage, make_sse_block
     from qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
+    from qz_search_policy import resolve_search_policy_selection
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
-from qz_runtime_io import (
+    from qz_runtime_io import (
         append_capture,
         append_request_capture,
         capture_enabled,
@@ -294,15 +296,24 @@ class RequestRouter:
 
         self.proxy_raw("POST")
 
-    def _web_runtime(self):
+    def _web_runtime(self, selected_model=None):
+        selection = resolve_search_policy_selection(
+            base_policy=self.handler.searxng_policy,
+            base_policy_path=getattr(self.handler, "searxng_policy_path", ""),
+            selected_model=selected_model,
+            root=getattr(self.handler, "root", Path(__file__).resolve().parents[1]),
+        )
         return WebSearchRuntime(
             base_url=self.handler.searxng_base_url,
             timeout=self.handler.searxng_timeout,
-            policy=self.handler.searxng_policy,
+            policy=selection.policy,
             capabilities=self.handler.searxng_capabilities,
             search_cache=self.handler.web_search_cache,
             opened_page_cache=self.handler.opened_page_cache,
             telemetry=self.handler.telemetry,
+            policy_path=selection.policy_path,
+            default_profile=selection.default_profile,
+            policy_selection=selection.metadata(),
         )
 
     def _runtime_metrics(self, selected_model=None):
@@ -646,19 +657,20 @@ class RequestRouter:
         requested_model: str,
         apply_patch_output_style: str = "native",
         request_id: str = "",
+        selected_model=None,
     ):
         runtime = ResponsesStreamRuntime(
             upstream=self.handler.upstream,
             authorization=self.handler.headers.get("Authorization", "Bearer local"),
             reasoning_stream_format=self.handler.reasoning_stream_format,
-            web_runtime=self._web_runtime(),
+            web_runtime=self._web_runtime(selected_model),
             chunk_writer=lambda chunk: self._write_sse_chunk(chunk, request_id=request_id),
             telemetry=self.handler.telemetry,
             request_id=request_id,
         )
         return runtime.run(body, requested_model, apply_patch_output_style)
 
-    def _run_responses_locally(self, body: dict, requested_model: str, apply_patch_output_style: str = "native"):
+    def _run_responses_locally(self, body: dict, requested_model: str, apply_patch_output_style: str = "native", selected_model=None):
         url = self.handler.upstream + "/v1/responses"
         working_body = json.loads(json.dumps(body))
         working_body["stream"] = False
@@ -667,7 +679,7 @@ class RequestRouter:
         gathered_sources = []
         counters = {"search": 0, "open_page": 0}
         seen_signatures = set()
-        web_runtime = self._web_runtime()
+        web_runtime = self._web_runtime(selected_model)
         proxy_tool_registry = make_proxy_local_tool_registry(web_runtime)
 
         for _hop in range(WEB_SEARCH_MAX_HOPS):
@@ -849,6 +861,7 @@ class RequestRouter:
                             client_model,
                             apply_patch_output_style,
                             request_id=request_id,
+                            selected_model=selected_model,
                         )
                         self._emit_request_telemetry(
                             "request_completed",
@@ -920,6 +933,7 @@ class RequestRouter:
                         body,
                         client_model,
                         apply_patch_output_style,
+                        selected_model=selected_model,
                     )
                     if status >= 400:
                         try:

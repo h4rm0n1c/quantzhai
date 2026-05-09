@@ -515,6 +515,7 @@ def main():
     capabilities = _safe_json_file(capabilities_path)
     catalog = ModelCatalog.from_env(root)
     ProxyHandler.model_catalog = catalog
+    ProxyHandler.root = str(root)
     ProxyHandler.model_catalog_path = str(catalog.cache_path)
     ProxyHandler.model_state_path = str(Path(os.environ.get("QZ_MODEL_STATE_PATH", str(root / "var" / "model-state.json"))).expanduser())
     ProxyHandler.backend_state_path = str(Path(os.environ.get("QZ_BACKEND_STATE_PATH", str(root / "var" / "backend-state.json"))).expanduser())

@@ -79,8 +79,28 @@ var/captures/latest-web-search-route.json
 
 - Document profile examples in README or a short docs page.
 - Add guidance for when Codex should use each profile.
-- Decide whether `auto` is enough for normal users or if `qz-codex` should expose profile defaults.
+- Per-model overrides can now select a search policy file and default profile
+  through `config/user/model-overrides.json`, using `search.policy_file` and
+  `search.default_profile`.
 - Keep the public tool name as `web_search` unless a hard compatibility issue appears.
+
+Override shape:
+
+```json
+{
+  "models": {
+    "research-agent.gguf": {
+      "search": {
+        "policy_file": "research-search-policy.json",
+        "default_profile": "deep_research"
+      }
+    }
+  }
+}
+```
+
+The tool schema accepts custom profile names. The proxy only honors names present
+in the active policy's `web_search_profiles`; unknown names fall back to `auto`.
 
 ## Phase 5b: Fresh and Source-Aware Search
 

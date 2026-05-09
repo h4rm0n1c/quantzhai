@@ -269,7 +269,7 @@ var/codex-home/sqlite/*
 | model-state persistence | selected model/profile from catalog/proxy | `var/model-state.json` | default selection after restart, status summary | removed last-selected profile can steer startup toward invalid entry | validate selected entry against current scan before use |
 | capture writing | request/response/proxy events when `QZ_CAPTURE_MODE` enabled | `var/captures/latest-*.json`, `.raw`, `.txt`, `.log` | debug files and monitor fallback | captures mistaken for live truth, stale latest files mislead monitors | telemetry endpoints first; captures are replay/debug fallback only |
 | logs | proxy/script diagnostics, Docker output when inspected | `var/logs/*`, capture log files | doctor/top/thoughts fallback detail | logs become parsing contract | logs are diagnostic, never authoritative status schema |
-| search policy loading | `SEARXNG_POLICY`; `scripts/qz-env` default `config/default/search-policy.json`; proxy fallback checks `config/default/search-policy.json`, old docs path, then old proxy path | web route captures | web-search behaviour and route diagnostics | old local env can still point at docs path | report docs-path policy as compatibility warning |
+| search policy loading | `SEARXNG_POLICY`; `scripts/qz-env` default `config/default/search-policy.json`; optional per-model `search.policy_file` and `search.default_profile` in model overrides; proxy fallback checks `config/default/search-policy.json`, old docs path, then old proxy path | web route captures include selected policy metadata | web-search behaviour and route diagnostics | old local env can still point at docs path; bad per-model policy file could silently alter search if not surfaced | report docs-path policy as compatibility warning; bad per-model policy falls back to base policy and records error in route metadata |
 | searxng capabilities loading | `SEARXNG_CAPABILITIES`; proxy fallback `proxy/searxng-capabilities.json` | web route captures/cache in memory | tool capability decisions | empty env means implicit proxy file fallback, hard to inspect | effective config view reports capability source and missing/disabled state |
 
 ### Current blur points
@@ -277,7 +277,7 @@ var/codex-home/sqlite/*
 The biggest remaining contract risks are:
 
 ```text
-search policy has moved to `config/default/search-policy.json`; old docs path is compatibility only.
+search policy has moved to `config/default/search-policy.json`; old docs path is compatibility only. Per-model policy files are profile overrides, not model-emitted paths.
 var/model-inventory.json is generated, but several scripts read it as a policy view.
 var/codex-home/config.toml is generated from an example, then patched in place.
 var/run/qz-runtime-state.json is a startup/status snapshot, not live truth.

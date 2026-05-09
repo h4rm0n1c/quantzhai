@@ -13,6 +13,9 @@ This is the controlling map for the current QuantZhai stabilisation work. It tie
 
 Update this document whenever the bug picture changes enough that the fix order or architecture contract changes.
 
+For a shorter periodic "where are we overall?" view, update
+`docs/progress-snapshot.md`.
+
 ## Core diagnosis
 
 QuantZhai is not suffering from one isolated bug.

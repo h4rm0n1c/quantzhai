@@ -7,12 +7,13 @@ Start here when you want to understand the repo without reading every note in th
 1. [Project README](../README.md) — what QuantZhai is, how to start it, what ships, and the known-good local setup.
 2. [Agent instructions](../AGENTS.md) — rules for agents working inside this repo.
 3. [Master stabilisation plan](master-stabilisation-plan.md) — controlling map for the current stabilisation work, bug relationships, and fix order.
-4. [Responses stream and tool state contract](responses-stream-tool-state-contract.md) — current runtime contract for streamed Responses events, tool-call state, telemetry, and captures.
-5. [Edge case and config contract plan](edge-case-config-contract-plan.md) — planned audit/refactor for edge cases, compact errors, profile safety, config layout, and script-sprawl reduction.
-6. [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) — current focused TODO/review plan for `/status`, `qz-top`, `qz-thoughts`, profiles, and streaming.
-7. [Benchmark harness](quantzhai-benchmark-harness.md) — how to compare profiles and prove whether changes help.
-8. [Runtime observability notes](runtime-observability-notes.md) — how to inspect live proxy/model behaviour.
-9. [Search roadmap](search-roadmap.md) — local web-search routing plan and policy direction.
+4. [Progress snapshot](progress-snapshot.md) — short overall percentage/status view.
+5. [Responses stream and tool state contract](responses-stream-tool-state-contract.md) — current runtime contract for streamed Responses events, tool-call state, telemetry, and captures.
+6. [Edge case and config contract plan](edge-case-config-contract-plan.md) — planned audit/refactor for edge cases, compact errors, profile safety, config layout, and script-sprawl reduction.
+7. [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) — current focused TODO/review plan for `/status`, `qz-top`, `qz-thoughts`, profiles, and streaming.
+8. [Benchmark harness](quantzhai-benchmark-harness.md) — how to compare profiles and prove whether changes help.
+9. [Runtime observability notes](runtime-observability-notes.md) — how to inspect live proxy/model behaviour.
+10. [Search roadmap](search-roadmap.md) — local web-search routing plan and policy direction.
 
 ## Documentation by area
 
@@ -21,6 +22,7 @@ Start here when you want to understand the repo without reading every note in th
 | Project overview | [README](../README.md) | Main setup, architecture, quick start, configuration, troubleshooting, and repo hygiene. |
 | Agent workflow | [AGENTS](../AGENTS.md) | Instructions for Codex/agent contributors working in this tree. |
 | Master plan | [Master stabilisation plan](master-stabilisation-plan.md) | Controlling map for current bugs, contracts, dependencies, and fix order. |
+| Progress | [Progress snapshot](progress-snapshot.md) | Short overall percentage/status view for periodic project check-ins. |
 | Runtime contract | [Responses stream and tool state contract](responses-stream-tool-state-contract.md) | State contract for streamed Responses events, tool calls, telemetry, and captures. |
 | Runtime contract | [Codex native first request capture](codex-native-request-capture.md) | Clean local reference for the raw first request shape Codex CLI sends before QuantZhai wrapper/proxy normalization. |
 | Config and error handling | [Edge case and config contract plan](edge-case-config-contract-plan.md) | Audit/refactor plan for edge cases, compact errors, profile safety, config layering, and reducing script sprawl. |
