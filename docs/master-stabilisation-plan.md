@@ -495,16 +495,14 @@ Multiple monitors can run concurrently.
 Readers do not mutate shared telemetry.
 ```
 
-Open Codex-facing status gap:
+Codex-facing status relay:
 
 ```text
-qz-codex `/status` should be audited separately from QuantZhai `/qz/status`.
-If Codex CLI expects context-window and token usage through Responses `usage`,
-model catalog metadata, or another client-visible field, the proxy/scripts need
-to populate that path from the same runtime truth used by /qz/status and
-qz-top. If Codex CLI does not expose a supported ingestion path for this, keep
-the limitation documented and make qz-top/qz-status the authoritative local
-runtime usage surfaces.
+qz-codex `/status` is separate from QuantZhai `/qz/status`, but it does ingest
+the Codex-visible paths we control: generated model catalog context metadata and
+final Responses `usage`. Keep those paths populated from the same runtime truth
+used by /qz/status and qz-top. Do not inject proxy status into the model prompt
+to work around UI display issues.
 ```
 
 Current finding:
@@ -515,10 +513,13 @@ truncation_policy, reasoning levels, and system prompt metadata. Responses
 turn.completed usage carries input/cached/output/reasoning token counts back to
 Codex. QuantZhai /qz/status and /qz/telemetry expose live backend/runtime truth.
 
-The Codex TUI /status command has not yet been proven to ingest QuantZhai
-/qz/status directly. Treat Codex /status as client/account/session status unless
-a supported ingestion path is identified. Use qz-top and /qz/status as the
-authoritative local runtime surfaces for now.
+Codex CLI v0.125.0 TUI `/status` was checked against prompt-compiler after a
+short streamed turn. It displayed `Token usage: 527 total (503 input + 24
+output)` with `+10,066 cached` on exit, and `Context window: 100% left (10.6K
+used / 249K)`. That confirms the client is consuming our catalog context window
+and final Responses usage. It does not mean Codex TUI consumes /qz/status
+directly; keep qz-top and /qz/status as the richer local runtime/backend
+surfaces.
 ```
 
 #### 6. Fix `qz-top` token math
@@ -740,6 +741,36 @@ proxy-local continuation shaping now have a small internal boundary. Tool
 declaration normalization, bad-history filtering, adapter ownership, and
 capture telemetry are still spread across the proxy flow. Keep behaviour stable
 while moving those contracts behind clearer ownership.
+```
+
+Concrete target:
+
+```text
+Add a proxy-local tool executor registry before adding more proxy-executed
+tools. The registry should make the streaming and non-streaming paths call the
+same interface for:
+
+- deciding whether a completed function_call is proxy-local
+- executing the tool with request_id, counters, cache, and telemetry context
+- returning the Codex-visible display item and hidden upstream continuation
+  items
+- emitting tool_call_started/tool_call_completed or failure telemetry
+- emitting safe Codex-visible lifecycle events for tools that have a supported
+  Responses item shape
+
+Move web_search onto that interface first. Keep apply_patch as a protocol
+adapter and Codex handoff path unless a separate security decision explicitly
+adds proxy-side patch execution.
+```
+
+Success criteria:
+
+```text
+A new proxy-local tool should not require bespoke edits in both
+qz_request_router.py and qz_responses_stream.py. It should provide an executor
+implementation, tests for streaming and non-streaming continuation, and docs for
+its Codex-visible event shape. Tool declaration adapters may still be separate
+when a tool only needs shape conversion rather than proxy execution.
 ```
 
 Then do:

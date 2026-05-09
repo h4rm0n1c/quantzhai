@@ -23,6 +23,33 @@ It does not define a general filesystem, shell, browser, MCP, or computer-use
 tool runtime. Those are still out of scope unless they are explicitly added and
 tested as proxy-executed tools.
 
+## Proxy-Local Tool Boundary
+
+Status: planned hardening target.
+
+QuantZhai currently has a `ToolAdapter` registry for declaration and item-shape
+normalization. That is not yet a full proxy-local execution interface.
+`web_search` is the first proxy-executed tool, but its execution and public
+lifecycle wiring still touch both the streaming and non-streaming response
+paths.
+
+Before adding more proxy-executed tools, introduce a proxy-local tool executor
+registry. A proxy-local executor should own:
+
+- the model-facing function name
+- completed-call classification
+- argument validation
+- local execution
+- hidden upstream continuation items
+- Codex-visible display/progress items
+- request-scoped telemetry
+- failure-to-message behavior
+
+The same executor must be used by streamed and non-streamed `/v1/responses`
+paths. `web_search` should move onto this interface first. `apply_patch` should
+remain a protocol adapter and Codex execution handoff path unless a separate
+security review explicitly adds proxy-side filesystem writes.
+
 ## Source of Truth
 
 Implementation:
@@ -140,9 +167,10 @@ Target behavior:
 - Emit completed/failed/incomplete terminal status for tool calls and outputs.
 - Preserve final `usage` data in `response.completed` where upstream or proxy
   accounting can provide it.
-- Audit whether Codex CLI `/status` consumes token/context data from final
-  Responses `usage`, generated model catalog metadata, request metadata, or an
-  undocumented local client state path.
+- Keep generated model catalog metadata in sync with proxy policy so Codex CLI
+  `/status` sees the selected context window and truncation limit.
+- Keep final Responses `usage` populated so Codex CLI `/status` can report the
+  latest turn token usage and cached-token split.
 
 Useful external references:
 
@@ -282,9 +310,17 @@ local monitors just because the short recent ring has moved on.
 Remaining live-state gaps should be investigated in the harder cases:
 
 - streamed `apply_patch` shape conversion and Codex execution handoff
-- TUI rendering and `/status` consumption of token/context data
+- long-running TUI rendering while tools are active
 - long-running tool calls where progress is available only inside proxy
   telemetry
+
+Codex CLI v0.125.0 TUI `/status` was checked with `prompt-compiler` after a
+short streamed turn. It displayed the generated catalog's effective context
+window as `10.6K used / 249K` and displayed final Responses usage as `527 total
+(503 input + 24 output)`, with `+10,066 cached` printed on exit. This confirms
+the supported Codex-facing status path is model-catalog metadata plus terminal
+Responses `usage`; QuantZhai `/qz/status` remains a separate richer proxy
+runtime surface.
 
 ## State Table
 
