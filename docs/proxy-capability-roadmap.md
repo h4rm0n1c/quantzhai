@@ -249,6 +249,10 @@ Maturity:
 Live smoke note:
 
 - The Codex exec apply_patch smoke now uses a real SSE-shaped upstream response and includes a minimal usage block on `response.completed`, so the end-to-end temp-workspace edit path is verified against the current proxy contract.
+- That hermetic Codex exec smoke also pins the public JSONL lifecycle Codex
+  exposes for the patch handoff: `item.started file_change`,
+  `item.completed file_change`, final `agent_message`, and terminal
+  `turn.completed usage`.
 - A direct live Qwen/TurboQuant Responses smoke on 2026-05-09 produced streamed
   `apply_patch` function-call arguments and the proxy returned a completed
   custom `apply_patch` envelope. Capture:

@@ -946,6 +946,8 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
         self.assertNotIn('"type": "function_call"', stream_text)
         self.assertEqual(len(patch_items), 2)
+        self.assertEqual(patch_items[0]["status"], "in_progress")
+        self.assertEqual(patch_items[1]["status"], "completed")
         self.assertEqual(patch_items[0]["call_id"], "call_fixture_patch")
         self.assertEqual(patch_items[0]["operation"]["path"], "tmp/quantzhai-smoke.txt")
 
@@ -973,6 +975,8 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
         self.assertNotIn('"type": "function_call"', stream_text)
         self.assertEqual(len(custom_items), 2)
+        self.assertEqual(custom_items[0]["status"], "in_progress")
+        self.assertEqual(custom_items[1]["status"], "completed")
         self.assertEqual(custom_items[0]["call_id"], "call_fixture_custom_patch")
         self.assertEqual(custom_items[0]["name"], "apply_patch")
         self.assertIn("*** Begin Patch", custom_items[0]["input"])

@@ -328,7 +328,8 @@ local monitors just because the short recent ring has moved on.
 
 Remaining live-state gaps should be investigated in the harder cases:
 
-- streamed `apply_patch` shape conversion and Codex execution handoff
+- live-Qwen streamed `apply_patch` edge cases beyond the hermetic fake-upstream
+  handoff smoke
 - long-running TUI rendering while tools are active
 - long-running tool calls where progress is available only inside proxy
   telemetry
@@ -340,6 +341,23 @@ window as `10.6K used / 249K` and displayed final Responses usage as `527 total
 the supported Codex-facing status path is model-catalog metadata plus terminal
 Responses `usage`; QuantZhai `/qz/status` remains a separate richer proxy
 runtime surface.
+
+Hermetic Codex apply_patch handoff is regression-pinned by
+`tests/smoke_apply_patch_codex_exec.py`. The fake upstream emits a streamed
+model-side `function_call` named `apply_patch`; the proxy rewrites it into the
+Codex-declared patch shape; Codex applies the patch in a temp workspace; and
+`codex exec --json` exposes this public lifecycle:
+
+```text
+item.started      file_change status=in_progress kind=add
+item.completed    file_change status=completed kind=add
+item.completed    agent_message
+turn.completed    usage={input_tokens,cached_input_tokens,output_tokens,reasoning_output_tokens}
+```
+
+The client-facing JSONL does not expose the intermediate `custom_tool_call` for
+this path. Codex collapses the successful patch handoff into `file_change`
+lifecycle rows, so that is the stable public assertion for the smoke.
 
 ## State Table
 
@@ -487,6 +505,9 @@ before broad stream/tool refactors.
   guard accounting, malformed historical tool-call filtering, completed-call
   routing decisions, apply_patch public item conversion, and proxy-local
   upstream continuation shaping
+- `tests/smoke_apply_patch_codex_exec.py`: hermetic fake-upstream Codex exec
+  smoke pins the end-to-end apply_patch handoff and public Codex JSONL
+  `file_change` started/completed lifecycle
 - `metadata.qz_tool_policy`: request-scoped proxy-owned tool-shape policy.
   For apply_patch it records whether the client declared patch support, the
   original client tool type (`apply_patch`, `custom`, or `absent`), and the

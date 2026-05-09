@@ -409,6 +409,30 @@ def main():
             print(f"requests={json.dumps(FakeCodexUpstreamHandler.requests, indent=2)}")
             raise AssertionError(f"Codex CLI exited nonzero: {process.returncode}")
 
+        codex_events = _parse_codex_jsonl(stdout_lines)
+        started_patch_items = _codex_patch_items(codex_events, "item.started", target)
+        completed_patch_items = _codex_patch_items(codex_events, "item.completed", target)
+        turn_completed = next((event for event in codex_events if event.get("type") == "turn.completed"), {})
+        usage = turn_completed.get("usage") if isinstance(turn_completed, dict) else None
+        lifecycle_ok = (
+            started_patch_items
+            and completed_patch_items
+            and started_patch_items[0].get("status") == "in_progress"
+            and completed_patch_items[0].get("status") == "completed"
+            and isinstance(usage, dict)
+            and {"input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens"}.issubset(usage)
+        )
+        if not lifecycle_ok:
+            print("codex stdout:")
+            print("".join(stdout_lines))
+            print("codex stderr:")
+            print("".join(stderr_lines))
+            print(f"workspace={workspace}")
+            print(f"codex_home={codex_home}")
+            print(f"requests={json.dumps(FakeCodexUpstreamHandler.requests, indent=2)}")
+            print(f"codex_events={json.dumps(codex_events, indent=2)}")
+            raise AssertionError("Codex JSONL did not expose apply_patch file_change lifecycle and terminal usage")
+
         assert len(FakeCodexUpstreamHandler.requests) >= 2, FakeCodexUpstreamHandler.requests
 
         upstream_body = next(
@@ -444,6 +468,39 @@ def _read_lines(pipe, lines):
             lines.append(line)
     finally:
         pipe.close()
+
+
+def _parse_codex_jsonl(lines):
+    events = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            events.append(payload)
+    return events
+
+
+def _codex_patch_items(events, event_type, target: Path):
+    items = []
+    for event in events:
+        if event.get("type") != event_type:
+            continue
+        item = event.get("item")
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") in {"apply_patch_call", "custom_tool_call"} and item.get("name") in {None, "apply_patch"}:
+            items.append(item)
+            continue
+        if item.get("type") == "file_change":
+            changes = item.get("changes") or []
+            if any(change.get("path") == str(target) for change in changes if isinstance(change, dict)):
+                items.append(item)
+    return items
 
 
 if __name__ == "__main__":

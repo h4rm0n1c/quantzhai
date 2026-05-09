@@ -727,8 +727,14 @@ latest completed request summary with `/qz/telemetry/recent`.
 Downstream client-disconnect handling now classifies write failures as
 `client_disconnected`, closes the upstream stream through normal cleanup, and
 does not emit synthetic completion after the failed write. Remaining relay gaps
-are apply_patch handoff edge cases, TUI rendering, and Codex `/status`
-token/context usage relay.
+are live-Qwen apply_patch edge cases, long-running TUI rendering, and any future
+Codex `/status` token/context usage relay regressions.
+
+Hermetic Codex apply_patch handoff is now pinned: the local fake upstream
+streams an `apply_patch` function call through the proxy, Codex executes the
+patch in a temp workspace, and `codex exec --json` exposes the public lifecycle
+as `item.started file_change`, `item.completed file_change`, final
+`agent_message`, and terminal `turn.completed usage`.
 ```
 
 Then do:
