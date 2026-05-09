@@ -191,13 +191,15 @@ Implemented so far:
 - Unit tests for native/custom tool normalization, output conversion, input history conversion, invalid operations, and streaming event synthesis.
 - Golden SSE replay fixtures for native/custom create, update, and delete
   patch output, and invalid model-side patch output.
-- Golden SSE replay fixtures for native/custom multi-hunk update output.
+- Golden SSE replay fixtures for native/custom multi-hunk update output,
+  including a larger four-hunk update with file-level unified-diff metadata.
 - Golden SSE replay fixtures for native/custom Qwen-style unified-diff update
   output, where file-level metadata and numbered hunk headers are normalized
   before Codex-facing output.
-- Golden SSE replay fixtures for native/custom move/rename output. Native
-  output is a structured `apply_patch_call.operation` with `type: move_file`,
-  `path`, and `destination`. Custom output is the Codex patch envelope:
+- Golden SSE replay fixtures for native/custom move/rename output, including
+  `rename_file` plus the `new_path` destination alias. Native output is a
+  structured `apply_patch_call.operation` with `type: move_file`, `path`, and
+  `destination`. Custom output is the Codex patch envelope:
   `*** Update File: old` followed by `*** Move to: new`.
 - Golden SSE replay fixture documenting invalid move/rename behavior:
   `move_file` without an explicit destination is converted into an assistant

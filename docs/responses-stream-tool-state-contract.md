@@ -533,6 +533,8 @@ before broad stream/tool refactors.
   update/delete patch operations rewritten to `apply_patch_call`
 - `apply_patch_multihunk_update_call.raw`: larger native multi-hunk update
   operation rewritten to `apply_patch_call`
+- `apply_patch_large_multihunk_update_call.raw`: four-hunk native update with
+  file-level unified-diff metadata stripped before Codex-facing output
 - `custom_apply_patch_call.raw`: function-call patch stream rewritten to Codex
   custom `apply_patch` envelope
 - `custom_apply_patch_update_call.raw` and `custom_apply_patch_delete_call.raw`:
@@ -540,6 +542,8 @@ before broad stream/tool refactors.
   envelopes
 - `custom_apply_patch_multihunk_update_call.raw`: larger multi-hunk update
   operation rewritten to a Codex custom `apply_patch` envelope
+- `custom_apply_patch_large_multihunk_update_call.raw`: four-hunk custom patch
+  envelope with file-level unified-diff metadata stripped before output
 - `apply_patch_unified_diff_update_call.raw` and
   `custom_apply_patch_unified_diff_update_call.raw`: Qwen-style streamed
   `update_file.diff` payloads containing file-level unified-diff metadata
@@ -551,6 +555,10 @@ before broad stream/tool refactors.
 - `custom_apply_patch_move_call.raw`: streamed `rename_file` alias rewritten to
   a Codex custom `apply_patch` envelope using `*** Update File:` plus
   `*** Move to:` and a non-empty context hunk
+- `apply_patch_rename_alias_move_call.raw` and
+  `custom_apply_patch_rename_alias_move_call.raw`: streamed `rename_file` with
+  `new_path` destination alias is normalized to canonical `move_file` behavior;
+  git rename metadata is stripped before native/custom Codex-facing output
 - `tests/test_apply_patch_adapter.py`: pins normalization of file-level
   unified-diff metadata and line-number hunk headers from model
   `update_file.diff` payloads before Codex-facing native/custom output

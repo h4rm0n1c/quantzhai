@@ -1108,6 +1108,37 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertNotIn("@@ -1,4 +1,4 @@", diff)
         self.assertNotIn("@@ -8,3 +8,4 @@", diff)
 
+    def test_golden_apply_patch_large_multihunk_update_stream_strips_metadata(self):
+        def opener(body):
+            return FakeStream(_fixture_chunks("apply_patch_large_multihunk_update_call.raw"))
+
+        stream_text = self._run_runtime(opener)
+        events = _parse_sse_events(stream_text)
+        patch_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "apply_patch_call"
+        ]
+
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertEqual(len(patch_items), 2)
+        self.assertEqual(patch_items[0]["operation"]["type"], "update_file")
+        self.assertEqual(patch_items[0]["operation"]["path"], "tmp/quantzhai-large-multihunk.txt")
+        diff = patch_items[0]["operation"]["diff"]
+        self.assertIn("@@\n context one\n-old alpha\n+new alpha", diff)
+        self.assertIn("@@\n context three\n-old beta\n+new beta\n+inserted beta detail", diff)
+        self.assertIn("@@\n-old gamma\n+new gamma", diff)
+        self.assertIn("@@\n context six\n-old delta\n+new delta\n+new epsilon tail", diff)
+        self.assertNotIn("diff --git", diff)
+        self.assertNotIn("index 1111111", diff)
+        self.assertNotIn("--- a/tmp/quantzhai-large-multihunk.txt", diff)
+        self.assertNotIn("+++ b/tmp/quantzhai-large-multihunk.txt", diff)
+        self.assertNotIn("@@ -14,6 +14,7 @@", diff)
+
     def test_golden_custom_apply_patch_multihunk_update_stream_rewrites_to_patch_envelope(self):
         def opener(body):
             return FakeStream(_fixture_chunks("custom_apply_patch_multihunk_update_call.raw"))
@@ -1161,6 +1192,36 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertNotIn("+++ b/tmp/quantzhai-unified.txt", patch)
         self.assertNotIn("@@ -1,4 +1,4 @@", patch)
         self.assertNotIn("@@ -8,3 +8,4 @@", patch)
+
+    def test_golden_custom_apply_patch_large_multihunk_update_stream_strips_metadata(self):
+        def opener(body):
+            return FakeStream(_fixture_chunks("custom_apply_patch_large_multihunk_update_call.raw"))
+
+        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        events = _parse_sse_events(stream_text)
+        custom_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "custom_tool_call"
+        ]
+
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertEqual(len(custom_items), 2)
+        patch = custom_items[0]["input"]
+        self.assertIn("*** Update File: tmp/quantzhai-large-multihunk.txt", patch)
+        self.assertIn("@@\n context one\n-old alpha\n+new alpha", patch)
+        self.assertIn("@@\n context three\n-old beta\n+new beta\n+inserted beta detail", patch)
+        self.assertIn("@@\n-old gamma\n+new gamma", patch)
+        self.assertIn("@@\n context six\n-old delta\n+new delta\n+new epsilon tail", patch)
+        self.assertNotIn("diff --git", patch)
+        self.assertNotIn("index 1111111", patch)
+        self.assertNotIn("--- a/tmp/quantzhai-large-multihunk.txt", patch)
+        self.assertNotIn("+++ b/tmp/quantzhai-large-multihunk.txt", patch)
+        self.assertNotIn("@@ -14,6 +14,7 @@", patch)
 
     def test_golden_apply_patch_delete_stream_rewrites_to_apply_patch_call(self):
         def opener(body):
@@ -1227,6 +1288,36 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             "destination": "tmp/quantzhai-new-name.txt",
         })
 
+    def test_golden_apply_patch_rename_alias_stream_rewrites_to_move_call(self):
+        def opener(body):
+            return FakeStream(_fixture_chunks("apply_patch_rename_alias_move_call.raw"))
+
+        stream_text = self._run_runtime(opener)
+        events = _parse_sse_events(stream_text)
+        patch_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "apply_patch_call"
+        ]
+
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertEqual(len(patch_items), 2)
+        operation = patch_items[0]["operation"]
+        self.assertEqual(operation["type"], "move_file")
+        self.assertEqual(operation["path"], "tmp/quantzhai-rename-old.txt")
+        self.assertEqual(operation["destination"], "tmp/quantzhai-rename-new.txt")
+        self.assertIn("@@\n stable heading\n-old rename body\n+new rename body", operation["diff"])
+        self.assertNotIn("similarity index", operation["diff"])
+        self.assertNotIn("rename from", operation["diff"])
+        self.assertNotIn("rename to", operation["diff"])
+        self.assertNotIn("--- a/tmp/quantzhai-rename-old.txt", operation["diff"])
+        self.assertNotIn("+++ b/tmp/quantzhai-rename-new.txt", operation["diff"])
+        self.assertNotIn("@@ -1,3 +1,3 @@", operation["diff"])
+
     def test_golden_custom_apply_patch_move_stream_rewrites_to_patch_envelope(self):
         def opener(body):
             return FakeStream(_fixture_chunks("custom_apply_patch_move_call.raw"))
@@ -1247,6 +1338,35 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertEqual(len(custom_items), 2)
         self.assertIn("*** Update File: tmp/quantzhai-old-name.txt", custom_items[0]["input"])
         self.assertIn("*** Move to: tmp/quantzhai-new-name.txt", custom_items[0]["input"])
+
+    def test_golden_custom_apply_patch_rename_alias_stream_rewrites_to_move_envelope(self):
+        def opener(body):
+            return FakeStream(_fixture_chunks("custom_apply_patch_rename_alias_move_call.raw"))
+
+        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        events = _parse_sse_events(stream_text)
+        custom_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "custom_tool_call"
+        ]
+
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertEqual(len(custom_items), 2)
+        patch = custom_items[0]["input"]
+        self.assertIn("*** Update File: tmp/quantzhai-rename-old.txt", patch)
+        self.assertIn("*** Move to: tmp/quantzhai-rename-new.txt", patch)
+        self.assertIn("@@\n stable heading\n-old rename body\n+new rename body", patch)
+        self.assertNotIn("similarity index", patch)
+        self.assertNotIn("rename from", patch)
+        self.assertNotIn("rename to", patch)
+        self.assertNotIn("--- a/tmp/quantzhai-rename-old.txt", patch)
+        self.assertNotIn("+++ b/tmp/quantzhai-rename-new.txt", patch)
+        self.assertNotIn("@@ -1,3 +1,3 @@", patch)
 
     def test_golden_invalid_apply_patch_stream_becomes_message_not_private_call(self):
         requests = []
