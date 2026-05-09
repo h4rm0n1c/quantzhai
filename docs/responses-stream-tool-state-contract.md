@@ -359,6 +359,15 @@ The client-facing JSONL does not expose the intermediate `custom_tool_call` for
 this path. Codex collapses the successful patch handoff into `file_change`
 lifecycle rows, so that is the stable public assertion for the smoke.
 
+Live Qwen/TurboQuant smoke on 2026-05-09 confirmed the same Codex-facing shape
+for a real prompt-compiler run. `qz-codex exec -m prompt-compiler --json
+--ephemeral` created `live-qwen-apply-patch-smoke.txt`, emitted one completed
+reasoning item, then emitted `file_change` started/completed, final
+`agent_message` text `done`, and terminal usage
+`input_tokens=10723`, `cached_input_tokens=10605`, `output_tokens=4`,
+`reasoning_output_tokens=0`. The proxy request id was
+`qz_req_1778312516589_af70`.
+
 ## State Table
 
 | Upstream signal | Proxy state/action | Codex-visible stream | Telemetry/capture | Evidence |

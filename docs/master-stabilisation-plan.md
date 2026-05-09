@@ -735,6 +735,12 @@ streams an `apply_patch` function call through the proxy, Codex executes the
 patch in a temp workspace, and `codex exec --json` exposes the public lifecycle
 as `item.started file_change`, `item.completed file_change`, final
 `agent_message`, and terminal `turn.completed usage`.
+
+Live Qwen/TurboQuant apply_patch smoke on 2026-05-09 also passed through
+`qz-codex exec -m prompt-compiler`: Codex created
+`live-qwen-apply-patch-smoke.txt`, exposed `file_change` started/completed
+events, returned final `agent_message` text `done`, and reported terminal usage.
+The matching proxy request was `qz_req_1778312516589_af70`.
 ```
 
 Then do:

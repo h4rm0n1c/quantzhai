@@ -261,6 +261,11 @@ Live smoke note:
   `custom_tool_call` and Codex created
   `live-codex-apply-patch-smoke.txt` in the temp workspace. Capture:
   `var/captures/requests/qz_req_1778257008620_8190`.
+- A later live `qz-codex exec -m prompt-compiler --json --ephemeral` smoke on
+  2026-05-09 created `live-qwen-apply-patch-smoke.txt` through apply_patch.
+  Codex JSONL exposed `item.started file_change`, `item.completed file_change`,
+  final `agent_message` text `done`, and terminal usage. Matching proxy request:
+  `qz_req_1778312516589_af70`.
 
 ## Search
 
