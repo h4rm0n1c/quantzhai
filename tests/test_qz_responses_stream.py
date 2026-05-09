@@ -256,6 +256,61 @@ def _reasoning_message_stream():
     ]
 
 
+def _multi_delta_message_stream():
+    return [
+        _sse_block("response.created", {
+            "response": {
+                "id": "resp_fake_multi_delta",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "in_progress",
+                "model": "fake",
+                "output": [],
+            },
+        }),
+        _sse_block("response.output_item.added", {
+            "output_index": 0,
+            "item": {
+                "id": "msg_multi",
+                "type": "message",
+                "status": "in_progress",
+                "role": "assistant",
+                "content": [],
+            },
+        }),
+        _sse_block("response.output_text.delta", {
+            "item_id": "msg_multi",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "alpha ",
+        }),
+        _sse_block("response.output_text.delta", {
+            "item_id": "msg_multi",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "beta",
+        }),
+        _sse_block("response.completed", {
+            "response": {
+                "id": "resp_fake_multi_delta",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "completed",
+                "model": "fake",
+                "output": [{
+                    "id": "msg_multi",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "alpha beta", "annotations": []}],
+                }],
+                "usage": {},
+            },
+        }),
+        b"data: [DONE]\n\n",
+    ]
+
+
 def _long_reasoning_then_message_stream(delta_count=20):
     chunks = [
         _sse_block("response.created", {
@@ -722,6 +777,36 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             for event in events
         ))
 
+    def test_stuck_function_call_timeout_aborts_without_leaking_private_call(self):
+        telemetry = TelemetryBus()
+
+        def opener(body):
+            return FakeStream(_stuck_function_call_stream(delta_count=1))
+
+        stream_text = self._run_runtime(
+            opener,
+            telemetry=telemetry,
+            request_id="req-stuck-tool-timeout",
+            private_function_call_timeout_s=0,
+            private_function_call_delta_limit=99,
+        )
+        events = telemetry.recent()
+
+        self.assertIn("private tool-call loop", stream_text)
+        self.assertIn("response.completed", stream_text)
+        self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertTrue(any(
+            event.get("type") == "private_tool_call_aborted"
+            and (event.get("payload") or {}).get("reason") == "timeout"
+            for event in events
+        ))
+        self.assertTrue(any(
+            event.get("type") == "stream_event_timing"
+            and (event.get("payload") or {}).get("suppressed") == "function_call_aborted"
+            for event in events
+        ))
+
     def test_reasoning_only_stream_aborts_instead_of_never_answering(self):
         telemetry = TelemetryBus()
 
@@ -882,6 +967,40 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertEqual([event for event, _payload in events].count("response.created"), 1)
         self.assertIn("stream ok", stream_text)
         self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+
+    def test_answer_deltas_are_written_before_terminal_completion(self):
+        written = []
+
+        def opener(body):
+            return FakeStream(_multi_delta_message_stream())
+
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=written.append,
+            stream_opener=opener,
+            capture_enabled=False,
+        )
+
+        runtime.run({
+            "model": "test-model.gguf",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "test"}],
+            }],
+        }, "test-model.gguf")
+
+        written_text = [chunk.decode("utf-8", "replace") for chunk in written]
+        first_delta = next(index for index, chunk in enumerate(written_text) if "alpha " in chunk)
+        second_delta = next(index for index, chunk in enumerate(written_text) if "beta" in chunk)
+        completed = next(index for index, chunk in enumerate(written_text) if "response.completed" in chunk)
+
+        self.assertLess(first_delta, completed)
+        self.assertLess(second_delta, completed)
+        self.assertNotIn('"type": "function_call"', "".join(written_text))
 
     def test_client_disconnect_closes_upstream_and_emits_cancel_telemetry(self):
         telemetry = TelemetryBus()

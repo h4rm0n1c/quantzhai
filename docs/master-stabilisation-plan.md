@@ -5,9 +5,10 @@
 Open master plan. Phase 1 breakage fixes, telemetry schema base, monitor
 fallback cleanup, concurrent monitor smoke, stream timing telemetry, qz-top
 host-local VRAM split, request-scoped stream captures, reasoning-effort policy,
-and the first config ownership/layering pass are live-smoked. The active
-engineering focus now moves to the Responses stream/tool state machine and
-golden replay fixtures before broader refactors.
+the first config ownership/layering pass, and the evidence-backed Responses
+stream/tool state table are live-smoked or regression-covered. The active
+engineering focus now moves to finishing the generic tool lifecycle boundary
+before broader refactors.
 
 This is the controlling map for the current QuantZhai stabilisation work. It ties together the known bug notes, observability agenda, and configuration-contract plan.
 
@@ -188,6 +189,8 @@ proxy stream path:
   promote request_id into sse_event and stream_event_timing telemetry
   classify reasoning-only stalls without a default char cap
   buffer executable tool calls until arguments are complete
+  abort private tool-call stalls without exposing private calls
+  pin answer deltas before terminal completion
   drop malformed empty tool-call history before forwarding upstream
 ```
 

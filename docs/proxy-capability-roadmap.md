@@ -504,7 +504,8 @@ Missing:
 
 1. Document the Responses stream/tool state table: upstream event, proxy state,
    Codex-visible event, telemetry, and capture output. Current contract:
-   `docs/responses-stream-tool-state-contract.md`.
+   `docs/responses-stream-tool-state-contract.md`. It now includes an
+   evidence-backed state table and coverage matrix.
 2. Expand golden replay fixtures. Seed fixtures now cover normal output,
    reasoning-only fallback, artifact-in-reasoning abort, long active reasoning,
    public tool-call buffering, malformed empty tool history, apply_patch
@@ -514,15 +515,18 @@ Missing:
    continuation with raw fixture replay, client-disconnect cleanup, and
    terminal usage normalization for Codex `/status`, plus continuation final-hop
    empty-close, bare-DONE, malformed-terminal recovery, large multi-hunk
-   apply_patch variants, and rename-alias move variants. Remaining coverage:
-   traversal/absolute-path move negatives if a local patch harness is added.
+   apply_patch variants, rename-alias move variants, private tool-call timeout
+   aborts, and answer-delta write ordering. Remaining coverage:
+   traversal/absolute-path move negatives if a local patch harness is added,
+   plus new negative fixtures only when a real bad upstream shape appears.
 3. Broaden the tool lifecycle boundary to cover request normalization,
    history filtering, adapter ownership, and telemetry naming. Completed-call
    public/proxy-local decisions, proxy-local continuation shaping, malformed
    history filtering, stream telemetry payload shaping, and tool request
    normalization now have explicit ownership boundaries. Proxy-local telemetry
    payloads, terminal-suppression labels, and continuation-limit fallback text
-   are registry-owned.
+   are registry-owned. Current weak spot: repeat the registry checklist for
+   the next proxy-executed tool to prove the interface is not web_search-only.
 4. Run a live Qwen/TurboQuant patch workflow and capture whether it emits valid
    patch operations. Done on 2026-05-09 with request
    `qz_req_1778312516589_af70`.
