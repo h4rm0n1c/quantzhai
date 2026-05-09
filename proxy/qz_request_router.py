@@ -35,9 +35,10 @@ try:
         append_capture,
         append_request_capture,
         capture_enabled,
-        capture_path,
+        open_dual_capture_append,
         runtime_log,
         write_capture,
+        write_dual_capture,
         write_request_capture,
     )
 except ImportError:
@@ -62,15 +63,32 @@ except ImportError:
     from qz_sse import _normalize_response_usage, make_sse_block
     from qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
-    from qz_runtime_io import (
+from qz_runtime_io import (
         append_capture,
         append_request_capture,
         capture_enabled,
-        capture_path,
+        open_dual_capture_append,
         runtime_log,
         write_capture,
+        write_dual_capture,
         write_request_capture,
     )
+
+
+class _MultiRawLog:
+    def __init__(self, handles):
+        self.handles = list(handles or [])
+
+    def write(self, data: bytes):
+        for handle in list(self.handles):
+            handle.write(data)
+
+    def close(self):
+        for handle in list(self.handles):
+            try:
+                handle.close()
+            except Exception:
+                pass
 
 
 class RequestRouter:
@@ -743,9 +761,8 @@ class RequestRouter:
             return
 
         try:
-            write_capture("latest-request.json", body)
+            write_dual_capture("latest-request.json", request_id, "incoming-request.json", body)
             write_capture("latest-request-id.txt", request_id)
-            write_request_capture(request_id, "incoming-request.json", body)
         except Exception:
             pass
 
@@ -810,10 +827,9 @@ class RequestRouter:
                 runtime_metrics["prompt_contract"] = prompt_contract
                 self._emit_prompt_contract(prompt_contract)
                 try:
-                    write_capture("latest-normalized-request.json", body)
-                    write_capture("latest-request-contract.json", self._capture_contract(request_id, prompt_contract, runtime_metrics))
-                    write_request_capture(request_id, "forwarded-request.json", body)
-                    write_request_capture(request_id, "request-contract.json", self._capture_contract(request_id, prompt_contract, runtime_metrics))
+                    capture_contract = self._capture_contract(request_id, prompt_contract, runtime_metrics)
+                    write_dual_capture("latest-normalized-request.json", request_id, "forwarded-request.json", body)
+                    write_dual_capture("latest-request-contract.json", request_id, "request-contract.json", capture_contract)
                 except Exception:
                     pass
 
@@ -1023,23 +1039,23 @@ class RequestRouter:
             stream_result = None
 
             try:
-                if capture_enabled():
-                    raw_log_path = capture_path("latest-upstream-response.raw")
-                    status_path = capture_path("latest-upstream-status.txt")
-                    status_path.write_text(
-                        f"status={status}\ncontent_type={content_type}\nstream=passthrough\nreasoning_stream_format={self.handler.reasoning_stream_format}\nrate_limits=local\n",
-                        encoding="utf-8"
-                    )
-                    write_request_capture(
-                        request_id,
-                        "upstream-status.txt",
-                        f"status={status}\ncontent_type={content_type}\nstream=passthrough\nreasoning_stream_format={self.handler.reasoning_stream_format}\nrate_limits=local\n",
-                    )
-                    write_request_capture(request_id, "upstream-response.raw", b"", mode="bytes")
-                    write_request_capture(request_id, "forwarded-sse.raw", b"", mode="bytes")
-                    raw_log = raw_log_path.open("wb")
-                else:
-                    raw_log = None
+                status_text = (
+                    f"status={status}\n"
+                    f"content_type={content_type}\n"
+                    "stream=passthrough\n"
+                    f"reasoning_stream_format={self.handler.reasoning_stream_format}\n"
+                    "rate_limits=local\n"
+                )
+                write_dual_capture("latest-upstream-status.txt", request_id, "upstream-status.txt", status_text)
+                write_dual_capture("latest-upstream-response.raw", request_id, "upstream-response.raw", b"", mode="bytes")
+                write_request_capture(request_id, "forwarded-sse.raw", b"", mode="bytes")
+                raw_handles = open_dual_capture_append(
+                    "latest-upstream-response.raw",
+                    request_id=request_id,
+                    request_name="upstream-response.raw",
+                    binary=True,
+                )
+                raw_log = _MultiRawLog(raw_handles) if raw_handles else None
             except Exception:
                 raw_log = None
 
@@ -1085,13 +1101,8 @@ class RequestRouter:
 
         if capture_enabled():
             try:
-                write_capture("latest-upstream-response.raw", resp_data, mode="bytes")
-                capture_path("latest-upstream-status.txt").write_text(
-                    f"status={status}\ncontent_type={content_type}\n",
-                    encoding="utf-8"
-                )
-                write_request_capture(request_id, "upstream-response.raw", resp_data, mode="bytes")
-                write_request_capture(request_id, "upstream-status.txt", f"status={status}\ncontent_type={content_type}\n")
+                write_dual_capture("latest-upstream-response.raw", request_id, "upstream-response.raw", resp_data, mode="bytes")
+                write_dual_capture("latest-upstream-status.txt", request_id, "upstream-status.txt", f"status={status}\ncontent_type={content_type}\n")
             except Exception:
                 pass
 

@@ -756,8 +756,9 @@ Reason:
 Streamed call state, public item conversion, completed-call routing,
 proxy-local continuation shaping, bad-history filtering, tool declaration
 normalization, and non-tool request-history normalization now have internal
-boundaries. Keep behaviour stable while moving the remaining capture contracts
-behind clearer ownership.
+boundaries. Capture mode interpretation and latest/request-scoped dual writes
+now have a first runtime IO boundary. Keep behaviour stable while moving toward
+one full tool/request/capture state machine.
 ```
 
 Concrete target:
@@ -793,7 +794,9 @@ request normalization now lives in `proxy/qz_tool_request.py`. Keep apply_patch
 as a protocol adapter and Codex handoff path unless a separate security decision
 explicitly adds proxy-side patch execution. Non-tool Responses input cleanup now
 lives in `proxy/qz_request_normalization.py`, while `proxy/qz_responses.py`
-keeps compatibility exports and local compaction helpers.
+keeps compatibility exports and local compaction helpers. Capture pairing now
+lives behind `proxy/qz_runtime_io.py` helpers such as `write_dual_capture()` and
+`open_dual_capture_append()`.
 ```
 
 Success criteria:

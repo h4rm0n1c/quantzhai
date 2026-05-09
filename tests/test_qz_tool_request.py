@@ -86,6 +86,7 @@ class ToolRequestNormalizationTests(unittest.TestCase):
                 os.environ["QZ_VAR_DIR"] = tmp
                 body = {
                     "input": [],
+                    "metadata": {"qz_request_id": "req/tool:1"},
                     "tools": [
                         {"type": "function", "name": "write_stdin"},
                         {"type": "web_search"},
@@ -97,10 +98,16 @@ class ToolRequestNormalizationTests(unittest.TestCase):
                 capture_dir = Path(tmp) / "captures"
                 notes = capture_dir.joinpath("latest-dropped-tools.txt").read_text(encoding="utf-8")
                 forwarded = json.loads(capture_dir.joinpath("latest-forwarded.json").read_text(encoding="utf-8"))
+                request_dir = capture_dir / "requests" / "req_tool_1"
                 self.assertEqual(notes, report.capture_notes())
                 self.assertIn("translated: web_search", notes)
                 self.assertIn("dropped: write_stdin(no live exec session)", notes)
                 self.assertEqual(forwarded["tools"][0]["name"], "web_search")
+                self.assertEqual(request_dir.joinpath("dropped-tools.txt").read_text(encoding="utf-8"), notes)
+                self.assertEqual(
+                    json.loads(request_dir.joinpath("forwarded-request-after-tools.json").read_text(encoding="utf-8")),
+                    forwarded,
+                )
             finally:
                 if old_capture_mode is None:
                     os.environ.pop("QZ_CAPTURE_MODE", None)

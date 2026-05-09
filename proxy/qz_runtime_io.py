@@ -2,7 +2,10 @@
 import json
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
+
+CAPTURE_POLICY_SCHEMA = "qz.capture.policy.v1"
 
 
 def capture_mode() -> str:
@@ -19,7 +22,41 @@ def capture_mode() -> str:
 
 
 def capture_enabled() -> bool:
-    return capture_mode() != "off"
+    return capture_policy().enabled
+
+
+@dataclass(frozen=True)
+class CapturePolicy:
+    schema: str
+    mode: str
+    enabled: bool
+    write_latest: bool
+    write_request_scoped: bool
+    write_raw_streams: bool
+
+    def as_dict(self) -> dict:
+        return {
+            "schema": self.schema,
+            "mode": self.mode,
+            "enabled": self.enabled,
+            "write_latest": self.write_latest,
+            "write_request_scoped": self.write_request_scoped,
+            "write_raw_streams": self.write_raw_streams,
+        }
+
+
+def capture_policy() -> CapturePolicy:
+    mode = capture_mode()
+    enabled = mode != "off"
+    # Preserve current behaviour for latest/minimal/full while making the policy explicit.
+    return CapturePolicy(
+        schema=CAPTURE_POLICY_SCHEMA,
+        mode=mode,
+        enabled=enabled,
+        write_latest=enabled,
+        write_request_scoped=enabled,
+        write_raw_streams=enabled,
+    )
 
 
 def quantzhai_var_dir() -> Path:
@@ -37,6 +74,11 @@ def capture_dir() -> Path:
 def _ensure_capture_dir():
     path = capture_dir()
     path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _ensure_capture_parent(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
 
@@ -59,23 +101,32 @@ def request_capture_path(request_id: str, name: str) -> Path:
 
 
 def write_capture(name: str, payload, mode: str = "text"):
-    if not capture_enabled():
+    if not capture_policy().write_latest:
         return
     _ensure_capture_dir()
     path = capture_path(name)
-    if mode == "bytes":
-        path.write_bytes(payload)
-    elif isinstance(payload, (dict, list)):
-        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    else:
-        path.write_text(str(payload), encoding="utf-8")
+    _write_payload(path, payload, mode=mode)
 
 
 def write_request_capture(request_id: str, name: str, payload, mode: str = "text"):
-    if not request_id or not capture_enabled():
+    if not request_id or not capture_policy().write_request_scoped:
         return
     path = request_capture_path(request_id, name)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_payload(path, payload, mode=mode)
+
+
+def write_dual_capture(latest_name: str, request_id: str | None, request_name: str | None, payload, mode: str = "text"):
+    policy = capture_policy()
+    if not policy.enabled:
+        return
+    if policy.write_latest and latest_name:
+        write_capture(latest_name, payload, mode=mode)
+    if policy.write_request_scoped and request_id and request_name:
+        write_request_capture(request_id, request_name, payload, mode=mode)
+
+
+def _write_payload(path: Path, payload, mode: str = "text"):
+    _ensure_capture_parent(path)
     if mode == "bytes":
         path.write_bytes(payload)
     elif isinstance(payload, (dict, list)):
@@ -84,16 +135,20 @@ def write_request_capture(request_id: str, name: str, payload, mode: str = "text
         path.write_text(str(payload), encoding="utf-8")
 
 
-def append_capture(name: str, text: str):
-    if not capture_enabled():
+def append_capture(name: str, text: str | bytes):
+    if not capture_policy().write_latest:
         return
     _ensure_capture_dir()
+    if isinstance(text, bytes):
+        with capture_path(name).open("ab") as handle:
+            handle.write(text)
+        return
     with capture_path(name).open("a", encoding="utf-8") as handle:
         handle.write(text)
 
 
 def append_request_capture(request_id: str, name: str, text: str | bytes):
-    if not request_id or not capture_enabled():
+    if not request_id or not capture_policy().write_request_scoped:
         return
     path = request_capture_path(request_id, name)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -103,6 +158,32 @@ def append_request_capture(request_id: str, name: str, text: str | bytes):
         return
     with path.open("a", encoding="utf-8") as handle:
         handle.write(str(text))
+
+
+def append_dual_capture(latest_name: str, request_id: str | None, request_name: str | None, text: str | bytes):
+    policy = capture_policy()
+    if not policy.enabled:
+        return
+    if policy.write_latest and latest_name:
+        append_capture(latest_name, text)
+    if policy.write_request_scoped and request_id and request_name:
+        append_request_capture(request_id, request_name, text)
+
+
+def open_dual_capture_append(latest_name: str, request_id: str | None = None, request_name: str | None = None, binary: bool = False):
+    policy = capture_policy()
+    if not policy.enabled:
+        return []
+    mode = "ab" if binary else "a"
+    encoding = None if binary else "utf-8"
+    handles = []
+    if policy.write_latest and latest_name:
+        path = _ensure_capture_parent(capture_path(latest_name))
+        handles.append(path.open(mode, encoding=encoding))
+    if policy.write_request_scoped and request_id and request_name:
+        path = _ensure_capture_parent(request_capture_path(request_id, request_name))
+        handles.append(path.open(mode, encoding=encoding))
+    return handles
 
 
 def runtime_log(name: str, payload):

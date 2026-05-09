@@ -118,7 +118,9 @@ proxy/qz_proxy_tools.py        completed-call routing, public adapter conversion
 proxy/qz_tool_lifecycle.py     private streamed tool-call state and malformed
                                historical tool-call filtering
 proxy/qz_tool_apply_patch.py   apply_patch envelope adaptation
-proxy/qz_runtime_io.py         request-scoped capture helpers
+proxy/qz_runtime_io.py         capture policy, latest/request-scoped dual
+                               writes, request path sanitization, and runtime
+                               file helpers
 proxy/qz_telemetry.py          status and telemetry events
 proxy/qz_request_router.py     request id and routing envelope
 ```
@@ -136,6 +138,33 @@ tests/test_apply_patch_adapter.py
 tests/test_qz_runtime_io.py
 tests/test_qz_thoughts_cli.py
 ```
+
+## Capture Policy
+
+Status: first ownership pass implemented.
+
+`proxy/qz_runtime_io.py` owns the capture-mode interpretation and the helper
+API for writing latest convenience files and request-scoped files. Capture mode
+`off` writes nothing. Current enabled modes preserve existing behaviour:
+`latest`, `minimal`, and `full` write both latest and request-scoped captures,
+including raw stream files.
+
+Use latest files as operator convenience only:
+
+```text
+var/captures/latest-*.*
+```
+
+Use request-scoped files as replay/audit evidence:
+
+```text
+var/captures/requests/<request_id>/
+```
+
+Code that has a request id should prefer `write_dual_capture()` or
+`append_dual_capture()` so latest and request-scoped artifacts stay paired.
+Direct `capture_path(...).write_*` calls should not be added outside the runtime
+IO helper.
 
 Responses normalization fixtures:
 
@@ -642,8 +671,10 @@ Still needed:
 - Tool lifecycle now has internal boundaries for streamed call state,
   malformed historical tool-call filtering, completed-call routing decisions,
   public protocol-adapter conversion, proxy-local continuation shaping, and
-  tool request normalization. Broader non-tool request normalization still
-  needs tightening.
+  tool request normalization. Non-tool request normalization now has its own
+  module boundary.
+- Capture mode interpretation and latest/request-scoped dual writes now have a
+  runtime IO boundary.
 - No redaction layer for captures.
 - Request-scoped captures are not grouped under a higher-level run id.
 - Proxy-side shell/code/computer/MCP execution is not implemented.

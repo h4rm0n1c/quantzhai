@@ -52,7 +52,7 @@ try:
     from .qz_streaming import StreamedFunctionCallAssembler, parse_sse_event_lines
     from .qz_telemetry import DEFAULT_TELEMETRY
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
-    from .qz_runtime_io import append_capture, capture_path, read_json, runtime_log, write_capture
+    from .qz_runtime_io import append_capture, read_json, runtime_log, write_capture
 except ImportError:
     from qz_backend import BackendClient
     from qz_proxy_config import (
@@ -96,7 +96,7 @@ except ImportError:
     from qz_streaming import StreamedFunctionCallAssembler, parse_sse_event_lines
     from qz_telemetry import DEFAULT_TELEMETRY
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
-    from qz_runtime_io import append_capture, capture_path, read_json, runtime_log, write_capture
+    from qz_runtime_io import append_capture, read_json, runtime_log, write_capture
 
 class ProxyHandler(BaseHTTPRequestHandler):
     upstream = "http://127.0.0.1:18084"
@@ -334,10 +334,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             cmp_item = next((item for item in out.get("output", []) if isinstance(item, dict) and item.get("type") == "compaction"), None)
             payload = _decode_local_compaction_blob(cmp_item.get("encrypted_content", "")) if cmp_item else None
             if payload:
-                capture_path("latest-compact-summary.txt").write_text(
-                    payload.get("summary_text", ""),
-                    encoding="utf-8",
-                )
+                write_capture("latest-compact-summary.txt", payload.get("summary_text", ""))
         except Exception:
             pass
 

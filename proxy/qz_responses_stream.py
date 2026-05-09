@@ -10,7 +10,7 @@ try:
         normalize_responses_input_for_qwen,
         normalize_tools_for_llamacpp,
     )
-    from .qz_runtime_io import capture_enabled, capture_path, request_capture_path, write_capture, write_request_capture
+    from .qz_runtime_io import capture_enabled, open_dual_capture_append, write_dual_capture
     from .qz_sse import _normalize_response_usage, make_sse_block, transform_sse_event
     from .qz_streaming import (
         is_function_call_stream_event,
@@ -32,7 +32,7 @@ except ImportError:
         normalize_responses_input_for_qwen,
         normalize_tools_for_llamacpp,
     )
-    from qz_runtime_io import capture_enabled, capture_path, request_capture_path, write_capture, write_request_capture
+    from qz_runtime_io import capture_enabled, open_dual_capture_append, write_dual_capture
     from qz_sse import _normalize_response_usage, make_sse_block, transform_sse_event
     from qz_streaming import (
         is_function_call_stream_event,
@@ -245,26 +245,17 @@ class ResponsesStreamRuntime:
         if not self.capture_enabled or not capture_enabled():
             return
         try:
-            write_capture("latest-upstream-response.raw", b"", mode="bytes")
-            capture_path("latest-upstream-status.txt").write_text(
+            write_dual_capture("latest-upstream-response.raw", self.request_id, "upstream-response.raw", b"", mode="bytes")
+            write_dual_capture(
+                "latest-upstream-status.txt",
+                self.request_id,
+                "upstream-status.txt",
                 "status=streaming\n"
                 "content_type=text/event-stream\n"
                 "stream=real\n"
                 f"reasoning_stream_format={self.reasoning_stream_format}\n"
                 "rate_limits=local\n",
-                encoding="utf-8",
             )
-            if self.request_id:
-                write_request_capture(self.request_id, "upstream-response.raw", b"", mode="bytes")
-                write_request_capture(
-                    self.request_id,
-                    "upstream-status.txt",
-                    "status=streaming\n"
-                    "content_type=text/event-stream\n"
-                    "stream=real\n"
-                    f"reasoning_stream_format={self.reasoning_stream_format}\n"
-                    "rate_limits=local\n",
-                )
         except Exception:
             pass
 
@@ -272,10 +263,12 @@ class ResponsesStreamRuntime:
         if not self.capture_enabled or not capture_enabled():
             return None
         try:
-            handles = [capture_path("latest-upstream-response.raw").open("ab")]
-            if self.request_id:
-                request_capture_path(self.request_id, "upstream-response.raw").parent.mkdir(parents=True, exist_ok=True)
-                handles.append(request_capture_path(self.request_id, "upstream-response.raw").open("ab"))
+            handles = open_dual_capture_append(
+                "latest-upstream-response.raw",
+                request_id=self.request_id,
+                request_name="upstream-response.raw",
+                binary=True,
+            )
             return _MultiRawLog(handles)
         except Exception:
             return None

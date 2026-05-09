@@ -6,11 +6,11 @@ from dataclasses import dataclass
 
 try:
     from .qz_proxy_tools import DEFAULT_TOOL_REGISTRY
-    from .qz_runtime_io import capture_enabled, write_capture
+    from .qz_runtime_io import capture_enabled, write_dual_capture
     from .qz_tool_apply_patch import ensure_apply_patch_tool_policy
 except ImportError:
     from qz_proxy_tools import DEFAULT_TOOL_REGISTRY
-    from qz_runtime_io import capture_enabled, write_capture
+    from qz_runtime_io import capture_enabled, write_dual_capture
     from qz_tool_apply_patch import ensure_apply_patch_tool_policy
 
 
@@ -136,8 +136,10 @@ def normalize_tool_request_for_llamacpp(
     )
     if write_captures and capture_enabled():
         try:
-            write_capture("latest-dropped-tools.txt", report.capture_notes())
-            write_capture("latest-forwarded.json", body)
+            metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
+            request_id = metadata.get("qz_request_id") if isinstance(metadata, dict) else None
+            write_dual_capture("latest-dropped-tools.txt", request_id, "dropped-tools.txt", report.capture_notes())
+            write_dual_capture("latest-forwarded.json", request_id, "forwarded-request-after-tools.json", body)
         except Exception:
             pass
     return report
