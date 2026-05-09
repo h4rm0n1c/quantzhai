@@ -93,9 +93,9 @@ class ToolLifecycleTests(unittest.TestCase):
             "arguments": "{\"query\":\"quantzhai\"}",
         }
 
-        decision = completed_tool_call_decision(call, "native")
+        decision = completed_tool_call_decision(call, "native", frozenset({"web_search"}))
 
-        self.assertTrue(is_proxy_local_function_call(call))
+        self.assertTrue(is_proxy_local_function_call(call, frozenset({"web_search"})))
         self.assertEqual(decision.kind, "proxy_local")
         self.assertEqual(decision.call, call)
         self.assertIsNone(decision.public_item)
@@ -124,9 +124,9 @@ class ToolLifecycleTests(unittest.TestCase):
             "arguments": "{\"operation\":{\"type\":\"create_file\",\"path\":\"notes.md\",\"diff\":\"@@\\n+ok\\n\"}}",
         }
 
-        decision = completed_tool_call_decision(call, "custom")
+        decision = completed_tool_call_decision(call, "custom", frozenset())
 
-        self.assertFalse(is_proxy_local_function_call(call))
+        self.assertFalse(is_proxy_local_function_call(call, frozenset()))
         self.assertEqual(decision.kind, "public")
         self.assertEqual(decision.call, call)
         self.assertEqual(decision.public_item["type"], "custom_tool_call")
@@ -141,7 +141,7 @@ class ToolLifecycleTests(unittest.TestCase):
             "arguments": "{\"operation\":{\"type\":\"create_file\",\"path\":\"notes.md\",\"diff\":\"@@\\n+ok\\n\"}}",
         }
 
-        decision = completed_tool_call_decision(call, "native")
+        decision = completed_tool_call_decision(call, "native", frozenset())
         result = tool_continuation_result(decision)
 
         self.assertEqual(result.public_item["type"], "apply_patch_call")
@@ -169,7 +169,7 @@ class ToolLifecycleTests(unittest.TestCase):
         }
         source = {"url": "https://example.test"}
 
-        decision = completed_tool_call_decision(call, "native")
+        decision = completed_tool_call_decision(call, "native", frozenset({"web_search"}))
         result = tool_continuation_result(
             decision,
             proxy_local_executor=lambda tool_call: (public_item, output_item, [source]),
@@ -188,7 +188,7 @@ class ToolLifecycleTests(unittest.TestCase):
             "arguments": "{\"query\":\"quantzhai\"}",
         }
 
-        decision = completed_tool_call_decision(call, "native")
+        decision = completed_tool_call_decision(call, "native", frozenset({"web_search"}))
 
         with self.assertRaises(ValueError):
             tool_continuation_result(decision)

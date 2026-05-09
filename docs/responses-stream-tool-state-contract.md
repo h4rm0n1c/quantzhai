@@ -33,6 +33,11 @@ for completed-call classification and execution. `web_search` is the first
 proxy-local executor and is used by both streamed and non-streamed
 `/v1/responses` paths.
 
+Proxy-local classification is registry-owned. The lifecycle helpers do not carry
+their own default list of private tool names; streamed and non-streamed runtimes
+ask the active `ProxyLocalToolRegistry` to classify completed calls. This keeps
+future proxy-side tools from requiring a second hard-coded allowlist.
+
 A proxy-local executor owns:
 
 - the model-facing function name

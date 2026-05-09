@@ -30,7 +30,6 @@ try:
     from .qz_responses_stream import ResponsesStreamRuntime
     from .qz_sse import _normalize_response_usage, make_sse_block
     from .qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
-    from .qz_tool_lifecycle import completed_tool_call_decision
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import (
         append_capture,
@@ -62,7 +61,6 @@ except ImportError:
     from qz_responses_stream import ResponsesStreamRuntime
     from qz_sse import _normalize_response_usage, make_sse_block
     from qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
-    from qz_tool_lifecycle import completed_tool_call_decision
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import (
         append_capture,
@@ -686,10 +684,9 @@ class RequestRouter:
                     next_input.append(item)
                     continue
 
-                decision = completed_tool_call_decision(
+                decision = proxy_tool_registry.completed_call_decision(
                     item,
                     apply_patch_output_style,
-                    proxy_tool_registry.function_names,
                 )
                 result = proxy_tool_registry.execute(
                     decision.call,

@@ -62,6 +62,28 @@ class ProxyToolRegistryTests(unittest.TestCase):
         self.assertEqual(item["status"], "in_progress")
         self.assertEqual(item["call_id"], "call_web")
 
+    def test_completed_call_decision_uses_registered_proxy_local_names(self):
+        registry = make_proxy_local_tool_registry(FakeWebRuntime())
+
+        web_decision = registry.completed_call_decision({
+            "id": "fc_web",
+            "type": "function_call",
+            "call_id": "call_web",
+            "name": "web_search",
+            "arguments": "{\"query\":\"quantzhai\"}",
+        }, "native")
+        patch_decision = registry.completed_call_decision({
+            "id": "fc_patch",
+            "type": "function_call",
+            "call_id": "call_patch",
+            "name": "apply_patch",
+            "arguments": "{\"operation\":{\"type\":\"create_file\",\"path\":\"notes.md\",\"diff\":\"@@\\n+ok\\n\"}}",
+        }, "native")
+
+        self.assertEqual(web_decision.kind, "proxy_local")
+        self.assertEqual(patch_decision.kind, "public")
+        self.assertEqual(patch_decision.public_item["type"], "apply_patch_call")
+
     def test_execute_returns_public_item_and_hidden_upstream_continuation_items(self):
         web_runtime = FakeWebRuntime()
         registry = make_proxy_local_tool_registry(web_runtime)

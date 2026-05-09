@@ -2,9 +2,9 @@
 from dataclasses import dataclass, field
 
 try:
-    from .qz_tool_lifecycle import ToolContinuationResult
+    from .qz_tool_lifecycle import ToolContinuationResult, completed_tool_call_decision
 except ImportError:
-    from qz_tool_lifecycle import ToolContinuationResult
+    from qz_tool_lifecycle import ToolContinuationResult, completed_tool_call_decision
 
 
 @dataclass
@@ -75,6 +75,9 @@ class ProxyLocalToolRegistry:
             and call.get("type") == "function_call"
             and call.get("name") in self._executors
         )
+
+    def completed_call_decision(self, call: dict, apply_patch_output_style: str):
+        return completed_tool_call_decision(call, apply_patch_output_style, self.function_names)
 
     def executor_for_call(self, call: dict) -> ProxyLocalToolExecutor:
         if not self.is_proxy_local_call(call):

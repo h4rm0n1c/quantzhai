@@ -23,7 +23,7 @@ try:
         web_search_call_lifecycle_event,
     )
     from .qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
-    from .qz_tool_lifecycle import StreamToolCallState, completed_tool_call_decision, tool_continuation_result
+    from .qz_tool_lifecycle import StreamToolCallState, tool_continuation_result
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS
 except ImportError:
     from qz_responses import (
@@ -44,7 +44,7 @@ except ImportError:
         web_search_call_lifecycle_event,
     )
     from qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
-    from qz_tool_lifecycle import StreamToolCallState, completed_tool_call_decision, tool_continuation_result
+    from qz_tool_lifecycle import StreamToolCallState, tool_continuation_result
     from qz_tool_web import WEB_SEARCH_MAX_HOPS
 
 
@@ -611,10 +611,9 @@ class ResponsesStreamRuntime:
                                 public_index = max_output_index + 1
                             public_index += output_index_offset
 
-                            decision = completed_tool_call_decision(
+                            decision = self.proxy_tool_registry.completed_call_decision(
                                 completed_call,
                                 apply_patch_output_style,
-                                self.proxy_tool_registry.function_names,
                             )
 
                             if decision.kind == "proxy_local":
