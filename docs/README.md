@@ -22,6 +22,7 @@ Start here when you want to understand the repo without reading every note in th
 | Agent workflow | [AGENTS](../AGENTS.md) | Instructions for Codex/agent contributors working in this tree. |
 | Master plan | [Master stabilisation plan](master-stabilisation-plan.md) | Controlling map for current bugs, contracts, dependencies, and fix order. |
 | Runtime contract | [Responses stream and tool state contract](responses-stream-tool-state-contract.md) | State contract for streamed Responses events, tool calls, telemetry, and captures. |
+| Runtime contract | [Codex native first request capture](codex-native-request-capture.md) | Clean local reference for the raw first request shape Codex CLI sends before QuantZhai wrapper/proxy normalization. |
 | Config and error handling | [Edge case and config contract plan](edge-case-config-contract-plan.md) | Audit/refactor plan for edge cases, compact errors, profile safety, config layering, and reducing script sprawl. |
 | Current bugfix focus | [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) | Triage, review plan, proposed fixes, and acceptance checks for `/status`, monitor tools, profile tuning, and proxy streaming. |
 | Fixed bug / regression guard | [Stale profile symlink bug](bugs/stale-profile-server-alias.md) | Symlink profile contract, compact invalid-profile errors, and `qz-doctor` regression checks. |
@@ -98,6 +99,7 @@ Read:
 
 - [Master stabilisation plan](master-stabilisation-plan.md)
 - [Responses stream and tool state contract](responses-stream-tool-state-contract.md)
+- [Codex native first request capture](codex-native-request-capture.md)
 - [Responses streaming and qz-thoughts bug](bugs/responses-streaming-and-qz-thoughts.md)
 - [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md)
 - [Runtime observability notes](runtime-observability-notes.md)
@@ -176,6 +178,7 @@ AGENTS.md
 docs/README.md
 docs/bugs/responses-streaming-and-qz-thoughts.md
 docs/bugs/stale-profile-server-alias.md
+docs/codex-native-request-capture.md
 docs/deep-research-report.md
 docs/edge-case-config-contract-plan.md
 docs/master-stabilisation-plan.md
