@@ -1488,6 +1488,56 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             if isinstance(item, dict) and item.get("type") == "function_call_output"
         ))
 
+    def test_proxy_local_continuation_multi_hop_raw_fixture_replay(self):
+        requests = []
+        web_runtime = FakeWebRuntime()
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            outputs = [
+                item
+                for item in body.get("input") or []
+                if isinstance(item, dict) and item.get("type") == "function_call_output"
+            ]
+            if len(outputs) == 0:
+                return FakeStream(_fixture_chunks("web_search_call.raw"))
+            if len(outputs) == 1:
+                return FakeStream(_fixture_chunks("web_search_call_second.raw"))
+            return FakeStream(_fixture_chunks("web_search_final.raw"))
+
+        stream_text = self._run_runtime(opener, web_runtime=web_runtime)
+        events = _parse_sse_events(stream_text)
+        event_names = [event for event, _payload in events]
+        completed = next(
+            payload["response"]
+            for event, payload in events
+            if event == "response.completed" and isinstance(payload, dict)
+        )
+
+        self.assertEqual(len(requests), 3)
+        self.assertEqual(len(web_runtime.calls), 2)
+        self.assertEqual(web_runtime.calls[0]["call_item"]["call_id"], "call_fixture_web")
+        self.assertEqual(web_runtime.calls[1]["call_item"]["call_id"], "call_fixture_web_second")
+        self.assertEqual(event_names.count("response.created"), 1)
+        self.assertEqual(event_names.count("response.completed"), 1)
+        self.assertEqual(event_names.count("response.web_search_call.in_progress"), 2)
+        self.assertEqual(event_names.count("response.web_search_call.searching"), 2)
+        self.assertEqual(event_names.count("response.web_search_call.completed"), 2)
+        self.assertEqual(completed["output"][0]["type"], "web_search_call")
+        self.assertEqual(completed["output"][1]["type"], "web_search_call")
+        self.assertEqual(completed["output"][2]["type"], "message")
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertTrue(any(
+            item.get("call_id") == "call_fixture_web"
+            for item in requests[1]["input"]
+            if isinstance(item, dict) and item.get("type") == "function_call_output"
+        ))
+        self.assertTrue(any(
+            item.get("call_id") == "call_fixture_web_second"
+            for item in requests[2]["input"]
+            if isinstance(item, dict) and item.get("type") == "function_call_output"
+        ))
+
     def test_proxy_local_final_usage_is_normalized_for_codex_status(self):
         def opener(body):
             outputs = [

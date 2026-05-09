@@ -568,7 +568,9 @@ before broad stream/tool refactors.
 - `reasoning_artifact.raw`: artifact-in-reasoning protocol failure
 - `long_active_reasoning.raw`: long reasoning followed by answer is not killed
   by the default disabled char limit
-- `web_search_call.raw` and `web_search_final.raw`: proxy-local web search continuation
+- `web_search_call.raw`, `web_search_call_second.raw`, and
+  `web_search_final.raw`: proxy-local web search continuation, including
+  multi-hop raw fixture replay
   including duplicate `response.created` suppression across continuation hops
 - `web_search_call.raw` plus `completed_without_done.raw`: continuation final hop
   appends exactly one terminal `[DONE]` when upstream completes without one

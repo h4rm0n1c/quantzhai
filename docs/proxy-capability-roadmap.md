@@ -486,9 +486,6 @@ Alpha:
 
 Missing:
 
-- Raw golden replay coverage for multi-hop streamed Responses tool
-  continuation. Multi-hop continuation is unit-tested; captured fixture replay
-  is still pending.
 - General tool runtime.
 - Proxy-side shell/code/computer tool support.
 - MCP/app bridge.
@@ -507,10 +504,9 @@ Missing:
    native/custom rewrite, invalid apply_patch rejection, completed-without-DONE
    terminal closure, web_search continuation, proxy-local web_search
    in-progress/searching/completed lifecycle events, multi-hop proxy-local
-   continuation, client-disconnect cleanup, and terminal usage normalization
-   for Codex `/status`. Remaining coverage: raw multi-hop captured fixture
-   replay, more continuation terminal-edge cases, and larger multi-hunk/move
-   patch variants.
+   continuation with raw fixture replay, client-disconnect cleanup, and
+   terminal usage normalization for Codex `/status`. Remaining coverage: more
+   continuation terminal-edge cases and larger multi-hunk/move patch variants.
 3. Broaden the tool lifecycle boundary to cover request normalization,
    history filtering, adapter ownership, and telemetry naming. Completed-call
    public/proxy-local decisions, proxy-local continuation shaping, malformed
