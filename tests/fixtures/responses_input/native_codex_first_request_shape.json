@@ -1,0 +1,238 @@
+{
+  "body": {
+    "model": "gpt-5.5",
+    "instructions": "NATIVE CODEX TOP LEVEL INSTRUCTIONS\n\nUse tools carefully.",
+    "input": [
+      {
+        "type": "message",
+        "role": "developer",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "<permissions instructions>\nNative Codex developer harness text.\n\n<tools instructions>\nTool usage rules."
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "<environment_context>\n  <cwd>/tmp/qz-native-codex-work</cwd>\n  <shell>bash</shell>\n</environment_context>"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Reply exactly: fixture-marker"
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "name": "exec_command",
+        "description": "Runs a command.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "cmd": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "name": "write_stdin",
+        "description": "Writes stdin.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "type": "integer"
+            },
+            "chars": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "name": "list_mcp_resources",
+        "description": "Lists MCP resources.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "type": "function",
+        "name": "list_mcp_resource_templates",
+        "description": "Lists MCP templates.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "type": "function",
+        "name": "read_mcp_resource",
+        "description": "Reads MCP resource.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "server": {
+              "type": "string"
+            },
+            "uri": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "name": "update_plan",
+        "description": "Updates plan.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "type": "function",
+        "name": "request_user_input",
+        "description": "Requests input.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "type": "tool_search"
+      },
+      {
+        "type": "function",
+        "name": "tool_suggest",
+        "description": "Suggests tools.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "type": "custom",
+        "name": "apply_patch",
+        "description": "Apply patch text."
+      },
+      {
+        "type": "web_search"
+      },
+      {
+        "type": "image_generation"
+      },
+      {
+        "type": "function",
+        "name": "view_image",
+        "description": "Views a local image.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "name": "spawn_agent",
+        "description": "Spawns an agent.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "type": "function",
+        "name": "send_input",
+        "description": "Sends input to an agent.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "type": "function",
+        "name": "resume_agent",
+        "description": "Resumes an agent.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "type": "function",
+        "name": "wait_agent",
+        "description": "Waits for an agent.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "type": "function",
+        "name": "close_agent",
+        "description": "Closes an agent.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    ],
+    "tool_choice": "auto"
+  },
+  "expected_input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Reply exactly: fixture-marker"
+        }
+      ]
+    }
+  ],
+  "expected_tool_names": [
+    "exec_command",
+    "list_mcp_resources",
+    "list_mcp_resource_templates",
+    "read_mcp_resource",
+    "update_plan",
+    "request_user_input",
+    "tool_suggest",
+    "apply_patch",
+    "web_search",
+    "view_image",
+    "spawn_agent",
+    "send_input",
+    "resume_agent",
+    "wait_agent",
+    "close_agent"
+  ],
+  "expected_policy": {
+    "schema": "qz.tool_policy.v1",
+    "apply_patch_declared": true,
+    "apply_patch_client_tool_type": "custom",
+    "apply_patch_output_style": "custom"
+  }
+}

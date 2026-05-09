@@ -1,5 +1,6 @@
 import json
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 from proxy.quantzhai_proxy import (
@@ -374,6 +375,26 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertEqual(out["tool_choice"], fixture["expected_tool_choice"])
         self.assertEqual(out["metadata"]["qz_tool_policy"], fixture["expected_policy"])
         self.assertIn("use apply_patch", out["tools"][0]["description"])
+
+    def test_golden_native_codex_first_request_shape_is_normalized(self):
+        fixture = json.loads(FIXTURE_DIR.joinpath("native_codex_first_request_shape.json").read_text())
+
+        input_out = normalize_responses_input_for_qwen(deepcopy(fixture["body"]))
+        tools_out = normalize_tools_for_llamacpp(deepcopy(fixture["body"]))
+
+        self.assertEqual(input_out["input"], fixture["expected_input"])
+        self.assertIn("You are Codex, powered by Qwen3.6", input_out["instructions"])
+        self.assertNotIn("NATIVE CODEX TOP LEVEL INSTRUCTIONS", input_out["instructions"])
+        self.assertNotIn("<permissions instructions>", input_out["instructions"])
+        self.assertNotIn("<environment_context>", json.dumps(input_out["input"]))
+        self.assertEqual(input_out["metadata"]["qz_prompt_policy"]["mode"], "replace_client")
+        self.assertTrue(input_out["metadata"]["qz_prompt_policy"]["replaced_client"])
+
+        self.assertEqual([tool.get("name") for tool in tools_out["tools"]], fixture["expected_tool_names"])
+        self.assertEqual(set(tool.get("type") for tool in tools_out["tools"]), {"function"})
+        self.assertEqual(tools_out["tool_choice"], "auto")
+        self.assertEqual(tools_out["metadata"]["qz_tool_policy"], fixture["expected_policy"])
+        self.assertIn("use apply_patch", tools_out["tools"][0]["description"])
 
     def test_custom_patch_history_becomes_function_history(self):
         call_item = {

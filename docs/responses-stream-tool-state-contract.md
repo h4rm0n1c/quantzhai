@@ -508,6 +508,9 @@ before broad stream/tool refactors.
 - `tests/test_apply_patch_adapter.py`: pins normalization of file-level
   unified-diff metadata and line-number hunk headers from model
   `update_file.diff` payloads before Codex-facing native/custom output
+- `tests/fixtures/responses_input/native_codex_first_request_shape.json`: pins
+  the redacted native Codex first-request envelope used by
+  `normalize_responses_input_for_qwen` and `normalize_tools_for_llamacpp`
 - `invalid_apply_patch_call.raw`: malformed model-side patch operation becomes
   an assistant error message, not a runnable private tool call
 - `invalid_apply_patch_move_call.raw`: move/rename-style operations are

@@ -129,6 +129,32 @@ must preserve that distinction:
 This is the baseline to use when checking whether QuantZhai has accidentally
 changed Codex's native first-turn shape.
 
+## Sanitized Regression Fixture
+
+A redacted fixture based on this capture lives at:
+
+```text
+tests/fixtures/responses_input/native_codex_first_request_shape.json
+```
+
+It intentionally keeps only the structural facts needed by the normalizer tests:
+top-level instructions, developer harness replay, environment-context replay,
+the first user prompt, and the native tool declaration order.
+
+`tests/test_apply_patch_adapter.py` pins the current QuantZhai behavior for that
+shape:
+
+- prompt policy replaces the native top-level `instructions` with the selected
+  QuantZhai/Codex prompt
+- replayed harness and environment-context messages are removed from upstream
+  `input`
+- `write_stdin` is hidden unless request history proves there is a live exec
+  session id
+- custom `apply_patch` and native `web_search` declarations are adapted to
+  upstream function tools
+- unsupported native-only declarations such as `tool_search` and
+  `image_generation` are dropped for llama.cpp
+
 ## Related Captures
 
 Less-clean comparison captures also exist locally:
