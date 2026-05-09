@@ -102,7 +102,13 @@ Implementation:
 ```text
 proxy/qz_responses_stream.py   streamed Responses runtime and continuation loop
 proxy/qz_streaming.py          SSE parser and streamed function-call assembler
-proxy/qz_responses.py          input history normalization and compaction helpers
+proxy/qz_responses.py          compatibility exports, output cleanup, and
+                               compaction helpers
+proxy/qz_request_normalization.py
+                               Responses input history cleanup, harness/meta
+                               filtering, content canonicalization, prompt
+                               policy assembly, and local compaction replay
+                               markers
 proxy/qz_tool_request.py       tool declaration normalization, tool-choice
                                adaptation, write_stdin gating, tool policy
                                metadata, and capture notes
@@ -124,6 +130,8 @@ tests/test_qz_responses_stream.py
 tests/test_qz_streaming.py
 tests/test_qz_proxy_tools.py
 tests/test_qz_tool_lifecycle.py
+tests/test_qz_request_normalization.py
+tests/test_qz_tool_request.py
 tests/test_apply_patch_adapter.py
 tests/test_qz_runtime_io.py
 tests/test_qz_thoughts_cli.py

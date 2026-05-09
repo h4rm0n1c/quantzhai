@@ -259,8 +259,9 @@ What works well:
 
 What is weak:
 
-- Tool handling has a shared contract, but some request-policy details still
-  live near the Responses normalizer.
+- Tool handling has a shared contract, and request normalization now has an
+  explicit module boundary, but capture policy is still spread across the
+  request router, runtime IO helpers, and stream runtime.
 - There is no shared tool-call lifecycle for request normalization, execution, result injection, streaming, and capture.
 - Tool execution and streaming share specs, but are not yet one state machine.
 - The adapter/executor split is now the design rule, but not every code path is
