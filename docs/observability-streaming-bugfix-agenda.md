@@ -149,6 +149,18 @@ Likely symptoms:
   - `delta`: current used minus model base when exact backend split is missing.
   - `free` and `total`.
 
+### Codex TUI `/status` note
+
+`qz-codex` launches Codex with a generated model catalog. That catalog carries
+`context_window`, `max_context_window`, truncation policy, reasoning levels, and
+prompt metadata, and the Responses terminal event carries usage counts back to
+the client. QuantZhai's own live runtime truth is exposed through `/qz/status`
+and `/qz/telemetry/*`.
+
+Do not assume the Codex TUI `/status` command reads `/qz/status`. Treat that as
+unproven unless a supported Codex CLI hook or event field is identified. Until
+then, `qz-top` and `/qz/status` are the authoritative local runtime views.
+
 No fake precision. No guessing unless explicitly labelled.
 
 ### Proposed fix
@@ -449,6 +461,15 @@ Specific requirements:
 - Maintain sequence numbers.
 - Preserve enough data for `qz-thoughts` without forcing log scraping.
 - Make batching explicit and minimal where unavoidable.
+
+Current supported captures show ordinary shell-command lifecycle already reaches
+Codex in the expected public shape: `command_execution status=in_progress`,
+then `status=completed`, then `turn.completed usage`. The remaining hard case is
+proxy-local tools. Local `web_search` emits `tool_call_started` and
+`tool_call_completed` telemetry to QZ monitors, but Codex only receives the
+public `web_search_call` after local execution completes. Before changing this,
+capture whether Codex will render a display-only `web_search_call
+status=in_progress` without treating it as a runnable private function call.
 
 ### Acceptance checks
 

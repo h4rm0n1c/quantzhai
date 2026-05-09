@@ -167,6 +167,78 @@ themselves prove which events the current Codex CLI UI renders, so this task
 needs a real Codex capture against hosted/OpenAI-compatible Responses streams
 before changing behavior broadly.
 
+### Supported Codex Event-Shape Capture
+
+Use supported Codex CLI output for client-lifecycle comparison. Do not MITM
+hosted OpenAI traffic, store auth/session material, replay raw hosted requests,
+or commit raw captures. The safe baseline command shape is:
+
+```bash
+codex exec --json --ephemeral --skip-git-repo-check --ignore-rules \
+  --sandbox read-only -c approval_policy="never" -C /tmp \
+  'Run exactly one shell command: pwd. Then respond with the single word done.'
+```
+
+For this tiny shell-command baseline, hosted OpenAI-backed Codex produced this
+public JSONL lifecycle shape:
+
+```text
+thread.started
+turn.started
+item.started      command_execution status=in_progress
+item.completed    command_execution status=completed
+item.completed    agent_message
+turn.completed    usage={input_tokens,cached_input_tokens,output_tokens,reasoning_output_tokens}
+```
+
+The same prompt through `qz-codex exec --json --ephemeral` produced the same
+shell-command lifecycle shape, plus one completed `reasoning` item before the
+command:
+
+```text
+thread.started
+turn.started
+item.completed    reasoning
+item.started      command_execution status=in_progress
+item.completed    command_execution status=completed
+item.completed    agent_message
+turn.completed    usage={input_tokens,cached_input_tokens,output_tokens,reasoning_output_tokens}
+```
+
+Long-running shell capture with the compiler/coding profile must force the
+model explicitly, because the persistent local Codex config can be left on a
+roleplay profile such as `amber`:
+
+```bash
+./scripts/qz-codex exec --json --ephemeral --skip-git-repo-check --ignore-rules \
+  --sandbox workspace-write -c approval_policy="never" -m prompt-compiler \
+  -C /tmp \
+  "Run exactly one shell command: sh -c 'sleep 2; echo ok'. Then reply done."
+```
+
+Observed QZ JSONL shape for that case:
+
+```text
+thread.started
+turn.started
+item.completed    reasoning
+item.started      command_execution status=in_progress
+item.completed    command_execution status=completed aggregated_output="ok\n"
+item.completed    agent_message text="done"
+turn.completed    usage={input_tokens,cached_input_tokens,output_tokens,reasoning_output_tokens}
+```
+
+Implication: the basic Codex shell-command start/completed lifecycle is already
+visible through the QZ path in `codex exec --json`, including a command that
+runs for multiple seconds. Remaining live-state gaps should be investigated in
+the harder cases:
+
+- proxy-local/private tools such as `web_search`
+- streamed `apply_patch` shape conversion and Codex execution handoff
+- TUI rendering and `/status` consumption of token/context data
+- long-running tool calls where progress is available only inside proxy
+  telemetry
+
 ## State Table
 
 | Upstream signal | Proxy state/action | Codex-visible stream | Telemetry/capture | Evidence |
@@ -177,7 +249,7 @@ before changing behavior broadly.
 | `response.output_item.added` with `function_call` | Start assembling a tool call. Do not emit runnable call yet. | Suppressed until arguments complete. | Internal stream state and captures. | `StreamedFunctionCallAssembler` tests. |
 | `response.function_call_arguments.delta` | Append argument delta to assembler. | Suppressed until complete. | Captured as upstream protocol. | `tests/test_qz_streaming.py` |
 | `response.function_call_arguments.done` | Validate assembled function name and argument JSON. | Emit one complete public tool item if the call belongs to Codex. | Tool-call telemetry and request captures. | `tests/test_qz_responses_stream.py` |
-| Completed proxy-local `web_search` call | Execute local search and append result into continuation context. | Do not expose half-built private tool events. | Search/tool telemetry and captures. | Existing smoke path plus roadmap. |
+| Completed proxy-local `web_search` call | Execute local search and append result into continuation context. | Currently emits the public `web_search_call` only after local execution completes. This keeps private function args hidden but makes Codex feel two-step during long searches. | Search/tool telemetry already emits `tool_call_started` and `tool_call_completed`; Codex-visible in-progress display is still an open relay decision. | Existing smoke path plus roadmap. |
 | Completed `apply_patch` call | Adapt native/custom envelope according to request `metadata.qz_tool_policy.apply_patch_output_style`. Delegate execution to Codex path unless proxy-side execution is explicitly implemented. | One complete patch tool item/result path matching the client-declared shape. | Adapter captures and tests. | `tests/test_apply_patch_adapter.py`, `tests/test_qz_responses_stream.py` |
 | Private tool call exceeds guard | Abort private call, do not publish incomplete runnable state. | Completed fallback/error path if needed. | `private_tool_call_aborted`. | `tests/test_qz_responses_stream.py` |
 | Reasoning-only idle stream | If reasoning appears with no answer/tool and no progress past timeout, classify as a stall. | Completed fallback answer plus terminal markers. | `reasoning_only_aborted`. | `tests/test_qz_responses_stream.py` |
@@ -216,6 +288,23 @@ complete. Codex should see one complete runnable tool item, not a premature
 Proxy-local tools such as local web search are runtime implementation details
 until they produce a safe continuation result. They must not leak incomplete
 private state as Codex-runnable calls.
+
+Current public-stream behavior:
+
+```text
+upstream function_call complete
+proxy executes local web_search
+proxy emits completed public web_search_call
+proxy resumes upstream with hidden function_call_output
+```
+
+This means `qz-top` can show local `tool_call_started` / `tool_call_completed`
+telemetry while Codex itself does not see a public in-progress item until after
+the local search returns. The safer next fix is to test whether Codex accepts a
+display-only `web_search_call status=in_progress` item without trying to execute
+anything. If it does, emit that before proxy execution and the completed item
+afterward. If it does not, keep proxy-local progress in QZ telemetry only and
+document that Codex-visible progress is not supported for that private tool.
 
 ### `write_stdin`
 

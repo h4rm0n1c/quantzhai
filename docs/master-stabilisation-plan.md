@@ -119,8 +119,17 @@ telemetry, runtime summary-mode transformation, synthetic terminal DONE
 forwarding, request_id correlation, request-scoped captures, reasoning-only
 classification, artifact-in-reasoning aborts, tool-call buffering until
 arguments are complete, and malformed empty-tool history filtering are
-implemented and live-smoked. Remaining work is a formal Responses stream/tool
-state contract plus golden replay fixtures.
+implemented and live-smoked. The formal Responses stream/tool state contract
+and golden replay fixtures now cover normal output, public function calls,
+native/custom apply_patch conversion, multi-hunk patches, unsupported move
+operations, reasoning-only stalls, and artifact-in-reasoning failures.
+
+A supported `codex exec --json --ephemeral` comparison against hosted
+OpenAI-backed Codex showed that the basic shell-command lifecycle already
+appears as `item.started`/`item.completed` through the QZ path. Remaining
+streaming hardening should focus on proxy-local/private tool progress,
+apply_patch handoff edge cases, TUI rendering, and `/status` token/context
+relay rather than assuming simple shell-call lifecycle relay is missing.
 ```
 
 Problem:
@@ -498,6 +507,20 @@ the limitation documented and make qz-top/qz-status the authoritative local
 runtime usage surfaces.
 ```
 
+Current finding:
+
+```text
+Generated Codex model catalog entries carry context_window, max_context_window,
+truncation_policy, reasoning levels, and system prompt metadata. Responses
+turn.completed usage carries input/cached/output/reasoning token counts back to
+Codex. QuantZhai /qz/status and /qz/telemetry expose live backend/runtime truth.
+
+The Codex TUI /status command has not yet been proven to ingest QuantZhai
+/qz/status directly. Treat Codex /status as client/account/session status unless
+a supported ingestion path is identified. Use qz-top and /qz/status as the
+authoritative local runtime surfaces for now.
+```
+
 #### 6. Fix `qz-top` token math
 
 Status:
@@ -675,6 +698,21 @@ Codex `/status` may not show proxy-calculated token/context usage. Audit the
 actual Responses events Codex consumes, then relay request, output item, tool
 call, tool result, usage, and terminal status transitions in the shapes Codex
 expects.
+```
+
+Current finding:
+
+```text
+Supported codex exec --json captures show basic shell_command lifecycle already
+matches hosted shape through QZ, including long-running shell commands when
+tested with -m prompt-compiler. A bad QZ capture used the persisted amber model
+and should not be treated as coding/tool evidence.
+
+The remaining live relay gap is proxy-local/private tools. web_search emits
+proxy telemetry while it runs, but Codex only receives the public web_search_call
+after local execution completes. Next proof: test whether a display-only
+web_search_call status=in_progress can be emitted before proxy-local execution
+without making Codex try to execute private function args.
 ```
 
 Then do:
