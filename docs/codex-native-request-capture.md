@@ -168,3 +168,22 @@ Those are useful for seeing QuantZhai/qz-codex effects, but they are not the
 native baseline. Use `clean-native-codex-first-packet-2026-05-09` when the
 question is what Codex itself sends before QuantZhai's wrapper/catalog/proxy
 logic gets involved.
+
+`direct-codex-first-packet-2026-05-09` is especially easy to misread. It was a
+plain `codex exec` run with inline provider/model overrides, but it did not
+ignore local user config/rules and it ran inside this repository. Its raw
+request is much larger because Codex loaded repo instructions and enabled app
+connector namespace schemas:
+
+```text
+raw request size: 242415 bytes
+tools JSON size:  about 132KB
+GitHub app namespace: 90 nested tools, about 60KB
+Google Drive namespace: 34 nested tools, about 47KB
+```
+
+That size is not evidence that the `prompt-compiler` profile or prompt text is
+itself huge. It is mostly connector/app tool schema metadata plus repo context.
+The proxy-normalized forwarded request for that capture dropped the namespace
+tools before llama.cpp, so this capture is useful for studying local Codex
+config effects, not for defining the clean native Codex baseline.
