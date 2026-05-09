@@ -708,11 +708,14 @@ matches hosted shape through QZ, including long-running shell commands when
 tested with -m prompt-compiler. A bad QZ capture used the persisted amber model
 and should not be treated as coding/tool evidence.
 
-The remaining live relay gap is proxy-local/private tools. web_search emits
-proxy telemetry while it runs, but Codex only receives the public web_search_call
-after local execution completes. Next proof: test whether a display-only
-web_search_call status=in_progress can be emitted before proxy-local execution
-without making Codex try to execute private function args.
+The proxy-local web_search relay now emits Responses built-in web-search
+progress events before proxy execution, then emits the completed public
+web_search_call after local execution. It still suppresses the private upstream
+function_call and arguments, so Codex is not asked to execute proxy-private
+tools itself.
+
+Remaining relay gaps are apply_patch handoff edge cases, TUI rendering, and
+Codex `/status` token/context usage relay.
 ```
 
 Then do:

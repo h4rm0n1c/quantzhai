@@ -466,7 +466,8 @@ Missing:
    reasoning-only fallback, artifact-in-reasoning abort, long active reasoning,
    public tool-call buffering, malformed empty tool history, apply_patch
    native/custom rewrite, invalid apply_patch rejection, completed-without-DONE
-   terminal closure, and web_search continuation. Remaining coverage: more
+   terminal closure, web_search continuation, and proxy-local web_search
+   in-progress/searching/completed lifecycle events. Remaining coverage: more
    continuation terminal-edge cases and larger multi-hunk/move patch variants.
 3. Broaden the tool lifecycle boundary to cover request normalization,
    history filtering, adapter ownership, and telemetry naming. Completed-call

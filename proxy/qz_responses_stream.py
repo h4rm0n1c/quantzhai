@@ -16,8 +16,11 @@ try:
         is_function_call_stream_event,
         is_terminal_stream_event,
         parse_sse_event_lines,
+        public_tool_item_done_event,
         public_tool_item_events,
+        public_tool_item_started_event,
         rewrite_sse_payload,
+        web_search_call_lifecycle_event,
     )
     from .qz_tool_lifecycle import StreamToolCallState, completed_tool_call_decision, tool_continuation_result
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS
@@ -33,8 +36,11 @@ except ImportError:
         is_function_call_stream_event,
         is_terminal_stream_event,
         parse_sse_event_lines,
+        public_tool_item_done_event,
         public_tool_item_events,
+        public_tool_item_started_event,
         rewrite_sse_payload,
+        web_search_call_lifecycle_event,
     )
     from qz_tool_lifecycle import StreamToolCallState, completed_tool_call_decision, tool_continuation_result
     from qz_tool_web import WEB_SEARCH_MAX_HOPS
@@ -277,6 +283,30 @@ class ResponsesStreamRuntime:
 
     def _emit_public_tool_item(self, item: dict, public_index: int, sequence: int):
         chunks, sequence = public_tool_item_events(item, public_index, sequence)
+        forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(chunks)
+        return sequence, forwarded_chunks, forwarded_bytes
+
+    def _emit_proxy_web_search_started(self, call: dict, public_index: int, sequence: int):
+        item_id = call.get("id") or call.get("call_id") or f"web_search_local_{public_index}"
+        public_item = {
+            "id": item_id,
+            "type": "web_search_call",
+            "status": "in_progress",
+            "call_id": call.get("call_id"),
+        }
+        chunks, sequence = public_tool_item_started_event(public_item, public_index, sequence)
+        for stage in ("in_progress", "searching"):
+            stage_chunks, sequence = web_search_call_lifecycle_event(stage, item_id, public_index, sequence)
+            chunks.extend(stage_chunks)
+        forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(chunks)
+        return sequence, forwarded_chunks, forwarded_bytes, item_id
+
+    def _emit_proxy_web_search_completed(self, item: dict, public_index: int, sequence: int, item_id: str):
+        item = dict(item)
+        item["id"] = item_id
+        completed_chunks, sequence = web_search_call_lifecycle_event("completed", item_id, public_index, sequence)
+        chunks, sequence = public_tool_item_done_event(item, public_index, sequence)
+        chunks = completed_chunks + chunks
         forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(chunks)
         return sequence, forwarded_chunks, forwarded_bytes
 
@@ -588,20 +618,45 @@ class ResponsesStreamRuntime:
                                 completed_call,
                                 apply_patch_output_style,
                             )
-                            result = tool_continuation_result(
-                                decision,
-                                proxy_local_executor=lambda call: self.web_runtime.execute_web_search_call(
-                                    call,
-                                    counters,
-                                    seen_signatures,
-                                ),
-                            )
-                            public_item = result.public_item
 
                             if decision.kind == "proxy_local":
+                                (
+                                    sequence,
+                                    started_chunks,
+                                    started_bytes,
+                                    web_search_item_id,
+                                ) = self._emit_proxy_web_search_started(
+                                    completed_call,
+                                    public_index,
+                                    sequence,
+                                )
+                                self._emit_stream_event_timing(
+                                    event_type,
+                                    event_received_at,
+                                    event_parsed_at,
+                                    time.time(),
+                                    forwarded_chunks=started_chunks,
+                                    forwarded_bytes=started_bytes,
+                                    suppressed="function_call_private_started",
+                                )
+                                result = tool_continuation_result(
+                                    decision,
+                                    proxy_local_executor=lambda call: self.web_runtime.execute_web_search_call(
+                                        call,
+                                        counters,
+                                        seen_signatures,
+                                    ),
+                                )
+                                public_item = result.public_item
+                                public_item["id"] = web_search_item_id
                                 public_trace.append(public_item)
                                 next_input.extend(result.upstream_items)
-                                sequence, forwarded_chunks, forwarded_bytes = self._emit_public_tool_item(public_item, public_index, sequence)
+                                sequence, forwarded_chunks, forwarded_bytes = self._emit_proxy_web_search_completed(
+                                    public_item,
+                                    public_index,
+                                    sequence,
+                                    web_search_item_id,
+                                )
                                 self._emit_stream_event_timing(
                                     event_type,
                                     event_received_at,
@@ -613,6 +668,8 @@ class ResponsesStreamRuntime:
                                 )
                                 break
 
+                            result = tool_continuation_result(decision)
+                            public_item = result.public_item
                             public_trace.append(public_item)
                             sequence, forwarded_chunks, forwarded_bytes = self._emit_public_tool_item(public_item, public_index, sequence)
                             self._emit_stream_event_timing(

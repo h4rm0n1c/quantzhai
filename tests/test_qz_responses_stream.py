@@ -1200,11 +1200,29 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertEqual(len(requests), 2)
         self.assertEqual(len(web_runtime.calls), 1)
         self.assertIn('"type": "web_search_call"', stream_text)
+        self.assertIn("response.web_search_call.in_progress", stream_text)
+        self.assertIn("response.web_search_call.searching", stream_text)
+        self.assertIn("response.web_search_call.completed", stream_text)
         self.assertIn("searched.", stream_text)
         self.assertNotIn('"type": "function_call"', stream_text)
         self.assertIn(1, output_indexes)
         self.assertEqual(completed["model"], "test-model.gguf")
         self.assertEqual(completed["output"][0]["type"], "web_search_call")
+        event_names = [event for event, _payload in events]
+        web_search_items = [
+            payload["item"]
+            for event, payload in events
+            if event in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "web_search_call"
+        ]
+        self.assertEqual(len(web_search_items), 2)
+        self.assertEqual(web_search_items[0]["id"], web_search_items[1]["id"])
+        self.assertLess(
+            event_names.index("response.web_search_call.in_progress"),
+            event_names.index("response.web_search_call.completed"),
+        )
 
     def test_web_search_continuation_suppresses_duplicate_response_start(self):
         telemetry = TelemetryBus()

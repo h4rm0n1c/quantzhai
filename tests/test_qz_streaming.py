@@ -8,6 +8,7 @@ from proxy.qz_streaming import (
     parse_sse_event_lines,
     public_tool_item_events,
     rewrite_sse_payload,
+    web_search_call_lifecycle_event,
 )
 
 
@@ -133,6 +134,20 @@ class StreamingStateTests(unittest.TestCase):
         self.assertIn("response.output_item.added", stream)
         self.assertIn("response.output_item.done", stream)
         self.assertIn('"type": "web_search_call"', stream)
+
+    def test_web_search_call_lifecycle_event(self):
+        chunks, sequence = web_search_call_lifecycle_event(
+            "searching",
+            item_id="wsc_1",
+            output_index=2,
+            sequence_start=10,
+        )
+        event_type, payload = parse_sse_event_lines(chunks[0].splitlines(keepends=True))
+
+        self.assertEqual(sequence, 11)
+        self.assertEqual(event_type, "response.web_search_call.searching")
+        self.assertEqual(payload["item_id"], "wsc_1")
+        self.assertEqual(payload["output_index"], 2)
 
     def test_rewrite_sse_payload_offsets_output_index_and_prepends_output(self):
         event_type, payload = rewrite_sse_payload(
