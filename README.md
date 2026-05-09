@@ -244,16 +244,22 @@ scripts/qz-proxy
 QZ_DOCTOR_PROMPT_SMOKE=1 scripts/qz-doctor
 ```
 
-`caveman` is an experimental compact-instructions profile. `scripts/qz-codex caveman`
-loads `docs/qz-caveman-codex-model-instructions-v2.md`; reasoning effort and
-prompt policy are the supported tuning knobs, not hard output-token caps.
+`caveman` is an experimental compact-instructions profile. Select it from the
+Codex model/profile UI or pass Codex's profile flag directly, for example
+`scripts/qz-codex -p quantzhai-caveman`. Reasoning effort and prompt policy are
+the supported tuning knobs, not hard output-token caps.
 
-`scripts/qz-codex` passes remaining arguments through to Codex after the optional
-profile. For example:
+`scripts/qz-codex` passes arguments through to Codex. Non-interactive
+`scripts/qz-codex exec` runs must specify `-m/--model` or `-p/--profile`, because
+Codex persists the last selected model and can otherwise silently run a capture
+under the wrong profile.
+
+Examples:
 
 ```bash
-scripts/qz-codex caveman resume 019dd7a5-ca8b-7b31-994e-fcde3def5824
-scripts/qz-codex caveman resume --last
+scripts/qz-codex resume --last
+scripts/qz-codex exec -m prompt-compiler --json --ephemeral 'Say done.'
+QZ_CODEX_EXEC_DEFAULT_MODEL=prompt-compiler scripts/qz-codex exec --json --ephemeral 'Say done.'
 ```
 
 ## Benchmark Harness

@@ -12,9 +12,54 @@ esac
 
 qz_prepare_codex_home
 
+qz_exec_has_model_selector() {
+  local arg
+  for arg in "${@:2}"; do
+    case "$arg" in
+      -m|--model|-p|--profile|--model=*|--profile=*)
+        return 0
+        ;;
+      --)
+        break
+        ;;
+    esac
+  done
+  return 1
+}
+
+QZ_CODEX_ARGS=("$@")
+if [[ "${1:-}" == "exec" ]]; then
+  case "${2:-}" in
+    resume|review|help|-h|--help)
+      ;;
+    *)
+      if ! qz_exec_has_model_selector "$@"; then
+        if [[ -n "${QZ_CODEX_EXEC_DEFAULT_MODEL:-}" ]]; then
+          QZ_CODEX_ARGS=(exec -m "$QZ_CODEX_EXEC_DEFAULT_MODEL" "${@:2}")
+        else
+          cat >&2 <<'EOF'
+qz-codex: exec requires an explicit -m/--model or -p/--profile.
+
+Reason: Codex persists the last selected model in var/codex-home/config.toml,
+so non-interactive captures can silently run under a roleplay profile such as
+amber instead of the intended coding/compiler profile.
+
+Example:
+  ./scripts/qz-codex exec -m prompt-compiler --json --ephemeral 'Say done.'
+
+To set a wrapper default for exec runs:
+  QZ_CODEX_EXEC_DEFAULT_MODEL=prompt-compiler ./scripts/qz-codex exec --json --ephemeral 'Say done.'
+EOF
+          exit 64
+        fi
+      fi
+      ;;
+  esac
+fi
+
 QZ_CODEX_EXTRA_ARGS=()
 if [[ -n "${QZ_CODEX_MODEL_PROVIDER:-}" ]]; then
   QZ_CODEX_EXTRA_ARGS+=(-c "model_provider=\"$QZ_CODEX_MODEL_PROVIDER\"")
 fi
 
-exec codex "${QZ_CODEX_EXTRA_ARGS[@]}" "$@"
+exec codex "${QZ_CODEX_EXTRA_ARGS[@]}" "${QZ_CODEX_ARGS[@]}"
