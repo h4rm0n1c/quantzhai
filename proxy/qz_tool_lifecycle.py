@@ -2,10 +2,8 @@
 from dataclasses import dataclass
 
 try:
-    from .qz_tool_apply_patch import APPLY_PATCH_TOOL_ADAPTER
     from .qz_streaming import StreamedFunctionCallAssembler, is_function_call_stream_event
 except ImportError:
-    from qz_tool_apply_patch import APPLY_PATCH_TOOL_ADAPTER
     from qz_streaming import StreamedFunctionCallAssembler, is_function_call_stream_event
 
 
@@ -73,10 +71,11 @@ def function_call_key(payload):
     return None
 
 
-def public_tool_item_from_function_call(call: dict, apply_patch_output_style: str):
-    if call.get("name") == "apply_patch":
-        return APPLY_PATCH_TOOL_ADAPTER.output_to_codex(call, apply_patch_output_style)
-    return call
+def public_tool_item_from_function_call(call: dict, output_style: str, tool_registry=None):
+    if tool_registry is None:
+        return call
+    public_item = tool_registry.output_to_codex(call, output_style)
+    return public_item if public_item is not None else call
 
 
 def is_proxy_local_function_call(call: dict, proxy_local_tool_names) -> bool:
@@ -89,15 +88,16 @@ def is_proxy_local_function_call(call: dict, proxy_local_tool_names) -> bool:
 
 def completed_tool_call_decision(
     call: dict,
-    apply_patch_output_style: str,
+    output_style: str,
     proxy_local_tool_names,
+    tool_registry=None,
 ) -> CompletedToolCallDecision:
     if is_proxy_local_function_call(call, proxy_local_tool_names):
         return CompletedToolCallDecision(kind="proxy_local", call=call)
     return CompletedToolCallDecision(
         kind="public",
         call=call,
-        public_item=public_tool_item_from_function_call(call, apply_patch_output_style),
+        public_item=public_tool_item_from_function_call(call, output_style, tool_registry),
     )
 
 

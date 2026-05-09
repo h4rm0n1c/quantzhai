@@ -5,11 +5,13 @@ try:
     from .qz_tool_apply_patch import APPLY_PATCH_TOOL_ADAPTER
     from .qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
     from .qz_tool_lifecycle import CompletedToolCallDecision, ToolContinuationResult
+    from .qz_streaming import public_tool_lifecycle_event
     from .qz_tools import ToolRegistry
 except ImportError:
     from qz_tool_apply_patch import APPLY_PATCH_TOOL_ADAPTER
     from qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
     from qz_tool_lifecycle import CompletedToolCallDecision, ToolContinuationResult
+    from qz_streaming import public_tool_lifecycle_event
     from qz_tools import ToolRegistry
 
 
@@ -49,10 +51,10 @@ class WebSearchProxyToolExecutor(ProxyLocalToolExecutor):
         self.web_runtime = web_runtime
 
     def started_public_item(self, call: dict, public_index: int) -> dict:
-        item_id = call.get("id") or call.get("call_id") or f"web_search_local_{public_index}"
+        item_id = call.get("id") or call.get("call_id") or f"{self.lifecycle.name}_local_{public_index}"
         return {
             "id": item_id,
-            "type": "web_search_call",
+            "type": self.lifecycle.public_item_type,
             "status": "in_progress",
             "call_id": call.get("call_id"),
         }
@@ -120,6 +122,43 @@ class ProxyLocalToolRegistry:
         spec = self.spec_for_call(call)
         tool_name = spec.telemetry_name or call.get("name") or "proxy_local"
         return f"{tool_name}_terminal"
+
+    def lifecycle_event_chunks(
+        self,
+        call: dict,
+        stage: str,
+        item_id: str,
+        output_index: int,
+        sequence_start: int = 0,
+    ):
+        spec = self.spec_for_call(call)
+        allowed_stages = tuple(spec.lifecycle_start_stages) + tuple(spec.lifecycle_done_stages)
+        if not spec.lifecycle_event_prefix:
+            return [], sequence_start
+        return public_tool_lifecycle_event(
+            spec.lifecycle_event_prefix,
+            allowed_stages,
+            stage,
+            item_id,
+            output_index,
+            sequence_start,
+        )
+
+    def lifecycle_start_event_chunks(self, call: dict, item_id: str, output_index: int, sequence_start: int = 0):
+        chunks = []
+        sequence = sequence_start
+        for stage in self.spec_for_call(call).lifecycle_start_stages:
+            stage_chunks, sequence = self.lifecycle_event_chunks(call, stage, item_id, output_index, sequence)
+            chunks.extend(stage_chunks)
+        return chunks, sequence
+
+    def lifecycle_done_event_chunks(self, call: dict, item_id: str, output_index: int, sequence_start: int = 0):
+        chunks = []
+        sequence = sequence_start
+        for stage in self.spec_for_call(call).lifecycle_done_stages:
+            stage_chunks, sequence = self.lifecycle_event_chunks(call, stage, item_id, output_index, sequence)
+            chunks.extend(stage_chunks)
+        return chunks, sequence
 
     def continuation_limit_message(self) -> str:
         names = sorted(self.function_names)

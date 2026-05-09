@@ -18,7 +18,6 @@ try:
         parse_sse_event_lines,
         public_tool_item_done_event,
         public_tool_item_events,
-        public_tool_lifecycle_event,
         public_tool_item_started_event,
         rewrite_sse_payload,
     )
@@ -40,7 +39,6 @@ except ImportError:
         parse_sse_event_lines,
         public_tool_item_done_event,
         public_tool_item_events,
-        public_tool_lifecycle_event,
         public_tool_item_started_event,
         rewrite_sse_payload,
     )
@@ -282,39 +280,25 @@ class ResponsesStreamRuntime:
         public_item = self.proxy_tool_registry.started_public_item(call, public_index)
         item_id = public_item["id"]
         chunks, sequence = public_tool_item_started_event(public_item, public_index, sequence)
-        spec = self.proxy_tool_registry.spec_for_call(call)
-        allowed_stages = tuple(spec.lifecycle_start_stages) + tuple(spec.lifecycle_done_stages)
-        if spec.lifecycle_event_prefix:
-            for stage in spec.lifecycle_start_stages:
-                stage_chunks, sequence = public_tool_lifecycle_event(
-                    spec.lifecycle_event_prefix,
-                    allowed_stages,
-                    stage,
-                    item_id,
-                    public_index,
-                    sequence,
-                )
-                chunks.extend(stage_chunks)
+        stage_chunks, sequence = self.proxy_tool_registry.lifecycle_start_event_chunks(
+            call,
+            item_id,
+            public_index,
+            sequence,
+        )
+        chunks.extend(stage_chunks)
         forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(chunks)
         return sequence, forwarded_chunks, forwarded_bytes, item_id
 
     def _emit_proxy_local_completed(self, call: dict, item: dict, public_index: int, sequence: int, item_id: str):
         item = dict(item)
         item["id"] = item_id
-        spec = self.proxy_tool_registry.spec_for_call(call)
-        allowed_stages = tuple(spec.lifecycle_start_stages) + tuple(spec.lifecycle_done_stages)
-        completed_chunks = []
-        if spec.lifecycle_event_prefix:
-            for stage in spec.lifecycle_done_stages:
-                stage_chunks, sequence = public_tool_lifecycle_event(
-                    spec.lifecycle_event_prefix,
-                    allowed_stages,
-                    stage,
-                    item_id,
-                    public_index,
-                    sequence,
-                )
-                completed_chunks.extend(stage_chunks)
+        completed_chunks, sequence = self.proxy_tool_registry.lifecycle_done_event_chunks(
+            call,
+            item_id,
+            public_index,
+            sequence,
+        )
         chunks, sequence = public_tool_item_done_event(item, public_index, sequence)
         chunks = completed_chunks + chunks
         forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(chunks)

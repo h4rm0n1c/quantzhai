@@ -136,6 +136,39 @@ class ProxyToolRegistryTests(unittest.TestCase):
         self.assertEqual(registry.terminal_suppression_reason(call), "web_search_terminal")
         self.assertIn("web_search", registry.continuation_limit_message())
 
+    def test_proxy_local_lifecycle_events_are_registry_owned(self):
+        registry = make_proxy_local_tool_registry(FakeWebRuntime())
+        call = {
+            "id": "fc_web",
+            "type": "function_call",
+            "call_id": "call_web",
+            "name": "web_search",
+            "arguments": "{\"query\":\"quantzhai\"}",
+        }
+
+        start_chunks, sequence = registry.lifecycle_start_event_chunks(call, "wsc_1", 4, 10)
+        done_chunks, sequence = registry.lifecycle_done_event_chunks(call, "wsc_1", 4, sequence)
+
+        start_text = b"".join(start_chunks).decode("utf-8")
+        done_text = b"".join(done_chunks).decode("utf-8")
+        self.assertIn("response.web_search_call.in_progress", start_text)
+        self.assertIn("response.web_search_call.searching", start_text)
+        self.assertIn("response.web_search_call.completed", done_text)
+        self.assertEqual(sequence, 13)
+
+    def test_proxy_local_lifecycle_rejects_unsupported_stage(self):
+        registry = make_proxy_local_tool_registry(FakeWebRuntime())
+        call = {
+            "id": "fc_web",
+            "type": "function_call",
+            "call_id": "call_web",
+            "name": "web_search",
+            "arguments": "{\"query\":\"quantzhai\"}",
+        }
+
+        with self.assertRaises(ValueError):
+            registry.lifecycle_event_chunks(call, "bogus", "wsc_1", 4, 0)
+
     def test_completed_call_decision_uses_registered_proxy_local_names(self):
         registry = make_proxy_local_tool_registry(FakeWebRuntime())
 

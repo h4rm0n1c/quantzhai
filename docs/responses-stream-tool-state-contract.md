@@ -55,8 +55,9 @@ Proxy-executed tools have a `ProxyLocalToolRegistry` for completed-call
 classification, public protocol-adapter conversion, proxy-local execution, and
 continuation-result shaping. The registry also exposes the lifecycle spec used
 by streaming code for Codex-visible event shape, continuation hop budget, and
-progress/completed event stages. `web_search` is the first proxy-local executor
-and is used by both streamed and non-streamed `/v1/responses` paths.
+progress/completed event stages. The registry builds proxy-local start/done
+lifecycle SSE chunks from that spec. `web_search` is the first proxy-local
+executor and is used by both streamed and non-streamed `/v1/responses` paths.
 
 Codex-facing output adaptation is adapter-owned. The generic `ToolRegistry`
 can normalize a list of output items back to the client shape, and the
@@ -64,12 +65,12 @@ non-streamed Responses path uses that registry instead of calling a
 tool-specific patch helper directly.
 
 Completed-call routing is registry-owned. The lifecycle helpers do not carry
-their own default list of private tool names, and the stream runtime does not
-call adapter-specific public-output helpers directly. Streamed runtimes ask the
-active `ProxyLocalToolRegistry` to classify completed calls and return either a
-Codex-visible public item or a proxy-local continuation result. This keeps
-future proxy-side tools from requiring a second hard-coded allowlist or public
-conversion branch.
+their own default list of private tool names or protocol-adapter conversions,
+and the stream runtime does not call adapter-specific public-output helpers
+directly. Streamed runtimes ask the active `ProxyLocalToolRegistry` to classify
+completed calls and return either a Codex-visible public item or a proxy-local
+continuation result. This keeps future proxy-side tools from requiring a second
+hard-coded allowlist, event-prefix branch, or public conversion branch.
 
 A proxy-local executor owns:
 
@@ -89,11 +90,11 @@ helper to inject the active `request_id`, build standard
 `stream_event_timing` payloads, and keep telemetry failures from breaking the
 client stream.
 
-Stream-specific lifecycle event emission still lives in `qz_responses_stream.py`
-because SSE sequence numbers and forwarded byte accounting are owned by the
-stream runtime. `apply_patch` remains a protocol adapter and Codex execution
-handoff path unless a separate security review explicitly adds proxy-side
-filesystem writes.
+Stream-specific lifecycle writes still live in `qz_responses_stream.py` because
+forwarded byte accounting is owned by the stream runtime. Proxy-local lifecycle
+stage selection and SSE chunk construction are registry-owned. `apply_patch`
+remains a protocol adapter and Codex execution handoff path unless a separate
+security review explicitly adds proxy-side filesystem writes.
 
 Proxy-local telemetry payloads, terminal-suppression reason names, and
 continuation-limit fallback text are registry-owned. Stream and non-stream
@@ -676,8 +677,9 @@ Still needed:
 - Tool lifecycle now has internal boundaries for streamed call state,
   malformed historical tool-call filtering, completed-call routing decisions,
   public protocol-adapter conversion, proxy-local continuation shaping, and
-  tool request normalization. Non-tool request normalization now has its own
-  module boundary.
+  registry-owned proxy-local lifecycle SSE chunk construction. Tool request
+  normalization and non-tool request normalization each have their own module
+  boundary.
 - Capture mode interpretation and latest/request-scoped dual writes now have a
   runtime IO boundary.
 - No redaction layer for captures.

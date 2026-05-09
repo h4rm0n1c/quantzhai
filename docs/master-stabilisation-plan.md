@@ -789,10 +789,11 @@ The streaming and non-streaming paths call the same interface for:
 - normalizing tool declarations, tool_choice, write_stdin exposure, and
   request-scoped tool policy metadata before forwarding to llama.cpp
 
-web_search is now on that interface. Stream-specific lifecycle event emission
-still lives in the stream runtime because it owns SSE sequencing and forwarded
-byte accounting, but the stream runtime now reads tool lifecycle metadata from
-the active registry instead of branching directly on the `web_search` name.
+web_search is now on that interface. Proxy-local lifecycle event selection and
+SSE chunk construction are registry-owned. The stream runtime still owns final
+write timing, SSE sequence advancement, and forwarded byte accounting, but it
+now asks the active registry for start/done lifecycle chunks instead of
+branching directly on the `web_search` name or event prefix.
 Proxy-local telemetry payloads, terminal-suppression labels, and
 continuation-limit fallback text are also registry-owned. Tool request
 normalization now lives in `proxy/qz_tool_request.py`. Keep apply_patch as a

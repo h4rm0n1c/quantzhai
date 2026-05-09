@@ -127,13 +127,14 @@ class ToolLifecycleTests(unittest.TestCase):
         self.assertEqual(completed[0]["output_index"], 0)
 
     def test_public_tool_item_from_function_call_rewrites_apply_patch(self):
+        registry = ToolRegistry((APPLY_PATCH_TOOL_ADAPTER, WEB_SEARCH_TOOL_ADAPTER))
         item = public_tool_item_from_function_call({
             "id": "fc_patch",
             "type": "function_call",
             "call_id": "call_patch",
             "name": "apply_patch",
             "arguments": "{\"operation\":{\"type\":\"create_file\",\"path\":\"notes.md\",\"diff\":\"@@\\n+ok\\n\"}}",
-        }, "native")
+        }, "native", registry)
 
         self.assertEqual(item["type"], "apply_patch_call")
         self.assertEqual(item["call_id"], "call_patch")
@@ -147,7 +148,8 @@ class ToolLifecycleTests(unittest.TestCase):
             "arguments": "{\"cmd\":\"pwd\"}",
         }
 
-        self.assertEqual(public_tool_item_from_function_call(call, "native"), call)
+        registry = ToolRegistry((APPLY_PATCH_TOOL_ADAPTER, WEB_SEARCH_TOOL_ADAPTER))
+        self.assertEqual(public_tool_item_from_function_call(call, "native", registry), call)
 
     def test_completed_tool_call_decision_classifies_proxy_local_web_search(self):
         call = {
@@ -189,7 +191,8 @@ class ToolLifecycleTests(unittest.TestCase):
             "arguments": "{\"operation\":{\"type\":\"create_file\",\"path\":\"notes.md\",\"diff\":\"@@\\n+ok\\n\"}}",
         }
 
-        decision = completed_tool_call_decision(call, "custom", frozenset())
+        registry = ToolRegistry((APPLY_PATCH_TOOL_ADAPTER, WEB_SEARCH_TOOL_ADAPTER))
+        decision = completed_tool_call_decision(call, "custom", frozenset(), registry)
 
         self.assertFalse(is_proxy_local_function_call(call, frozenset()))
         self.assertEqual(decision.kind, "public")
@@ -206,7 +209,8 @@ class ToolLifecycleTests(unittest.TestCase):
             "arguments": "{\"cmd\":\"pwd\"}",
         }
 
-        decision = completed_tool_call_decision(call, "native", frozenset({"web_search"}))
+        registry = ToolRegistry((APPLY_PATCH_TOOL_ADAPTER, WEB_SEARCH_TOOL_ADAPTER))
+        decision = completed_tool_call_decision(call, "native", frozenset({"web_search"}), registry)
 
         self.assertEqual(decision.kind, "public")
         self.assertEqual(decision.call, call)
@@ -221,7 +225,8 @@ class ToolLifecycleTests(unittest.TestCase):
             "arguments": "{\"operation\":{\"type\":\"create_file\",\"path\":\"notes.md\",\"diff\":\"@@\\n+ok\\n\"}}",
         }
 
-        decision = completed_tool_call_decision(call, "native", frozenset())
+        registry = ToolRegistry((APPLY_PATCH_TOOL_ADAPTER, WEB_SEARCH_TOOL_ADAPTER))
+        decision = completed_tool_call_decision(call, "native", frozenset(), registry)
         result = tool_continuation_result(decision)
 
         self.assertEqual(result.public_item["type"], "apply_patch_call")

@@ -236,7 +236,8 @@ Current behavior:
   Codex-visible item type, telemetry name, continuation hop budget, and optional
   SSE lifecycle event stages.
 - Streamed proxy-local lifecycle handling now asks the active registry for
-  lifecycle metadata instead of hard-coding `web_search` branching.
+  start/done lifecycle SSE chunks instead of hard-coding `web_search` event
+  prefixes or stages.
 
 Missing or incomplete:
 
@@ -260,10 +261,11 @@ What works well:
 What is weak:
 
 - Tool handling has a shared contract, request normalization has an explicit
-  module boundary, and capture latest/request-scoped writes now go through a
-  runtime IO policy helper.
+  module boundary, proxy-local lifecycle events are registry-owned, and capture
+  latest/request-scoped writes now go through a runtime IO policy helper.
 - There is no shared tool-call lifecycle for request normalization, execution, result injection, streaming, and capture.
-- Tool execution and streaming share specs, but are not yet one state machine.
+- Tool execution and streaming share specs and proxy-local lifecycle chunk
+  builders, but are not yet one state machine.
 - The adapter/executor split is now the design rule, but not every code path is
   routed through that boundary yet.
 
