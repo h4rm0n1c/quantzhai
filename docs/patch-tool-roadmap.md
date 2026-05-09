@@ -26,6 +26,16 @@ The near-term target is a protocol adapter: let the local model emit patch inten
 - Live Qwen/TurboQuant smoke on 2026-05-09 confirmed custom `apply_patch`
   output from a real streamed function call.
 - Live `qz-codex exec` smoke on 2026-05-09 confirmed Codex consumed the translated custom patch call and created the requested temp-workspace file.
+- Live `qz-codex exec` update smoke on 2026-05-09 exposed a Qwen failure
+  mode where `update_file.diff` included unified-diff file headers
+  (`--- a/path` / `+++ b/path`) and line-number hunk headers
+  (`@@ -1,5 +1,6 @@`). Codex's custom `apply_patch` grammar treats those
+  as patch content/context once wrapped, so the adapter now normalizes
+  file-level unified-diff metadata before returning the custom patch envelope.
+- Follow-up live `qz-codex exec` update smoke on 2026-05-09 against the
+  updated adapter succeeded: Qwen's first malformed patch failed, the next
+  normalized update patch was accepted by Codex, and the temp target file
+  ended as `ALPHA/beta/GAMMA/delta/epsilon/zeta`.
 
 This means QuantZhai now has a first-pass protocol adapter for native and current-Codex custom patch calls. It still does not apply files itself. Codex remains responsible for workspace writes.
 
@@ -88,6 +98,17 @@ Outcome:
   freeform tool, the proxy presented a stricter private function schema to
   llama.cpp, Qwen emitted a valid operation with `diff`, and Codex applied the
   returned `custom_tool_call`.
+- Live `qz-codex exec` update smoke showed successful final file content, but
+  only after repeated failed update patches and a fallback add-file operation.
+  The visible Codex errors reported expected lines such as
+  `-- a/patch_target.txt` and context strings such as `-1,5 +1,6 @@`,
+  matching unified-diff metadata leaking into Codex's patch grammar. The
+  adapter now strips file headers and converts line-number hunk headers to
+  bare `@@` for update operations before wrapping model output as a custom
+  `apply_patch` call.
+- Follow-up validation through a temporary proxy on `18183` confirmed that the
+  normalized patch path can complete a real update edit through Codex's custom
+  `apply_patch` execution path.
 
 ## Phase 2: Protocol Adapter
 
@@ -110,6 +131,8 @@ Implemented:
 - Patch-call-output history normalization.
 - Function-call-to-`apply_patch_call` output normalization for valid operations.
 - Function-call-to-`custom_tool_call` output normalization for the current Codex CLI.
+- Unified-diff metadata normalization for model `update_file.diff` payloads
+  before custom Codex patch-envelope synthesis.
 - Invalid model-side `apply_patch` output normalization into assistant error messages.
 - Streaming event synthesis for `apply_patch_call` and `custom_tool_call`.
 - Request-scoped `metadata.qz_tool_policy` records the original Codex-facing

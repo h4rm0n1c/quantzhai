@@ -15,6 +15,7 @@ from proxy.quantzhai_proxy import (
     normalize_tools_for_llamacpp,
 )
 from proxy.qz_tool_apply_patch import ensure_apply_patch_tool_policy
+from proxy.qz_tool_apply_patch import _apply_patch_operation_to_patch_text
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "responses_input"
 
@@ -224,6 +225,31 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertEqual(out["name"], "apply_patch")
         self.assertIn("*** Add File: notes.md", out["input"])
         self.assertIn("+hello", out["input"])
+
+    def test_custom_update_patch_strips_unified_diff_file_headers(self):
+        patch = _apply_patch_operation_to_patch_text({
+            "type": "update_file",
+            "path": "patch_target.txt",
+            "diff": (
+                "--- a/patch_target.txt\n"
+                "+++ b/patch_target.txt\n"
+                "@@ -1,5 +1,6 @@\n"
+                "-alpha\n"
+                "+ALPHA\n"
+                " beta\n"
+                "-gamma\n"
+                "+GAMMA\n"
+                " delta\n"
+                " epsilon\n"
+                "+zeta\n"
+            ),
+        })
+
+        self.assertIn("*** Update File: patch_target.txt", patch)
+        self.assertIn("@@\n-alpha\n+ALPHA", patch)
+        self.assertNotIn("@@ -1,5 +1,6 @@", patch)
+        self.assertNotIn("--- a/patch_target.txt", patch)
+        self.assertNotIn("+++ b/patch_target.txt", patch)
 
     def test_invalid_patch_function_call_becomes_message_not_private_call(self):
         function_call = {

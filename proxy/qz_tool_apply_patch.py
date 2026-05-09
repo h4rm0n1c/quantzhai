@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import re
 import time
 
 try:
@@ -169,7 +170,54 @@ def _apply_patch_operation_to_patch_text(operation: dict) -> str:
     if operation_type == "delete_file":
         return f"*** Begin Patch\n*** Delete File: {path}\n*** End Patch\n"
 
+    diff = _strip_unified_diff_headers(diff, path)
     return f"*** Begin Patch\n*** Update File: {path}\n{diff.rstrip()}\n*** End Patch\n"
+
+
+def _strip_unified_diff_headers(diff: str, path: str | None = None) -> str:
+    """Drop file-level unified diff metadata before Codex patch wrapping."""
+    lines = diff.splitlines()
+    if not lines:
+        return diff
+
+    stripped = []
+    seen_hunk = False
+    for line in lines:
+        normalized_hunk = _normalize_unified_diff_hunk_header(line)
+        if normalized_hunk is not None:
+            seen_hunk = True
+            stripped.append(normalized_hunk)
+            continue
+
+        if not seen_hunk and _is_unified_diff_metadata_line(line, path):
+            continue
+
+        stripped.append(line)
+
+    trailing_newline = "\n" if diff.endswith("\n") else ""
+    return "\n".join(stripped) + trailing_newline
+
+
+def _normalize_unified_diff_hunk_header(line: str) -> str | None:
+    if line == "@@":
+        return "@@"
+    if re.match(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@(?: .*)?$", line):
+        return "@@"
+    if line.startswith("@@ "):
+        return line
+    return None
+
+
+def _is_unified_diff_metadata_line(line: str, path: str | None = None) -> bool:
+    if line.startswith(("diff --git ", "index ", "new file mode ", "deleted file mode ")):
+        return True
+    if line.startswith(("similarity index ", "rename from ", "rename to ", "old mode ", "new mode ")):
+        return True
+    if line.startswith("--- ") or line.startswith("+++ "):
+        return True
+    if path:
+        return line in {f"--- {path}", f"+++ {path}", f"--- a/{path}", f"+++ b/{path}"}
+    return False
 
 
 def _function_call_to_apply_patch_call(item: dict) -> dict:

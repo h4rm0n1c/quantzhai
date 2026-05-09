@@ -421,6 +421,9 @@ before broad stream/tool refactors.
   envelopes
 - `custom_apply_patch_multihunk_update_call.raw`: larger multi-hunk update
   operation rewritten to a Codex custom `apply_patch` envelope
+- `tests/test_apply_patch_adapter.py`: pins normalization of file-level
+  unified-diff metadata and line-number hunk headers from model
+  `update_file.diff` payloads before Codex custom patch-envelope synthesis
 - `invalid_apply_patch_call.raw`: malformed model-side patch operation becomes
   an assistant error message, not a runnable private tool call
 - `invalid_apply_patch_move_call.raw`: move/rename-style operations are
@@ -459,6 +462,10 @@ Still needed:
 - Golden replay fixture coverage has expanded across normal output, tool-call
   buffering, web-search continuation, reasoning aborts, and apply_patch
   adaptation for create/update/delete patches, but is not broad enough yet.
+- Live Qwen update-patch behavior can still emit one malformed attempt before
+  converging, but follow-up validation through a temporary proxy confirmed the
+  adapter now handles leaked unified-diff file headers and line-number hunk
+  headers well enough for Codex to apply the next update patch.
 - Tool lifecycle now has an initial internal boundary for streamed call state,
   public item conversion, completed-call routing decisions, and proxy-local
   continuation shaping, but request normalization, adapter ownership, and
