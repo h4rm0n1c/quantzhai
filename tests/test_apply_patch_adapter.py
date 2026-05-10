@@ -423,6 +423,40 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertEqual(out["type"], "custom_tool_call")
         self.assertIn("*** Update File: greeting.py", out["input"])
 
+    def test_qwen_legacy_patch_envelope_with_no_top_level_path_is_coerced(self):
+        """Qwen-observed shape: full *** Begin Patch envelope as top-level
+        'patch' string with no separate 'path'. Path is extracted from the
+        envelope's *** Update File: header."""
+        operation = _parse_apply_patch_arguments(json.dumps({
+            "patch": (
+                "*** Begin Patch\n"
+                "*** Update File: quote.py\n"
+                "@@\n"
+                "-MESSAGE = 'plain'\n"
+                "+MESSAGE = 'escaped'\n"
+                "*** End Patch\n"
+            ),
+        }))
+
+        self.assertIsNotNone(operation)
+        self.assertEqual(operation["type"], "update_file")
+        self.assertEqual(operation["path"], "quote.py")
+        self.assertIn("MESSAGE = 'escaped'", operation["diff"])
+
+    def test_qwen_legacy_patch_add_file_envelope_extracts_create_type(self):
+        operation = _parse_apply_patch_arguments(json.dumps({
+            "patch": (
+                "*** Begin Patch\n"
+                "*** Add File: new.py\n"
+                "+x = 1\n"
+                "*** End Patch\n"
+            ),
+        }))
+
+        self.assertIsNotNone(operation)
+        self.assertEqual(operation["type"], "create_file")
+        self.assertEqual(operation["path"], "new.py")
+
     def test_qwen_bare_create_file_native_mode_emits_apply_patch_call(self):
         """Native mode counterpart: best-effort apply_patch_call with
         whatever fields are recoverable."""

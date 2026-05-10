@@ -153,13 +153,39 @@ def _parse_apply_patch_arguments(arguments: str) -> dict | None:
     patch = data.get("patch")
     path = data.get("path")
     operation_type = data.get("operation_type") or data.get("type") or "update_file"
-    if isinstance(patch, str) and isinstance(path, str):
-        return _coerce_apply_patch_operation({
-            "type": operation_type,
-            "path": path,
-            "diff": patch,
-        })
+    if isinstance(patch, str):
+        # Qwen-observed variant: full *** Begin Patch ... *** End Patch envelope
+        # at top-level with no separate path. Extract the path and operation
+        # type from the envelope header lines.
+        if not isinstance(path, str) or not path.strip():
+            extracted = _extract_op_and_path_from_patch_envelope(patch)
+            if extracted:
+                operation_type, path = extracted
+        if isinstance(path, str) and path.strip():
+            return _coerce_apply_patch_operation({
+                "type": operation_type,
+                "path": path,
+                "diff": patch,
+            })
 
+    return None
+
+
+def _extract_op_and_path_from_patch_envelope(patch_text: str) -> tuple[str, str] | None:
+    """Pull (operation_type, path) from a Codex *** Begin Patch ... *** End
+    Patch envelope's header lines. Returns None if no recognised header is
+    found.
+    """
+    if not isinstance(patch_text, str):
+        return None
+    for line in patch_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("*** Add File: "):
+            return ("create_file", stripped[len("*** Add File: "):].strip())
+        if stripped.startswith("*** Update File: "):
+            return ("update_file", stripped[len("*** Update File: "):].strip())
+        if stripped.startswith("*** Delete File: "):
+            return ("delete_file", stripped[len("*** Delete File: "):].strip())
     return None
 
 

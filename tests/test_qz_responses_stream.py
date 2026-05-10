@@ -1665,6 +1665,57 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         # Hunk header normalised to bare @@.
         self.assertNotIn("@@ -1,4 +1,5 @@", envelope)
 
+    def test_golden_qwen_legacy_patch_missing_path_extracts_path_from_envelope(self):
+        """Qwen-observed shape: full Codex patch envelope as top-level 'patch'
+        string with no separate 'path'. Proxy extracts type+path from the
+        envelope's header line and routes through normal coercion."""
+        def opener(body):
+            return FakeStream(_fixture_chunks("qwen_legacy_patch_missing_path.raw"))
+
+        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        events = _parse_sse_events(stream_text)
+        custom_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "custom_tool_call"
+        ]
+
+        self.assertNotIn("invalid patch arguments", stream_text)
+        self.assertEqual(len(custom_items), 2)
+        envelope = custom_items[0]["input"]
+        self.assertIn("*** Update File: quote.py", envelope)
+        self.assertIn("-MESSAGE = 'plain'", envelope)
+        self.assertIn("+MESSAGE = 'escaped'", envelope)
+
+    def test_golden_qwen_rename_no_hunk_emits_move_envelope(self):
+        """rename_file without a content hunk used to silently route to the
+        broken assistant-message path. Now the proxy emits a partial
+        *** Update File + *** Move to envelope so Codex's verifier surfaces
+        a specific error (or applies the rename if the verifier accepts
+        hunkless moves)."""
+        def opener(body):
+            return FakeStream(_fixture_chunks("qwen_rename_no_hunk.raw"))
+
+        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        events = _parse_sse_events(stream_text)
+        custom_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "custom_tool_call"
+        ]
+
+        self.assertNotIn("invalid patch arguments", stream_text)
+        self.assertEqual(len(custom_items), 2)
+        self.assertIn("*** Update File: src/old.py", custom_items[0]["input"])
+        self.assertIn("*** Move to: src/new.py", custom_items[0]["input"])
+        self.assertIn("*** End Patch", custom_items[0]["input"])
+
     def test_golden_qwen_create_file_bare_operation_emits_partial_envelope(self):
         """Qwen Shape B: create_file with no diff and no sibling patch.
         Coercion cannot recover content, but the proxy still salvages
