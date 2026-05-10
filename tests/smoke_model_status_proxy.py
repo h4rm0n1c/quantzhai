@@ -22,7 +22,7 @@ class FakeCatalog:
             "path": "/models/model-a.gguf",
             "label": "Model A",
             "name": "Model A",
-            "context_length": 131072,
+            "context_length": 262144,
             "metadata": {},
             "overrides": {"system_prompt_file": "var/prompts/model-a.md"},
             "default": False,
@@ -33,7 +33,7 @@ class FakeCatalog:
             "path": "/models/model-b.gguf",
             "label": "Model B",
             "name": "Model B",
-            "context_length": 131072,
+            "context_length": 262144,
             "metadata": {},
             "overrides": {"system_prompt_file": "var/prompts/model-b.md"},
             "default": True,
@@ -197,12 +197,12 @@ def main():
                 "model-a.gguf": {
                     "status": "unloaded",
                     "path": "/models/model-a.gguf",
-                    "args": ["llama-server", "--ctx-size", "131072"],
+                    "args": ["llama-server", "--ctx-size", "262144"],
                 },
                 "model-b.gguf": {
                     "status": "loaded",
                     "path": "/models/model-b.gguf",
-                    "args": ["llama-server", "--ctx-size", "131072"],
+                    "args": ["llama-server", "--ctx-size", "262144"],
                 },
             }
             ProxyHandler.upstream = f"http://127.0.0.1:{upstream.server_port}"
@@ -225,7 +225,7 @@ def main():
             assert ready["ready"] is True, ready
             assert ready["load"]["state"] == "loaded", ready
             assert ready["load"]["error"] is None, ready
-            assert ready["backend"]["backend_context_length"] == 131072, ready
+            assert ready["backend"]["backend_context_length"] == 262144, ready
             assert ready["backend"]["backend_context_length_state"] == "confirmed", ready
             assert ready["backend"]["backend_context_length_source"] == "backend_inventory", ready
             assert ready["backend"]["selected_context_length_state"] == "intended", ready
@@ -239,7 +239,7 @@ def main():
             assert reconciled_model_state["selected_backend_id"] == "model-b.gguf", reconciled_model_state
             assert reconciled_backend_state["selected_key"] == "model-b.gguf", reconciled_backend_state
             assert reconciled_backend_state["selected_backend_id"] == "model-b.gguf", reconciled_backend_state
-            assert reconciled_backend_state["backend_context_length"] == 131072, reconciled_backend_state
+            assert reconciled_backend_state["backend_context_length"] == 262144, reconciled_backend_state
             assert reconciled_backend_state["loaded_model"] == "model-b.gguf", reconciled_backend_state
 
             status, _, snapshot = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/status")
@@ -247,8 +247,8 @@ def main():
             assert snapshot["schema"] == "qz.status.snapshot.v1", snapshot
             assert snapshot["router_mode"] is True, snapshot
             assert snapshot["selected"]["key"] == "model-b.gguf", snapshot
-            assert snapshot["backend"]["selected_context_length"] == 131072, snapshot
-            assert snapshot["backend"]["backend_context_length"] == 131072, snapshot
+            assert snapshot["backend"]["selected_context_length"] == 262144, snapshot
+            assert snapshot["backend"]["backend_context_length"] == 262144, snapshot
             assert snapshot["backend"]["backend_reasoning_budget"] == -1, snapshot
             assert snapshot["backend"]["backend_context_length_state"] == "confirmed", snapshot
             assert snapshot["prompt"]["schema"] == "qz.prompt.status.v1", snapshot
@@ -259,8 +259,8 @@ def main():
             assert telemetry["schema"] == "qz.telemetry.recent.v1", telemetry
             assert telemetry["state"]["schema"] == "qz.telemetry.state.v1", telemetry
             assert telemetry["state"]["runtime"]["schema"] == "qz.status.summary.v1", telemetry
-            assert telemetry["state"]["runtime"]["selected_context_length"] == 131072, telemetry
-            assert telemetry["state"]["runtime"]["backend_context_length"] == 131072, telemetry
+            assert telemetry["state"]["runtime"]["selected_context_length"] == 262144, telemetry
+            assert telemetry["state"]["runtime"]["backend_context_length"] == 262144, telemetry
             assert telemetry["state"]["runtime"]["backend_reasoning_budget"] == -1, telemetry
             assert any(event.get("type") == "status_snapshot" for event in telemetry.get("events", [])), telemetry
 
@@ -268,8 +268,8 @@ def main():
             assert status == 200, telemetry_state
             assert telemetry_state["schema"] == "qz.telemetry.state.v1", telemetry_state
             assert telemetry_state["runtime"]["schema"] == "qz.status.summary.v1", telemetry_state
-            assert telemetry_state["runtime"]["selected_context_length"] == 131072, telemetry_state
-            assert telemetry_state["runtime"]["backend_context_length"] == 131072, telemetry_state
+            assert telemetry_state["runtime"]["selected_context_length"] == 262144, telemetry_state
+            assert telemetry_state["runtime"]["backend_context_length"] == 262144, telemetry_state
             assert telemetry_state["runtime"]["backend_reasoning_budget"] == -1, telemetry_state
             assert telemetry_state["runtime"]["selected_reasoning_level"] == "medium", telemetry_state
 
@@ -304,7 +304,7 @@ def main():
             assert FakeBackendHandler.requests[-1]["path"] == "/v1/responses", FakeBackendHandler.requests
             sent = FakeBackendHandler.requests[-1]["body"]
             assert sent["model"] == "model-a.gguf", sent
-            assert "<QZSTATE v=1 ready=1 load=ready ctx=131072 prof=model-a.gguf sel=model-a.gguf>" in sent["instructions"], sent
+            assert "<QZSTATE v=1 ready=1 load=ready ctx=262144 prof=model-a.gguf sel=model-a.gguf>" in sent["instructions"], sent
             assert "Reasoning effort: high." in sent["instructions"], sent
             assert sent["temperature"] == 0.6, sent
             assert sent["top_p"] == 0.95, sent
@@ -347,7 +347,7 @@ def main():
             assert any(
                 event.get("type") == "request_completed"
                 and event.get("request_id")
-                and (event.get("payload") or {}).get("runtime_metrics", {}).get("selected_context_length") == 131072
+                and (event.get("payload") or {}).get("runtime_metrics", {}).get("selected_context_length") == 262144
                 and (event.get("payload") or {}).get("runtime_metrics", {}).get("schema") == "qz.runtime.metrics.v1"
                 and (event.get("payload") or {}).get("runtime_metrics", {}).get("reasoning_level") == "high"
                 and (event.get("payload") or {}).get("runtime_metrics", {}).get("active_reasoning_level") == "high"

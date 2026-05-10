@@ -220,7 +220,7 @@ class ModelRouter:
         context = self._parse_context_length(env_value, None)
         if context is not None:
             return context, "env:QZ_CONTEXT", "default"
-        return 131072, "built_in_default", "default"
+        return 262144, "built_in_default", "default"
 
     def selected_context_length(self, selected: dict | None = None):
         context, _source, _state = self.selected_context_length_fact(selected)
@@ -239,7 +239,7 @@ class ModelRouter:
         context = self._parse_context_length(env_value, None)
         if context is not None:
             return context, "env:QZ_CONTEXT", "intended"
-        return 131072, "built_in_default", "default"
+        return 262144, "built_in_default", "default"
 
     def _emit(self, event_type: str, payload: dict | None = None):
         telemetry = getattr(self.handler, "telemetry", None)
@@ -1217,7 +1217,7 @@ class ModelRouter:
                 "model_info": {
                     "general.architecture": "qwen",
                     "general.name": model,
-                    "qwen36turbo.context_length": 131072,
+                    "qwen36turbo.context_length": 262144,
                 },
                 "capabilities": ["completion", "tools", "thinking"],
             })

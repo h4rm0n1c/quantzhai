@@ -18,7 +18,7 @@ Example override entry:
   "models": {
     "prompt-compiler.gguf": {
       "label": "prompt-compiler",
-      "runtime_context_length": 131072,
+      "runtime_context_length": 262144,
       "system_prompt_file": "config/example/prompts/prompt-compiler.md"
     }
   }

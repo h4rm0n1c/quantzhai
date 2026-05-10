@@ -869,6 +869,7 @@ docs/edge-case-config-contract-plan.md
 docs/observability-streaming-bugfix-agenda.md
 docs/responses-stream-tool-state-contract.md
 docs/runtime-observability-notes.md
+docs/apply-patch-compatibility-plan.md
 docs/README.md
 AGENTS.md
 ```

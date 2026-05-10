@@ -269,7 +269,7 @@ def main():
     os.environ["QZ_ROOT"] = str(tmp_path)
     os.environ["QZ_MODEL_DIR"] = str(model_dir)
     os.environ["QZ_MODEL_KEY"] = TEST_MODEL_FILENAME
-    os.environ["QZ_CONTEXT"] = "131072"
+    os.environ["QZ_CONTEXT"] = "262144"
     os.environ["QZ_MODEL_OVERRIDES"] = str(tmp_path / "model-overrides.json")
     os.environ["QZ_MODEL_INVENTORY_CACHE"] = str(tmp_path / "model-inventory.json")
     os.environ["QZ_MODEL_STATE_PATH"] = str(tmp_path / "model-state.json")

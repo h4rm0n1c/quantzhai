@@ -410,7 +410,7 @@ def truncation_limit(entry, overrides, runtime_context):
 
     if isinstance(runtime_context, int) and runtime_context > 0:
         # Codex uses this catalog value as its client-side context/truncation
-        # budget. A stale 10k default makes 128k/196k local contexts behave as
+        # budget. A stale 10k default makes 128k/256k local contexts behave as
         # if they were tiny and can trigger pathological compaction/replay.
         return max(10000, int(runtime_context * 0.95))
 

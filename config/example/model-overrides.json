@@ -25,7 +25,7 @@
     "prompt-compiler.gguf": {
       "label": "prompt-compiler",
       "notes": "Example v2 compiler profile. Create var/models/prompt-compiler.gguf as a symlink to a real GGUF in var/models/; routing uses the symlink target, while Codex sees prompt-compiler.",
-      "runtime_context_length": 131072,
+      "runtime_context_length": 262144,
       "system_prompt_file": "config/example/prompts/prompt-compiler.md"
     },
     "roleplay-character.gguf": {

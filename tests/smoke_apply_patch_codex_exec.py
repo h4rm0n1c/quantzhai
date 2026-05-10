@@ -26,8 +26,8 @@ class SmokeModelCatalog:
             "backend_id": MODEL,
             "label": MODEL,
             "profile_valid": True,
-            "runtime_context_length": 131072,
-            "context_length": 131072,
+            "runtime_context_length": 262144,
+            "context_length": 262144,
         }]
         self.selected = self.entries[0]
         self.reason = "smoke"
@@ -304,7 +304,7 @@ model = "{MODEL}"
 model_provider = "quantzhai"
 approval_policy = "never"
 sandbox_mode = "workspace-write"
-model_context_window = 131072
+model_context_window = 262144
 model_max_output_tokens = 4096
 
 [model_providers.quantzhai]

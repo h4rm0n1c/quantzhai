@@ -22,8 +22,8 @@ class SmokeModelCatalog:
             "backend_id": MODEL,
             "label": MODEL,
             "profile_valid": True,
-            "runtime_context_length": 131072,
-            "context_length": 131072,
+            "runtime_context_length": 262144,
+            "context_length": 262144,
         }]
         self.selected = self.entries[0]
         self.reason = "smoke"
@@ -283,8 +283,8 @@ def main():
         assert status == 200, status
         assert "application/json" in content_type, content_type
         assert telemetry_state["counters"]["request_started"] >= 1, telemetry_state
-        assert telemetry_state["runtime"]["selected_context_length"] == 131072, telemetry_state
-        assert telemetry_state["runtime"]["backend_context_length"] >= 131072, telemetry_state
+        assert telemetry_state["runtime"]["selected_context_length"] == 262144, telemetry_state
+        assert telemetry_state["runtime"]["backend_context_length"] >= 262144, telemetry_state
 
         status, content_type, telemetry_recent = _get_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/recent?limit=100")
         assert status == 200, status
@@ -292,7 +292,7 @@ def main():
         assert telemetry_recent["events"], telemetry_recent
         assert any(
             event.get("type") == "request_completed"
-            and (event.get("payload") or {}).get("runtime_metrics", {}).get("selected_context_length") == 131072
+            and (event.get("payload") or {}).get("runtime_metrics", {}).get("selected_context_length") == 262144
             for event in telemetry_recent["events"]
         ), telemetry_recent
         assert any(
