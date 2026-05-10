@@ -550,3 +550,60 @@ Missing:
   tool-call continuation hops?
 - How much config should move from scripts into tracked sample config?
 - Should QuantZhai ever execute filesystem tools directly, or should it always delegate writes back to Codex?
+
+## Known Blind Spots
+
+Things not tracked elsewhere that should stay on the radar. None are blocking
+current use; all are worth addressing before the project is considered stable.
+
+**Codex CLI version drift.**
+The proxy is tuned against Codex CLI v0.125.0. New SSE event shapes, tool types,
+or catalog fields in a later Codex release could silently break the proxy. There
+is no version pin, no canary test against a newer binary, and no compatibility
+matrix. Track Codex releases and run the smoke suite when upgrading.
+
+**Fake rate-limit metadata.**
+The proxy emits fabricated rate-limit headers to satisfy Codex. This is not real
+token accounting. If Codex starts enforcing or displaying these values in ways
+the user cares about, the fabrication will become misleading. Marked as "not real
+accounting" in the maturity notes but no action is planned.
+
+**Compaction format compatibility.**
+Local compaction (`/v1/responses/compact`) is described as "useful beta" with
+"format compatibility needs tests." There are no compaction-specific unit or
+regression tests. A silent format change could degrade long sessions without a
+clear error.
+
+**Date and time grounding for agents.**
+The model has no reliable way to get the current date and time during a session.
+Tasks anchored to "today", "latest", "current week", or deadlines require the
+model to infer or ask the user. A cheap session-scoped date/time injection in the
+system prompt or QZSTATE block would close this without invalidating prompt
+caches on every second.
+
+**web_search has not been fuzz-tested.**
+apply_patch was fuzz-tested against 40 prompts and produced actionable fixes.
+web_search has not been. We do not know what argument shapes Qwen actually emits
+for search calls, whether any shapes are broken in the proxy, or what the
+dominant failure modes look like. Apply the same capture-and-diagnose methodology
+used for apply_patch.
+
+**Reasoning budget tuning.**
+`QZ_REASONING_BUDGET` exists but optimal values for different task types have not
+been explored. Context was bumped to 256k but there is no validation that the
+model behaves coherently at that length for multi-turn coding tasks versus
+shorter contexts. Track token use and quality across task types before treating
+256k as the right default for all profiles.
+
+**Unsupported tool policy.**
+Currently unsupported tools are silently dropped. The model has no signal that a
+tool call never returned. The right behavior (drop silently, inject a no-op
+result, surface as a model-visible limitation) has not been decided. Silent drops
+are the current pragmatic choice; document the decision when it becomes load
+bearing.
+
+**Proxy authentication.**
+The proxy binds to 127.0.0.1 by default but has no authentication. An operator
+who accidentally exposes port 18180 gives anyone on the network unrestricted
+access to the LLM API. Consider a `QZ_PROXY_SECRET` option or at minimum a
+prominent warning in the README about the authentication boundary.
