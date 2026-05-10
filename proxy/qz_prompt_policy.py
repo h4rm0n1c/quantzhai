@@ -42,14 +42,7 @@ def _model_overrides_path():
 
 
 def _model_override_paths():
-    root = _root_dir()
-    path = _model_overrides_path()
-    paths = [path]
-    default_user = root / "config" / "user" / "model-overrides.json"
-    legacy_user = runtime_state_path("model-overrides.json")
-    if path == default_user and not path.is_file():
-        paths.append(legacy_user)
-    return paths
+    return [_model_overrides_path()]
 
 
 def _deep_merge(base, overlay):

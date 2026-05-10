@@ -119,7 +119,9 @@ class ModelCatalogProfileValidationTests(unittest.TestCase):
             self.assertEqual(manifest["default_key"], "profile.gguf")
             self.assertEqual(manifest["models"]["profile.gguf"]["label"], "profile")
 
-    def test_load_manifest_prefers_config_user_then_legacy_var(self):
+    def test_load_manifest_reads_config_user_not_var(self):
+        """User overrides must be in config/user/model-overrides.json.
+        var/model-overrides.json is no longer a fallback location."""
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {}, clear=False):
             os.environ.pop("QZ_MODEL_OVERRIDES", None)
             root = Path(tmp)
@@ -131,13 +133,14 @@ class ModelCatalogProfileValidationTests(unittest.TestCase):
                 "models": {"profile.gguf": {"label": "legacy"}},
             }), encoding="utf-8")
 
+            # var/ path should NOT be read — manifest should be empty.
             manifest = load_manifest(root)
-            self.assertEqual(manifest["models"]["profile.gguf"]["label"], "legacy")
+            self.assertNotIn("profile.gguf", manifest.get("models", {}))
 
+            # config/user/ IS read.
             user_path.write_text(json.dumps({
                 "models": {"profile.gguf": {"label": "user"}},
             }), encoding="utf-8")
-
             manifest = load_manifest(root)
             self.assertEqual(manifest["models"]["profile.gguf"]["label"], "user")
 

@@ -56,11 +56,7 @@ export QZ_CUDA_ARCH="${QZ_CUDA_ARCH:-70;86}"
 export QZ_MODEL_DIR="${QZ_MODEL_DIR:-$QZ_ROOT/var/models}"
 export QZ_MODEL_KEY="${QZ_MODEL_KEY:-}"
 if [[ -z "${QZ_MODEL_OVERRIDES:-}" ]]; then
-  if [[ -f "$QZ_ROOT/config/user/model-overrides.json" || ! -f "$QZ_ROOT/var/model-overrides.json" ]]; then
-    export QZ_MODEL_OVERRIDES="$QZ_ROOT/config/user/model-overrides.json"
-  else
-    export QZ_MODEL_OVERRIDES="$QZ_ROOT/var/model-overrides.json"
-  fi
+  export QZ_MODEL_OVERRIDES="$QZ_ROOT/config/user/model-overrides.json"
 else
   export QZ_MODEL_OVERRIDES
 fi

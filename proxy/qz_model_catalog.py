@@ -246,17 +246,8 @@ def _user_override_paths(root: Path, overrides_path: Optional[Path] = None) -> l
         return [overrides_path]
     env_path = os.environ.get("QZ_MODEL_OVERRIDES")
     if isinstance(env_path, str) and env_path.strip():
-        path = Path(env_path).expanduser()
-        paths = [path]
-        default_user = root / "config" / "user" / "model-overrides.json"
-        legacy_user = root / "var" / "model-overrides.json"
-        if path == default_user and not path.is_file():
-            paths.append(legacy_user)
-        return paths
-    return [
-        root / "config" / "user" / "model-overrides.json",
-        root / "var" / "model-overrides.json",
-    ]
+        return [Path(env_path).expanduser()]
+    return [root / "config" / "user" / "model-overrides.json"]
 
 
 def load_manifest(root: Path, overrides_path: Optional[Path] = None) -> Dict[str, Any]:

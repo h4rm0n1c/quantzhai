@@ -64,10 +64,6 @@ def load_override_manifest():
     manifest = {}
     user_override = Path(os.environ.get("QZ_MODEL_OVERRIDES", str(root_dir / "config" / "user" / "model-overrides.json"))).expanduser()
     user_paths = [user_override]
-    default_user = root_dir / "config" / "user" / "model-overrides.json"
-    legacy_user = root_dir / "var" / "model-overrides.json"
-    if user_override == default_user and not user_override.is_file():
-        user_paths.append(legacy_user)
     for path in (
         first_existing_path(
             root_dir / "config" / "default" / "model-overrides.json",

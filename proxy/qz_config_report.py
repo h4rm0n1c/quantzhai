@@ -178,7 +178,6 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
 
     model_dir = Path(os.environ.get("QZ_MODEL_DIR", str(var_dir / "models"))).expanduser()
     model_overrides = Path(os.environ.get("QZ_MODEL_OVERRIDES", str(root / "config" / "user" / "model-overrides.json"))).expanduser()
-    legacy_model_overrides = var_dir / "model-overrides.json"
     inventory = Path(os.environ.get("QZ_MODEL_INVENTORY_CACHE", str(var_dir / "model-inventory.json"))).expanduser()
     model_state = Path(os.environ.get("QZ_MODEL_STATE_PATH", str(var_dir / "model-state.json"))).expanduser()
     backend_state = Path(os.environ.get("QZ_BACKEND_STATE_PATH", str(var_dir / "backend-state.json"))).expanduser()
@@ -210,7 +209,6 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
         _record("model_dir", model_dir, source_layer="user_runtime_input", classification="local_models", env_var="QZ_MODEL_DIR", default=str(var_dir / "models")),
         _record("model_overrides_default", default_overrides, source_layer="tracked_default", classification="source_config", active=True),
         _record("model_overrides_user", model_overrides, source_layer="user_override", classification="local_config", env_var="QZ_MODEL_OVERRIDES", default=str(root / "config" / "user" / "model-overrides.json")),
-        _record("model_overrides_legacy_user", legacy_model_overrides, source_layer="compat_user_override", classification="local_config_legacy", active=not model_overrides.is_file(), note="read only when config/user/model-overrides.json is absent"),
         _record("model_overrides_example", example_overrides, source_layer="tracked_example", classification="example_config", active=os.environ.get("QZ_LOAD_EXAMPLE_MODEL_OVERRIDES", "").strip().lower() in {"1", "true", "yes", "on"}),
         _record("model_inventory_cache", inventory, source_layer="generated", classification="generated_inventory", env_var="QZ_MODEL_INVENTORY_CACHE", default=str(var_dir / "model-inventory.json")),
         _record("codex_config_template", root / "config" / "example" / "codex-config.toml", source_layer="tracked_example", classification="example_codex_config"),
@@ -227,10 +225,7 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
         _record("searxng_policy", searxng_policy, source_layer="tracked_or_env_config", classification="active_search_policy", env_var="SEARXNG_POLICY"),
         _record("searxng_capabilities", searxng_capabilities, source_layer="tracked_or_env_config", classification="active_search_capabilities", env_var="SEARXNG_CAPABILITIES"),
     ]
-    user_prompt_sources = [model_overrides]
-    if not model_overrides.is_file():
-        user_prompt_sources.append(legacy_model_overrides)
-    prompt_records, prompt_file_summary = _prompt_file_records(root, [default_overrides] + user_prompt_sources)
+    prompt_records, prompt_file_summary = _prompt_file_records(root, [default_overrides, model_overrides])
     records.extend(prompt_records)
 
     warnings = []
