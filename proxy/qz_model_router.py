@@ -142,8 +142,8 @@ class ModelRouter:
         }
         try:
             write_json(self.model_state_path(), payload)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._emit("state_write_failed", {"file": "model-state.json", "error": str(exc)})
 
     def load_runtime_model_state(self):
         payload = read_json(self.model_state_path(), default={})
@@ -178,8 +178,8 @@ class ModelRouter:
         }
         try:
             write_json(self.backend_state_path(), payload)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._emit("state_write_failed", {"file": "backend-state.json", "error": str(exc)})
 
     def load_backend_state(self):
         payload = read_json(self.backend_state_path(), default={})
