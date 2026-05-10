@@ -1049,7 +1049,6 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
 
         self.assertIn("sample_v4.md", stream_text)
         self.assertIn("response.completed", names)
-        self.assertNotIn("response.output_item.done", names)
         self.assertNotIn('"type": "function_call"', stream_text)
         self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
         self.assertTrue(any(
@@ -1057,6 +1056,12 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             and (event.get("payload") or {}).get("reason") == "artifact_tool_payload"
             for event in events
         ))
+        # Fallback message is now streamed incrementally before response.completed:
+        # the client receives output_item.added → content_part.added →
+        # output_text.delta → output_text.done → content_part.done → output_item.done.
+        self.assertIn("response.output_item.added", names)
+        self.assertIn("response.output_text.delta", names)
+        self.assertIn("response.output_item.done", names)
 
     def test_golden_basic_message_stream_replays_unchanged(self):
         requests = []

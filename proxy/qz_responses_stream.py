@@ -13,6 +13,7 @@ try:
     from .qz_runtime_io import capture_enabled, open_dual_capture_append, write_dual_capture
     from .qz_sse import _normalize_response_usage, make_sse_block, transform_sse_event
     from .qz_streaming import (
+        _sse_block_with_sequence,
         is_function_call_stream_event,
         is_terminal_stream_event,
         parse_sse_event_lines,
@@ -34,6 +35,7 @@ except ImportError:
     from qz_runtime_io import capture_enabled, open_dual_capture_append, write_dual_capture
     from qz_sse import _normalize_response_usage, make_sse_block, transform_sse_event
     from qz_streaming import (
+        _sse_block_with_sequence,
         is_function_call_stream_event,
         is_terminal_stream_event,
         parse_sse_event_lines,
@@ -328,6 +330,63 @@ class ResponsesStreamRuntime:
             self._write_chunk(out_chunk)
         self._write_chunk(b"data: [DONE]\n\n")
 
+    def _stream_fallback_message(self, item: dict, public_index: int, sequence: int) -> int:
+        """Stream a pre-built message item as proper SSE events before response.completed.
+
+        Emits the full incremental sequence expected by Codex for a message output item:
+        output_item.added → content_part.added → output_text.delta → output_text.done
+        → content_part.done → output_item.done.
+
+        Returns the updated sequence number.
+        """
+        item_id = item.get("id") or f"msg_local_fallback_{public_index}"
+        role = item.get("role", "assistant")
+        content = item.get("content") or []
+        text = (content[0].get("text") or "") if content and isinstance(content[0], dict) else ""
+
+        sequence += 1
+        self._write_chunk(_sse_block_with_sequence("response.output_item.added", {
+            "output_index": public_index,
+            "item": {"id": item_id, "type": "message", "status": "in_progress",
+                     "role": role, "content": []},
+        }, sequence))
+
+        sequence += 1
+        self._write_chunk(_sse_block_with_sequence("response.content_part.added", {
+            "item_id": item_id, "output_index": public_index, "content_index": 0,
+            "part": {"type": "output_text", "text": "", "annotations": []},
+        }, sequence))
+
+        if text:
+            sequence += 1
+            self._write_chunk(_sse_block_with_sequence("response.output_text.delta", {
+                "item_id": item_id, "output_index": public_index, "content_index": 0,
+                "delta": text,
+            }, sequence))
+
+        sequence += 1
+        self._write_chunk(_sse_block_with_sequence("response.output_text.done", {
+            "item_id": item_id, "output_index": public_index, "content_index": 0,
+            "text": text, "logprobs": [],
+        }, sequence))
+
+        sequence += 1
+        self._write_chunk(_sse_block_with_sequence("response.content_part.done", {
+            "item_id": item_id, "output_index": public_index, "content_index": 0,
+            "part": {"type": "output_text", "text": text, "annotations": []},
+        }, sequence))
+
+        done_item = dict(item)
+        done_item["id"] = item_id
+        done_item["status"] = "completed"
+        sequence += 1
+        self._write_chunk(_sse_block_with_sequence("response.output_item.done", {
+            "output_index": public_index,
+            "item": done_item,
+        }, sequence))
+
+        return sequence
+
     def _emit_private_tool_call_aborted(
         self,
         requested_model: str,
@@ -335,30 +394,29 @@ class ResponsesStreamRuntime:
         final_usage,
         reason: str,
         call_name: str = "",
-    ):
+        public_index: int = 0,
+        sequence: int = 0,
+    ) -> tuple:
         text = (
             "I stopped a private tool-call loop before it could stall the stream. "
             "No file was changed. Please retry with normal text feedback, or name "
             "an explicit output path if you want a file written."
         )
-        output = [{
+        output_item = {
             "id": f"msg_local_{_now_ts()}",
             "type": "message",
             "status": "completed",
             "role": "assistant",
-            "content": [{
-                "type": "output_text",
-                "text": text,
-                "annotations": [],
-            }],
-        }]
+            "content": [{"type": "output_text", "text": text, "annotations": []}],
+        }
         self._emit("private_tool_call_aborted", {
             "model": requested_model,
             "reason": reason,
             "tool_name": call_name or "",
         })
-        self._emit_completed(requested_model, output, summary_started, usage=final_usage)
-        return output
+        sequence = self._stream_fallback_message(output_item, public_index, sequence)
+        self._emit_completed(requested_model, [output_item], summary_started, usage=final_usage)
+        return [output_item], sequence
 
     def _emit_reasoning_only_aborted(
         self,
@@ -367,7 +425,9 @@ class ResponsesStreamRuntime:
         final_usage,
         reason: str,
         reasoning_chars: int,
-    ):
+        public_index: int = 0,
+        sequence: int = 0,
+    ) -> tuple:
         if reason == "artifact_tool_payload":
             text = (
                 "I stopped the stream because the model started writing a tool or patch payload "
@@ -380,24 +440,21 @@ class ResponsesStreamRuntime:
                 "No file was changed. Retry with a narrower request, or ask for a "
                 "normal final answer instead of continued internal drafting."
             )
-        output = [{
+        output_item = {
             "id": f"msg_local_{_now_ts()}",
             "type": "message",
             "status": "completed",
             "role": "assistant",
-            "content": [{
-                "type": "output_text",
-                "text": text,
-                "annotations": [],
-            }],
-        }]
+            "content": [{"type": "output_text", "text": text, "annotations": []}],
+        }
         self._emit("reasoning_only_aborted", {
             "model": requested_model,
             "reason": reason,
             "reasoning_chars": int(reasoning_chars),
         })
-        self._emit_completed(requested_model, output, summary_started, usage=final_usage)
-        return output
+        sequence = self._stream_fallback_message(output_item, public_index, sequence)
+        self._emit_completed(requested_model, [output_item], summary_started, usage=final_usage)
+        return [output_item], sequence
 
     def _emit_stream_completed(self, requested_model: str, output_items: int, started_at: float, fallback: bool = False):
         self._emit("stream_completed", {
@@ -526,13 +583,16 @@ class ResponsesStreamRuntime:
                                     forwarded_bytes=forwarded_bytes,
                                     suppressed="function_call_aborted",
                                 )
-                                public_trace.extend(self._emit_private_tool_call_aborted(
+                                abort_items, sequence = self._emit_private_tool_call_aborted(
                                     requested_model,
                                     summary_started,
                                     final_usage,
                                     abort_reason,
                                     tool_call_state.call_name,
-                                ))
+                                    public_index=len(public_trace),
+                                    sequence=sequence,
+                                )
+                                public_trace.extend(abort_items)
                                 self._emit_stream_completed(requested_model, len(public_trace), started_at, fallback=True)
                                 completed_at = time.time()
                                 return self._build_result(
@@ -588,13 +648,16 @@ class ResponsesStreamRuntime:
                                         else "reasoning_only_aborted"
                                     ),
                                 )
-                                public_trace.extend(self._emit_reasoning_only_aborted(
+                                abort_items, sequence = self._emit_reasoning_only_aborted(
                                     requested_model,
                                     summary_started,
                                     final_usage,
                                     abort_reason,
                                     reasoning_only_chars,
-                                ))
+                                    public_index=len(public_trace),
+                                    sequence=sequence,
+                                )
+                                public_trace.extend(abort_items)
                                 self._emit_stream_completed(requested_model, len(public_trace), started_at, fallback=True)
                                 completed_at = time.time()
                                 return self._build_result(
