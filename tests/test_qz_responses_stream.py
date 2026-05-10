@@ -1592,6 +1592,79 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertNotIn("+++ b/tmp/quantzhai-rename-new.txt", patch)
         self.assertNotIn("@@ -1,3 +1,3 @@", patch)
 
+    def test_golden_qwen_create_file_sibling_patch_stream_is_coerced(self):
+        """Qwen-observed shape: operation lacks diff, sibling top-level patch carries the content."""
+        def opener(body):
+            return FakeStream(_fixture_chunks("qwen_create_file_sibling_patch.raw"))
+
+        stream_text = self._run_runtime(opener)
+        events = _parse_sse_events(stream_text)
+        patch_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "apply_patch_call"
+        ]
+
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertNotIn("invalid patch arguments", stream_text)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertEqual(len(patch_items), 2)
+        self.assertEqual(patch_items[0]["operation"]["type"], "create_file")
+        self.assertEqual(patch_items[0]["operation"]["path"], "tmp/qwen-sibling-patch.txt")
+        self.assertEqual(patch_items[0]["operation"]["diff"], "qwen sibling patch content\n")
+
+    def test_golden_qwen_create_file_sibling_patch_custom_stream_is_coerced(self):
+        """Same shape, custom output style — should produce a custom_tool_call envelope."""
+        def opener(body):
+            return FakeStream(_fixture_chunks("qwen_create_file_sibling_patch.raw"))
+
+        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        events = _parse_sse_events(stream_text)
+        custom_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "custom_tool_call"
+        ]
+
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertNotIn("invalid patch arguments", stream_text)
+        self.assertEqual(len(custom_items), 2)
+        self.assertIn("*** Add File: tmp/qwen-sibling-patch.txt", custom_items[0]["input"])
+        self.assertIn("+qwen sibling patch content", custom_items[0]["input"])
+
+    def test_golden_qwen_update_file_sibling_patch_with_unified_headers_stream_is_coerced(self):
+        """Sibling patch carrying a unified diff with file-level headers should be coerced and stripped."""
+        def opener(body):
+            return FakeStream(_fixture_chunks("qwen_update_file_sibling_patch_with_unified_headers.raw"))
+
+        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        events = _parse_sse_events(stream_text)
+        custom_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "custom_tool_call"
+        ]
+
+        self.assertNotIn("invalid patch arguments", stream_text)
+        self.assertEqual(len(custom_items), 2)
+        envelope = custom_items[0]["input"]
+        self.assertIn("*** Update File: config/app.json", envelope)
+        self.assertIn("+  \"debug\": false,", envelope)
+        # File-level unified diff headers should be stripped.
+        self.assertNotIn("--- a/config/app.json", envelope)
+        self.assertNotIn("+++ b/config/app.json", envelope)
+        # Hunk header normalised to bare @@.
+        self.assertNotIn("@@ -1,4 +1,5 @@", envelope)
+
     def test_golden_invalid_apply_patch_stream_becomes_message_not_private_call(self):
         requests = []
 

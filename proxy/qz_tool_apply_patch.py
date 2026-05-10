@@ -129,6 +129,23 @@ def _parse_apply_patch_arguments(arguments: str) -> dict | None:
     if operation:
         return operation
 
+    # Qwen-observed shape: operation lacks diff but a sibling top-level `patch`
+    # string carries the file content. Promote the sibling into the operation's
+    # diff before retrying coercion. The existing diff-stripping path then
+    # handles unified-diff file headers in the promoted content.
+    nested = data.get("operation")
+    sibling_patch = data.get("patch")
+    if (
+        isinstance(nested, dict)
+        and isinstance(sibling_patch, str)
+        and not isinstance(nested.get("diff"), str)
+    ):
+        merged = dict(nested)
+        merged["diff"] = sibling_patch
+        operation = _coerce_apply_patch_operation(merged)
+        if operation:
+            return operation
+
     operation = _coerce_apply_patch_operation(data)
     if operation:
         return operation

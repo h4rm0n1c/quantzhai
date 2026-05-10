@@ -511,6 +511,59 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertEqual(operation["type"], "update_file")
         self.assertEqual(operation["path"], "README.md")
 
+    def test_qwen_create_file_sibling_patch_is_coerced(self):
+        """Qwen-observed shape: operation lacks diff, sibling 'patch' carries the file content."""
+        operation = _parse_apply_patch_arguments(json.dumps({
+            "operation": {
+                "type": "create_file",
+                "path": "hello.py",
+            },
+            "patch": "def greet():\n    return 'hello'\n",
+        }))
+
+        self.assertIsNotNone(operation)
+        self.assertEqual(operation["type"], "create_file")
+        self.assertEqual(operation["path"], "hello.py")
+        self.assertEqual(operation["diff"], "def greet():\n    return 'hello'\n")
+
+    def test_qwen_update_file_sibling_patch_with_unified_headers_is_coerced(self):
+        """Qwen-observed shape: update_file operation with unified-diff sibling patch."""
+        operation = _parse_apply_patch_arguments(json.dumps({
+            "operation": {
+                "type": "update_file",
+                "path": "config/app.json",
+            },
+            "patch": (
+                "--- a/config/app.json\n"
+                "+++ b/config/app.json\n"
+                "@@ -1,4 +1,5 @@\n"
+                " {\n"
+                "+  \"debug\": false,\n"
+                "   \"name\": \"demo\",\n"
+                "   \"port\": 8080\n"
+                " }\n"
+            ),
+        }))
+
+        self.assertIsNotNone(operation)
+        self.assertEqual(operation["type"], "update_file")
+        self.assertEqual(operation["path"], "config/app.json")
+        self.assertIn("\"debug\": false", operation["diff"])
+
+    def test_qwen_sibling_patch_does_not_overwrite_explicit_diff(self):
+        """If the operation already has a diff, the sibling patch must not clobber it."""
+        operation = _parse_apply_patch_arguments(json.dumps({
+            "operation": {
+                "type": "create_file",
+                "path": "hello.py",
+                "diff": "intentional diff\n",
+            },
+            "patch": "ignored sibling content\n",
+        }))
+
+        self.assertIsNotNone(operation)
+        self.assertEqual(operation["diff"], "intentional diff\n")
+
     def test_stream_synthesis_includes_apply_patch_call_item(self):
         out = {
             "id": "resp_1",
