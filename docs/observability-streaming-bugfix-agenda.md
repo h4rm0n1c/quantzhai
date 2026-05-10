@@ -464,12 +464,14 @@ Specific requirements:
 
 Current supported captures show ordinary shell-command lifecycle already reaches
 Codex in the expected public shape: `command_execution status=in_progress`,
-then `status=completed`, then `turn.completed usage`. The remaining hard case is
-proxy-local tools. Local `web_search` emits `tool_call_started` and
-`tool_call_completed` telemetry to QZ monitors, but Codex only receives the
-public `web_search_call` after local execution completes. Before changing this,
-capture whether Codex will render a display-only `web_search_call
-status=in_progress` without treating it as a runnable private function call.
+then `status=completed`, then `turn.completed usage`.
+
+**2026-05-11 live capture confirms web_search in-progress relay is correct.**
+The proxy emits `response.output_item.added (web_search_call, in_progress)`,
+`response.web_search_call.in_progress`, and `response.web_search_call.searching`
+before execution, then the completed events after. Codex converts these to
+`item.started {type:web_search, query:""}` (fires immediately) and
+`item.completed` (fires after the search). No code change needed.
 
 ### Acceptance checks
 
