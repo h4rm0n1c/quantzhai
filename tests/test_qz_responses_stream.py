@@ -1665,7 +1665,55 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         # Hunk header normalised to bare @@.
         self.assertNotIn("@@ -1,4 +1,5 @@", envelope)
 
-    def test_golden_invalid_apply_patch_stream_becomes_message_not_private_call(self):
+    def test_golden_qwen_create_file_bare_operation_emits_partial_envelope(self):
+        """Qwen Shape B: create_file with no diff and no sibling patch.
+        Coercion cannot recover content, but the proxy still salvages
+        type+path into a partial *** Add File envelope so Codex's verifier
+        feeds back a specific error to the model on the next turn."""
+        def opener(body):
+            return FakeStream(_fixture_chunks("qwen_create_file_bare_operation.raw"))
+
+        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        events = _parse_sse_events(stream_text)
+        custom_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "custom_tool_call"
+        ]
+
+        self.assertNotIn("invalid patch arguments", stream_text)
+        self.assertEqual(len(custom_items), 2)
+        self.assertIn("*** Add File: hello.py", custom_items[0]["input"])
+        self.assertIn("*** End Patch", custom_items[0]["input"])
+
+    def test_golden_qwen_update_file_bare_operation_emits_partial_envelope(self):
+        """Same as above but for update_file."""
+        def opener(body):
+            return FakeStream(_fixture_chunks("qwen_update_file_bare_operation.raw"))
+
+        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        events = _parse_sse_events(stream_text)
+        custom_items = [
+            payload["item"]
+            for event_type, payload in events
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "custom_tool_call"
+        ]
+
+        self.assertNotIn("invalid patch arguments", stream_text)
+        self.assertEqual(len(custom_items), 2)
+        self.assertIn("*** Update File: greeting.py", custom_items[0]["input"])
+
+    def test_golden_invalid_apply_patch_stream_emits_partial_envelope(self):
+        """Bare-operation create_file (Qwen Shape B) used to dead-end as an
+        assistant message. Now the proxy emits a partial *** Add File: <path>
+        envelope so Codex's V4A verifier produces a specific error the model
+        sees on the next turn."""
         requests = []
 
         def opener(body):
@@ -1674,28 +1722,26 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
 
         stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
         events = _parse_sse_events(stream_text)
-        message_items = [
+        custom_items = [
             payload["item"]
             for event_type, payload in events
-            if event_type == "response.output_item.done"
+            if event_type in {"response.output_item.added", "response.output_item.done"}
             and isinstance(payload, dict)
             and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "message"
+            and payload["item"].get("type") == "custom_tool_call"
         ]
-        completed = next(
-            payload["response"]
-            for event_type, payload in events
-            if event_type == "response.completed" and isinstance(payload, dict)
-        )
 
         self.assertEqual(len(requests), 1)
-        self.assertIn("invalid patch arguments", stream_text)
-        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertNotIn("invalid patch arguments", stream_text)
         self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
-        self.assertEqual(len(message_items), 1)
-        self.assertEqual(completed["output"][0]["type"], "message")
+        self.assertEqual(len(custom_items), 2)
+        self.assertIn("*** Add File: tmp/missing-diff.txt", custom_items[0]["input"])
+        self.assertIn("*** End Patch", custom_items[0]["input"])
 
-    def test_golden_invalid_apply_patch_move_without_destination_stream_becomes_message(self):
+    def test_golden_invalid_apply_patch_move_without_destination_falls_back_to_message(self):
+        """When the args truly cannot yield a usable envelope (move_file with
+        no destination key), the proxy still falls back to the descriptive
+        assistant message — but the message now carries a specific reason."""
         def opener(body):
             return FakeStream(_fixture_chunks("invalid_apply_patch_move_call.raw"))
 
@@ -1711,7 +1757,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         ]
 
         self.assertIn("invalid patch arguments", stream_text)
-        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertIn("destination", stream_text)
         self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
         self.assertEqual(len(message_items), 1)
 

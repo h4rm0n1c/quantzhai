@@ -278,7 +278,10 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertIn("*** Move to: new.md", out["input"])
         self.assertIn(" unchanged context", out["input"])
 
-    def test_custom_move_without_diff_becomes_assistant_error(self):
+    def test_custom_move_without_diff_emits_partial_envelope(self):
+        """Move without a content hunk now emits a partial Codex envelope so
+        Codex's verifier produces a specific error the model can act on,
+        instead of routing to the broken assistant-message path."""
         function_call = {
             "id": "fc_1",
             "type": "function_call",
@@ -296,8 +299,10 @@ class ApplyPatchAdapterTests(unittest.TestCase):
 
         out = normalize_apply_patch_output_for_codex([function_call], "custom")[0]
 
-        self.assertEqual(out["type"], "message")
-        self.assertIn("apply_patch call rejected", out["content"][0]["text"])
+        self.assertEqual(out["type"], "custom_tool_call")
+        self.assertIn("*** Update File: old.md", out["input"])
+        self.assertIn("*** Move to: new.md", out["input"])
+        self.assertIn("*** End Patch", out["input"])
 
     def test_move_operation_requires_destination(self):
         operation = _parse_apply_patch_arguments(json.dumps({
@@ -365,7 +370,11 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertNotIn("--- a/patch_target.txt", out["operation"]["diff"])
         self.assertNotIn("+++ b/patch_target.txt", out["operation"]["diff"])
 
-    def test_invalid_patch_function_call_becomes_message_not_private_call(self):
+    def test_invalid_patch_function_call_with_no_path_falls_back_to_message(self):
+        """When the args have no salvageable path, no envelope can be built —
+        the legacy assistant-message path is the last resort. The reason is
+        included so the user sees what was missing even though the model
+        cannot consume it directly."""
         function_call = {
             "type": "function_call",
             "name": "apply_patch",
@@ -377,6 +386,60 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertEqual(out["type"], "message")
         self.assertEqual(out["role"], "assistant")
         self.assertIn("invalid patch arguments", out["content"][0]["text"])
+        self.assertIn("'path'", out["content"][0]["text"])
+
+    def test_qwen_bare_create_file_emits_partial_envelope(self):
+        """The Qwen Shape B failure (create_file with no diff) used to dead-end
+        in an assistant message. Now the proxy emits a *** Add File: <path>
+        envelope so Codex's verifier surfaces a specific error the model
+        can act on next turn."""
+        function_call = {
+            "id": "fc_qwen_bare_create",
+            "type": "function_call",
+            "status": "completed",
+            "call_id": "call_qwen_bare_create",
+            "name": "apply_patch",
+            "arguments": json.dumps({"operation": {"type": "create_file", "path": "hello.py"}}),
+        }
+
+        out = normalize_apply_patch_output_for_codex([function_call], "custom")[0]
+
+        self.assertEqual(out["type"], "custom_tool_call")
+        self.assertIn("*** Add File: hello.py", out["input"])
+        self.assertIn("*** End Patch", out["input"])
+
+    def test_qwen_bare_update_file_emits_partial_envelope(self):
+        function_call = {
+            "id": "fc_qwen_bare_update",
+            "type": "function_call",
+            "status": "completed",
+            "call_id": "call_qwen_bare_update",
+            "name": "apply_patch",
+            "arguments": json.dumps({"operation": {"type": "update_file", "path": "greeting.py"}}),
+        }
+
+        out = normalize_apply_patch_output_for_codex([function_call], "custom")[0]
+
+        self.assertEqual(out["type"], "custom_tool_call")
+        self.assertIn("*** Update File: greeting.py", out["input"])
+
+    def test_qwen_bare_create_file_native_mode_emits_apply_patch_call(self):
+        """Native mode counterpart: best-effort apply_patch_call with
+        whatever fields are recoverable."""
+        function_call = {
+            "id": "fc_qwen_bare_create_native",
+            "type": "function_call",
+            "status": "completed",
+            "call_id": "call_qwen_bare_create_native",
+            "name": "apply_patch",
+            "arguments": json.dumps({"operation": {"type": "create_file", "path": "hello.py"}}),
+        }
+
+        out = normalize_apply_patch_output_for_codex([function_call], "native")[0]
+
+        self.assertEqual(out["type"], "apply_patch_call")
+        self.assertEqual(out["operation"]["type"], "create_file")
+        self.assertEqual(out["operation"]["path"], "hello.py")
 
     def test_normalize_responses_input_converts_patch_items(self):
         body = {

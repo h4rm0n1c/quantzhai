@@ -292,9 +292,12 @@ def _is_unified_diff_metadata_line(line: str, path: str | None = None) -> bool:
 
 
 def _function_call_to_apply_patch_call(item: dict) -> dict:
-    operation = _parse_apply_patch_arguments(item.get("arguments") or "{}")
+    arguments = item.get("arguments") or "{}"
+    operation = _parse_apply_patch_arguments(arguments)
     if not operation:
-        return _invalid_apply_patch_call_message(item)
+        operation = _extract_partial_native_operation(arguments)
+        if not operation:
+            return _invalid_apply_patch_call_message(item, _describe_args_failure(arguments))
     operation = _normalize_apply_patch_operation_for_codex(operation)
 
     call_id = item.get("call_id") or item.get("id") or f"call_apply_patch_{_now_ts()}"
@@ -309,20 +312,34 @@ def _function_call_to_apply_patch_call(item: dict) -> dict:
 
 
 def _function_call_to_custom_apply_patch_call(item: dict) -> dict:
-    operation = _parse_apply_patch_arguments(item.get("arguments") or "{}")
+    arguments = item.get("arguments") or "{}"
+    operation = _parse_apply_patch_arguments(arguments)
+    patch_text = None
+
     if operation:
         try:
             patch_text = _apply_patch_operation_to_patch_text(operation)
         except ValueError:
-            return _invalid_apply_patch_call_message(item)
-    else:
+            patch_text = _build_partial_custom_envelope(operation)
+
+    if patch_text is None:
+        partial = _extract_partial_custom_envelope_from_args(arguments)
+        if partial is not None:
+            patch_text = partial
+
+    if patch_text is None:
+        # Last resort: a recognisable legacy patch string at top-level.
         try:
-            data = json.loads(item.get("arguments") or "{}")
+            data = json.loads(arguments)
         except Exception:
-            return item
-        patch_text = data.get("patch") if isinstance(data, dict) else None
-        if not isinstance(patch_text, str) or not patch_text.strip():
-            return _invalid_apply_patch_call_message(item)
+            data = None
+        if isinstance(data, dict):
+            legacy = data.get("patch")
+            if isinstance(legacy, str) and legacy.strip():
+                patch_text = legacy
+
+    if patch_text is None:
+        return _invalid_apply_patch_call_message(item, _describe_args_failure(arguments))
 
     return {
         "type": "custom_tool_call",
@@ -333,8 +350,137 @@ def _function_call_to_custom_apply_patch_call(item: dict) -> dict:
     }
 
 
-def _invalid_apply_patch_call_message(item: dict) -> dict:
+def _build_partial_custom_envelope(operation: dict) -> str:
+    """Build a Codex apply_patch envelope from a partially-valid operation.
+
+    The envelope is intentionally minimal — enough to carry the type/path/
+    destination so Codex's V4A verifier produces a specific error message
+    instead of the proxy silently dropping the call.
+    """
+    op_type = operation.get("type")
+    path = operation.get("path") or "unknown"
+    if op_type == "move_file":
+        destination = operation.get("destination") or "unknown"
+        return (
+            "*** Begin Patch\n"
+            f"*** Update File: {path}\n"
+            f"*** Move to: {destination}\n"
+            "*** End Patch\n"
+        )
+    if op_type == "delete_file":
+        return f"*** Begin Patch\n*** Delete File: {path}\n*** End Patch\n"
+    if op_type == "create_file":
+        return f"*** Begin Patch\n*** Add File: {path}\n*** End Patch\n"
+    return f"*** Begin Patch\n*** Update File: {path}\n*** End Patch\n"
+
+
+def _extract_partial_custom_envelope_from_args(arguments: str) -> str | None:
+    """When full coercion fails, try to pull at least type+path from the args
+    and emit a partial envelope so Codex's verifier surfaces a specific error.
+    """
+    candidate = _extract_partial_operation(arguments)
+    if not candidate:
+        return None
+    return _build_partial_custom_envelope(candidate)
+
+
+def _extract_partial_native_operation(arguments: str) -> dict | None:
+    """Native-mode counterpart: return whatever operation fields can be
+    salvaged so the call still surfaces to Codex with structured data."""
+    candidate = _extract_partial_operation(arguments)
+    if not candidate:
+        return None
+    op = {"type": candidate["type"], "path": candidate["path"]}
+    if isinstance(candidate.get("destination"), str) and candidate["destination"].strip():
+        op["destination"] = candidate["destination"].strip()
+    return op
+
+
+def _extract_partial_operation(arguments: str) -> dict | None:
+    """Pull a {type, path, destination?} dict out of best-effort args parsing.
+    Returns None if there is not enough to build a meaningful envelope."""
+    try:
+        data = json.loads(arguments or "{}")
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    nested = data.get("operation")
+    candidate = nested if isinstance(nested, dict) else data
+    if not isinstance(candidate, dict):
+        return None
+    op_type = candidate.get("type")
+    path = candidate.get("path")
+    if op_type not in APPLY_PATCH_OPERATION_TYPES:
+        return None
+    if not isinstance(path, str) or not path.strip():
+        return None
+    if op_type == "rename_file":
+        op_type = "move_file"
+    out = {"type": op_type, "path": path.strip()}
+    if op_type == "move_file":
+        destination = next(
+            (
+                candidate.get(key).strip()
+                for key in APPLY_PATCH_DESTINATION_KEYS
+                if isinstance(candidate.get(key), str) and candidate.get(key).strip()
+            ),
+            None,
+        )
+        if not destination:
+            # Without a destination there is no usable envelope; fall back to
+            # the descriptive assistant message rather than emit garbage.
+            return None
+        out["destination"] = destination
+    return out
+
+
+def _describe_args_failure(arguments: str) -> str:
+    """Produce a specific human-readable reason for an args-coercion failure.
+    Used in the fallback assistant message when no envelope can be salvaged."""
+    try:
+        data = json.loads(arguments or "{}")
+    except Exception:
+        return "arguments are not valid JSON"
+    if not isinstance(data, dict):
+        return "arguments are not a JSON object"
+    nested = data.get("operation")
+    candidate = nested if isinstance(nested, dict) else data
+    if not isinstance(candidate, dict):
+        return "could not extract operation object from arguments"
+    op_type = candidate.get("type")
+    if op_type not in APPLY_PATCH_OPERATION_TYPES:
+        return (
+            f"unknown operation type {op_type!r}; expected one of: "
+            f"{', '.join(sorted(APPLY_PATCH_OPERATION_TYPES))}"
+        )
+    path = candidate.get("path")
+    if not isinstance(path, str) or not path.strip():
+        return f"missing or empty 'path' on operation type {op_type!r}"
+    if op_type in {"create_file", "update_file"} and not isinstance(candidate.get("diff"), str):
+        return (
+            f"missing 'diff' on operation type {op_type!r}; "
+            "include file content (create_file) or V4A hunk (update_file) "
+            "as operation.diff or top-level patch"
+        )
+    if op_type in {"move_file", "rename_file"}:
+        for key in APPLY_PATCH_DESTINATION_KEYS:
+            value = candidate.get(key)
+            if isinstance(value, str) and value.strip():
+                break
+        else:
+            return (
+                f"missing destination on operation type {op_type!r}; "
+                f"expected one of: {', '.join(APPLY_PATCH_DESTINATION_KEYS)}"
+            )
+    return "could not coerce arguments to a valid apply_patch operation"
+
+
+def _invalid_apply_patch_call_message(item: dict, reason: str | None = None) -> dict:
     item_id = item.get("id") or item.get("call_id") or f"msg_apply_patch_invalid_{_now_ts()}"
+    text = "apply_patch call rejected by QuantZhai proxy: model emitted invalid patch arguments."
+    if reason:
+        text = f"{text} Reason: {reason}"
     return {
         "id": f"msg_{item_id}",
         "type": "message",
@@ -342,7 +488,7 @@ def _invalid_apply_patch_call_message(item: dict) -> dict:
         "role": "assistant",
         "content": [{
             "type": "output_text",
-            "text": "apply_patch call rejected by QuantZhai proxy: model emitted invalid patch arguments.",
+            "text": text,
         }],
     }
 
