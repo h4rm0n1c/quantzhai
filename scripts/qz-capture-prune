@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qz-env"
+
+RETAIN_DAYS="${QZ_CAPTURE_RETAIN_DAYS:-7}"
+DRY_RUN=0
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/qz-capture-prune [--days N] [--dry-run]
+
+Delete per-request capture directories under var/captures/requests/ that are
+older than the retention threshold. Request directory timestamps are read from
+the embedded millisecond timestamp in the directory name (qz_req_<ms>_<id>),
+so mtime is not used and copies/rsyncs do not affect pruning decisions.
+
+Options:
+  --days N    Retain captures from the last N days (default: QZ_CAPTURE_RETAIN_DAYS or 7)
+  --dry-run   Show what would be removed without removing anything
+
+Environment:
+  QZ_CAPTURE_RETAIN_DAYS   Default retention period in days (set in .env)
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --days)
+      RETAIN_DAYS="$2"
+      shift 2
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'unknown option: %s\n' "$1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+if ! [[ "$RETAIN_DAYS" =~ ^[0-9]+$ ]] || (( RETAIN_DAYS < 0 )); then
+  printf 'error: --days must be a non-negative integer, got: %s\n' "$RETAIN_DAYS" >&2
+  exit 1
+fi
+
+requests_dir="$QZ_VAR_DIR/captures/requests"
+
+if [[ ! -d "$requests_dir" ]]; then
+  printf 'no captures requests dir found: %s\n' "$requests_dir"
+  exit 0
+fi
+
+cutoff_ms=$(( ($(date +%s) - RETAIN_DAYS * 86400) * 1000 ))
+removed=0
+freed_kb=0
+
+while IFS= read -r -d '' dir; do
+  name="$(basename "$dir")"
+  if [[ "$name" =~ ^qz_req_([0-9]+)_ ]]; then
+    ts_ms="${BASH_REMATCH[1]}"
+    if (( ts_ms < cutoff_ms )); then
+      size_kb="$(du -sk "$dir" 2>/dev/null | awk '{print $1}' || printf '0')"
+      if [[ $DRY_RUN -eq 1 ]]; then
+        printf 'would remove: %s (%sK)\n' "$name" "$size_kb"
+      else
+        rm -rf "$dir"
+        printf 'removed: %s (%sK)\n' "$name" "$size_kb"
+      fi
+      (( removed++ )) || true
+      (( freed_kb += size_kb )) || true
+    fi
+  fi
+done < <(find "$requests_dir" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
+
+freed_mb=$(( freed_kb / 1024 ))
+
+if [[ $DRY_RUN -eq 1 ]]; then
+  printf 'dry run: would remove %d dirs (~%dMB), keeping last %d days\n' \
+    "$removed" "$freed_mb" "$RETAIN_DAYS"
+else
+  printf 'done: removed %d dirs (~%dMB), kept last %d days\n' \
+    "$removed" "$freed_mb" "$RETAIN_DAYS"
+fi
