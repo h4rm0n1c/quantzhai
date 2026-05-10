@@ -130,6 +130,7 @@ class ResponsesStreamRuntime:
         reasoning_only_timeout_s: float | None = None,
         reasoning_only_char_limit: int | None = None,
         proxy_tool_registry=None,
+        selected_model=None,
     ):
         self.upstream = upstream.rstrip("/")
         self.authorization = authorization or "Bearer local"
@@ -139,6 +140,7 @@ class ResponsesStreamRuntime:
         self.capture_enabled = capture_enabled
         self.telemetry = telemetry
         self.request_id = request_id or ""
+        self.selected_model = selected_model if isinstance(selected_model, dict) else None
         self.telemetry_emitter = RequestTelemetryEmitter(telemetry, self.request_id)
         self.proxy_tool_registry = proxy_tool_registry or make_proxy_local_tool_registry(web_runtime)
         self.private_function_call_timeout_s = (
@@ -439,7 +441,7 @@ class ResponsesStreamRuntime:
             for _hop in range(self.proxy_tool_registry.max_continuation_hops or WEB_SEARCH_MAX_HOPS):
                 hop_body = json.loads(json.dumps(working_body))
                 hop_body["stream"] = True
-                hop_body = normalize_responses_input_for_qwen(hop_body)
+                hop_body = normalize_responses_input_for_qwen(hop_body, selected_model=self.selected_model)
                 hop_body = normalize_tools_for_llamacpp(hop_body)
                 resp = None
                 raw_log = None

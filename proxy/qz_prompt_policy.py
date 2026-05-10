@@ -93,6 +93,20 @@ def _load_manifest():
     return manifest
 
 
+def _boolish(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off", ""}:
+            return False
+    return False
+
+
 def _clean_text(value):
     if not isinstance(value, str):
         return ""
@@ -207,6 +221,20 @@ def _selected_overrides(selected_model, manifest):
                 return value
 
     return {}
+
+
+def _disable_system_prompt(manifest, model_overrides):
+    if isinstance(model_overrides, dict) and model_overrides.get("disable_system_prompt") is not None:
+        return _boolish(model_overrides.get("disable_system_prompt"))
+    if isinstance(manifest, dict) and manifest.get("disable_system_prompt") is not None:
+        return _boolish(manifest.get("disable_system_prompt"))
+    return False
+
+
+def system_prompt_disabled(selected_model=None):
+    manifest = _load_manifest()
+    model_overrides = _selected_overrides(selected_model, manifest)
+    return _disable_system_prompt(manifest, model_overrides)
 
 
 def _first_block(*values):
@@ -395,6 +423,7 @@ def assemble_instruction_stack(existing_instructions="", client_blocks=None, sel
     """
     manifest = _load_manifest()
     model_overrides = _selected_overrides(selected_model, manifest)
+    disabled = _disable_system_prompt(manifest, model_overrides)
 
     top_policy = manifest.get("prompt_policy")
     model_policy = model_overrides.get("prompt_policy")
@@ -418,6 +447,7 @@ def assemble_instruction_stack(existing_instructions="", client_blocks=None, sel
 
     report = {
         "mode": mode,
+        "disable_system_prompt": disabled,
         "allow_replace": allow_replace,
         "allow_prepend_before_client": allow_prepend_before_client,
         "synthesize_missing_client": synthesize_missing_client,
@@ -428,6 +458,23 @@ def assemble_instruction_stack(existing_instructions="", client_blocks=None, sel
         "replacement_files_missing": [],
         "replacement_files_failed": [],
     }
+
+    if disabled:
+        report.update({
+            "client_blocks": 0,
+            "existing_blocks": 0,
+            "global_prepend_blocks": 0,
+            "global_append_blocks": 0,
+            "model_prepend_blocks": 0,
+            "model_append_blocks": 0,
+            "replacement_available": False,
+            "replacement_already_present": False,
+            "replaced_client": False,
+            "synthesized_missing_client": False,
+            "reused_existing_replacement": False,
+            "ignored_replace": False,
+        })
+        return "", report
 
     client_blocks = _blocks(client_blocks or [])
     existing_blocks = _blocks(existing_instructions)

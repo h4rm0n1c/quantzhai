@@ -84,6 +84,12 @@ backend_args=(
   --reasoning-format deepseek
 )
 
+case "${QZ_SPEC_DEFAULT,,}" in
+  1|true|yes|on)
+    backend_args+=(--spec-default)
+    ;;
+esac
+
 qz_docker run -d \
   --name "$QZ_CONTAINER" \
   --gpus all \

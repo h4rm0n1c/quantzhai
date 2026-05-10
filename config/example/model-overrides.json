@@ -17,6 +17,11 @@
       "notes": "Reasoning-focused compact variant.",
       "system_prompt": "Optional inline per-model system prompt override. Prefer system_prompt_file for long prompts."
     },
+    "qwen-blank.gguf": {
+      "label": "qwen-blank",
+      "notes": "Example blank interrogation profile. Symlink this profile to a real GGUF when you want the proxy to forward no top-level instructions at all.",
+      "disable_system_prompt": true
+    },
     "prompt-compiler.gguf": {
       "label": "prompt-compiler",
       "notes": "Example v2 compiler profile. Create var/models/prompt-compiler.gguf as a symlink to a real GGUF in var/models/; routing uses the symlink target, while Codex sees prompt-compiler.",

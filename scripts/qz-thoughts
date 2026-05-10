@@ -144,6 +144,8 @@ def _contract_rows(payload: dict) -> List[Tuple[str, str]]:
     mode = prompt_policy.get("mode")
     if mode:
         policy_bits.append(f"mode={mode}")
+    if prompt_policy.get("disable_system_prompt"):
+        policy_bits.append("system_prompt=off")
     for key, label in (
         ("replaced_client", "replaced"),
         ("synthesized_missing_client", "synthesized"),

@@ -429,6 +429,8 @@ Important settings:
 - `QZ_REASONING_BUDGET`: llama.cpp server-side Qwen reasoning budget, default
   `-1` for unlimited backend thinking. Set a positive value only when
   deliberately testing a hard backend reasoning cap.
+- `QZ_SPEC_DEFAULT`: set to `1/true/yes/on` to pass `--spec-default` to
+  llama.cpp when the backend build/model supports default speculative decoding.
 - `SEARXNG_BASE_URL`: optional SearXNG base URL for local web search. Leave empty to disable search.
 - `SEARXNG_POLICY`: search routing policy, default `config/default/search-policy.json`.
 

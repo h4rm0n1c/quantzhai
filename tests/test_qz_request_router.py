@@ -132,6 +132,42 @@ class RequestRouterProxyLocalToolTests(unittest.TestCase):
         self.assertEqual(router.request_bodies[1]["input"][-1]["type"], "function_call_output")
         self.assertEqual(router.request_bodies[1]["input"][-1]["call_id"], "call_probe")
 
+    def test_non_streaming_renormalization_preserves_disabled_system_prompt(self):
+        router = FakeRouter(
+            FakeHandler(ProxyLocalToolRegistry([])),
+            responses=[{
+                "id": "resp_final",
+                "object": "response",
+                "output": [{
+                    "id": "msg_final",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "done", "annotations": []}],
+                }],
+                "usage": {},
+            }],
+        )
+
+        router._run_responses_locally(
+            {
+                "model": "fake",
+                "input": [{
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "direct"}],
+                }],
+                "tools": [],
+            },
+            "fake",
+            selected_model={"overrides": {"disable_system_prompt": True}},
+            request_id="qz_req_blank",
+        )
+
+        self.assertEqual(len(router.request_bodies), 1)
+        self.assertNotIn("instructions", router.request_bodies[0])
+        self.assertTrue(router.request_bodies[0]["metadata"]["qz_prompt_policy"]["disable_system_prompt"])
+
 
 if __name__ == "__main__":
     unittest.main()

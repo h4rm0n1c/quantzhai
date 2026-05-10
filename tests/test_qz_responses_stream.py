@@ -665,6 +665,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         apply_patch_output_style="native",
         metadata=None,
         proxy_tool_registry=None,
+        selected_model=None,
     ):
         chunks = []
         runtime = ResponsesStreamRuntime(
@@ -682,6 +683,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             reasoning_only_timeout_s=reasoning_only_timeout_s,
             reasoning_only_char_limit=reasoning_only_char_limit,
             proxy_tool_registry=proxy_tool_registry,
+            selected_model=selected_model,
         )
         body = {
             "model": "test-model.gguf",
@@ -696,6 +698,22 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             body["metadata"] = metadata
         runtime.run(body, "test-model.gguf", apply_patch_output_style)
         return b"".join(chunks).decode("utf-8")
+
+    def test_streaming_renormalization_preserves_disabled_system_prompt(self):
+        requests = []
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            return FakeStream(_final_message_stream())
+
+        self._run_runtime(
+            opener,
+            selected_model={"overrides": {"disable_system_prompt": True}},
+        )
+
+        self.assertEqual(len(requests), 1)
+        self.assertNotIn("instructions", requests[0])
+        self.assertTrue(requests[0]["metadata"]["qz_prompt_policy"]["disable_system_prompt"])
 
     def test_web_search_call_is_public_and_upstream_resumes_with_hidden_output(self):
         requests = []

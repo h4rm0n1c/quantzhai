@@ -123,6 +123,12 @@ messages, and the structured `tools` array. Any QuantZhai prompt or tool policy
 must preserve that distinction:
 
 - top-level `instructions` can be replaced or amended by prompt policy
+- a profile may also set `disable_system_prompt: true`, which tells QuantZhai
+  to strip inbound top-level/developer instruction text and forward no
+  top-level `instructions` at all
+- continuation hops and `forwarded-request-after-tools.json` captures must
+  preserve the same selected-profile prompt policy; re-normalizing without the
+  selected model/profile can accidentally reintroduce the default Codex prompt
 - developer/user `input` items need explicit replay/normalization rules
 - structured tools need adapter logic, not text-only prompt replacement
 

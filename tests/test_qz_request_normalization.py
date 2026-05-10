@@ -9,6 +9,7 @@ from proxy.qz_request_normalization import (
     normalize_responses_input_for_qwen,
     recursive_clean,
 )
+from proxy.qz_prompt_policy import assemble_instruction_stack, system_prompt_disabled
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "responses_input"
@@ -44,6 +45,51 @@ class RequestNormalizationTests(unittest.TestCase):
         self.assertNotIn("<environment_context>", json.dumps(out["input"]))
         self.assertEqual(out["metadata"]["qz_prompt_policy"]["mode"], "replace_client")
         self.assertTrue(out["metadata"]["qz_prompt_policy"]["replaced_client"])
+
+    def test_disable_system_prompt_strips_all_forwarded_instruction_text(self):
+        body = {
+            "instructions": "NATIVE CODEX TOP LEVEL INSTRUCTIONS",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "developer harness"}],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "talk directly"}],
+                },
+            ],
+        }
+
+        out = normalize_responses_input_for_qwen(
+            body,
+            selected_model={"overrides": {"disable_system_prompt": True}},
+        )
+
+        self.assertNotIn("instructions", out)
+        self.assertEqual(out["input"], [{
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "talk directly"}],
+        }])
+        self.assertTrue(out["metadata"]["qz_prompt_policy"]["disable_system_prompt"])
+
+    def test_assemble_instruction_stack_reports_system_prompt_disabled(self):
+        text, report = assemble_instruction_stack(
+            existing_instructions="client prompt",
+            client_blocks=["developer prompt"],
+            selected_model={"overrides": {"disable_system_prompt": True}},
+        )
+
+        self.assertEqual(text, "")
+        self.assertTrue(report["disable_system_prompt"])
+        self.assertFalse(report["replacement_available"])
+
+    def test_system_prompt_disabled_reads_selected_model_overrides(self):
+        self.assertTrue(system_prompt_disabled({"overrides": {"disable_system_prompt": True}}))
+        self.assertFalse(system_prompt_disabled({"overrides": {"disable_system_prompt": False}}))
 
     def test_turn_harness_injects_into_latest_user_when_prompt_stack_absent(self):
         body = {

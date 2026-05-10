@@ -498,6 +498,7 @@ class RequestRouter:
             "profile_symlink": bool(selected_model.get("profile_symlink")),
             "prompt_policy": {
                 "mode": prompt_policy.get("mode") or "",
+                "disable_system_prompt": bool(prompt_policy.get("disable_system_prompt")),
                 "replaced_client": bool(prompt_policy.get("replaced_client")),
                 "synthesized_missing_client": bool(prompt_policy.get("synthesized_missing_client")),
                 "reused_existing_replacement": bool(prompt_policy.get("reused_existing_replacement")),
@@ -720,6 +721,7 @@ class RequestRouter:
             telemetry=self.handler.telemetry,
             request_id=request_id,
             proxy_tool_registry=self._proxy_tool_registry(web_runtime),
+            selected_model=selected_model,
         )
         return runtime.run(body, requested_model, apply_patch_output_style)
 
@@ -745,7 +747,7 @@ class RequestRouter:
         for _hop in range(WEB_SEARCH_MAX_HOPS):
             hop_body = json.loads(json.dumps(working_body))
             hop_body["stream"] = False
-            hop_body = normalize_responses_input_for_qwen(hop_body)
+            hop_body = normalize_responses_input_for_qwen(hop_body, selected_model=selected_model)
             hop_body = normalize_tools_for_llamacpp(hop_body)
             status, content_type, resp_data = self._call_upstream_json(url, hop_body)
             out = json.loads(resp_data.decode("utf-8"))

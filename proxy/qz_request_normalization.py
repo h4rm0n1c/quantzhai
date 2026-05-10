@@ -342,6 +342,8 @@ def normalize_responses_input_for_qwen(body: dict, selected_model: dict | None =
     )
     if assembled_instructions:
         body["instructions"] = assembled_instructions
+    else:
+        body.pop("instructions", None)
 
     harness_blocks, turn_harness_report = selected_turn_harnesses(selected_model)
     _strip_turn_harnesses(clean_input, harness_blocks=harness_blocks)
