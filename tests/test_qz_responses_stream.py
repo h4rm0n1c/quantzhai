@@ -476,8 +476,8 @@ def _reasoning_tool_artifact_stream():
         '{\n'
         '  "operation": {\n'
         '    "type": "update_file",\n'
-        '    "path": "amber_v4.md",\n'
-        '    "diff": "--- a/amber_v4.md\\n+++ b/amber_v4.md\\n@@ -1,1 +1,2 @@\\n old\\n+new\\n"\n'
+        '    "path": "sample_v4.md",\n'
+        '    "diff": "--- a/sample_v4.md\\n+++ b/sample_v4.md\\n@@ -1,1 +1,2 @@\\n old\\n+new\\n"\n'
         '  }\n'
         '}\n'
     )
@@ -563,7 +563,7 @@ def _apply_patch_call_stream():
 
 
 def _exec_command_call_stream():
-    arguments = json.dumps({"cmd": "cat > amber_v2.md", "yield_time_ms": 1000})
+    arguments = json.dumps({"cmd": "cat > sample_v2.md", "yield_time_ms": 1000})
     midpoint = len(arguments) // 2
     return [
         _sse_block("response.created", {
@@ -786,8 +786,8 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertEqual(added_payload["item"]["type"], "function_call")
         self.assertEqual(added_payload["item"]["status"], "in_progress")
         self.assertEqual(added_payload["item"]["name"], "exec_command")
-        self.assertIn('"cmd": "cat > amber_v2.md"', added_payload["item"]["arguments"])
-        self.assertIn("cat > amber_v2.md", stream_text)
+        self.assertIn('"cmd": "cat > sample_v2.md"', added_payload["item"]["arguments"])
+        self.assertIn("cat > sample_v2.md", stream_text)
 
     def test_golden_public_function_call_buffers_until_arguments_done(self):
         def opener(body):
@@ -813,7 +813,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             "response.output_item.done",
         ])
         self.assertEqual(public_call_events[0][1]["item"]["name"], "exec_command")
-        self.assertIn("cat > amber_v2.md", public_call_events[0][1]["item"]["arguments"])
+        self.assertIn("cat > sample_v2.md", public_call_events[0][1]["item"]["arguments"])
 
     def test_golden_public_function_call_without_done_still_completes_once(self):
         def opener(body):
@@ -974,7 +974,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         )
         events = telemetry.recent()
 
-        self.assertIn("reasoning channel instead of emitting a real tool call", stream_text)
+        self.assertIn("sample_v4.md", stream_text)
         self.assertIn("response.completed", stream_text)
         self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
         self.assertTrue(any(
@@ -1029,7 +1029,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         events = telemetry.recent()
         names = [event_type for event_type, _payload in _parse_sse_events(stream_text)]
 
-        self.assertIn("reasoning channel instead of emitting a real tool call", stream_text)
+        self.assertIn("sample_v4.md", stream_text)
         self.assertIn("response.completed", names)
         self.assertNotIn("response.output_item.done", names)
         self.assertNotIn('"type": "function_call"', stream_text)

@@ -325,7 +325,7 @@ arrive. Input normalization now drops empty `function_call` history items and
 their parse-error outputs before forwarding to upstream.
 
 Follow-up: request `qz_req_1778177240868_e0d0` showed the model streaming an
-`apply_patch`-shaped JSON/diff payload for `amber_v4.md` entirely through
+`apply_patch`-shaped JSON/diff payload for `sample_v4.md` entirely through
 `response.reasoning_text.delta`. It never emitted `output_text` or a real
 `function_call`, so the idle timeout did not apply because tokens were still
 arriving. The proxy now treats patch/tool-shaped payloads in reasoning-only
@@ -344,7 +344,7 @@ Follow-up prompt-compiler file-write failure:
 
 ```text
 request_id: qz_req_1778171634737_8a10
-user request: write compiled output to amber_v2.md
+user request: write compiled output to sample_v2.md
 incoming tools: exec_command, write_stdin, custom apply_patch, ...
 forwarded tools: exec_command, write_stdin, function apply_patch, ...
 upstream reasoning_text.delta: 671

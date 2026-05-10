@@ -292,13 +292,13 @@ class ModelCatalogProfileValidationTests(unittest.TestCase):
             model_dir = root / "var" / "models"
             target = model_dir / "real-backend.gguf"
             _write_gguf(target)
-            (model_dir / "amber.gguf").symlink_to(target)
+            (model_dir / "example-roleplay.gguf").symlink_to(target)
             (model_dir / "prompt-compiler.gguf").symlink_to(target)
             overrides = root / "var" / "model-overrides.json"
             overrides.parent.mkdir(parents=True, exist_ok=True)
             overrides.write_text(json.dumps({
                 "models": {
-                    "amber.gguf": {
+                    "example-roleplay.gguf": {
                         "label": "prompt-compiler",
                     },
                     "prompt-compiler.gguf": {

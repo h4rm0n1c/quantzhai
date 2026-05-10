@@ -43,7 +43,7 @@ ordinary visible text.
 
 ## Local Path Contract
 
-When the user names a relative file such as `amber.md`, resolve it from the
+When the user names a relative file such as `example-roleplay.md`, resolve it from the
 current working directory first. Treat the current project/workspace directory as
 the default search root.
 

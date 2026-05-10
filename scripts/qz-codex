@@ -41,8 +41,8 @@ if [[ "${1:-}" == "exec" ]]; then
 qz-codex: exec requires an explicit -m/--model or -p/--profile.
 
 Reason: Codex persists the last selected model in var/codex-home/config.toml,
-so non-interactive captures can silently run under a roleplay profile such as
-amber instead of the intended coding/compiler profile.
+so non-interactive captures can silently run under a roleplay profile instead
+of the intended coding/compiler profile.
 
 Example:
   ./scripts/qz-codex exec -m prompt-compiler --json --ephemeral 'Say done.'

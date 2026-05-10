@@ -6,7 +6,22 @@
 
 QuantZhai is a local Codex stack for running Qwen through a turboquant llama.cpp server with an OpenAI-compatible proxy.
 
-This directory is the cleaned seed, not the discovery dump. Runtime state lives under `var/` and stays out of git.
+It is built as a cleanly isolated, optional wrapper around a normal Codex install. If you stop using QuantZhai, you can remove the repo and its `var/` state without disturbing your native Codex setup. The point is to make a local agent box you can shape, test, replay, and remove cleanly.
+
+This repository is the cleaned seed. Runtime state lives under `var/` and stays out of git.
+
+## Why This Matters
+
+QuantZhai is useful because it gives you a local agent stack with real guardrails:
+
+- isolated from a native Codex install
+- driven by profile-level behavior instead of one fixed prompt
+- backed by golden replay fixtures and unit tests
+- able to model turn-level harnesses for roleplay and compact modes
+- able to swap model profiles with symlinks instead of runtime surgery
+- wrapped in simple start, stop, doctor, smoke, and Codex runner scripts
+
+That makes it practical for home-lab experimentation, prompt/profile work, and small custom-agent deployments that need to stay reproducible.
 
 ## Documentation
 
@@ -14,7 +29,15 @@ Start with the [documentation index](docs/README.md) for a browsable map of the 
 
 ## Status
 
-QuantZhai is early but has run locally in a useful Codex workflow. Treat it as a reproducible lab stack, not a polished installer.
+QuantZhai is early but has already run locally in a useful Codex workflow. Treat it as a reproducible lab stack, not a polished installer.
+
+Current coverage is not hand-wavy:
+
+- 187 unit tests lock down established behavior.
+- Golden replay fixtures cover proxy logic, stream normalization, tool state, and patch adapter paths.
+- Live smoke tests cover the proxy, `apply_patch`, and Codex exec flows.
+- Symlink-based model profiles, prompt injection, and turn harnesses are all part of the runtime contract.
+- The wrapper is intended to stay removable and non-destructive to a native Codex install.
 
 Known-good host used during initial bring-up:
 
@@ -54,6 +77,8 @@ The proxy exists because Codex expects OpenAI-style Responses behavior, model ca
 - `scripts/qz-doctor`: checks local prerequisites.
 - `scripts/qz-clean-legacy`: stops the old source-tree proxy and shared container.
 - `config/`: publishable Codex config and model catalog examples.
+
+This is enough to make the repo feel like a small local agent appliance: profile-driven behavior, replayable proxy contracts, a removable Codex wrapper, and scripts that keep the operational path short.
 
 ## Runtime Layout
 
@@ -616,3 +641,16 @@ See the [documentation index](docs/README.md) for the current browsable document
 ## Name
 
 `Zhai` comes from `shanzhai`: scrappy, DIY, mountain-fort energy. QuantZhai means local quant stack built from practical parts.
+
+## Credits
+
+QuantZhai draws on the behavior and tooling contracts of:
+
+- OpenAI Codex CLI and the Responses API shape it expects.
+- llama.cpp as the local model server and routing target.
+- Qwen model family behavior, especially reasoning and thinking controls.
+- SearXNG for local search routing and policy shaping.
+- The turboquant llama.cpp fork/image used for the GPU server path.
+- The Codex CLI `caveman` plugin, which inspired the repo's own Caveman profile and helped motivate the turn-level harness approach.
+
+The repo-specific proxy, profile, and harness contract are QuantZhai work, but the system is built by standing on those upstream pieces rather than pretending they do not exist.

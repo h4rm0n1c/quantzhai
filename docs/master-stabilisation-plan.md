@@ -717,8 +717,8 @@ Current finding:
 ```text
 Supported codex exec --json captures show basic shell_command lifecycle already
 matches hosted shape through QZ, including long-running shell commands when
-tested with -m prompt-compiler. A bad QZ capture used the persisted amber model
-and should not be treated as coding/tool evidence.
+tested with -m prompt-compiler. A bad QZ capture used the persisted roleplay
+profile and should not be treated as coding/tool evidence.
 
 The proxy-local web_search relay now emits Responses built-in web-search
 progress events before proxy execution, then emits the completed public

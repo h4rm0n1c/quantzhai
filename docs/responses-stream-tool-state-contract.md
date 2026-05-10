@@ -362,7 +362,7 @@ turn.completed    usage={input_tokens,cached_input_tokens,output_tokens,reasonin
 
 Long-running shell capture with the compiler/coding profile must force the
 model explicitly, because the persistent local Codex config can be left on a
-roleplay profile such as `amber`:
+roleplay profile such as `example-roleplay`:
 
 ```bash
 ./scripts/qz-codex exec --json --ephemeral --skip-git-repo-check --ignore-rules \

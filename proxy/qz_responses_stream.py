@@ -462,7 +462,10 @@ class ResponsesStreamRuntime:
                     while True:
                         chunk = resp.readline()
                         if not chunk:
-                            break
+                            if event_lines:
+                                chunk = b"\n"
+                            else:
+                                break
 
                         if raw_log is not None:
                             raw_log.write(chunk)
