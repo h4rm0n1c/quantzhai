@@ -277,6 +277,45 @@ class GenerateIntegrationTests(unittest.TestCase):
 
         self.assertNotIn("model_max_output_tokens", toml_path.read_text())
 
+    def test_no_prompt_warning_printed_to_stderr(self):
+        """When a model has no system prompt and disable_system_prompt is not
+        set, generate() should print a warning to stderr."""
+        inventory_path = self._write_inventory([
+            {"stem": "promptless", "backend_id": "promptless",
+             "context_length": 131072, "overrides": {}},
+        ])
+        catalog_path = self._catalog_path()
+        toml_path = self._write_toml("")
+
+        import io
+        from unittest.mock import patch
+
+        stderr_buf = io.StringIO()
+        with patch("sys.stderr", stderr_buf):
+            generate(inventory_path, catalog_path, toml_path)
+
+        self.assertIn("warning", stderr_buf.getvalue().lower())
+        self.assertIn("promptless", stderr_buf.getvalue())
+
+    def test_no_warning_when_disable_system_prompt_set(self):
+        """No warning when disable_system_prompt is explicitly set."""
+        inventory_path = self._write_inventory([
+            {"stem": "intentionally-blank", "backend_id": "intentionally-blank",
+             "context_length": 131072,
+             "overrides": {"disable_system_prompt": True}},
+        ])
+        catalog_path = self._catalog_path()
+        toml_path = self._write_toml("")
+
+        import io
+        from unittest.mock import patch
+
+        stderr_buf = io.StringIO()
+        with patch("sys.stderr", stderr_buf):
+            generate(inventory_path, catalog_path, toml_path)
+
+        self.assertEqual(stderr_buf.getvalue(), "")
+
     def test_missing_inventory_produces_empty_catalog(self):
         inventory_path = self.root / "var" / "nonexistent.json"
         catalog_path = self._catalog_path()

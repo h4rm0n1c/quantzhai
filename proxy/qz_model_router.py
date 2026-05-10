@@ -569,9 +569,14 @@ class ModelRouter:
             if item not in missing:
                 missing.append(item)
 
+        disabled = bool(policy.get("disable_system_prompt"))
+        prompt_empty = not disabled and not (_instructions or "").strip()
+
         return {
             "schema": "qz.prompt.status.v1",
             "mode": policy.get("mode") or "",
+            "disabled": disabled,
+            "prompt_empty": prompt_empty,
             "policy": policy,
             "files_loaded": loaded,
             "files_missing": missing,

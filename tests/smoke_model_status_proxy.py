@@ -253,6 +253,8 @@ def main():
             assert snapshot["backend"]["backend_context_length_state"] == "confirmed", snapshot
             assert snapshot["prompt"]["schema"] == "qz.prompt.status.v1", snapshot
             assert snapshot["prompt"]["files_missing"], snapshot
+            assert snapshot["prompt"]["disabled"] is False, snapshot
+            assert snapshot["prompt"]["prompt_empty"] is True, snapshot
 
             status, _, telemetry = _request_json(f"http://127.0.0.1:{proxy.server_port}/qz/telemetry/recent?limit=5")
             assert status == 200, telemetry

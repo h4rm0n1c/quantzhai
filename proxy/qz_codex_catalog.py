@@ -439,7 +439,18 @@ def build_live_model(entry, priority):
     notes = entry.get("notes") or overrides.get("notes")
     model["description"] = notes or f"Local GGUF model: {label}"
 
-    model["base_instructions"] = system_prompt_for_model(overrides)
+    base_instructions = system_prompt_for_model(overrides)
+    model["base_instructions"] = base_instructions
+
+    if not base_instructions:
+        model_disable = override_value(overrides, "disable_system_prompt")
+        global_disable = override_value(OVERRIDE_MANIFEST, "disable_system_prompt")
+        disabled = _boolish(model_disable if model_disable is not None else global_disable)
+        if not disabled:
+            print(
+                f"warning: model '{slug}' has no system prompt and disable_system_prompt is not set",
+                file=sys.stderr,
+            )
 
     model_messages = override_value(overrides, "codex_model_messages", "model_messages")
     if isinstance(model_messages, dict):
