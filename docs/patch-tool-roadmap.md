@@ -140,14 +140,26 @@ Implemented:
   is accepted as a model-facing alias and converted to `move_file`.
 - Unified-diff metadata normalization for model `update_file.diff` payloads
   before custom Codex patch-envelope synthesis.
-- Invalid model-side `apply_patch` output normalization into assistant error messages.
 - Streaming event synthesis for `apply_patch_call` and `custom_tool_call`.
 - Request-scoped `metadata.qz_tool_policy` records the original Codex-facing
   apply_patch declaration shape and drives native/custom stream output.
+- **(2026-05-10)** Sibling-`patch` field coercion: when the model emits the
+  file content as a top-level `patch` string sibling to `operation`, the proxy
+  promotes it into `operation.diff` before retrying coercion. Driven by live
+  fuzz captures (Qwen Shape A).
+- **(2026-05-10)** Partial-envelope error feedback: when args coercion fails
+  but type+path can be salvaged, the proxy emits a partial Codex envelope so
+  Codex's V4A verifier produces a specific error the model can act on next
+  turn. Replaces the previous "invalid arguments" assistant message dead-end.
+  Driven by live fuzz captures (Qwen Shape B).
+- **(2026-05-10)** Path extraction from full-envelope legacy `patch` strings.
+- **(2026-05-10)** Move-without-hunk emits a partial `*** Update File +
+  *** Move to` envelope so renames surface to Codex.
 
 Still pending:
 
-- Add more negative fixtures for Codex parser-failure history.
+- Re-fuzz validation of the four 2026-05-10 changes against the linuxstreamtools
+  prompt set; expect dramatically improved create_file completion rate.
 
 The first implementation does not write files. It only translates tool-call shape.
 
@@ -202,8 +214,16 @@ Implemented so far:
   `destination`. Custom output is the Codex patch envelope:
   `*** Update File: old` followed by `*** Move to: new`.
 - Golden SSE replay fixture documenting invalid move/rename behavior:
-  `move_file` without an explicit destination is converted into an assistant
-  error message, not exposed as a runnable tool call.
+  `move_file` without an explicit destination falls back to a descriptive
+  assistant message (no envelope can be salvaged from no-destination args).
+- **(2026-05-10)** Golden fixtures derived from live Qwen fuzz captures:
+  `qwen_create_file_sibling_patch.raw`,
+  `qwen_update_file_sibling_patch_with_unified_headers.raw`,
+  `qwen_create_file_bare_operation.raw`,
+  `qwen_update_file_bare_operation.raw`,
+  `qwen_legacy_patch_missing_path.raw`,
+  `qwen_rename_no_hunk.raw`. Each pins one observed Qwen failure shape and
+  asserts the proxy's compatibility behaviour.
 - Proxy smoke test with fake upstream covering native and custom output styles.
 - Codex CLI smoke test with fake upstream proving current Codex consumes the translated custom `apply_patch` call and creates the expected temp file.
 

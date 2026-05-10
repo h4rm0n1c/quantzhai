@@ -646,11 +646,29 @@ before broad stream/tool refactors.
 - `tests/fixtures/responses_input/native_codex_first_request_shape.json`: pins
   the redacted native Codex first-request envelope used by
   `normalize_responses_input_for_qwen` and `normalize_tools_for_llamacpp`
-- `invalid_apply_patch_call.raw`: malformed model-side patch operation becomes
-  an assistant error message, not a runnable private tool call
-- `invalid_apply_patch_move_call.raw`: move/rename-style operations without an
-  explicit destination are rejected instead of being exposed as runnable tool
-  calls
+- `invalid_apply_patch_call.raw`: bare-operation create_file (no diff) now
+  emits a partial `*** Add File: <path>` envelope so Codex's verifier
+  surfaces a specific error to the model on the next turn (was: assistant
+  message dead-end before 2026-05-10)
+- `invalid_apply_patch_move_call.raw`: move/rename-style operations without
+  an explicit destination still fall back to a descriptive assistant message,
+  because no usable envelope can be salvaged from no-destination args
+- `qwen_create_file_sibling_patch.raw`,
+  `qwen_update_file_sibling_patch_with_unified_headers.raw`: Qwen-observed
+  shape A — operation lacks diff but a sibling top-level `patch` carries
+  the file content; proxy promotes it into `operation.diff` and coercion
+  proceeds normally. The unified-diff variant exercises the existing file-
+  header stripping path
+- `qwen_create_file_bare_operation.raw`,
+  `qwen_update_file_bare_operation.raw`: Qwen-observed shape B — operation
+  with type+path but no content anywhere; proxy emits a partial Codex
+  envelope so the verifier produces a specific actionable error
+- `qwen_legacy_patch_missing_path.raw`: full Codex patch envelope as
+  top-level `patch` string with no separate `path`; proxy extracts type+path
+  from the envelope's `*** Update File:` header line
+- `qwen_rename_no_hunk.raw`: rename without a content hunk emits a partial
+  `*** Update File + *** Move to` envelope rather than the previous silent
+  no-op
 - `completed_without_done.raw`: upstream `response.completed` without `[DONE]`
   is closed with exactly one terminal `[DONE]`
 - `done_only.raw`: final continuation hop with only `[DONE]` is converted into

@@ -1,11 +1,21 @@
 # apply_patch Compatibility Plan
 
-Date: 2026-05-10 (revised after live fuzz)
+Date: 2026-05-10 (Phases 1–4 implemented and live-validated)
 
 ## Status
 
-Evidence collected. Two live fuzz sessions complete (40 prompts, 56 apply_patch
-calls). Implementation plan below is evidence-backed and ready to act on.
+All five phases implemented, committed, documented, and live-validated.
+
+Implementation commits:
+- Phase 1 — `8e0af06` Coerce sibling patch field next to operation
+- Phase 2 — `69e28ad` Emit partial apply_patch envelope on coercion failure
+- Phase 3+4 — `e40c976` Extract path from legacy envelopes; pin rename-no-hunk
+- Phase 5 — this commit
+
+Validation: 8 of 8 worst-failing create prompts from the original synthetic
+fuzz now succeed (was 0 of 5). Multi-step tasks complete end-to-end. See
+`var/captures/apply-patch-revalidation-2026-05-10/report.md` for the
+post-implementation evidence.
 
 Original-state notes from before the fuzz are preserved in section "Pre-fuzz
 plan" at the bottom for archival.
@@ -157,7 +167,7 @@ coercion for unobserved variants.
 Phased, ordered by safety and value. Each phase produces a small, testable
 change.
 
-### Phase 1 — Sibling-`patch` coercion
+### Phase 1 — Sibling-`patch` coercion ✅ implemented (`8e0af06`)
 
 Smallest, safest change. Closes ~13 of 25 missing-diff failures.
 
@@ -179,9 +189,22 @@ existing `_strip_unified_diff_headers` path so file-header noise is stripped.
 
 **Smoke:** `tests/smoke_apply_patch_proxy.py`, `tests/smoke_apply_patch_codex_exec.py`.
 
-### Phase 2 — Error feedback path
+### Phase 2 — Error feedback path ✅ implemented (`69e28ad`)
 
 Biggest lever. Closes ~12 bare-operation failures and any future variants.
+
+**Implementation differs from the original Option B plan.** During implementation
+we found that Codex's V4A verifier already produces specific errors (e.g. "Add
+File requires content lines") and Codex synthesizes a `custom_tool_call_output`
+back to the model on the next turn. So instead of synthesizing a tool result
+inside the proxy's SSE stream, the proxy now emits a **partial Codex envelope**
+when coercion fails — `*** Add File: <path>` with no content, etc. Codex's
+verifier then produces a specific error and the model gets actionable feedback
+through Codex's normal flow. No proxy-side stream synthesis required.
+
+When the args cannot yield a usable envelope at all (no path, no destination
+for moves), the proxy still falls back to an assistant message — but that
+message now carries a specific reason describing what was missing.
 
 **Change:** replace `_invalid_apply_patch_call_message` (and its callers in
 `_function_call_to_apply_patch_call` / `_function_call_to_custom_apply_patch_call`)
@@ -228,7 +251,7 @@ hops). The apply_patch failure injection follows the same pattern. Validate
 against `docs/responses-stream-tool-state-contract.md` and add a row to the
 state table for "apply_patch invalid arguments".
 
-### Phase 3 — Move-without-hunk handling
+### Phase 3 — Move-without-hunk handling ✅ implemented (`e40c976`, partly subsumed by Phase 2)
 
 Closes the silent no-op for clean renames in custom-output mode.
 
@@ -246,7 +269,7 @@ Closes the silent no-op for clean renames in custom-output mode.
 - Fixture `tests/fixtures/sse/qwen_rename_no_hunk.raw`.
 - Test that the resulting custom envelope or native operation passes through to Codex.
 
-### Phase 4 — Legacy `patch`-string with missing path
+### Phase 4 — Legacy `patch`-string with missing path ✅ implemented (`e40c976`)
 
 Rare (1/56) but easy.
 
@@ -259,13 +282,16 @@ specific message.
 - Fixture `tests/fixtures/sse/qwen_legacy_patch_missing_path.raw`.
 - Test extraction success and extraction failure paths.
 
-### Phase 5 — Update `apply-patch-compatibility-plan.md` and `patch-tool-roadmap.md`
+### Phase 5 — Documentation sync ✅ complete
 
-Move this doc to "implemented" status after Phases 1–4 land. Update
-`docs/patch-tool-roadmap.md` Phase 4 ("Tests") to reference the new fixtures.
-Update the controlled state table in
-`docs/responses-stream-tool-state-contract.md` to reflect the new error path
-shape.
+This doc, `docs/patch-tool-roadmap.md`, and the state contract in
+`docs/responses-stream-tool-state-contract.md` have been updated to reflect
+Phases 1–4. Revalidation evidence is in
+`var/captures/apply-patch-revalidation-2026-05-10/report.md`.
+
+Revalidation summary: 8 of 8 worst-failing creates now succeed, vs 0 of 5
+before. Detailed comparison and per-prompt outcomes in the revalidation
+report.
 
 ---
 
