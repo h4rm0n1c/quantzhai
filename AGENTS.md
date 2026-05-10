@@ -100,7 +100,7 @@ sudo docker ps -a
 For script or proxy changes, run:
 
 ```bash
-bash -n scripts/qz-env scripts/qz-doctor scripts/qz-up scripts/qz-proxy scripts/qz-codex scripts/qz-down scripts/qz-clean-legacy scripts/qz-build-image
+bash -n scripts/qz-env scripts/qz-doctor scripts/qz-up scripts/qz-proxy scripts/qz-codex scripts/qz-down scripts/qz-build-image
 python3 -m py_compile proxy/quantzhai_proxy.py
 ```
 

@@ -75,7 +75,6 @@ The proxy exists because Codex expects OpenAI-style Responses behavior, model ca
 - `scripts/qz-codex`: runs Codex against the local proxy.
 - `scripts/qz-down`: stops the proxy and QuantZhai container.
 - `scripts/qz-doctor`: checks local prerequisites.
-- `scripts/qz-clean-legacy`: stops the old source-tree proxy and shared container.
 - `config/`: publishable Codex config and model catalog examples.
 
 This is enough to make the repo feel like a small local agent appliance: profile-driven behavior, replayable proxy contracts, a removable Codex wrapper, and scripts that keep the operational path short.
@@ -191,7 +190,6 @@ cp .env.example .env
 $EDITOR .env
 scripts/qz-doctor
 scripts/qz-build-image   # only needed if qz-doctor reports missing image
-scripts/qz-clean-legacy
 scripts/qz-up
 scripts/qz-codex high
 ```
@@ -556,12 +554,6 @@ Stop QuantZhai:
 scripts/qz-down
 ```
 
-Stop old source-tree process/container:
-
-```bash
-scripts/qz-clean-legacy
-```
-
 ## Troubleshooting
 
 If `qz-doctor` says Docker image missing, check local images:
@@ -582,12 +574,8 @@ section. With plain `QZ_DOCKER_CMD="sudo docker"`, run the script in a real
 terminal where sudo can prompt, or refresh sudo with `sudo -v` before setup
 commands.
 
-If `qz-proxy` says the port is in use, clear old proxy processes:
-
-```bash
-scripts/qz-clean-legacy
-scripts/qz-proxy
-```
+If `qz-proxy` says the port is in use, clear the old process or pick a free
+proxy port, then start `scripts/qz-proxy` again.
 
 If Codex says `Pulling model ...` then fails, check that `qz-codex` is using the local model catalog under `var/codex-home/model-catalogs/` and that the proxy is reachable:
 
