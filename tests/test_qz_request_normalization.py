@@ -189,7 +189,7 @@ class RequestNormalizationTests(unittest.TestCase):
         self.assertIn("profile system prompt", out["instructions"])
         self.assertTrue(out["metadata"]["qz_turn_harness"]["applied"])
         self.assertEqual(out["input"][0]["content"][0]["text"], "hello")
-        self.assertIn("Caveman ultra is ON and locked", out["input"][2]["content"][0]["text"])
+        self.assertIn("Caveman ultra locked", out["input"][2]["content"][0]["text"])
 
     def test_turn_harness_dedupes_and_reports_unknown_names(self):
         body = {
@@ -223,7 +223,7 @@ class RequestNormalizationTests(unittest.TestCase):
         )
 
         text = out["input"][2]["content"][0]["text"]
-        self.assertEqual(text.count("Caveman ultra is ON and locked"), 1)
+        self.assertEqual(text.count("Caveman ultra locked"), 1)
         self.assertEqual(out["metadata"]["qz_turn_harness"]["active"], ["caveman-ultra-lock"])
         self.assertEqual(out["metadata"]["qz_turn_harness"]["unknown"], ["missing-harness"])
 
