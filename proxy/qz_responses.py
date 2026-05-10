@@ -54,6 +54,19 @@ except ImportError:
     from qz_proxy_tools import DEFAULT_TOOL_REGISTRY
     from qz_tool_request import normalize_tools_for_llamacpp
 
+# Item types that are proxy-generated and should be excluded from old-history
+# compaction summaries and microcompaction replays. Proxy-local tool types are
+# derived from the registry so new tools don't require edits here.
+_PROXY_LOCAL_ITEM_TYPES: frozenset[str] = frozenset(
+    spec.public_item_type
+    for spec in DEFAULT_TOOL_REGISTRY.specs()
+    if spec.execution == "proxy_local" and spec.public_item_type
+)
+# Reasoning items come from upstream and are also excluded; they are not
+# managed by the tool registry.
+_UPSTREAM_TRANSIENT_ITEM_TYPES: frozenset[str] = frozenset({"reasoning"})
+_COMPACTION_DROP_TYPES: frozenset[str] = _PROXY_LOCAL_ITEM_TYPES | _UPSTREAM_TRANSIENT_ITEM_TYPES
+
 LOCAL_COMPACTION_PREFIX = "localcmp:v1:"
 COMPACTION_CONFIG = {
     "keep_recent_items": 8,
@@ -163,7 +176,7 @@ def _item_text(item: dict) -> str:
         role = item.get("role", "unknown")
         return f"{role}: {text}"
 
-    if item_type in ("reasoning", "web_search_call"):
+    if item_type in _COMPACTION_DROP_TYPES:
         return ""
 
     if item_type in FUNCTION_CALL_TYPES:
@@ -287,7 +300,7 @@ def _build_local_compaction_response(body: dict) -> dict:
     for item in input_items:
         if _is_local_checkpoint_prompt(item):
             continue
-        if isinstance(item, dict) and item.get("type") in ("reasoning", "web_search_call"):
+        if isinstance(item, dict) and item.get("type") in _COMPACTION_DROP_TYPES:
             continue
         if isinstance(item, dict) and item.get("type") == "message":
             text = _normalize_ws(_content_to_text(item.get("content")))
