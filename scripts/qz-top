@@ -12,6 +12,7 @@ set +o pipefail 2>/dev/null
 
 python3 - "$@" <<'PY'
 import argparse
+import collections
 import curses
 import json
 import math
@@ -45,18 +46,22 @@ class Rates:
     checkpoints: int = 0
     restores: int = 0
     oom: int = 0
+    # Rolling windows (last 5 samples) for smoothed "latest" display.
+    prompt_window: object = field(default_factory=lambda: collections.deque(maxlen=5))
+    gen_window: object = field(default_factory=lambda: collections.deque(maxlen=5))
+    total_window: object = field(default_factory=lambda: collections.deque(maxlen=5))
     prompt_latest: float = 0.0
     prompt_max: float = 0.0
-    prompt_tokens: int = 0
-    prompt_ms: float = 0.0
+    prompt_tokens: int = 0      # latest request
+    prompt_ms: float = 0.0      # latest request
     gen_latest: float = 0.0
     gen_max: float = 0.0
-    gen_tokens: int = 0
-    gen_ms: float = 0.0
+    gen_tokens: int = 0         # latest request
+    gen_ms: float = 0.0         # latest request
     total_latest: float = 0.0
     total_max: float = 0.0
-    total_tokens: int = 0
-    total_ms: float = 0.0
+    total_tokens: int = 0       # latest request (input + output)
+    total_ms: float = 0.0       # latest request
     recent: List[Tuple[str, str]] = None
 
 
@@ -335,6 +340,23 @@ def human_si(value: float, suffix: str = "", precision: int = 1) -> str:
     return f"{sign}{text}{units[idx]}{suffix}"
 
 
+def tps_str(value: float) -> str:
+    """Format a token-per-second rate as a plain number, never using SI prefixes.
+
+    Keeps all TPS columns in the same unit so values are immediately comparable.
+    Returns '--' when the rate is zero or unavailable.
+    """
+    if not value or value <= 0:
+        return "--"
+    if value >= 1000:
+        return f"{int(round(value))}"
+    if value >= 100:
+        return f"{int(round(value))}"
+    if value >= 10:
+        return f"{value:.1f}"
+    return f"{value:.2f}"
+
+
 def human_bytes_from_mib(value: float, compact: bool = False) -> str:
     try:
         value = float(value)
@@ -525,11 +547,11 @@ def telemetry_row(event: dict) -> Optional[Tuple[str, str]]:
         msg = f"{path}".strip()
         parts = []
         if prompt_rate:
-            parts.append(f"prompt={human_si(prompt_rate, '/s', precision=2)}")
+            parts.append(f"prompt={tps_str(prompt_rate)} t/s")
         if gen_rate:
-            parts.append(f"gen={human_si(gen_rate, '/s', precision=2)}")
+            parts.append(f"gen={tps_str(gen_rate)} t/s")
         if total_rate:
-            parts.append(f"total={human_si(total_rate, '/s', precision=2)}")
+            parts.append(f"total={tps_str(total_rate)} t/s")
         if parts:
             msg = f"{msg} {' '.join(parts)}".strip()
         return ("throughput", msg.strip())
@@ -575,6 +597,10 @@ def telemetry_row(event: dict) -> Optional[Tuple[str, str]]:
     return None
 
 
+def _window_avg(window) -> float:
+    return sum(window) / len(window) if window else 0.0
+
+
 def _apply_request_completed_telemetry(rates: Rates, payload: dict):
     if not isinstance(payload, dict):
         return rates
@@ -585,26 +611,32 @@ def _apply_request_completed_telemetry(rates: Rates, payload: dict):
     gen_ms = _positive_float(payload.get("gen_ms"))
     prompt_tokens = _positive_int(usage.get("input_tokens"))
     gen_tokens = _positive_int(usage.get("output_tokens"))
-    total_tokens = _positive_int(usage.get("total_tokens") or usage.get("output_tokens"))
+    # Use explicit total when available; fall back to input+output (not just output).
+    total_tokens = _positive_int(usage.get("total_tokens"))
+    if not total_tokens:
+        total_tokens = prompt_tokens + gen_tokens
+
     if prompt_tokens and prompt_ms:
         prompt_rate = _positive_float(prompt_tokens * 1000.0 / prompt_ms)
-        rates.prompt_ms = max(rates.prompt_ms, prompt_ms)
-        rates.prompt_tokens = max(rates.prompt_tokens, prompt_tokens)
-        rates.prompt_latest = prompt_rate
+        rates.prompt_window.append(prompt_rate)
+        rates.prompt_latest = _window_avg(rates.prompt_window)
         rates.prompt_max = max(rates.prompt_max, prompt_rate)
+        rates.prompt_tokens = prompt_tokens   # latest request, not all-time max
+        rates.prompt_ms = prompt_ms
     if gen_tokens and gen_ms:
         gen_rate = _positive_float(gen_tokens * 1000.0 / gen_ms)
-        rates.gen_ms = max(rates.gen_ms, gen_ms)
-        rates.gen_tokens = max(rates.gen_tokens, gen_tokens)
-        rates.gen_latest = gen_rate
+        rates.gen_window.append(gen_rate)
+        rates.gen_latest = _window_avg(rates.gen_window)
         rates.gen_max = max(rates.gen_max, gen_rate)
-    if elapsed:
-        rates.total_ms = max(rates.total_ms, elapsed)
-        rates.total_tokens = max(rates.total_tokens, total_tokens)
-        if total_tokens:
-            latest_rate = _positive_float(total_tokens * 1000.0 / elapsed)
-            rates.total_latest = latest_rate
-            rates.total_max = max(rates.total_max, latest_rate)
+        rates.gen_tokens = gen_tokens         # latest request
+        rates.gen_ms = gen_ms
+    if elapsed and total_tokens:
+        total_rate = _positive_float(total_tokens * 1000.0 / elapsed)
+        rates.total_window.append(total_rate)
+        rates.total_latest = _window_avg(rates.total_window)
+        rates.total_max = max(rates.total_max, total_rate)
+        rates.total_tokens = total_tokens     # latest request
+        rates.total_ms = elapsed
     return rates
 
 
@@ -623,13 +655,16 @@ def _apply_throughput_sample_telemetry(rates: Rates, payload: dict):
     elapsed_ms = _positive_float(payload.get("elapsed_ms"))
 
     if prompt_rate:
-        rates.prompt_latest = prompt_rate
+        rates.prompt_window.append(prompt_rate)
+        rates.prompt_latest = _window_avg(rates.prompt_window)
         rates.prompt_max = max(rates.prompt_max, prompt_rate)
     if gen_rate:
-        rates.gen_latest = gen_rate
+        rates.gen_window.append(gen_rate)
+        rates.gen_latest = _window_avg(rates.gen_window)
         rates.gen_max = max(rates.gen_max, gen_rate)
     if total_rate:
-        rates.total_latest = total_rate
+        rates.total_window.append(total_rate)
+        rates.total_latest = _window_avg(rates.total_window)
         rates.total_max = max(rates.total_max, total_rate)
     if prompt_tokens:
         rates.prompt_tokens = max(rates.prompt_tokens, prompt_tokens)
@@ -994,7 +1029,7 @@ class UI:
 
     def draw_throughput(self, y: int, x: int, h: int, w: int, rates: Rates):
         self.box(y, x, h, w, "LIVE THROUGHPUT")
-        self.add(y + 1, x + 2, f"{'METRIC':<12} {'LATEST':>10} {'MAX':>10} {'TOKENS':>10} {'TIME':>9}", self.dim | self.bold)
+        self.add(y + 1, x + 2, f"{'METRIC':<12} {'LATEST t/s':>10} {'MAX t/s':>10} {'TOKENS':>10} {'TIME':>9}", self.dim | self.bold)
 
         rows = [
             ("prompt", rates.prompt_latest, rates.prompt_max, rates.prompt_tokens, rates.prompt_ms),
@@ -1006,8 +1041,8 @@ class UI:
             attr = self.green | self.bold if latest > 0 else self.dim
             row_text = (
                 f"{name:<12} "
-                f"{human_si(latest, '/s', precision=2):>10} "
-                f"{human_si(max_rate, '/s', precision=2):>10} "
+                f"{tps_str(latest):>10} "
+                f"{tps_str(max_rate):>10} "
                 f"{human_si(tokens, precision=1):>10} "
                 f"{human_duration_ms(ms):>9}"
             )
@@ -1186,9 +1221,9 @@ def once():
         )
     print()
     print("LIVE THROUGHPUT")
-    print(f"  prompt   latest={human_si(rates.prompt_latest, '/s', precision=2)} max={human_si(rates.prompt_max, '/s', precision=2)} tokens={human_si(rates.prompt_tokens, precision=1)} time={human_duration_ms(rates.prompt_ms)}")
-    print(f"  generate latest={human_si(rates.gen_latest, '/s', precision=2)} max={human_si(rates.gen_max, '/s', precision=2)} tokens={human_si(rates.gen_tokens, precision=1)} time={human_duration_ms(rates.gen_ms)}")
-    print(f"  total    latest={human_si(rates.total_latest, '/s', precision=2)} max={human_si(rates.total_max, '/s', precision=2)} tokens={human_si(rates.total_tokens, precision=1)} time={human_duration_ms(rates.total_ms)}")
+    print(f"  prompt   latest={tps_str(rates.prompt_latest)} t/s  max={tps_str(rates.prompt_max)} t/s  tokens={human_si(rates.prompt_tokens, precision=1)}  time={human_duration_ms(rates.prompt_ms)}")
+    print(f"  generate latest={tps_str(rates.gen_latest)} t/s  max={tps_str(rates.gen_max)} t/s  tokens={human_si(rates.gen_tokens, precision=1)}  time={human_duration_ms(rates.gen_ms)}")
+    print(f"  total    latest={tps_str(rates.total_latest)} t/s  max={tps_str(rates.total_max)} t/s  tokens={human_si(rates.total_tokens, precision=1)}  time={human_duration_ms(rates.total_ms)}")
     print(f"  requests={human_si(rates.requests, precision=1)} checkpoints={human_si(rates.checkpoints, precision=1)} restores={human_si(rates.restores, precision=1)} CUDA_OOM={human_si(rates.oom, precision=1)}")
     if benchmark is not None:
         print()
