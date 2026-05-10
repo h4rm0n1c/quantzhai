@@ -214,6 +214,14 @@ Codex sees and selects the profile name. The proxy resolves the symlink target
 and routes llama.cpp backend requests to the real scanned GGUF model. Do not add
 a backend-name override in profile metadata.
 
+Profile metadata lives on the Codex-visible symlink name, not on the resolved
+backend file. The shipped baseline overrides live in
+`config/default/model-overrides.json`. Local changes belong in
+`config/user/model-overrides.json`; the legacy `var/model-overrides.json`
+remains a compatibility fallback only when the user file is absent. Example
+override files under `config/example/` document the shape but stay inactive
+unless copied or explicitly enabled.
+
 Optional profile metadata lives in `config/user/model-overrides.json`:
 
 ```json
@@ -281,6 +289,11 @@ Default static harness definitions include `roleplay-private-thoughts` and
 plain `User message:` separator. Old guidance blocks are stripped from replayed
 history before the newest eligible user turn is reinjected, so reminders do not
 accumulate across turns.
+
+Changing a profile symlink or override file updates the generated catalog on
+proxy refresh. Restarting `scripts/qz-proxy` or hitting
+`/qz/models/refresh` picks up the latest symlink and override manifest without
+changing the Codex-visible profile name.
 
 Roleplay and other private-thought profiles can also hide client-visible
 reasoning summaries with `reasoning_stream_format: "hidden"`. The default proxy

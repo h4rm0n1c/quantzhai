@@ -17,6 +17,10 @@ Runtime behavior:
 - Uses the same local TurboQuant backend as the other QuantZhai Codex profiles.
 - Exposes `caveman` through `var/models/caveman.gguf`, normally a symlink to a
   real GGUF under `var/models/`.
+- Keeps the profile identity on the symlink name. `config/default/model-overrides.json`
+  carries the shipped caveman defaults, while `config/user/model-overrides.json`
+  is the active local override layer. The legacy `var/model-overrides.json`
+  path only remains as a fallback when the user file is absent.
 - For behavior-only testing, point that symlink at the same backend GGUF already
   used by the normal profile. Pointing it at a different GGUF is a deliberate
   model-swap profile and will make llama.cpp load that other backend.
@@ -38,6 +42,9 @@ Runtime behavior:
   `stop caveman` to switch back during the session.
 - The model catalog now defaults to `medium` verbosity instead of `low`, so the
   coding agent starts with a less clipped answer style.
+- Updating the caveman symlink or profile overrides is picked up on proxy
+  refresh. Restart `scripts/qz-proxy` or use `/qz/models/refresh` after
+  changing the symlink target or caveman override file.
 
 Manual test:
 
