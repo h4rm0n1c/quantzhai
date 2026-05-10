@@ -4,57 +4,14 @@ import unittest
 from pathlib import Path
 
 from proxy.qz_codex_catalog import (
-    _boolish,
-    _dedupe_blocks,
     build_live_model,
     catalog_defaults,
-    deep_merge,
     generate,
     profile_slug,
     reasoning_level,
     supported_reasoning_levels,
     truncation_limit,
 )
-
-
-class DeepMergeTests(unittest.TestCase):
-    def test_overlay_wins_on_scalar(self):
-        self.assertEqual(deep_merge({"a": 1}, {"a": 2}), {"a": 2})
-
-    def test_nested_dicts_are_merged_not_replaced(self):
-        base = {"a": {"x": 1, "y": 2}}
-        overlay = {"a": {"y": 99, "z": 3}}
-        self.assertEqual(deep_merge(base, overlay), {"a": {"x": 1, "y": 99, "z": 3}})
-
-    def test_base_not_a_dict_returns_empty(self):
-        self.assertEqual(deep_merge(None, {"a": 1}), {"a": 1})
-
-    def test_overlay_not_a_dict_returns_base(self):
-        self.assertEqual(deep_merge({"a": 1}, None), {"a": 1})
-
-
-class BoolishTests(unittest.TestCase):
-    def test_true_values(self):
-        for v in (True, 1, "true", "yes", "on", "1"):
-            self.assertTrue(_boolish(v), v)
-
-    def test_false_values(self):
-        for v in (False, 0, "false", "no", "off", "0", ""):
-            self.assertFalse(_boolish(v), v)
-
-    def test_none_is_false(self):
-        self.assertFalse(_boolish(None))
-
-
-class DedupeBlocksTests(unittest.TestCase):
-    def test_dedupes_exact_matches(self):
-        self.assertEqual(_dedupe_blocks(["a", "b", "a"]), ["a", "b"])
-
-    def test_strips_before_deduping(self):
-        self.assertEqual(_dedupe_blocks(["  a  ", "a"]), ["a"])
-
-    def test_empty_strings_dropped(self):
-        self.assertEqual(_dedupe_blocks(["", "a", "  "]), ["a"])
 
 
 class ProfileSlugTests(unittest.TestCase):
@@ -122,7 +79,9 @@ class BuildLiveModelTests(unittest.TestCase):
             "label": "My Model",
             "backend_id": "my-model",
             "context_length": 131072,
-            "overrides": {},
+            # Provide an inline system_prompt so assemble_instruction_stack
+            # doesn't need to read any files from disk in the test environment.
+            "overrides": {"system_prompt": "test prompt"},
         }
         base.update(kwargs)
         return base
@@ -164,6 +123,10 @@ class BuildLiveModelTests(unittest.TestCase):
             self.assertIn(key, model, key)
         self.assertEqual(model["shell_type"], defaults["shell_type"])
 
+    def test_inline_system_prompt_appears_in_base_instructions(self):
+        model = build_live_model(self._entry(), 0)
+        self.assertIn("test prompt", model["base_instructions"])
+
 
 class GenerateIntegrationTests(unittest.TestCase):
     """End-to-end: generate() reads inventory, writes catalog and patches toml."""
@@ -191,12 +154,22 @@ class GenerateIntegrationTests(unittest.TestCase):
     def _catalog_path(self):
         return self.root / "var" / "catalog.json"
 
+    def _entry(self, stem="model-a", **kwargs):
+        base = {
+            "stem": stem,
+            "label": stem.replace("-", " ").title(),
+            "backend_id": stem,
+            "context_length": 131072,
+            # Inline prompt avoids needing real prompt files on disk.
+            "overrides": {"system_prompt": f"prompt for {stem}"},
+        }
+        base.update(kwargs)
+        return base
+
     def test_generates_catalog_from_inventory(self):
         inventory_path = self._write_inventory([
-            {"stem": "model-a", "label": "Model A", "backend_id": "model-a",
-             "context_length": 131072, "overrides": {}},
-            {"stem": "model-b", "label": "Model B", "backend_id": "model-b",
-             "context_length": 262144, "overrides": {}},
+            self._entry("model-a"),
+            self._entry("model-b", context_length=262144),
         ])
         catalog_path = self._catalog_path()
         toml_path = self._write_toml("")
@@ -210,10 +183,8 @@ class GenerateIntegrationTests(unittest.TestCase):
 
     def test_invalid_profiles_excluded(self):
         inventory_path = self._write_inventory([
-            {"stem": "good", "backend_id": "good", "context_length": 131072,
-             "overrides": {}, "profile_valid": True},
-            {"stem": "bad", "backend_id": "bad", "context_length": 131072,
-             "overrides": {}, "profile_valid": False},
+            self._entry("good", profile_valid=True),
+            self._entry("bad", profile_valid=False),
         ])
         catalog_path = self._catalog_path()
         toml_path = self._write_toml("")
@@ -277,45 +248,6 @@ class GenerateIntegrationTests(unittest.TestCase):
 
         self.assertNotIn("model_max_output_tokens", toml_path.read_text())
 
-    def test_no_prompt_warning_printed_to_stderr(self):
-        """When a model has no system prompt and disable_system_prompt is not
-        set, generate() should print a warning to stderr."""
-        inventory_path = self._write_inventory([
-            {"stem": "promptless", "backend_id": "promptless",
-             "context_length": 131072, "overrides": {}},
-        ])
-        catalog_path = self._catalog_path()
-        toml_path = self._write_toml("")
-
-        import io
-        from unittest.mock import patch
-
-        stderr_buf = io.StringIO()
-        with patch("sys.stderr", stderr_buf):
-            generate(inventory_path, catalog_path, toml_path)
-
-        self.assertIn("warning", stderr_buf.getvalue().lower())
-        self.assertIn("promptless", stderr_buf.getvalue())
-
-    def test_no_warning_when_disable_system_prompt_set(self):
-        """No warning when disable_system_prompt is explicitly set."""
-        inventory_path = self._write_inventory([
-            {"stem": "intentionally-blank", "backend_id": "intentionally-blank",
-             "context_length": 131072,
-             "overrides": {"disable_system_prompt": True}},
-        ])
-        catalog_path = self._catalog_path()
-        toml_path = self._write_toml("")
-
-        import io
-        from unittest.mock import patch
-
-        stderr_buf = io.StringIO()
-        with patch("sys.stderr", stderr_buf):
-            generate(inventory_path, catalog_path, toml_path)
-
-        self.assertEqual(stderr_buf.getvalue(), "")
-
     def test_missing_inventory_produces_empty_catalog(self):
         inventory_path = self.root / "var" / "nonexistent.json"
         catalog_path = self._catalog_path()
@@ -325,3 +257,53 @@ class GenerateIntegrationTests(unittest.TestCase):
 
         catalog = json.loads(catalog_path.read_text())
         self.assertEqual(catalog["models"], [])
+
+    def _minimal_overrides_env(self):
+        """Return env patches that make assemble_instruction_stack see an empty
+        global manifest — so a model with no overrides genuinely has no prompt."""
+        empty_overrides = self.root / "config" / "user" / "empty-overrides.json"
+        empty_overrides.write_text('{"models": {}}', encoding="utf-8")
+        return {"QZ_MODEL_OVERRIDES": str(empty_overrides), "QZ_ROOT": str(self.root)}
+
+    def test_no_prompt_warning_printed_to_stderr(self):
+        """When a model has no system prompt and disable_system_prompt is not
+        set, generate() should print a warning to stderr."""
+        import io
+        import os
+        from unittest.mock import patch
+
+        inventory_path = self._write_inventory([
+            {"stem": "promptless", "backend_id": "promptless",
+             "context_length": 131072, "overrides": {}},
+        ])
+        catalog_path = self._catalog_path()
+        toml_path = self._write_toml("")
+
+        stderr_buf = io.StringIO()
+        with patch.dict(os.environ, self._minimal_overrides_env()), \
+             patch("sys.stderr", stderr_buf):
+            generate(inventory_path, catalog_path, toml_path)
+
+        self.assertIn("warning", stderr_buf.getvalue().lower())
+        self.assertIn("promptless", stderr_buf.getvalue())
+
+    def test_no_warning_when_disable_system_prompt_set(self):
+        """No warning when disable_system_prompt is explicitly set."""
+        import io
+        import os
+        from unittest.mock import patch
+
+        inventory_path = self._write_inventory([
+            {"stem": "intentionally-blank", "backend_id": "intentionally-blank",
+             "context_length": 131072,
+             "overrides": {"disable_system_prompt": True}},
+        ])
+        catalog_path = self._catalog_path()
+        toml_path = self._write_toml("")
+
+        stderr_buf = io.StringIO()
+        with patch.dict(os.environ, self._minimal_overrides_env()), \
+             patch("sys.stderr", stderr_buf):
+            generate(inventory_path, catalog_path, toml_path)
+
+        self.assertEqual(stderr_buf.getvalue(), "")
