@@ -1,6 +1,6 @@
 # QuantZhai Progress Snapshot
 
-Last updated: 2026-05-11 (session 4, end).
+Last updated: 2026-05-11 (session 4, mid).
 
 This is a periodic high-level progress note. Use it when someone asks "where are
 we overall?" without needing to reread every roadmap.
@@ -25,16 +25,19 @@ smoked — Qwen correctly recalls compacted context in follow-up turns.
   Unchanged from prior.
 - **Observability/status:** 70%
   Unchanged. VRAM backend telemetry still open.
-- **LLM signal system:** 55%
+- **LLM signal system:** 57%
   Coercion error feedback, informative compaction placeholders, reasoning-budget-
   message, carry-forward all live. Hop budget and context pressure signals live.
   Compaction bridge delivered: v2 blob format, auto-compaction trigger via
   `compact_threshold`, native blob passthrough, improved limits, 29 unit tests,
   live smoke (10/10, model recalled file names from compacted context).
+  Telemetry bus capacity fixed: `stream_event_timing` partitioned into its own
+  per-request ring so it can no longer evict `tool_call_started`,
+  `hop_budget_signal`, `auto_compaction_triggered`, etc.
   Next: empirical A/B format testing for signal formats; profile eval framework.
 - **Docs/tests/replay:** 93%
-  Compaction bridge plan updated to reflect delivery. 29 new unit tests +
-  live integration smoke. Test suite: 292/292 green.
+  Compaction bridge plan and telemetry bus bug note updated to reflect delivery.
+  293/293 tests green.
 - **Packaging/architecture:** 35%
   Unchanged.
 
@@ -51,14 +54,10 @@ Revised after research:
 
 ## Immediate next priorities (in order)
 
-1. **Telemetry bus capacity** — per-request buffer (200 events) fills with
-   `stream_event_timing` events and pushes out meaningful lifecycle events
-   (`hop_budget_signal`, `tool_call_started`, etc.). Fix: raise capacity or
-   give timing events a separate lower-priority buffer.
-2. **Profile eval framework** — build the prompt test battery from
+1. **Profile eval framework** — build the prompt test battery from
    `docs/profile-eval-plan.md`. Prerequisite for A/B testing signal formats
    and profile preset tuning.
-3. **Config/var layout + script cleanup** — Phase 3 of master plan. `var/`
+2. **Config/var layout + script cleanup** — Phase 3 of master plan. `var/`
    restructure and script sprawl reduction. Housekeeping, long deferred.
 
 ## Remaining Big Rocks

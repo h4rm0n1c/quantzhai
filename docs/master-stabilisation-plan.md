@@ -673,33 +673,30 @@ fold all old script logic into qz-up/qz-down/qz-codex
 
 ## Immediate next engineering target
 
-The compaction bridge is shipped. v2 blob format, auto-compaction trigger via
+The compaction bridge is shipped and the telemetry bus capacity bug is fixed.
+
+Compaction: v2 blob format, auto-compaction trigger via
 `context_management.compact_threshold`, native blob passthrough, 29 unit tests,
-and a live integration smoke (10/10 — model recalled compacted file names
-without seeing raw files in the follow-up turn). See
-`docs/compaction-bridge-plan.md` for full delivery notes.
+live integration smoke (10/10). See `docs/compaction-bridge-plan.md`.
+
+Telemetry bus: `stream_event_timing` is now partitioned into its own per-request
+deque (`maxlen=150`) separate from the lifecycle deque (`maxlen=200`). Timing
+events can no longer evict `tool_call_started`, `hop_budget_signal`,
+`auto_compaction_triggered`, etc. See `docs/bugs/telemetry-bus-capacity.md`.
 
 Start with:
 
 ```text
-telemetry bus capacity — the per-request event buffer fills with
-stream_event_timing events and evicts meaningful lifecycle events
-```
-
-Document:
-
-```text
-docs/bugs/telemetry-bus-capacity.md
+profile eval framework — build the prompt test battery from
+docs/profile-eval-plan.md
 ```
 
 Reason:
 
 ```text
-hop_budget_signal, tool_call_started, and auto_compaction_triggered events are
-pushed out of the 200-event per-request ring by high-frequency
-stream_event_timing entries. Preferred fix: partition stream_event_timing into
-its own lower-priority ring so lifecycle events are never evicted. See the bug
-note for options and do-not-fix constraints.
+Prerequisite for empirical A/B testing of signal formats and profile preset
+tuning. Without a fixed prompt set and scoring harness, signal format changes
+and profile adjustments are guesswork.
 ```
 
 Then do:

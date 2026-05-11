@@ -1,6 +1,14 @@
 # Bug: Telemetry bus capacity — stream_event_timing evicts lifecycle events
 
-## Symptom
+Status: **Fixed** — 2026-05-11 (session 4).
+
+`REQUEST_RETAINED_EVENT_TYPES` split into `REQUEST_LIFECYCLE_EVENT_TYPES` and
+`REQUEST_TIMING_EVENT_TYPES`. Per-request store now keeps two separate deques:
+lifecycle (`maxlen=200`) and timing (`maxlen=150`). `_request_events_for_locked`
+merges both sorted by seq. Timing events can no longer evict lifecycle events.
+Regression test: `test_timing_events_cannot_evict_lifecycle_events`.
+
+## Symptom (pre-fix)
 
 High-frequency `stream_event_timing` events fill the per-request telemetry
 ring buffer and push out meaningful lifecycle events:
