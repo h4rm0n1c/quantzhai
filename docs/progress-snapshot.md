@@ -53,6 +53,21 @@ Revised after research:
 4. **Context pressure** — same pattern as hop budget
 5. **Empirical validation** — fuzz the signal format question before building more
 
+## Immediate next priorities (in order)
+
+1. **Compaction bridge** — give the model a signal when context history is
+   compacted and what got dropped. `docs/compaction-bridge-plan.md` exists.
+   Needs a capture audit + OpenAI compaction format research pass first.
+2. **Telemetry bus capacity** — per-request buffer (200 events) fills with
+   `stream_event_timing` events and pushes out meaningful lifecycle events
+   (`hop_budget_signal`, `tool_call_started`, etc.). Fix: raise capacity or
+   give timing events a separate lower-priority buffer.
+3. **Profile eval framework** — build the prompt test battery from
+   `docs/profile-eval-plan.md`. Prerequisite for A/B testing signal formats
+   and profile preset tuning.
+4. **Config/var layout + script cleanup** — Phase 3 of master plan. `var/`
+   restructure and script sprawl reduction. Housekeeping, long deferred.
+
 ## Remaining Big Rocks
 
 1. ~~Fix pre-existing test failures~~ — done.
