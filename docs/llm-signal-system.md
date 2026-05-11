@@ -321,11 +321,26 @@ The right budget per effort level is empirical. Key questions:
    help), or is it reasoning-then-tool-call cycles that the budget
    doesn't affect (since the budget only covers the reasoning block)?
 
-4. **Does the budget message wording matter?**
-   Current: "I have reasoned long enough. Let me now produce my final
-   answer." Does a more specific message ("Summarise findings and answer
-   the original question directly.") produce better answers at the cutoff?
-   Interrogate qwen-blank.
+4. **Does the budget message wording matter — and what is it actually for?**
+   Two fundamentally different approaches:
+
+   - **Directive** ("I have reasoned long enough. Let me now produce my
+     final answer.") — forces conclusion regardless of whether reasoning
+     was productive. Risks cutting off good reasoning that was still
+     making progress.
+
+   - **Loop-detection nudge** ("You may be revisiting information already
+     gathered. Consolidate what you know and form your answer.") — a
+     metacognitive signal that lets the model self-evaluate. If it was
+     looping, it self-corrects and produces a better summary. If it was
+     making progress, it can still conclude from wherever it is. The
+     forced `</think>` close is the mechanical guarantee regardless.
+
+   The nudge approach is likely better for answer quality at the cutoff
+   because it shapes the model's reasoning about its own state rather than
+   just commanding it to stop. To investigate: does the self-awareness
+   framing produce better answers on tasks that genuinely warranted deep
+   reasoning vs tasks where the model was looping?
 
 5. **Is the budget per-turn or per-session?**
    If a Codex session has 10 hops at `high` effort, does each hop get
