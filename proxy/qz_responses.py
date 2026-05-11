@@ -222,6 +222,46 @@ def _tail_start_for_compaction(items):
     return start
 
 
+def _tool_output_signal(item: dict) -> str:
+    """Extract a brief, informative signal from a tool output for the compaction
+    placeholder. Preserves success/failure status and first-line error context
+    so the model retains useful history even after the full output is dropped.
+    """
+    name = item.get("name") or item.get("call_id") or "tool"
+    raw = item.get("output") or item.get("result") or ""
+    if not isinstance(raw, str):
+        raw = ""
+
+    # Try JSON payloads first (apply_patch, web_search, coercion errors).
+    try:
+        import json as _json
+        parsed = _json.loads(raw)
+        if isinstance(parsed, dict):
+            ok = parsed.get("ok")
+            error = parsed.get("error") or ""
+            status = parsed.get("status") or ""
+            if ok is False or error:
+                snippet = str(error)[:200] if error else str(parsed)[:200]
+                return f"Tool {name}: FAILED — {snippet}"
+            if status == "failed":
+                snippet = str(parsed.get("output") or parsed)[:200]
+                return f"Tool {name}: FAILED — {snippet}"
+            return f"Tool {name}: completed OK."
+    except Exception:
+        pass
+
+    # Raw string output — look for exit code signals and error keywords.
+    if not raw.strip():
+        return f"Tool {name}: completed (no output)."
+
+    first_line = raw.strip().splitlines()[0][:200]
+    lower = raw.lower()
+    has_error = any(k in lower for k in ("error:", "exception:", "traceback", "failed:", "exit 1", "exit code"))
+    if has_error:
+        return f"Tool {name}: FAILED. Output (compacted): {first_line}"
+    return f"Tool {name}: completed. Output (compacted): {first_line}"
+
+
 def _microcompact_old_tool_results(items):
     if not isinstance(items, list):
         return items
@@ -233,10 +273,9 @@ def _microcompact_old_tool_results(items):
             continue
         item_type = item.get("type")
         if item_type in FUNCTION_OUTPUT_TYPES or item.get("role") == "tool":
-            name = item.get("name") or item.get("call_id") or "tool"
             placeholder = _make_input_text_message(
                 "assistant",
-                f"Older tool output compacted locally for {name}. The detailed payload was dropped to save context.",
+                _tool_output_signal(item),
             )
             compacted.append(placeholder)
             continue
