@@ -484,6 +484,105 @@ qz-codex/qz-up/qz-down behaviour notes
 any generated Codex catalog documentation
 ```
 
+## Proxy ownership of model setup — architectural issue
+
+**Status:** Documented. Must be addressed alongside the config/var cleanup and
+script sprawl reduction. Do not start the broader refactor without a plan for
+this.
+
+### The problem
+
+Critical setup work is currently split across shell scripts that run *before*
+Codex starts. The proxy is passive — it serves whatever state the scripts
+established at launch. Adding a new model, updating an override, or creating a
+profile symlink requires restarting the entire stack for the change to take
+effect.
+
+The kuato model addition illustrated this directly: the GGUF landed, the
+symlink was created, the Codex catalog was regenerated — but the running
+llama.cpp backend didn't know about it until `qz-up` was restarted.
+
+**Current split:**
+
+```text
+qz-up            starts llama.cpp + proxy (model inventory fixed at launch)
+qz-codex-common  scans inventory, generates Codex catalog, sets env vars
+                 (runs once per qz-codex invocation, not kept live)
+proxy            passively serves whatever state was configured at startup
+```
+
+**Target split:**
+
+```text
+qz-up            starts llama.cpp + proxy
+proxy            owns model inventory, catalog generation, override loading
+                 rescans models/ at startup and on /qz/models/refresh
+                 regenerates Codex catalog when inventory changes
+                 hot-reloads config/user/model-overrides.json on demand
+                 exposes /qz/catalog as a live view, writes catalog file
+qz-codex-common  thin launcher — asks proxy for catalog state, sets
+                 CODEX_HOME, execs codex
+```
+
+### What the proxy should absorb
+
+- **Model inventory scanning** — currently `python3 proxy/qz_model_catalog.py
+  scan` called by shell scripts at each Codex launch. The proxy should scan
+  at startup and expose a `/qz/models/refresh` endpoint that rescans without
+  restart.
+
+- **Codex catalog generation** — currently `python3 proxy/qz_codex_catalog.py
+  ...` called by `qz-codex-common`. The proxy should own the generated catalog
+  file (`var/codex-home/model-catalogs/qwenzhai-models.json`), write it at
+  startup and after each refresh, and expose its current state.
+
+- **Override loading** — currently read once at proxy startup. The proxy should
+  accept a reload signal (or watch the file) so new per-model overrides,
+  labels, and turn harnesses take effect without restart.
+
+- **Profile symlink validation** — already performed in the proxy, but the
+  result is only surfaced to Codex via the catalog file that scripts generate.
+  The proxy should regenerate the catalog file itself when validation state
+  changes.
+
+### What must stay in scripts
+
+Codex reads the catalog **from a file** before the first request. The proxy
+cannot inject the catalog into Codex at runtime — it must be a file on disk.
+The proxy's job is to own generating and updating that file, not to serve it
+over HTTP to Codex directly (at least until Codex supports a remote catalog
+endpoint, which it currently does not).
+
+`qz-up`, `qz-down`, and `qz-codex` stay as thin entry points. Process
+management and environment bootstrapping belong in shell. Business logic
+(scanning, catalog building, validation, override resolution) belongs in the
+proxy.
+
+### Why this must be done alongside config/var cleanup
+
+The script-owned setup work is tangled with the current config/var layout.
+Scripts know about specific paths (`var/model-inventory.json`,
+`var/codex-home/model-catalogs/`, `config/user/model-overrides.json`). Moving
+those paths without moving the setup ownership creates a broken intermediate
+state. The two changes must be planned together.
+
+### Acceptance criteria for this item
+
+```text
+Adding a new GGUF to var/models/ and calling /qz/models/refresh makes it
+available in Codex without restarting qz-up.
+
+Updating config/user/model-overrides.json and calling /qz/models/refresh
+applies the new overrides without restart.
+
+qz-codex-common contains no Python subprocess calls for catalog or
+inventory work — it reads state from the proxy or from a file the proxy
+already maintains.
+
+The generated Codex catalog is always consistent with the proxy's current
+model state.
+```
+
 ## Next steps
 
 1. Treat this plan as a living document.
