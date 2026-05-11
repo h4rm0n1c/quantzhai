@@ -69,13 +69,13 @@ _COMPACTION_DROP_TYPES: frozenset[str] = _PROXY_LOCAL_ITEM_TYPES | _UPSTREAM_TRA
 
 LOCAL_COMPACTION_PREFIX = "localcmp:v2:"
 COMPACTION_CONFIG = {
-    "keep_recent_items": 8,
-    "min_preserve_items": 4,
-    "max_summary_chars": 16000,
-    "max_tool_output_chars": 800,
-    "max_item_summary_chars": 600,
+    "keep_recent_items": 20,
+    "min_preserve_items": 6,
+    "max_summary_chars": 48000,
+    "max_tool_output_chars": 3200,
+    "max_item_summary_chars": 2000,
     "max_compaction_depth": 8,
-    "target_output_tokens": 12000,
+    "target_output_tokens": 56000,
 }
 
 FUNCTION_CALL_TYPES = {"function_call", "computer_call", "code_interpreter_call", "apply_patch_call", "custom_tool_call"}
