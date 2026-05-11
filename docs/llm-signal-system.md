@@ -191,6 +191,12 @@ Worth a pass over what others have done before implementing:
   feedback effective
 - **Qwen documentation and eval papers** — whether there is anything specific
   about how Qwen3.6 (MoE) responds to meta-instructions vs dense models
+- **OpenClaude** — an open-source proxy tackling similar problems (making a
+  local proxy support capable agentic behaviour without a hosted platform).
+  Worth reading specifically for their signal injection and feedback patterns.
+  Treat as a cautionary reference rather than a blueprint — they have a known
+  path traversal CVE (CVE-2026-35570) and their safety decisions may not be
+  right for this stack. Read the ideas, not the code.
 
 Weight this lightly. If prior art says "use system prompt" but empirical
 testing with Qwen shows in-turn messages produce better self-regulation,
