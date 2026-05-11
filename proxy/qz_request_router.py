@@ -80,6 +80,13 @@ except ImportError:
     )
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def normalize_reasoning_stream_format(value, default: str = "raw") -> str:
     if isinstance(value, str):
         normalized = value.strip().lower()
@@ -724,7 +731,7 @@ class RequestRouter:
             request_id=request_id,
             proxy_tool_registry=self._proxy_tool_registry(web_runtime),
             selected_model=selected_model,
-            reasoning_carry_forward=bool(os.environ.get("QZ_REASONING_CARRY_FORWARD", "")),
+            reasoning_carry_forward=_env_bool("QZ_REASONING_CARRY_FORWARD", False),
             hop_budget_signal_threshold=int(os.environ.get("QZ_HOP_BUDGET_SIGNAL_THRESHOLD", "3")),
             context_pressure_signal_threshold=float(os.environ.get("QZ_CONTEXT_PRESSURE_SIGNAL_THRESHOLD", "0.8")),
         )
