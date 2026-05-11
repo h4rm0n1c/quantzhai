@@ -173,6 +173,29 @@ class RequestRouter:
 
         return _ctx()
 
+    def _refresh_codex_catalog(self, catalog) -> bool:
+        try:
+            from proxy.qz_codex_catalog import generate as generate_codex_catalog
+        except ImportError:
+            try:
+                from qz_codex_catalog import generate as generate_codex_catalog
+            except ImportError:
+                return False
+        try:
+            root = Path(os.environ.get("QZ_ROOT", Path(__file__).resolve().parents[1])).resolve()
+            inventory_path = Path(os.environ.get(
+                "QZ_MODEL_INVENTORY_CACHE",
+                root / "var" / "model-inventory.json",
+            ))
+            codex_home = Path(os.environ.get("CODEX_HOME", root / "var" / "codex-home"))
+            catalog_dst = codex_home / "model-catalogs" / "qwenzhai-models.json"
+            config_dst = codex_home / "config.toml"
+            catalog_dst.parent.mkdir(parents=True, exist_ok=True)
+            generate_codex_catalog(inventory_path, catalog_dst, config_dst)
+            return True
+        except Exception:
+            return False
+
     def _log_request_path(self, method):
         if self.handler.path.startswith("/qz/telemetry"):
             return
@@ -297,9 +320,11 @@ class RequestRouter:
         if self.handler.path == "/qz/models/refresh":
             catalog = self.handler._model_catalog()
             catalog.refresh()
+            codex_catalog_written = self._refresh_codex_catalog(catalog)
             self.handler._send_json(200, {
                 "catalog": catalog.to_payload(),
                 "backend": self.handler._backend_models(),
+                "codex_catalog_updated": codex_catalog_written,
             })
             return
 

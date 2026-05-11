@@ -18,16 +18,20 @@ qz_prepare_codex_home() {
     cp "$QZ_ROOT/config/example/codex-config.toml" "$QZ_ROOT/var/codex-home/config.toml"
   fi
 
-  # Refresh the live GGUF inventory first. The Codex model catalog below is a
-  # generated view over var/model-inventory.json; using a stale inventory can
-  # leak old overrides or deleted prompt paths back into Codex.
-  python3 "$QZ_ROOT/proxy/qz_model_catalog.py" scan >/dev/null
-
-  local catalog_dst="$QZ_ROOT/var/codex-home/model-catalogs/qwenzhai-models.json"
-  python3 "$QZ_ROOT/proxy/qz_codex_catalog.py" \
-    "$QZ_MODEL_INVENTORY_CACHE" \
-    "$catalog_dst" \
-    "$QZ_ROOT/var/codex-home/config.toml"
+  # Ask the proxy to refresh its model inventory and regenerate the Codex
+  # catalog file in one call. Falls back to direct Python invocation if the
+  # proxy isn't running (e.g. benchmark or offline use).
+  local proxy_url="http://$QZ_PROXY_HOST:$QZ_PROXY_PORT"
+  if curl -fsS -X POST "$proxy_url/qz/models/refresh" >/dev/null 2>&1; then
+    : # proxy handled it
+  else
+    python3 "$QZ_ROOT/proxy/qz_model_catalog.py" scan >/dev/null
+    local catalog_dst="$QZ_ROOT/var/codex-home/model-catalogs/qwenzhai-models.json"
+    python3 "$QZ_ROOT/proxy/qz_codex_catalog.py" \
+      "$QZ_MODEL_INVENTORY_CACHE" \
+      "$catalog_dst" \
+      "$QZ_ROOT/var/codex-home/config.toml"
+  fi
 
   export CODEX_HOME="$QZ_ROOT/var/codex-home"
   export CODEX_SQLITE_HOME="$CODEX_HOME/sqlite"
