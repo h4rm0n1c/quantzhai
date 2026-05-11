@@ -1721,101 +1721,110 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertIn("*** Move to: src/new.py", custom_items[0]["input"])
         self.assertIn("*** End Patch", custom_items[0]["input"])
 
-    def test_golden_qwen_create_file_bare_operation_emits_partial_envelope(self):
+    def test_golden_qwen_create_file_bare_operation_injects_error_upstream(self):
         """Qwen Shape B: create_file with no diff and no sibling patch.
-        Coercion cannot recover content, but the proxy still salvages
-        type+path into a partial *** Add File envelope so Codex's verifier
-        feeds back a specific error to the model on the next turn."""
+        coerce() cannot recover content so the registry injects an error result
+        upstream (into next_input for the model). No custom_tool_call is emitted
+        to Codex — the tool call error is model-facing, not Codex-facing.
+        The second hop returns a valid message so the stream ends cleanly."""
+        telemetry = TelemetryBus()
+        calls = []
+
         def opener(body):
-            return FakeStream(_fixture_chunks("qwen_create_file_bare_operation.raw"))
+            calls.append(body)
+            if len(calls) == 1:
+                return FakeStream(_fixture_chunks("qwen_create_file_bare_operation.raw"))
+            return FakeStream(_fixture_chunks("basic_message.raw"))
 
-        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
-        events = _parse_sse_events(stream_text)
-        custom_items = [
-            payload["item"]
-            for event_type, payload in events
-            if event_type in {"response.output_item.added", "response.output_item.done"}
-            and isinstance(payload, dict)
-            and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "custom_tool_call"
-        ]
+        stream_text = self._run_runtime(opener, apply_patch_output_style="custom", telemetry=telemetry)
+        events_list = [et for et, _ in _parse_sse_events(stream_text)]
 
+        # Error is injected upstream, not forwarded as a Codex-facing tool call.
+        self.assertNotIn("custom_tool_call", stream_text)
         self.assertNotIn("invalid patch arguments", stream_text)
-        self.assertEqual(len(custom_items), 2)
-        self.assertIn("*** Add File: hello.py", custom_items[0]["input"])
-        self.assertIn("*** End Patch", custom_items[0]["input"])
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        # Second hop carries the error result in its input.
+        self.assertGreater(len(calls), 1)
+        second_input = calls[1].get("input") or []
+        error_results = [i for i in second_input if isinstance(i, dict) and i.get("type") == "function_call_output"]
+        self.assertTrue(any("apply_patch" in str(i.get("output", "")) for i in error_results), second_input)
+        # tool_call_error telemetry emitted.
+        telem_events = telemetry.recent()
+        self.assertTrue(any(e.get("type") == "tool_call_error" for e in telem_events), telem_events)
 
-    def test_golden_qwen_update_file_bare_operation_emits_partial_envelope(self):
+    def test_golden_qwen_update_file_bare_operation_injects_error_upstream(self):
         """Same as above but for update_file."""
-        def opener(body):
-            return FakeStream(_fixture_chunks("qwen_update_file_bare_operation.raw"))
-
-        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
-        events = _parse_sse_events(stream_text)
-        custom_items = [
-            payload["item"]
-            for event_type, payload in events
-            if event_type in {"response.output_item.added", "response.output_item.done"}
-            and isinstance(payload, dict)
-            and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "custom_tool_call"
-        ]
-
-        self.assertNotIn("invalid patch arguments", stream_text)
-        self.assertEqual(len(custom_items), 2)
-        self.assertIn("*** Update File: greeting.py", custom_items[0]["input"])
-
-    def test_golden_invalid_apply_patch_stream_emits_partial_envelope(self):
-        """Bare-operation create_file (Qwen Shape B) used to dead-end as an
-        assistant message. Now the proxy emits a partial *** Add File: <path>
-        envelope so Codex's V4A verifier produces a specific error the model
-        sees on the next turn."""
-        requests = []
+        calls = []
 
         def opener(body):
-            requests.append(json.loads(json.dumps(body)))
-            return FakeStream(_fixture_chunks("invalid_apply_patch_call.raw"))
+            calls.append(body)
+            if len(calls) == 1:
+                return FakeStream(_fixture_chunks("qwen_update_file_bare_operation.raw"))
+            return FakeStream(_fixture_chunks("basic_message.raw"))
 
         stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
-        events = _parse_sse_events(stream_text)
-        custom_items = [
-            payload["item"]
-            for event_type, payload in events
-            if event_type in {"response.output_item.added", "response.output_item.done"}
-            and isinstance(payload, dict)
-            and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "custom_tool_call"
-        ]
 
-        self.assertEqual(len(requests), 1)
+        self.assertNotIn("custom_tool_call", stream_text)
         self.assertNotIn("invalid patch arguments", stream_text)
         self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
-        self.assertEqual(len(custom_items), 2)
-        self.assertIn("*** Add File: tmp/missing-diff.txt", custom_items[0]["input"])
-        self.assertIn("*** End Patch", custom_items[0]["input"])
+        self.assertGreater(len(calls), 1)
 
-    def test_golden_invalid_apply_patch_move_without_destination_falls_back_to_message(self):
-        """When the args truly cannot yield a usable envelope (move_file with
-        no destination key), the proxy still falls back to the descriptive
-        assistant message — but the message now carries a specific reason."""
+    def test_golden_invalid_apply_patch_stream_injects_error_upstream(self):
+        """Bare-operation create_file: coerce() fails, error injected upstream.
+        No Codex-facing custom_tool_call emitted. The model gets the error
+        result in next_input and can retry on the second hop."""
+        calls = []
+
         def opener(body):
-            return FakeStream(_fixture_chunks("invalid_apply_patch_move_call.raw"))
+            calls.append(json.loads(json.dumps(body)))
+            if len(calls) == 1:
+                return FakeStream(_fixture_chunks("invalid_apply_patch_call.raw"))
+            return FakeStream(_fixture_chunks("basic_message.raw"))
 
         stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
-        events = _parse_sse_events(stream_text)
-        message_items = [
-            payload["item"]
-            for event_type, payload in events
-            if event_type == "response.output_item.done"
-            and isinstance(payload, dict)
-            and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "message"
-        ]
 
-        self.assertIn("invalid patch arguments", stream_text)
-        self.assertIn("destination", stream_text)
+        self.assertNotIn('"type": "function_call"', stream_text)
+        self.assertNotIn("custom_tool_call", stream_text)
         self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
-        self.assertEqual(len(message_items), 1)
+        self.assertGreater(len(calls), 1)
+        second_input = calls[1].get("input") or []
+        self.assertTrue(
+            any(
+                isinstance(i, dict) and i.get("type") == "function_call_output"
+                for i in second_input
+            ),
+            second_input,
+        )
+
+    def test_golden_invalid_apply_patch_move_without_destination_injects_error_upstream(self):
+        """move_file with no destination: coerce() fails with a specific reason.
+        The error is injected upstream as a function_call_output, not shown to
+        Codex as an assistant message."""
+        calls = []
+
+        def opener(body):
+            calls.append(body)
+            if len(calls) == 1:
+                return FakeStream(_fixture_chunks("invalid_apply_patch_move_call.raw"))
+            return FakeStream(_fixture_chunks("basic_message.raw"))
+
+        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+
+        # No proxy-generated error assistant message (old behavior).
+        self.assertNotIn("invalid patch arguments", stream_text)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertGreater(len(calls), 1)
+        second_input = calls[1].get("input") or []
+        error_outputs = [
+            i for i in second_input
+            if isinstance(i, dict) and i.get("type") == "function_call_output"
+        ]
+        self.assertTrue(error_outputs, second_input)
+        # Error message should mention destination.
+        self.assertTrue(
+            any("destination" in str(i.get("output", "")) for i in error_outputs),
+            error_outputs,
+        )
 
     def test_golden_completed_without_done_appends_done_once(self):
         def opener(body):

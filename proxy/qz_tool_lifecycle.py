@@ -9,9 +9,10 @@ except ImportError:
 
 @dataclass(frozen=True)
 class CompletedToolCallDecision:
-    kind: str
+    kind: str          # "proxy_local" | "public" | "error"
     call: dict
     public_item: dict | None = None
+    error_result: dict | None = None   # set when kind == "error"
 
 
 @dataclass(frozen=True)

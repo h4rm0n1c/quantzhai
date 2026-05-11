@@ -770,6 +770,9 @@ class RequestRouter:
                 runtime_log("latest-web-runtime-final.json", final_out)
                 return status, content_type, final_out
 
+            dropped_tool_names = frozenset(
+                (hop_body.get("metadata") or {}).get("qz_dropped_tool_names") or []
+            )
             next_input = list(hop_body.get("input") or [])
             for item in output_items:
                 if not proxy_tool_registry.is_proxy_local_call(item):
@@ -779,7 +782,11 @@ class RequestRouter:
                 decision = proxy_tool_registry.completed_call_decision(
                     item,
                     apply_patch_output_style,
+                    dropped_tool_names=dropped_tool_names,
                 )
+                if decision.kind == "error":
+                    next_input.append(decision.error_result)
+                    continue
                 result = proxy_tool_registry.execute(
                     decision.call,
                     ProxyToolExecutionContext(

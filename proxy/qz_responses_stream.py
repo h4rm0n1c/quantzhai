@@ -473,6 +473,10 @@ class ResponsesStreamRuntime:
             policy_style = tool_policy.get("apply_patch_output_style")
             if policy_style in {"native", "custom"}:
                 apply_patch_output_style = policy_style
+        dropped_tool_names = frozenset(
+            metadata.get("qz_dropped_tool_names") or []
+            if isinstance(metadata, dict) else []
+        )
 
         started_at = time.time()
         first_output_at = None
@@ -510,6 +514,7 @@ class ResponsesStreamRuntime:
                     event_started_at = None
                     next_input = list(hop_body.get("input") or [])
                     completed_call = None
+                    error_injected = False
                     reasoning_only_started_at = None
                     reasoning_only_last_delta_at = None
                     reasoning_only_chars = 0
@@ -680,7 +685,24 @@ class ResponsesStreamRuntime:
                             decision = self.proxy_tool_registry.completed_call_decision(
                                 completed_call,
                                 apply_patch_output_style,
+                                dropped_tool_names=dropped_tool_names,
                             )
+
+                            if decision.kind == "error":
+                                # Inject the error result upstream so the model sees
+                                # it on the next hop. No lifecycle events emitted to
+                                # Codex — the tool never ran.
+                                next_input.append(decision.error_result)
+                                error_injected = True
+                                self._emit("tool_call_error", {
+                                    "tool": completed_call.get("name"),
+                                    "error": (decision.error_result or {}).get("output", ""),
+                                })
+                                self._emit_stream_event_timing(
+                                    event_type, event_received_at, event_parsed_at,
+                                    time.time(), suppressed="function_call_error",
+                                )
+                                break
 
                             if decision.kind == "proxy_local":
                                 (
@@ -904,7 +926,7 @@ class ResponsesStreamRuntime:
                     if resp is not None:
                         resp.close()
 
-                if completed_call and self.proxy_tool_registry.is_proxy_local_call(completed_call):
+                if error_injected or (completed_call and self.proxy_tool_registry.is_proxy_local_call(completed_call)):
                     if max_output_index >= 0:
                         output_index_offset += max_output_index + 1
                     working_body["input"] = next_input

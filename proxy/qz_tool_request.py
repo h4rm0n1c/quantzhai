@@ -134,6 +134,17 @@ def normalize_tool_request_for_llamacpp(
         tool_choice_normalized=tool_choice_normalized,
         tool_choice_forced_auto=tool_choice_forced_auto,
     )
+    # Store the raw dropped names (without reason suffixes) in metadata so
+    # the response routing path can check them when a function_call arrives
+    # for a tool that was removed from the declaration.
+    if dropped:
+        metadata = body.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata["qz_dropped_tool_names"] = [
+            d.split("(")[0].strip() for d in dropped
+        ]
+        body["metadata"] = metadata
     if write_captures and capture_enabled():
         try:
             metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}

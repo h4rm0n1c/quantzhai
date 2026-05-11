@@ -1,8 +1,19 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
+import time
 from dataclasses import dataclass
 from typing import Protocol
+
+# Tool names that Codex handles natively and should be passed through unchanged.
+# Do NOT inject coercion errors for these — Codex will execute them itself.
+CODEX_NATIVE_TOOL_NAMES: frozenset[str] = frozenset({
+    "exec_command",
+    "write_stdin",
+    "shell_command",
+    "computer",
+})
 
 
 @dataclass(frozen=True)
@@ -23,6 +34,50 @@ class ToolLifecycleSpec:
     @property
     def emits_continuation(self) -> bool:
         return self.execution == "proxy_local" and self.continuation_hops > 0
+
+
+@dataclass
+class ToolCoercionResult:
+    """Result of a tool's coerce() call.
+
+    Exactly one field is set:
+    - corrected_arguments: coercion succeeded; re-run with this JSON string.
+    - error_message: coercion failed; inject this as an error tool result so
+      the model can see what went wrong and retry.
+    """
+    corrected_arguments: str | None = None
+    error_message: str | None = None
+
+    def succeeded(self) -> bool:
+        return self.corrected_arguments is not None
+
+
+def _coercion_error(name: str, reason: str = "") -> ToolCoercionResult:
+    """Generic coercion failure result for use as a default."""
+    detail = f": {reason}" if reason else "."
+    return ToolCoercionResult(
+        error_message=(
+            f"Tool call for '{name}' could not be completed by the proxy{detail} "
+            "Check your arguments and retry, or use a different tool."
+        )
+    )
+
+
+def synthesize_tool_error_result(call: dict, message: str) -> dict:
+    """Build a function_call_output carrying an error message.
+
+    Used to inject a proxy-generated error back to the model when a tool
+    call cannot be executed or coerced into a valid form.
+    """
+    call_id = (
+        call.get("call_id") or call.get("id")
+        if isinstance(call, dict) else None
+    ) or f"err_{int(time.time())}"
+    return {
+        "type": "function_call_output",
+        "call_id": call_id,
+        "output": json.dumps({"ok": False, "error": message}, ensure_ascii=False),
+    }
 
 
 def function_tool(name: str, description: str, parameters: dict) -> dict:
@@ -52,6 +107,17 @@ class ToolAdapter(Protocol):
 
     def output_to_codex(self, item: dict, output_style: str = "native"):
         ...
+
+    def coerce(self, call: dict) -> ToolCoercionResult:
+        """Attempt to coerce a malformed function_call into a valid one.
+
+        Return ToolCoercionResult with corrected_arguments on success, or
+        error_message on failure. The default returns a generic error.
+        Adapters override this to provide tool-specific argument recovery
+        and targeted error messages.
+        """
+        name = call.get("name", "unknown") if isinstance(call, dict) else "unknown"
+        return _coercion_error(name)
 
 
 @dataclass(frozen=True)
@@ -97,6 +163,23 @@ class ToolRegistry:
             if normalized is not None:
                 return normalized
         return None
+
+    def coerce_call(self, call: dict) -> ToolCoercionResult:
+        """Run the first matching adapter's coerce() against this function_call.
+
+        If no adapter matches, returns the generic error fallback.
+        """
+        if not isinstance(call, dict):
+            return _coercion_error("unknown")
+        for adapter in self.adapters:
+            if hasattr(adapter, "coerce") and hasattr(adapter, "accepts_tool"):
+                # Check if this adapter owns the call's tool name
+                name = call.get("name")
+                spec = getattr(adapter, "lifecycle", None)
+                if isinstance(spec, ToolLifecycleSpec) and spec.name == name:
+                    return adapter.coerce(call)
+        name = call.get("name", "unknown") if isinstance(call, dict) else "unknown"
+        return _coercion_error(name)
 
     def output_items_to_codex(self, items, output_style: str = "native"):
         if not isinstance(items, list):

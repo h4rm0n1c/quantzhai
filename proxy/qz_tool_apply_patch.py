@@ -4,9 +4,9 @@ import re
 import time
 
 try:
-    from .qz_tools import ToolLifecycleSpec, ToolRegistry, function_tool
+    from .qz_tools import ToolCoercionResult, ToolLifecycleSpec, ToolRegistry, function_tool
 except ImportError:
-    from qz_tools import ToolLifecycleSpec, ToolRegistry, function_tool
+    from qz_tools import ToolCoercionResult, ToolLifecycleSpec, ToolRegistry, function_tool
 
 
 APPLY_PATCH_OPERATION_TYPES = {"create_file", "update_file", "delete_file", "move_file", "rename_file"}
@@ -609,6 +609,24 @@ class ApplyPatchToolAdapter:
         if item.get("type") == "custom_tool_call_output":
             return _custom_apply_patch_output_to_function_output(item)
         return None
+
+    def coerce(self, call: dict) -> ToolCoercionResult:
+        """Attempt to recover a malformed apply_patch function_call.
+
+        If the arguments can be coerced into a valid operation (e.g. sibling
+        patch field, legacy envelope), return the corrected canonical JSON.
+        If coercion fails, return a specific error message the model can act on.
+        """
+        arguments = call.get("arguments") or "{}" if isinstance(call, dict) else "{}"
+        operation = _parse_apply_patch_arguments(arguments)
+        if operation:
+            return ToolCoercionResult(
+                corrected_arguments=json.dumps({"operation": operation}, ensure_ascii=False)
+            )
+        reason = _describe_args_failure(arguments)
+        return ToolCoercionResult(
+            error_message=f"apply_patch: {reason}"
+        )
 
     def output_to_codex(self, item: dict, output_style: str = "native"):
         if not (

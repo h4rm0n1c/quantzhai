@@ -15,8 +15,11 @@ from proxy.quantzhai_proxy import (
     normalize_responses_input_for_qwen,
     normalize_tools_for_llamacpp,
 )
-from proxy.qz_tool_apply_patch import ensure_apply_patch_tool_policy
-from proxy.qz_tool_apply_patch import _apply_patch_operation_to_patch_text
+from proxy.qz_tool_apply_patch import (
+    APPLY_PATCH_TOOL_ADAPTER,
+    ensure_apply_patch_tool_policy,
+    _apply_patch_operation_to_patch_text,
+)
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "responses_input"
 
@@ -689,3 +692,49 @@ class ApplyPatchAdapterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ApplyPatchCoerceTests(unittest.TestCase):
+    """Tests for the new coerce() method on ApplyPatchToolAdapter."""
+
+    def _call(self, arguments: str) -> dict:
+        return {"type": "function_call", "name": "apply_patch",
+                "call_id": "test_call", "arguments": arguments}
+
+    def test_coerce_valid_operation_returns_corrected_arguments(self):
+        import json
+        call = self._call(json.dumps({"operation": {"type": "create_file", "path": "x.py", "diff": "x=1\n"}}))
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(call)
+        self.assertTrue(result.succeeded())
+        self.assertIsNone(result.error_message)
+        parsed = json.loads(result.corrected_arguments)
+        self.assertEqual(parsed["operation"]["type"], "create_file")
+
+    def test_coerce_sibling_patch_returns_corrected_arguments(self):
+        import json
+        call = self._call(json.dumps({"operation": {"type": "create_file", "path": "x.py"}, "patch": "x=1\n"}))
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(call)
+        self.assertTrue(result.succeeded())
+        parsed = json.loads(result.corrected_arguments)
+        self.assertEqual(parsed["operation"]["diff"], "x=1\n")
+
+    def test_coerce_bare_operation_returns_error_message(self):
+        import json
+        call = self._call(json.dumps({"operation": {"type": "create_file", "path": "x.py"}}))
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(call)
+        self.assertFalse(result.succeeded())
+        self.assertIsNotNone(result.error_message)
+        self.assertIn("diff", result.error_message)
+
+    def test_coerce_missing_destination_returns_error_message(self):
+        import json
+        call = self._call(json.dumps({"operation": {"type": "move_file", "path": "a.py"}}))
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(call)
+        self.assertFalse(result.succeeded())
+        self.assertIn("destination", result.error_message)
+
+    def test_coerce_bad_json_returns_error_message(self):
+        call = self._call("{not valid json}")
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(call)
+        self.assertFalse(result.succeeded())
+        self.assertIsNotNone(result.error_message)

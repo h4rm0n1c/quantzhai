@@ -48,3 +48,91 @@ class ToolRegistryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ToolCoercionResultTests(unittest.TestCase):
+    def test_succeeded_when_corrected_arguments_set(self):
+        from proxy.qz_tools import ToolCoercionResult
+        r = ToolCoercionResult(corrected_arguments='{"ok": true}')
+        self.assertTrue(r.succeeded())
+        self.assertIsNone(r.error_message)
+
+    def test_not_succeeded_when_error_message_set(self):
+        from proxy.qz_tools import ToolCoercionResult
+        r = ToolCoercionResult(error_message="something went wrong")
+        self.assertFalse(r.succeeded())
+        self.assertIsNone(r.corrected_arguments)
+
+
+class SynthesizeToolErrorResultTests(unittest.TestCase):
+    def test_produces_function_call_output(self):
+        import json
+        from proxy.qz_tools import synthesize_tool_error_result
+        call = {"type": "function_call", "name": "my_tool", "call_id": "c1", "arguments": "{}"}
+        result = synthesize_tool_error_result(call, "tool not available")
+        self.assertEqual(result["type"], "function_call_output")
+        self.assertEqual(result["call_id"], "c1")
+        payload = json.loads(result["output"])
+        self.assertFalse(payload["ok"])
+        self.assertIn("not available", payload["error"])
+
+    def test_uses_call_id_from_call(self):
+        from proxy.qz_tools import synthesize_tool_error_result
+        call = {"call_id": "my_call_id"}
+        result = synthesize_tool_error_result(call, "error")
+        self.assertEqual(result["call_id"], "my_call_id")
+
+
+class WebSearchCoerceTests(unittest.TestCase):
+    def test_valid_json_passes_through(self):
+        import json
+        call = {"name": "web_search", "call_id": "c1",
+                "arguments": json.dumps({"action": "search", "query": "test"})}
+        result = WEB_SEARCH_TOOL_ADAPTER.coerce(call)
+        self.assertTrue(result.succeeded())
+
+    def test_bad_json_returns_error(self):
+        call = {"name": "web_search", "call_id": "c1", "arguments": "{not json}"}
+        result = WEB_SEARCH_TOOL_ADAPTER.coerce(call)
+        self.assertFalse(result.succeeded())
+        self.assertIn("JSON", result.error_message)
+
+    def test_non_dict_json_returns_error(self):
+        call = {"name": "web_search", "call_id": "c1", "arguments": '"just a string"'}
+        result = WEB_SEARCH_TOOL_ADAPTER.coerce(call)
+        self.assertFalse(result.succeeded())
+
+
+class DroppedToolFeedbackTests(unittest.TestCase):
+    def _make_registry(self):
+        from proxy.qz_proxy_tools import make_proxy_local_tool_registry
+
+        class FakeWebRuntime:
+            def execute_web_search_call(self, call, counters, seen_signatures, request_id=""):
+                return type('R', (), {'public_item': {}, 'upstream_items': (), 'sources': ()})()
+
+        return make_proxy_local_tool_registry(FakeWebRuntime())
+
+    def test_dropped_tool_returns_error_decision(self):
+        registry = self._make_registry()
+        call = {"type": "function_call", "name": "secret_tool", "call_id": "c1", "arguments": "{}"}
+        decision = registry.completed_call_decision(
+            call, "custom", dropped_tool_names=frozenset({"secret_tool"})
+        )
+        self.assertEqual(decision.kind, "error")
+        self.assertIsNotNone(decision.error_result)
+        self.assertIn("secret_tool", decision.error_result["output"])
+        self.assertIn("not available", decision.error_result["output"])
+
+    def test_unknown_tool_returns_error_decision(self):
+        registry = self._make_registry()
+        call = {"type": "function_call", "name": "totally_unknown", "call_id": "c1", "arguments": "{}"}
+        decision = registry.completed_call_decision(call, "custom")
+        self.assertEqual(decision.kind, "error")
+        self.assertIn("totally_unknown", decision.error_result["output"])
+
+    def test_codex_native_tool_passes_through(self):
+        registry = self._make_registry()
+        call = {"type": "function_call", "name": "exec_command", "call_id": "c1", "arguments": "{}"}
+        decision = registry.completed_call_decision(call, "custom")
+        self.assertEqual(decision.kind, "public")

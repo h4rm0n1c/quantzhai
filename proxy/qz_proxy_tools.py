@@ -6,13 +6,13 @@ try:
     from .qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
     from .qz_tool_lifecycle import CompletedToolCallDecision, ToolContinuationResult
     from .qz_streaming import public_tool_lifecycle_event
-    from .qz_tools import ToolRegistry
+    from .qz_tools import CODEX_NATIVE_TOOL_NAMES, ToolRegistry, synthesize_tool_error_result
 except ImportError:
     from qz_tool_apply_patch import APPLY_PATCH_TOOL_ADAPTER
     from qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
     from qz_tool_lifecycle import CompletedToolCallDecision, ToolContinuationResult
     from qz_streaming import public_tool_lifecycle_event
-    from qz_tools import ToolRegistry
+    from qz_tools import CODEX_NATIVE_TOOL_NAMES, ToolRegistry, synthesize_tool_error_result
 
 
 DEFAULT_TOOL_REGISTRY = ToolRegistry((APPLY_PATCH_TOOL_ADAPTER, WEB_SEARCH_TOOL_ADAPTER))
@@ -176,21 +176,82 @@ class ProxyLocalToolRegistry:
             and call.get("name") in self._executors
         )
 
-    def completed_call_decision(self, call: dict, apply_patch_output_style: str):
+    def completed_call_decision(
+        self,
+        call: dict,
+        apply_patch_output_style: str,
+        dropped_tool_names: frozenset[str] = frozenset(),
+    ) -> CompletedToolCallDecision:
+        name = call.get("name") if isinstance(call, dict) else None
+
+        # 1. Dropped tool: model called something explicitly removed from its
+        #    declaration list. Inject a specific error so it can try again.
+        if name and name in dropped_tool_names:
+            error = synthesize_tool_error_result(
+                call,
+                f"Tool '{name}' is not available in this session. "
+                "It was removed from the tool list before this request. "
+                "Use a different tool or approach.",
+            )
+            return CompletedToolCallDecision(kind="error", call=call, error_result=error)
+
+        # 2. Proxy-local executor: coerce via the executor if it supports it,
+        #    otherwise pass through (in-band errors handle runtime failures).
         if self.is_proxy_local_call(call):
+            executor = self._executors.get(name)
+            if executor is not None and hasattr(executor, "coerce"):
+                coercion = executor.coerce(call)
+                if not coercion.succeeded():
+                    error = synthesize_tool_error_result(call, coercion.error_message or "")
+                    return CompletedToolCallDecision(kind="error", call=call, error_result=error)
+                corrected = call if not coercion.corrected_arguments else dict(call, arguments=coercion.corrected_arguments)
+                return CompletedToolCallDecision(kind="proxy_local", call=corrected)
             return CompletedToolCallDecision(kind="proxy_local", call=call)
-        public_item = self.tool_registry.output_to_codex(call, apply_patch_output_style)
-        return CompletedToolCallDecision(
-            kind="public",
-            call=call,
-            public_item=public_item if public_item is not None else call,
+
+        # 3. Protocol adapter (e.g. apply_patch): coerce then convert shape.
+        if self.tool_registry.spec_for_name(name):
+            coercion = self.tool_registry.coerce_call(call)
+            if not coercion.succeeded():
+                error = synthesize_tool_error_result(call, coercion.error_message or "")
+                return CompletedToolCallDecision(kind="error", call=call, error_result=error)
+            corrected = call if not coercion.corrected_arguments else dict(call, arguments=coercion.corrected_arguments)
+            public_item = self.tool_registry.output_to_codex(corrected, apply_patch_output_style)
+            return CompletedToolCallDecision(
+                kind="public",
+                call=corrected,
+                public_item=public_item if public_item is not None else corrected,
+            )
+
+        # 4. Known Codex-native tool: pass through as public, Codex handles it.
+        if name in CODEX_NATIVE_TOOL_NAMES:
+            public_item = self.tool_registry.output_to_codex(call, apply_patch_output_style)
+            return CompletedToolCallDecision(
+                kind="public",
+                call=call,
+                public_item=public_item if public_item is not None else call,
+            )
+
+        # 5. Unknown tool: inject generic error so the model can try something else.
+        error = synthesize_tool_error_result(
+            call,
+            f"Tool '{name}' is not recognised by the proxy and cannot be executed. "
+            "Check the available tools and retry with a supported tool name.",
         )
+        return CompletedToolCallDecision(kind="error", call=call, error_result=error)
 
     def continuation_result(
         self,
         decision: CompletedToolCallDecision,
         context: ProxyToolExecutionContext | None = None,
     ) -> ToolContinuationResult:
+        if decision.kind == "error":
+            # Return the error result as an upstream item so the model sees it.
+            # No public display item — the tool never ran.
+            return ToolContinuationResult(
+                public_item=decision.error_result,
+                upstream_items=(decision.error_result,),
+            )
+
         if decision.kind == "proxy_local":
             if context is None:
                 raise ValueError("context is required for proxy-local tool calls")

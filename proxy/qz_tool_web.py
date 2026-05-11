@@ -11,10 +11,10 @@ from pathlib import Path
 
 try:
     from .qz_runtime_io import runtime_log
-    from .qz_tools import ToolLifecycleSpec, function_tool
+    from .qz_tools import ToolCoercionResult, ToolLifecycleSpec, function_tool
 except ImportError:
     from qz_runtime_io import runtime_log
-    from qz_tools import ToolLifecycleSpec, function_tool
+    from qz_tools import ToolCoercionResult, ToolLifecycleSpec, function_tool
 
 
 def _now_ts() -> int:
@@ -46,6 +46,33 @@ class WebSearchToolAdapter:
         lifecycle_start_stages=("in_progress", "searching"),
         lifecycle_done_stages=("completed",),
     )
+
+    def coerce(self, call: dict) -> ToolCoercionResult:
+        """Coerce a malformed web_search function_call.
+
+        web_search execution already handles missing/bad fields with in-band
+        errors, so this only needs to catch truly unparseable structures.
+        """
+        import json as _json
+        arguments = call.get("arguments") or "{}" if isinstance(call, dict) else "{}"
+        try:
+            data = _json.loads(arguments)
+        except Exception:
+            return ToolCoercionResult(
+                error_message=(
+                    "web_search: arguments are not valid JSON. "
+                    "Provide {\"action\": \"search\", \"query\": \"your query\"} as JSON."
+                )
+            )
+        if not isinstance(data, dict):
+            return ToolCoercionResult(
+                error_message=(
+                    "web_search: arguments must be a JSON object. "
+                    "Provide {\"action\": \"search\", \"query\": \"your query\"}."
+                )
+            )
+        # Arguments are structurally valid; runtime validation handles the rest.
+        return ToolCoercionResult(corrected_arguments=arguments)
 
     def accepts_tool(self, tool: dict) -> bool:
         return isinstance(tool, dict) and tool.get("type") == "web_search"
