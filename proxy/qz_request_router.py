@@ -18,6 +18,7 @@ try:
         _apply_patch_output_style,
         _build_local_compaction_response,
         _decode_local_compaction_blob,
+        _estimate_items_tokens,
         _expand_local_compaction_items,
         _microcompact_old_tool_results,
         _now_ts,
@@ -51,6 +52,7 @@ except ImportError:
         _apply_patch_output_style,
         _build_local_compaction_response,
         _decode_local_compaction_blob,
+        _estimate_items_tokens,
         _expand_local_compaction_items,
         _microcompact_old_tool_results,
         _now_ts,
@@ -908,6 +910,25 @@ class RequestRouter:
                 input_items = body.get("input")
                 if isinstance(input_items, list):
                     body["input"] = _microcompact_old_tool_results(_expand_local_compaction_items(input_items))
+                
+                # Support context_management.compact_threshold
+                context_mgmt = body.get("context_management")
+                if isinstance(context_mgmt, dict):
+                    threshold = context_mgmt.get("compact_threshold")
+                    if isinstance(threshold, int) and threshold > 0:
+                        current_tokens = _estimate_items_tokens(body.get("input", []))
+                        if current_tokens > threshold:
+                            out = _build_local_compaction_response(body)
+                            self.handler._send_json(200, out)
+                            self._emit_request_telemetry(
+                                "request_completed",
+                                started_at,
+                                upstream_path,
+                                client_model,
+                                status=200,
+                                suppressed="auto_compaction_triggered",
+                            )
+                            return
                 body = normalize_responses_input_for_qwen(body, selected_model=selected_model)
                 body = normalize_tools_for_llamacpp(body)
                 prompt_contract = self._prompt_contract(body, selected_model, client_model, backend_model)
