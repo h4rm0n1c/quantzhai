@@ -239,6 +239,110 @@ prompt additions.
 
 ---
 
+---
+
+## Reasoning budget as the primary effort control — next implementation target
+
+### The insight
+
+`--reasoning-budget N` in TurboQuant/llama.cpp is a sampler-level constraint
+on the `<think>...</think>` reasoning block. When N tokens are exhausted:
+
+1. The budget message is injected into the reasoning channel
+2. The `</think>` closing tag is force-fed token by token
+3. Generation continues normally for the answer
+
+This is mechanically enforced — the model cannot think past the budget
+regardless of presence_penalty, prompt wording, or task complexity. This
+makes it the right primary lever for reasoning effort control, replacing the
+current prompt-text approach which the model can ignore on open-ended tasks.
+
+See `common/reasoning-budget.cpp` in the TurboQuant repo for the full state
+machine: `IDLE → COUNTING → WAITING_UTF8 → FORCING → DONE`. It does not
+hard-stop — it force-feeds the closing sequence and then passes through.
+The earlier hard-stop bug was a different mechanism.
+
+### Mapping to effort levels
+
+```
+low    →  small budget  (fast, shallow reasoning, quick answer)
+medium →  moderate budget
+high   →  large budget  (deep reasoning, thorough answer)
+xhigh  →  -1 (unlimited, reason as long as needed)
+```
+
+Exact token counts are TBD — see open questions below.
+
+### Implementation shape
+
+`--reasoning-budget` is a server launch parameter, not per-request. The
+proxy already has a `restart_required` mechanism for context window changes:
+
+```python
+restart_required = (selected_context_length != backend_context_length)
+```
+
+Reasoning budget fits the same shape:
+
+```python
+restart_required = (
+    selected_context_length != backend_context_length
+    or selected_reasoning_budget != backend_reasoning_budget()
+)
+```
+
+`backend_reasoning_budget()` already exists in `proxy/qz_model_router.py`.
+`selected_reasoning_budget` would be derived from the effort level mapping
+and stored in `REASONING_POLICIES` alongside sampling params. The proxy
+triggers a backend restart when effort level changes, exactly as it does
+when context window changes.
+
+`QZ_REASONING_BUDGET` and `QZ_REASONING_BUDGET_MESSAGE` are already wired
+in `qz-env` and `qz-up`. The proxy just needs to set them before restart.
+
+### Open questions — token budgets
+
+The right budget per effort level is empirical. Key questions:
+
+1. **What is kuato-DPO's typical reasoning token count by task type?**
+   Snap questions (factual) vs local inspection vs complex reasoning vs
+   open-ended exploration each have different natural reasoning depths.
+   Interrogate qwen-blank to get self-reported estimates, then validate
+   against captured reasoning token counts from benchmark runs.
+
+2. **What is the minimum reasoning budget for a coherent answer?**
+   Too low and the model gets cut off mid-thought and produces a confused
+   answer. There's a floor below which quality degrades sharply. Need to
+   find it empirically.
+
+3. **What budget triggers the looping behaviour?**
+   The benchmark showed kuato-DPO loops on open-ended tasks. Is this
+   caused by very long reasoning chains (suggesting a high budget would
+   help), or is it reasoning-then-tool-call cycles that the budget
+   doesn't affect (since the budget only covers the reasoning block)?
+
+4. **Does the budget message wording matter?**
+   Current: "I have reasoned long enough. Let me now produce my final
+   answer." Does a more specific message ("Summarise findings and answer
+   the original question directly.") produce better answers at the cutoff?
+   Interrogate qwen-blank.
+
+5. **Is the budget per-turn or per-session?**
+   If a Codex session has 10 hops at `high` effort, does each hop get
+   its own full budget, or does the budget need to account for cumulative
+   reasoning across hops? The sampler resets per generation, so each hop
+   gets the full budget — but the effective reasoning depth per hop may
+   need to be lower than single-turn reasoning depth.
+
+### Investigation plan
+
+Before implementing:
+1. Interrogate qwen-blank about natural reasoning depths by task type
+2. Check captured reasoning token counts from existing benchmark events
+3. Run targeted tests at candidate budget values (2K, 4K, 8K, 16K, 32K)
+   on the prompts that showed looping behaviour
+4. Confirm the budget message wording is appropriate for kuato-DPO
+
 ## Relationship to other docs
 
 - `docs/tool-coercion-design.md` — the coercion system, the first concrete
