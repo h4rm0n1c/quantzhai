@@ -342,7 +342,56 @@ The right budget per effort level is empirical. Key questions:
    framing produce better answers on tasks that genuinely warranted deep
    reasoning vs tasks where the model was looping?
 
-5. **Is the budget per-turn or per-session?**
+5. **Proxy-managed budget retry — tier-2 feature**
+
+   When the reasoning budget fires, the proxy sees the budget message text
+   appear in the `reasoning_text` SSE delta stream before the forced
+   `</think>`. This is a detectable event. The proxy could use it to
+   trigger an intelligent retry rather than forwarding a potentially
+   degraded answer to Codex.
+
+   **Mechanism:**
+   1. Proxy accumulates reasoning text deltas as they stream from llama.cpp
+   2. Proxy detects the budget message string in the reasoning stream —
+      this signals the budget fired
+   3. Proxy evaluates the answer that follows. If degraded (too short,
+      incoherent, or starts with hedging like "I wasn't able to..."):
+   4. Proxy discards the response
+   5. Proxy extracts key findings from the accumulated reasoning content
+   6. Proxy injects a synthetic follow-up context: *"Your reasoning budget
+      was reached. Based on your analysis so far: [extracted key points].
+      Now answer the original question directly."*
+   7. Proxy re-submits to llama.cpp — model answers from the pre-digested
+      summary without needing to re-explore
+
+   The model gets a second shot with its own reasoning distilled for it.
+   No re-exploration needed because the context now contains the key
+   findings, not the original open-ended prompt.
+
+   This is the same intervention pattern the proxy already uses for tool
+   call coercion and error injection — intercept, reshape, re-inject.
+
+   **Circuit breakers required:**
+   - Retry at most once per request — never chain retries
+   - Do not retry if the answer after the forced close was already coherent
+     (detect by length, structure, or absence of hedging markers)
+   - Do not retry on snap/factual prompts where the budget firing indicates
+     over-reasoning on a simple task rather than a productive loop
+
+   **Open questions for implementation:**
+   - How to reliably extract useful signal from a partial reasoning chain
+     (mid-thought rather than a natural summary)
+   - What constitutes a "degraded" answer reliably enough to trigger retry
+   - Whether the synthetic context should include all extracted reasoning
+     or a compressed summary
+   - Latency budget: retry adds one full generation hop; acceptable for
+     high/xhigh effort, probably not for low/medium
+
+   **Implementation order:** implement basic budget+message first, validate
+   that the forced close produces acceptable answers on its own, then add
+   proxy-managed retry as a follow-on once the base mechanism is proven.
+
+6. **Is the budget per-turn or per-session?**
    If a Codex session has 10 hops at `high` effort, does each hop get
    its own full budget, or does the budget need to account for cumulative
    reasoning across hops? The sampler resets per generation, so each hop
