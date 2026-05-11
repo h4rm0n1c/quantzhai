@@ -597,10 +597,11 @@ shorter contexts. Track token use and quality across task types before treating
 
 **Unsupported tool policy.**
 Currently unsupported tools are silently dropped. The model has no signal that a
-tool call never returned. The right behavior (drop silently, inject a no-op
-result, surface as a model-visible limitation) has not been decided. Silent drops
-are the current pragmatic choice; document the decision when it becomes load
-bearing.
+tool call never returned. A coercion system design now exists at
+`docs/tool-coercion-design.md` that answers this: dropped tools inject a
+specific error result back to the model; unknown tools get a generic error;
+per-tool coercion is declared via a `coerce()` method on the registry interface.
+Implementation pending.
 
 **Proxy authentication.**
 The proxy binds to 127.0.0.1 by default but has no authentication. An operator
