@@ -545,6 +545,24 @@ qz-codex-common  thin launcher — asks proxy for catalog state, sets
   The proxy should regenerate the catalog file itself when validation state
   changes.
 
+### Current state of /qz/models/refresh
+
+`/qz/models/refresh` already exists and already does half the job:
+it calls `catalog.refresh()` which rescans `var/models/`, reloads the
+manifest/overrides, and writes the inventory cache. What it does **not**
+currently do is regenerate the Codex catalog file
+(`var/codex-home/model-catalogs/qwenzhai-models.json`). That step is still
+only triggered by the `qz_codex_catalog.py` shell subprocess in
+`qz-codex-common`.
+
+The fix is additive: after `catalog.refresh()`, call the same catalog
+generation logic inline. One HTTP POST to `/qz/models/refresh` then does
+the complete reload cycle — inventory rescan, override reload, Codex catalog
+file update — and the model picker sees the change on its next open.
+
+This is the standard pattern: nginx reload, systemd daemon-reload. The
+endpoint exists; it just needs to do the full job.
+
 ### What must stay in scripts
 
 Codex reads the catalog **from a file** before the first request. The proxy
