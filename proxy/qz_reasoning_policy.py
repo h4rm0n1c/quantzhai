@@ -5,58 +5,57 @@ from typing import Any, Dict, List
 
 DEFAULT_REASONING_POLICY_MODE = "prompt"
 
+_SHARED_SAMPLING = {
+    "temperature": 0.6,
+    "top_p": 0.95,
+    "top_k": 20,
+    "min_p": 0,
+    "presence_penalty": 1.5,
+    "repeat_penalty": 1.0,
+}
+
 REASONING_POLICIES: Dict[str, Dict[str, Any]] = {
     "low": {
         "effort": "low",
-        "description": "Fast/shallow effort for simple prompts.",
-        "prompt": "Reasoning effort: low.",
-        "sampling": {
-            "temperature": 0.7,
-            "top_p": 0.8,
-            "top_k": 20,
-            "min_p": 0,
-            "presence_penalty": 1.5,
-            "repeat_penalty": 1.0,
-        },
+        "description": "One tool call maximum. Direct answer, two sentences max.",
+        "prompt": (
+            "Use at most one tool call to answer. "
+            "Do not follow imports, explore subdirectories, or run a second command unless the first fails. "
+            "Answer directly in two sentences or fewer."
+        ),
+        "sampling": dict(_SHARED_SAMPLING),
     },
     "medium": {
         "effort": "medium",
-        "description": "Default coding-agent balance.",
-        "prompt": "Reasoning effort: medium.",
-        "sampling": {
-            "temperature": 0.6,
-            "top_p": 0.95,
-            "top_k": 20,
-            "min_p": 0,
-            "presence_penalty": 1.5,
-            "repeat_penalty": 1.0,
-        },
+        "description": "Default coding-agent balance. 2-3 tool calls, concise answer.",
+        "prompt": (
+            "Run 2-3 tool calls as needed — read the files directly relevant to the question. "
+            "Stop once you have enough to answer confidently. "
+            "Give a concise answer with brief supporting detail."
+        ),
+        "sampling": dict(_SHARED_SAMPLING),
     },
     "high": {
         "effort": "high",
-        "description": "Careful reasoning for complex coding work.",
-        "prompt": "Reasoning effort: high.",
-        "sampling": {
-            "temperature": 0.6,
-            "top_p": 0.95,
-            "top_k": 20,
-            "min_p": 0,
-            "presence_penalty": 1.5,
-            "repeat_penalty": 1.0,
-        },
+        "description": "Multi-file investigation. Cross-reference before answering.",
+        "prompt": (
+            "Investigate across multiple files. "
+            "Read at least two relevant files and cross-reference their contents before answering. "
+            "Stop when you are confident there are no conflicting definitions or missing context. "
+            "Explain your reasoning."
+        ),
+        "sampling": dict(_SHARED_SAMPLING),
     },
     "xhigh": {
         "effort": "xhigh",
-        "description": "Deep effort when complexity warrants it.",
-        "prompt": "Reasoning effort: xhigh.",
-        "sampling": {
-            "temperature": 0.6,
-            "top_p": 0.95,
-            "top_k": 20,
-            "min_p": 0,
-            "presence_penalty": 1.5,
-            "repeat_penalty": 1.0,
-        },
+        "description": "Exhaustive investigation. Trace dependencies, verify everything.",
+        "prompt": (
+            "Perform exhaustive investigation: map the directory structure, read every file that could affect the answer, "
+            "trace dependencies between modules, and verify assumptions from source rather than inference. "
+            "Stop only when you have no remaining uncertainty about the answer. "
+            "Document all relevant findings."
+        ),
+        "sampling": dict(_SHARED_SAMPLING),
     },
 }
 
