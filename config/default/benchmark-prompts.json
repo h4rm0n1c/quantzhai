@@ -1,25 +1,103 @@
 {
-  "version": 1,
+  "version": 2,
   "prompts": [
     {
-      "id": "stack-evaluate-report",
-      "prompt": "examine current dir, this stack runs you: evaluate, report.",
-      "goal": "Measure repo comprehension, tool discipline, and useful reporting from the real QuantZhai directory."
+      "id": "greeting-latch",
+      "category": "snap",
+      "expected_tools": [],
+      "prompt": "how are you?",
+      "goal": "Measure startup style latch and response overhead. No tool use expected at any effort level."
     },
     {
-      "id": "greeting-latch",
-      "prompt": "how are you?",
-      "goal": "Measure startup style latch and response overhead."
+      "id": "gguf-definition",
+      "category": "snap",
+      "expected_tools": [],
+      "prompt": "What does GGUF stand for?",
+      "goal": "Simple factual question answerable from training knowledge. Should be short and fast at every effort level."
+    },
+    {
+      "id": "bash-set-e",
+      "category": "snap",
+      "expected_tools": [],
+      "prompt": "What does `set -e` do in bash?",
+      "goal": "Simple factual question. No tool use expected. Higher effort should not make this slower without reason."
+    },
+    {
+      "id": "proxy-default-port",
+      "category": "local",
+      "expected_tools": ["shell"],
+      "prompt": "What port does the QuantZhai proxy listen on by default? Check the source to confirm.",
+      "goal": "Answer is in scripts/qz-env. Low effort may hallucinate; high effort should inspect the file."
+    },
+    {
+      "id": "test-file-count",
+      "category": "local",
+      "expected_tools": ["shell"],
+      "prompt": "How many test files are in the tests/ directory? Give the exact count.",
+      "goal": "Requires a shell command to count accurately. Tests whether the model inspects rather than guesses."
     },
     {
       "id": "bounded-readme-launcher",
+      "category": "local",
+      "expected_tools": ["shell"],
       "prompt": "Inspect README.md and scripts/qz-codex. Run at most two read-only commands. Report what this stack does and how Codex is launched in under 140 words.",
       "goal": "Measure bounded inspection, repo-specific accuracy, and concise final reporting."
     },
     {
+      "id": "qz-doctor-exists",
+      "category": "local",
+      "expected_tools": ["shell"],
+      "prompt": "Does scripts/qz-doctor exist? If so, what does it check? Read the file to find out.",
+      "goal": "Requires file inspection. Tests whether the model reads before answering rather than guessing."
+    },
+    {
+      "id": "run-qz-doctor",
+      "category": "tool",
+      "expected_tools": ["shell"],
+      "prompt": "Run scripts/qz-doctor and summarise what it reports. Quote any warnings or errors exactly.",
+      "goal": "Shell execution required. Tests whether the model runs the command and accurately reports output."
+    },
+    {
+      "id": "count-proxy-functions",
+      "category": "tool",
+      "expected_tools": ["shell"],
+      "prompt": "Read proxy/qz_tool_apply_patch.py and count the top-level functions defined at module level (lines starting with `def `). Give the exact number.",
+      "goal": "File inspection required. Tests accuracy of reported count against ground truth."
+    },
+    {
+      "id": "count-capture-dirs",
+      "category": "tool",
+      "expected_tools": ["shell"],
+      "prompt": "How many request capture directories are currently under var/captures/requests/? Give the exact count.",
+      "goal": "Shell command required; answer varies per run. Tests whether the model runs a command rather than guessing."
+    },
+    {
+      "id": "stack-evaluate-report",
+      "category": "reasoning",
+      "expected_tools": ["shell"],
+      "prompt": "examine current dir, this stack runs you: evaluate, report.",
+      "goal": "Measure repo comprehension, tool discipline, and useful reporting. Higher effort should produce more thorough analysis."
+    },
+    {
+      "id": "apply-patch-readiness",
+      "category": "reasoning",
+      "expected_tools": [],
+      "prompt": "Is the QuantZhai apply_patch adapter production-ready? Give your honest assessment in under 200 words.",
+      "goal": "Judgment based on code and docs. Low effort should still be coherent; high effort should be more specific and evidence-based."
+    },
+    {
+      "id": "riskiest-proxy-file",
+      "category": "reasoning",
+      "expected_tools": [],
+      "prompt": "What is the riskiest single file to change in the QuantZhai proxy and why? Think carefully before answering.",
+      "goal": "Reasoning about code structure. No single correct answer; human reads whether higher effort produces visibly more thorough reasoning."
+    },
+    {
       "id": "artifact-boundary",
-      "prompt": "Create no files. Draft a normal professional git commit subject and body for adding a benchmark harness to QuantZhai. Do not use compressed mode wording in the commit text.",
-      "goal": "Measure whether compact profiles keep generated artifacts professional instead of leaking chat style."
+      "category": "reasoning",
+      "expected_tools": [],
+      "prompt": "Create no files. Draft a normal professional git commit subject and body for adding a profile eval framework to the benchmark harness. Do not use compressed mode wording in the commit text.",
+      "goal": "Artifact quality — whether compact profiles keep generated text professional rather than leaking chat style."
     }
   ]
 }

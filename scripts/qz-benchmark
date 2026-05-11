@@ -278,6 +278,8 @@ case_index=0
 while IFS= read -r prompt_json; do
   prompt_id="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["id"])' "$prompt_json")"
   prompt_text="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["prompt"])' "$prompt_json")"
+  prompt_category="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("category",""))' "$prompt_json")"
+  prompt_expected_tools="$(python3 -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1]).get("expected_tools",[])))' "$prompt_json")"
   prompt_slug="$(safe_name "$prompt_id")"
 
   for profile in "${profiles[@]}"; do
@@ -290,6 +292,7 @@ while IFS= read -r prompt_json; do
     printf '%s\n' "$prompt_text" > "$case_dir/prompt.txt"
     printf '%s\n' "$profile" > "$case_dir/profile.txt"
     printf '%s\n' "$QZ_CODEX_MODEL" > "$case_dir/model.txt"
+    printf '%s\n' "$prompt_category" > "$case_dir/category.txt"
 
     cmd=(codex -a "$approval_policy")
     if [[ "$enable_search" == "1" ]]; then
@@ -336,7 +339,7 @@ while IFS= read -r prompt_json; do
     fi
     copy_latest_captures "$case_dir/captures"
 
-    python3 - "$case_dir" "$profile" "$QZ_CODEX_MODEL" "$prompt_id" "$exit_code" "$timed_out" "$start_ts" "$end_ts" <<'PY'
+    python3 - "$case_dir" "$profile" "$QZ_CODEX_MODEL" "$prompt_id" "$exit_code" "$timed_out" "$start_ts" "$end_ts" "$prompt_category" "$prompt_expected_tools" <<'PY'
 import hashlib
 import json
 import math
@@ -351,6 +354,13 @@ exit_code = int(sys.argv[5])
 timed_out = sys.argv[6] == "1"
 start_ts = float(sys.argv[7])
 end_ts = float(sys.argv[8])
+category = sys.argv[9] if len(sys.argv) > 9 else ""
+try:
+    expected_tools = json.loads(sys.argv[10]) if len(sys.argv) > 10 else []
+    if not isinstance(expected_tools, list):
+        expected_tools = []
+except Exception:
+    expected_tools = []
 
 def approx_tokens(text):
     if not text:
@@ -466,10 +476,72 @@ for source in [events, runtime_final, upstream_raw]:
         if reason:
             finish_reasons.append(reason)
 
+_TOOL_TYPE_MAP = {
+    "shell": "shell",
+    "exec_command": "shell",
+    "command": "shell",
+    "file_read": "read",
+    "read_file": "read",
+    "file_change": "apply_patch",
+    "apply_patch": "apply_patch",
+    "apply_patch_call": "apply_patch",
+    "web_search": "web_search",
+    "web_search_call": "web_search",
+}
+
+def _iter_codex_items(events):
+    for event in events:
+        for candidate in [event, event.get("payload") or {}]:
+            if not isinstance(candidate, dict):
+                continue
+            if candidate.get("type") in ("item.completed", "item.started"):
+                item = candidate.get("item")
+                if isinstance(item, dict):
+                    yield candidate["type"], item
+
+def _count_turns(events):
+    count = 0
+    for event in events:
+        for candidate in [event, event.get("payload") or {}]:
+            if isinstance(candidate, dict) and candidate.get("type") == "turn.completed":
+                count += 1
+    return count
+
+tools_called = []
+seen_call_ids = set()
+for ev_type, item in _iter_codex_items(events):
+    if ev_type != "item.completed":
+        continue
+    raw_type = str(item.get("type") or "").lower()
+    canonical = _TOOL_TYPE_MAP.get(raw_type)
+    if not canonical:
+        continue
+    call_id = item.get("call_id") or item.get("id") or ""
+    if call_id and call_id in seen_call_ids:
+        continue
+    if call_id:
+        seen_call_ids.add(call_id)
+    tools_called.append(canonical)
+
+turn_count = _count_turns(events)
+missing_expected = sorted(set(expected_tools) - set(tools_called))
+tools_used_set = sorted(set(tools_called))
+
+tool_use = {
+    "tools_called": tools_called,
+    "tools_called_set": tools_used_set,
+    "tool_call_count": len(tools_called),
+    "turn_count": turn_count,
+    "expected_tools": expected_tools,
+    "missing_expected_tools": missing_expected,
+    "expected_tools_satisfied": len(missing_expected) == 0,
+}
+
 result = {
     "profile": profile,
     "model": model,
     "prompt_id": prompt_id,
+    "category": category,
     "exit_code": exit_code,
     "timed_out": timed_out,
     "wall_seconds": round(max(0.0, end_ts - start_ts), 3),
@@ -487,6 +559,7 @@ result = {
     },
     "sse_done": sse_done,
     "finish_reason": finish_reasons[-1] if finish_reasons else None,
+    "tool_use": tool_use,
 }
 (case_dir / "result.json").write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 PY
@@ -681,6 +754,97 @@ for result in results:
         f"{usage.get('input_tokens', 0)} | {usage.get('output_tokens', 0)} | "
         f"{result.get('final_est_tokens', 0)} | {usage.get('total_tokens', 0)} |"
     )
+
+# Tool-use table
+categories = ["snap", "local", "tool", "reasoning"]
+lines.extend(["", "## Tool Use", ""])
+lines.extend([
+    "| Profile | Prompt | Category | Exit | Turns | Tools called | Expected | Satisfied |",
+    "| --- | --- | --- | ---: | ---: | --- | --- | --- |",
+])
+deviations = []
+for result in results:
+    tu = result.get("tool_use") or {}
+    cat = result.get("category") or ""
+    called_set = tu.get("tools_called_set") or []
+    expected = tu.get("expected_tools") or []
+    satisfied = tu.get("expected_tools_satisfied", True)
+    missing = tu.get("missing_expected_tools") or []
+    turns = tu.get("turn_count", 0)
+    called_str = ", ".join(called_set) if called_set else "—"
+    expected_str = ", ".join(expected) if expected else "—"
+    sat_str = "✓" if satisfied else f"✗ missing: {', '.join(missing)}"
+    lines.append(
+        f"| {result['profile']} | {result['prompt_id']} | {cat} | "
+        f"{result['exit_code']} | {turns} | {called_str} | {expected_str} | {sat_str} |"
+    )
+    if not satisfied:
+        deviations.append(
+            f"  - **{result['profile']}** / `{result['prompt_id']}` "
+            f"(category: {cat}): expected `{expected}`, got `{called_set}`"
+        )
+
+if deviations:
+    lines.extend(["", "### Tool-use deviations", ""])
+    lines.extend(deviations)
+
+# Per-category summary
+lines.extend(["", "## Per-category tool use", ""])
+from collections import defaultdict
+cat_profile_stats = defaultdict(lambda: defaultdict(lambda: {"calls": [], "turns": [], "satisfied": []}))
+for result in results:
+    tu = result.get("tool_use") or {}
+    cat = result.get("category") or "unknown"
+    prof = result.get("profile") or ""
+    cat_profile_stats[cat][prof]["calls"].append(tu.get("tool_call_count", 0))
+    cat_profile_stats[cat][prof]["turns"].append(tu.get("turn_count", 0))
+    cat_profile_stats[cat][prof]["satisfied"].append(1 if tu.get("expected_tools_satisfied", True) else 0)
+
+lines.extend([
+    "| Category | Profile | Prompts | Avg tool calls | Avg turns | Expected satisfied |",
+    "| --- | --- | ---: | ---: | ---: | ---: |",
+])
+for cat in categories + sorted(c for c in cat_profile_stats if c not in categories):
+    if cat not in cat_profile_stats:
+        continue
+    for prof in sorted(cat_profile_stats[cat]):
+        stats = cat_profile_stats[cat][prof]
+        n = len(stats["calls"])
+        avg_calls = round(sum(stats["calls"]) / n, 2) if n else 0
+        avg_turns = round(sum(stats["turns"]) / n, 2) if n else 0
+        sat_pct = f"{round(100 * sum(stats['satisfied']) / n)}%" if n else "—"
+        lines.append(
+            f"| {cat} | {prof} | {n} | {avg_calls} | {avg_turns} | {sat_pct} |"
+        )
+
+# Manual review section for reasoning category
+reasoning_results = [r for r in results if r.get("category") == "reasoning"]
+if reasoning_results:
+    lines.extend(["", "## Manual Review — Reasoning category", ""])
+    lines.append(
+        "_Human review: does higher effort produce visibly more thorough reasoning? "
+        "No automated grading. Read and compare._"
+    )
+    for result in reasoning_results:
+        final_path = Path(result["case_dir"]).parent / result["case_dir"] / "final.txt"
+        # case_dir in result is the dir name, not full path — try reading from run_dir
+        answer_path = run_dir / result["case_dir"] / "final.txt"
+        answer = ""
+        try:
+            answer = answer_path.read_text(encoding="utf-8", errors="replace").strip()
+        except Exception:
+            answer = "_no output_"
+        lines.extend([
+            "",
+            f"### {result['profile']} / {result['prompt_id']}",
+            "",
+            f"Exit: {result['exit_code']}  Wall: {result['wall_seconds']}s  "
+            f"Turns: {(result.get('tool_use') or {}).get('turn_count', '?')}",
+            "",
+            "```",
+            answer[:1200] + ("..." if len(answer) > 1200 else ""),
+            "```",
+        ])
 
 (run_dir / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
