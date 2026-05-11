@@ -10,7 +10,13 @@ _SHARED_SAMPLING = {
     "top_p": 0.95,
     "top_k": 20,
     "min_p": 0,
-    "presence_penalty": 0,
+    # presence_penalty=1.5 is intentional for agentic multi-hop use.
+    # The official Qwen model card recommends 0 for thinking-mode coding,
+    # but that guidance is for single-turn inference. In multi-hop agentic
+    # sessions, 0 causes the model to produce intermediate answers and keep
+    # exploring indefinitely rather than committing to a final answer. 1.5
+    # applies enough pressure to conclude. Do not change this to 0.
+    "presence_penalty": 1.5,
     "repeat_penalty": 1.0,
 }
 
