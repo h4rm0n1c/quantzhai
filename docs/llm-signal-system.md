@@ -155,6 +155,64 @@ retry as-is vs try a different approach entirely.
 
 ---
 
+## Signal format — an open question
+
+How a signal is injected matters as much as what it says. Candidates:
+
+- **System prompt addition** — visible to the model on every turn; risks
+  becoming background noise the model learns to ignore; stale between turns
+- **In-turn user/context message** — visible, fresh, clear; adds a turn to
+  the conversation; may be more salient than prompt text
+- **function_call_output-style message** — consistent with the coercion
+  system; fits the model's existing "tool result" expectation; could become
+  the standard channel for all proxy-injected signals
+- **XML/structured tags** — models vary widely on whether they treat tags
+  as special or just as text; Qwen's training on these is unknown
+- **Instruction annotation** — appended to the existing instructions block;
+  compact but may be overshadowed by task instructions
+
+None of these are obviously right. The format question is empirically
+answerable with the fuzz infrastructure: implement hop budget in two or
+three different injection formats, run the same task battery, observe
+which format produces the most consistent model behaviour.
+
+### Research direction (inform, don't bind)
+
+Worth a pass over what others have done before implementing:
+
+- **ReAct (Reason + Act)** — how the reasoning channel interacts with
+  action signals; relevant to whether signals should target reasoning or
+  the answer phase
+- **LangChain/LangGraph** — how they surface agent state to the model;
+  their approach to self-management prompts
+- **AutoGen** — self-reflection and retry patterns; how they handle tool
+  failures
+- **Anthropic tool-use research** — published work on what makes tool-use
+  feedback effective
+- **Qwen documentation and eval papers** — whether there is anything specific
+  about how Qwen3.6 (MoE) responds to meta-instructions vs dense models
+
+Weight this lightly. If prior art says "use system prompt" but empirical
+testing with Qwen shows in-turn messages produce better self-regulation,
+use in-turn messages. The model's actual behaviour is the ground truth.
+
+### Qwen-specific considerations
+
+Qwen3.6-35B-A3B is a MoE architecture with a separate reasoning channel.
+Both of these are relevant to signal design:
+
+- The reasoning channel sees the world before the answer does. A signal
+  visible in the reasoning phase may produce more deliberate self-regulation
+  than one that arrives after reasoning has already committed to a path.
+- MoE models can behave differently from dense models on meta-instructions.
+  The degree to which Qwen follows "you have 3 hops remaining" literally vs
+  treats it as background information is unknown without testing.
+- Qwen has been trained on agentic tasks but the specific format of its
+  training data for meta-signals is not public. This makes empirical testing
+  more important than research review.
+
+---
+
 ## Design principles (current thinking, subject to change)
 
 **Reactive over proactive where possible.** Quality signals in response
