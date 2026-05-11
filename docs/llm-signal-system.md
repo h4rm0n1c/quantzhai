@@ -72,6 +72,70 @@ even after compaction.
 These are directions, not commitments. Priority and shape may change as we
 implement and observe.
 
+### Tool use feedback — loop detection and dedup signals
+
+**Why this is needed:** Benchmark forensics showed that looping (the model
+reading the same files 3 times, spending 36 tool calls on a task that needed 5)
+happens entirely in the tool call layer — outside the reasoning channel and
+therefore outside the reach of the reasoning token budget. Per-tool-call
+reasoning blocks are tiny (28-213 tokens each). The budget controls reasoning
+depth per hop but cannot prevent the model from continuing to make redundant
+tool calls after each `</think>`.
+
+The fix requires feedback from the proxy about what has already been done.
+
+**Option 1 — Dedup signal on repeated reads (most surgical)**
+
+Proxy tracks file paths accessed in the current turn. When the model reads the
+same path again, inject into the tool result alongside the file content:
+
+> *"Note: you already read this file earlier in this turn."*
+
+Fires exactly when the redundant behaviour occurs. The model sees it in the
+tool result and self-corrects without needing a separate signal channel. This
+directly addresses the benchmark failure: `README.md` × 3, `streamlink_3.sh`
+× 3, `streamlinkbgm/README.md` × 3 in a single session.
+
+**Option 2 — Tool call counter signal**
+
+Proxy injects an ephemeral message after N tool calls in a turn:
+
+> *"You have made N tool calls this turn. Consider whether you have enough
+> information to answer the question."*
+
+Similar to hop budget but scoped to tool calls within a single turn rather
+than conversation hops. Less surgical than option 1 but simpler to implement
+and catches any excessive tool use, not just file reads.
+
+**Option 3 — Diminishing returns signal**
+
+Proxy hashes consecutive tool outputs and signals when a new result overlaps
+significantly with a previous one:
+
+> *"This result is similar to content you already retrieved."*
+
+More complex to implement reliably. Dedup by path (option 1) is more precise
+for the file-read case.
+
+**Recommended implementation order:**
+1. Option 1 first — path dedup on shell/read tool calls, injected into the
+   tool result. Low complexity, high signal-to-noise, directly targets the
+   observed failure mode.
+2. Option 2 as a backstop — fires when total tool calls exceed a threshold
+   regardless of dedup, catching loops that don't involve file re-reads.
+3. Option 3 deferred — only if 1+2 are insufficient.
+
+**Implementation notes:**
+- Per-turn state only. Reset at turn boundary, not carried across hops.
+- Inject into the tool result text, not as a separate message turn. Keeps
+  it in the tool result channel where the model already expects feedback.
+- Same pattern as coercion error injection — the proxy augments the tool
+  result rather than adding a new message.
+- The path tracker needs to normalise paths (resolve `./`, `../`, absolute
+  vs relative) to avoid false negatives.
+- This is distinct from the compaction microcompaction system which handles
+  old tool outputs across turns — this is intra-turn dedup only.
+
 ### Hop budget (self-management)
 
 The model doesn't know how many continuation hops remain in the current
@@ -398,14 +462,58 @@ The right budget per effort level is empirical. Key questions:
    gets the full budget — but the effective reasoning depth per hop may
    need to be lower than single-turn reasoning depth.
 
+### Empirical data — actual reasoning token counts (kuato-DPO, pp=0.5)
+
+Measured from benchmark `kuato-pp05` events.jsonl (reasoning item text length
+÷ 4 for token estimate):
+
+| Task | Profile | Tool calls | Est reasoning tokens |
+|---|---|---:|---:|
+| greeting-latch | medium | 0 | 25 |
+| greeting-latch | high | 0 | 23 |
+| project-assessment | medium | 4 | 358 |
+| project-assessment | high | 8 | 500 |
+| riskiest-file | medium | 6 | 1453 |
+| riskiest-file | high | 6 | 615 |
+| commit-message | medium | 5 | 572 |
+| commit-message | high | 3 | 395 |
+
+Looping cases from `kuato-baseline` (per-tool-call reasoning):
+
+| Task | Profile | Tool calls | Total reasoning tokens | Per-call tokens |
+|---|---|---:|---:|---:|
+| stack-evaluate | low | 25 | 2744 | 109 |
+| stack-evaluate | medium | 36 | 2023 | 56 |
+| stack-evaluate | high | 26 | 1472 | 56 |
+| riskiest-file | medium | 13 | 2160 | 166 |
+
+**Key finding:** Looping is entirely in tool calls, not reasoning. Per-call
+reasoning is tiny (28-213 tokens). Total reasoning for 36-tool-call sessions
+is only ~2000 tokens. A reasoning budget cannot stop the loop — it can only
+control reasoning depth per call.
+
+**Model self-report vs reality:** The model overestimates its own reasoning
+depth by 3-5x. Actual peak observed is ~1500 tokens for the most complex
+non-looping tasks.
+
+**Calibrated budget targets:**
+```
+low    →  500 tokens   (snap tasks peak at 25, inspection at ~400)
+medium →  2000 tokens  (covers all observed clean completions with headroom)
+high   →  4000 tokens  (2x medium, headroom for genuinely deep reasoning)
+xhigh  →  -1           (unlimited)
+```
+
 ### Investigation plan
 
-Before implementing:
-1. Interrogate qwen-blank about natural reasoning depths by task type
-2. Check captured reasoning token counts from existing benchmark events
-3. Run targeted tests at candidate budget values (2K, 4K, 8K, 16K, 32K)
-   on the prompts that showed looping behaviour
-4. Confirm the budget message wording is appropriate for kuato-DPO
+Remaining before implementing:
+1. Confirm budget message wording — the combined form is likely best:
+   "You may be revisiting information. Consolidate your findings and
+   produce your final answer."
+2. Run targeted tests at 500/2000/4000 token budgets on riskiest-file
+   and project-assessment to validate cutoff quality
+3. Implement tool use dedup signal (option 1 above) in parallel — the
+   loop fix requires both budget and dedup to be complete
 
 ## Relationship to other docs
 
