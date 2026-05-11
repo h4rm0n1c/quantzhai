@@ -686,14 +686,20 @@ telemetry bus capacity — the per-request event buffer fills with
 stream_event_timing events and evicts meaningful lifecycle events
 ```
 
+Document:
+
+```text
+docs/bugs/telemetry-bus-capacity.md
+```
+
 Reason:
 
 ```text
-hop_budget_signal, tool_call_started, and compaction telemetry events are
-being pushed out of the 200-event per-request ring by high-frequency
-stream_event_timing entries. Either raise the per-request capacity, partition
-timing events into a separate lower-priority buffer, or add a discard policy
-that preserves lifecycle events over timing events.
+hop_budget_signal, tool_call_started, and auto_compaction_triggered events are
+pushed out of the 200-event per-request ring by high-frequency
+stream_event_timing entries. Preferred fix: partition stream_event_timing into
+its own lower-priority ring so lifecycle events are never evicted. See the bug
+note for options and do-not-fix constraints.
 ```
 
 Then do:
