@@ -1,17 +1,17 @@
 # QuantZhai Progress Snapshot
 
-Last updated: 2026-05-11 (session 3, end).
+Last updated: 2026-05-11 (session 4, end).
 
 This is a periodic high-level progress note. Use it when someone asks "where are
 we overall?" without needing to reread every roadmap.
 
 ## Overall
 
-Current estimate: **84% through stabilisation for the local Codex + Qwen goal**.
+Current estimate: **86% through stabilisation for the local Codex + Qwen goal**.
 
-Two long sessions. The proxy is substantially more capable and more honest about
-what it knows. The LLM signal system is a new area taking shape — coercion,
-informative history, and early reasoning signals are all live.
+Three long sessions plus a fourth. The proxy is substantially more capable and
+more honest about what it knows. The compaction bridge is now shipped and live-
+smoked — Qwen correctly recalls compacted context in follow-up turns.
 
 ## Area Estimates
 
@@ -25,20 +25,16 @@ informative history, and early reasoning signals are all live.
   Unchanged from prior.
 - **Observability/status:** 70%
   Unchanged. VRAM backend telemetry still open.
-- **LLM signal system:** 40%
+- **LLM signal system:** 55%
   Coercion error feedback, informative compaction placeholders, reasoning-budget-
-  message, carry-forward all live. Hop budget signal and context pressure signal
-  now implemented (QZ_HOP_BUDGET_SIGNAL_THRESHOLD=3,
-  QZ_CONTEXT_PRESSURE_SIGNAL_THRESHOLD=0.8). Both are ephemeral per-hop plain-
-  instruction messages injected only when relevant; apply_patch and public tools
-  are unaffected. Usage drain added so context pressure has accurate token counts
-  from proxy-local hop completions. Live-smoked: single web_search hop correctly
-  emits no signal (5 hops remaining > threshold). 263/263 tests green.
-  Next: empirical A/B format testing; compaction bridge research.
-- **Docs/tests/replay:** 92%
-  Signal system doc, research findings, conversation history audit plan,
-  compaction bridge plan all committed. Conversation history audit complete —
-  tool filter has no bugs; reasoning correctly dropped per ReAct.
+  message, carry-forward all live. Hop budget and context pressure signals live.
+  Compaction bridge delivered: v2 blob format, auto-compaction trigger via
+  `compact_threshold`, native blob passthrough, improved limits, 29 unit tests,
+  live smoke (10/10, model recalled file names from compacted context).
+  Next: empirical A/B format testing for signal formats; profile eval framework.
+- **Docs/tests/replay:** 93%
+  Compaction bridge plan updated to reflect delivery. 29 new unit tests +
+  live integration smoke. Test suite: 292/292 green.
 - **Packaging/architecture:** 35%
   Unchanged.
 
@@ -55,17 +51,14 @@ Revised after research:
 
 ## Immediate next priorities (in order)
 
-1. **Compaction bridge** — give the model a signal when context history is
-   compacted and what got dropped. `docs/compaction-bridge-plan.md` exists.
-   Needs a capture audit + OpenAI compaction format research pass first.
-2. **Telemetry bus capacity** — per-request buffer (200 events) fills with
+1. **Telemetry bus capacity** — per-request buffer (200 events) fills with
    `stream_event_timing` events and pushes out meaningful lifecycle events
    (`hop_budget_signal`, `tool_call_started`, etc.). Fix: raise capacity or
    give timing events a separate lower-priority buffer.
-3. **Profile eval framework** — build the prompt test battery from
+2. **Profile eval framework** — build the prompt test battery from
    `docs/profile-eval-plan.md`. Prerequisite for A/B testing signal formats
    and profile preset tuning.
-4. **Config/var layout + script cleanup** — Phase 3 of master plan. `var/`
+3. **Config/var layout + script cleanup** — Phase 3 of master plan. `var/`
    restructure and script sprawl reduction. Housekeeping, long deferred.
 
 ## Remaining Big Rocks
@@ -78,7 +71,7 @@ Revised after research:
    validation, profile preset tuning (blocked on profile eval framework).
 6. LLM signal system — **in progress**. Hop budget + context pressure signals
    live. Next: empirical A/B format testing; compaction bridge.
-7. Compaction bridge — needs capture audit + OpenAI format research first.
+7. ~~Compaction bridge~~ — done. v2 format, auto-compaction trigger, live smoke.
 8. Profile eval framework — prompt set (docs/profile-eval-plan.md).
 9. Split proxy into a conventional Python package.
 10. Add backend adapter boundary.
