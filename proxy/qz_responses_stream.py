@@ -56,6 +56,14 @@ REASONING_ONLY_TIMEOUT_S = float(os.environ.get("QZ_REASONING_ONLY_TIMEOUT_S", "
 REASONING_ONLY_CHAR_LIMIT = int(os.environ.get("QZ_REASONING_ONLY_CHAR_LIMIT", "-1"))
 REASONING_ARTIFACT_SCAN_LIMIT = int(os.environ.get("QZ_REASONING_ARTIFACT_SCAN_LIMIT", "8192"))
 
+# Hop budget signal: inject a plain-instruction message when remaining continuation
+# hops fall to this threshold or below. Set to -1 to disable entirely.
+HOP_BUDGET_SIGNAL_THRESHOLD = int(os.environ.get("QZ_HOP_BUDGET_SIGNAL_THRESHOLD", "3"))
+
+# Context pressure signal: inject when input token fill ratio meets this fraction
+# of the configured context window. Set to a negative value to disable.
+CONTEXT_PRESSURE_SIGNAL_THRESHOLD = float(os.environ.get("QZ_CONTEXT_PRESSURE_SIGNAL_THRESHOLD", "0.8"))
+
 
 class ClientStreamDisconnected(BrokenPipeError):
     """Raised when the downstream client closes while streaming."""
@@ -134,6 +142,8 @@ class ResponsesStreamRuntime:
         proxy_tool_registry=None,
         selected_model=None,
         reasoning_carry_forward: bool = False,
+        hop_budget_signal_threshold: int | None = None,
+        context_pressure_signal_threshold: float | None = None,
     ):
         self.upstream = upstream.rstrip("/")
         self.authorization = authorization or "Bearer local"
@@ -147,6 +157,16 @@ class ResponsesStreamRuntime:
         self.telemetry_emitter = RequestTelemetryEmitter(telemetry, self.request_id)
         self.proxy_tool_registry = proxy_tool_registry or make_proxy_local_tool_registry(web_runtime)
         self.reasoning_carry_forward = bool(reasoning_carry_forward)
+        self.hop_budget_signal_threshold = (
+            HOP_BUDGET_SIGNAL_THRESHOLD
+            if hop_budget_signal_threshold is None
+            else int(hop_budget_signal_threshold)
+        )
+        self.context_pressure_signal_threshold = (
+            CONTEXT_PRESSURE_SIGNAL_THRESHOLD
+            if context_pressure_signal_threshold is None
+            else float(context_pressure_signal_threshold)
+        )
         self.private_function_call_timeout_s = (
             PRIVATE_FUNCTION_CALL_TIMEOUT_S
             if private_function_call_timeout_s is None
@@ -466,6 +486,76 @@ class ResponsesStreamRuntime:
             "fallback": bool(fallback),
         })
 
+    @staticmethod
+    def _drain_stream_for_usage(resp) -> dict | None:
+        """Read remaining SSE events from resp (still open after a tool break) to
+        capture a response.completed usage payload before the stream is closed.
+
+        Bounded to 200 events so a runaway upstream cannot stall the proxy.
+        Returns a normalized usage dict if found, None otherwise.
+        """
+        event_lines = []
+        for _ in range(200):
+            try:
+                chunk = resp.readline()
+            except Exception:
+                break
+            if not chunk:
+                break
+            event_lines.append(chunk)
+            if chunk not in (b"\n", b"\r\n"):
+                continue
+            event_type, payload = parse_sse_event_lines(event_lines)
+            event_lines = []
+            if event_type == "response.completed" and isinstance(payload, dict):
+                response = payload.get("response") or {}
+                if isinstance(response, dict):
+                    return _normalize_response_usage(response.get("usage"))
+            if event_type == "done" or payload == "[DONE]":
+                break
+        return None
+
+    @staticmethod
+    def _make_signal_message(text: str) -> dict:
+        return {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": text}],
+        }
+
+    def _hop_budget_signal_message(self, hops_remaining: int) -> dict | None:
+        if self.hop_budget_signal_threshold < 0 or hops_remaining > self.hop_budget_signal_threshold:
+            return None
+        text = (
+            f"You have {hops_remaining} continuation hop(s) remaining this turn. "
+            "If the task is complete or nearly complete, give a direct answer rather than calling more tools."
+        )
+        return self._make_signal_message(text)
+
+    def _context_pressure_signal_message(self, usage: dict) -> dict | None:
+        if self.context_pressure_signal_threshold <= 0:
+            return None
+        context_length = None
+        if isinstance(self.selected_model, dict):
+            context_length = (
+                self.selected_model.get("runtime_context_length")
+                or self.selected_model.get("context_length")
+            )
+        if not isinstance(context_length, int) or context_length <= 0:
+            return None
+        input_tokens = usage.get("input_tokens") or 0
+        if not isinstance(input_tokens, (int, float)) or input_tokens <= 0:
+            return None
+        fill_ratio = input_tokens / context_length
+        if fill_ratio < self.context_pressure_signal_threshold:
+            return None
+        pct = int(fill_ratio * 100)
+        text = (
+            f"Context window is {pct}% full. "
+            "Prefer concise responses and avoid unnecessary tool calls to prevent compaction."
+        )
+        return self._make_signal_message(text)
+
     def run(self, body: dict, requested_model: str, apply_patch_output_style: str = "native"):
         working_body = json.loads(json.dumps(body))
         working_body["stream"] = True
@@ -500,8 +590,9 @@ class ResponsesStreamRuntime:
             "tool_hops_max": self.proxy_tool_registry.max_continuation_hops or WEB_SEARCH_MAX_HOPS,
         })
 
+        max_hops = self.proxy_tool_registry.max_continuation_hops or WEB_SEARCH_MAX_HOPS
         try:
-            for _hop in range(self.proxy_tool_registry.max_continuation_hops or WEB_SEARCH_MAX_HOPS):
+            for hop_index in range(max_hops):
                 hop_body = json.loads(json.dumps(working_body))
                 hop_body["stream"] = True
                 hop_body = normalize_responses_input_for_qwen(hop_body, selected_model=self.selected_model)
@@ -922,6 +1013,17 @@ class ResponsesStreamRuntime:
                             forwarded_bytes=forwarded_bytes,
                         )
                         event_lines = []
+                    # Drain remaining SSE events to capture the server's
+                    # response.completed usage before resp is closed by the
+                    # finally block.  Only runs on proxy-local or error breaks
+                    # where the while loop exits before the terminal events.
+                    if resp is not None and (
+                        error_injected
+                        or (completed_call and self.proxy_tool_registry.is_proxy_local_call(completed_call))
+                    ):
+                        drained_usage = self._drain_stream_for_usage(resp)
+                        if drained_usage is not None:
+                            final_usage = drained_usage
                 finally:
                     if raw_log is not None:
                         raw_log.close()
@@ -946,6 +1048,29 @@ class ResponsesStreamRuntime:
                         }
                         next_input.insert(0, carry_msg)
                         self._emit("reasoning_carry_forward", {"chars": len(snippet)})
+                    # Ephemeral self-management signals for the next hop.
+                    hops_remaining = max_hops - (hop_index + 1)
+                    hop_signal = self._hop_budget_signal_message(hops_remaining)
+                    if hop_signal is not None:
+                        next_input.append(hop_signal)
+                        self._emit("hop_budget_signal", {
+                            "hops_remaining": hops_remaining,
+                            "threshold": self.hop_budget_signal_threshold,
+                        })
+                    ctx_signal = self._context_pressure_signal_message(final_usage)
+                    if ctx_signal is not None:
+                        next_input.append(ctx_signal)
+                        input_tokens = final_usage.get("input_tokens") or 0
+                        context_length = (
+                            self.selected_model.get("runtime_context_length")
+                            or self.selected_model.get("context_length")
+                            if isinstance(self.selected_model, dict) else 0
+                        ) or 0
+                        self._emit("context_pressure_signal", {
+                            "input_tokens": int(input_tokens),
+                            "context_length": int(context_length),
+                            "threshold": self.context_pressure_signal_threshold,
+                        })
                     working_body["input"] = next_input
                     continue
 

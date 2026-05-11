@@ -666,6 +666,8 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         metadata=None,
         proxy_tool_registry=None,
         selected_model=None,
+        hop_budget_signal_threshold=None,
+        context_pressure_signal_threshold=None,
     ):
         chunks = []
         runtime = ResponsesStreamRuntime(
@@ -684,6 +686,8 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             reasoning_only_char_limit=reasoning_only_char_limit,
             proxy_tool_registry=proxy_tool_registry,
             selected_model=selected_model,
+            hop_budget_signal_threshold=hop_budget_signal_threshold,
+            context_pressure_signal_threshold=context_pressure_signal_threshold,
         )
         body = {
             "model": "test-model.gguf",
@@ -2255,6 +2259,243 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
         self.assertEqual(completed[0]["output"][0]["type"], "web_search_call")
         self.assertNotIn('"type": "function_call"', stream_text)
+
+
+    def test_hop_budget_signal_injected_when_hops_tight(self):
+        # ProbeProxyToolExecutor has continuation_hops=2 so max_hops=2.
+        # After hop 0 completes, hops_remaining = 2 - (0+1) = 1.
+        # threshold=1 means 1 <= 1, so the signal should appear in the second call.
+        requests = []
+        registry = ProxyLocalToolRegistry([ProbeProxyToolExecutor()])
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            if len(requests) == 1:
+                return FakeStream(_probe_call_stream())
+            return FakeStream(_final_message_stream())
+
+        self._run_runtime(
+            opener,
+            proxy_tool_registry=registry,
+            hop_budget_signal_threshold=1,
+        )
+
+        self.assertEqual(len(requests), 2)
+        second_input = requests[1].get("input") or []
+        signal_texts = [
+            item["content"][0]["text"]
+            for item in second_input
+            if isinstance(item, dict)
+            and item.get("role") == "user"
+            and isinstance(item.get("content"), list)
+            and item["content"]
+            and "continuation hop" in (item["content"][0].get("text") or "")
+        ]
+        self.assertEqual(len(signal_texts), 1, f"Expected 1 hop budget signal, got: {signal_texts}")
+        self.assertIn("1 continuation hop", signal_texts[0])
+
+    def test_hop_budget_signal_not_injected_when_hops_plentiful(self):
+        # ProbeProxyToolExecutor has continuation_hops=2, threshold=1.
+        # Wait — with continuation_hops=2 and threshold=1 the signal DOES fire.
+        # Use threshold=0 (fires when remaining=0, but loop already ends).
+        # Alternatively just verify: after hop 0, hops_remaining=1 > threshold=0.
+        requests = []
+        registry = ProxyLocalToolRegistry([ProbeProxyToolExecutor()])
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            if len(requests) == 1:
+                return FakeStream(_probe_call_stream())
+            return FakeStream(_final_message_stream())
+
+        self._run_runtime(
+            opener,
+            proxy_tool_registry=registry,
+            hop_budget_signal_threshold=0,
+        )
+
+        self.assertEqual(len(requests), 2)
+        second_input = requests[1].get("input") or []
+        signal_msgs = [
+            item for item in second_input
+            if isinstance(item, dict)
+            and item.get("role") == "user"
+            and "continuation hop" in json.dumps(item.get("content") or "")
+        ]
+        self.assertEqual(len(signal_msgs), 0, "Hop budget signal should not be injected when threshold=0 and 1 hop remains")
+
+    def test_hop_budget_signal_disabled_with_minus_one(self):
+        requests = []
+        registry = ProxyLocalToolRegistry([ProbeProxyToolExecutor()])
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            if len(requests) == 1:
+                return FakeStream(_probe_call_stream())
+            return FakeStream(_final_message_stream())
+
+        self._run_runtime(
+            opener,
+            proxy_tool_registry=registry,
+            hop_budget_signal_threshold=-1,
+        )
+
+        self.assertEqual(len(requests), 2)
+        second_input = requests[1].get("input") or []
+        signal_msgs = [
+            item for item in second_input
+            if isinstance(item, dict)
+            and "continuation hop" in json.dumps(item.get("content") or "")
+        ]
+        self.assertEqual(len(signal_msgs), 0, "Hop budget signal must be absent when threshold=-1")
+
+    def test_hop_budget_signal_emits_telemetry_event(self):
+        telemetry = TelemetryBus()
+        registry = ProxyLocalToolRegistry([ProbeProxyToolExecutor()])
+
+        def opener(body):
+            if not getattr(opener, "_called", False):
+                opener._called = True
+                return FakeStream(_probe_call_stream())
+            return FakeStream(_final_message_stream())
+
+        self._run_runtime(
+            opener,
+            proxy_tool_registry=registry,
+            telemetry=telemetry,
+            hop_budget_signal_threshold=1,
+        )
+
+        events = [e for e in telemetry.recent(100) if e.get("type") == "hop_budget_signal"]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["payload"]["hops_remaining"], 1)
+
+    def test_context_pressure_signal_injected_at_threshold(self):
+        # selected_model with context_length=1000, usage reports 850 input tokens (85%).
+        # Threshold 0.8 should trigger.
+        requests = []
+        registry = ProxyLocalToolRegistry([ProbeProxyToolExecutor()])
+        usage_with_tokens = {"input_tokens": 850, "output_tokens": 10, "total_tokens": 860}
+
+        def _probe_stream_with_usage():
+            return _named_function_call_stream(
+                "fc_probe_ctx", "call_probe_ctx", "qz_probe", json.dumps({"value": 1})
+            )[:-1] + [
+                _sse_block("response.completed", {
+                    "response": {
+                        "id": "resp_probe_ctx",
+                        "object": "response",
+                        "created_at": 4102444800,
+                        "status": "completed",
+                        "model": "fake",
+                        "output": [],
+                        "usage": usage_with_tokens,
+                    },
+                }),
+                b"data: [DONE]\n\n",
+            ]
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            if len(requests) == 1:
+                return FakeStream(_probe_stream_with_usage())
+            return FakeStream(_final_message_stream())
+
+        self._run_runtime(
+            opener,
+            proxy_tool_registry=registry,
+            selected_model={"context_length": 1000},
+            hop_budget_signal_threshold=-1,
+            context_pressure_signal_threshold=0.8,
+        )
+
+        self.assertEqual(len(requests), 2)
+        second_input = requests[1].get("input") or []
+        signal_texts = [
+            item["content"][0]["text"]
+            for item in second_input
+            if isinstance(item, dict)
+            and item.get("role") == "user"
+            and isinstance(item.get("content"), list)
+            and item["content"]
+            and "Context window" in (item["content"][0].get("text") or "")
+        ]
+        self.assertEqual(len(signal_texts), 1, f"Expected 1 context pressure signal, got: {signal_texts}")
+        self.assertIn("85%", signal_texts[0])
+
+    def test_context_pressure_signal_not_injected_below_threshold(self):
+        requests = []
+        registry = ProxyLocalToolRegistry([ProbeProxyToolExecutor()])
+        usage_with_tokens = {"input_tokens": 500, "output_tokens": 10}
+
+        def _probe_stream_with_usage():
+            return _named_function_call_stream(
+                "fc_probe_lo", "call_probe_lo", "qz_probe", json.dumps({"value": 1})
+            )[:-1] + [
+                _sse_block("response.completed", {
+                    "response": {
+                        "id": "resp_probe_lo",
+                        "object": "response",
+                        "created_at": 4102444800,
+                        "status": "completed",
+                        "model": "fake",
+                        "output": [],
+                        "usage": usage_with_tokens,
+                    },
+                }),
+                b"data: [DONE]\n\n",
+            ]
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            if len(requests) == 1:
+                return FakeStream(_probe_stream_with_usage())
+            return FakeStream(_final_message_stream())
+
+        self._run_runtime(
+            opener,
+            proxy_tool_registry=registry,
+            selected_model={"context_length": 1000},
+            hop_budget_signal_threshold=-1,
+            context_pressure_signal_threshold=0.8,
+        )
+
+        self.assertEqual(len(requests), 2)
+        second_input = requests[1].get("input") or []
+        signal_msgs = [
+            item for item in second_input
+            if isinstance(item, dict)
+            and "Context window" in json.dumps(item.get("content") or "")
+        ]
+        self.assertEqual(len(signal_msgs), 0, "Context pressure signal must not fire when fill ratio is below threshold")
+
+    def test_context_pressure_signal_skipped_without_context_length(self):
+        requests = []
+        registry = ProxyLocalToolRegistry([ProbeProxyToolExecutor()])
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            if len(requests) == 1:
+                return FakeStream(_probe_call_stream())
+            return FakeStream(_final_message_stream())
+
+        # No context_length in selected_model → signal should not fire even if threshold met.
+        self._run_runtime(
+            opener,
+            proxy_tool_registry=registry,
+            selected_model={"name": "no-context-length"},
+            hop_budget_signal_threshold=-1,
+            context_pressure_signal_threshold=0.0,
+        )
+
+        self.assertEqual(len(requests), 2)
+        second_input = requests[1].get("input") or []
+        signal_msgs = [
+            item for item in second_input
+            if isinstance(item, dict)
+            and "Context window" in json.dumps(item.get("content") or "")
+        ]
+        self.assertEqual(len(signal_msgs), 0)
 
 
 if __name__ == "__main__":

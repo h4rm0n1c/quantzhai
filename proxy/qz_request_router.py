@@ -723,6 +723,8 @@ class RequestRouter:
             proxy_tool_registry=self._proxy_tool_registry(web_runtime),
             selected_model=selected_model,
             reasoning_carry_forward=bool(os.environ.get("QZ_REASONING_CARRY_FORWARD", "")),
+            hop_budget_signal_threshold=int(os.environ.get("QZ_HOP_BUDGET_SIGNAL_THRESHOLD", "3")),
+            context_pressure_signal_threshold=float(os.environ.get("QZ_CONTEXT_PRESSURE_SIGNAL_THRESHOLD", "0.8")),
         )
         return runtime.run(body, requested_model, apply_patch_output_style)
 
