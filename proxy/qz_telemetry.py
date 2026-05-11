@@ -14,7 +14,7 @@ TELEMETRY_REQUEST_SCHEMA = "qz.telemetry.request.v1"
 TELEMETRY_STREAM_SCHEMA = "qz.telemetry.stream.v1"
 UNKNOWN_RUNTIME_SCHEMA = "qz.runtime.summary.v1"
 
-REQUEST_RETAINED_EVENT_TYPES = {
+REQUEST_LIFECYCLE_EVENT_TYPES = {
     "client_disconnected",
     "prompt_contract",
     "private_tool_call_aborted",
@@ -25,12 +25,17 @@ REQUEST_RETAINED_EVENT_TYPES = {
     "request_queued",
     "request_started",
     "stream_completed",
-    "stream_event_timing",
     "throughput_sample",
     "tool_call_completed",
     "tool_call_failed",
     "tool_call_started",
 }
+
+REQUEST_TIMING_EVENT_TYPES = {
+    "stream_event_timing",
+}
+
+REQUEST_RETAINED_EVENT_TYPES = REQUEST_LIFECYCLE_EVENT_TYPES | REQUEST_TIMING_EVENT_TYPES
 
 
 class RequestTelemetryEmitter:
@@ -85,11 +90,13 @@ class TelemetryBus:
         subscriber_queue_size: int = 200,
         request_capacity: int = 50,
         request_event_capacity: int = 200,
+        request_timing_event_capacity: int = 150,
     ):
         self.capacity = max(1, int(capacity))
         self.subscriber_queue_size = max(1, int(subscriber_queue_size))
         self.request_capacity = max(1, int(request_capacity))
         self.request_event_capacity = max(1, int(request_event_capacity))
+        self.request_timing_event_capacity = max(1, int(request_timing_event_capacity))
         self._events = deque(maxlen=self.capacity)
         self._request_events = OrderedDict()
         self._counters = Counter()
@@ -269,13 +276,20 @@ class TelemetryBus:
         if event_type not in REQUEST_RETAINED_EVENT_TYPES:
             return
 
-        events = self._request_events.get(request_id)
-        if events is None:
-            events = deque(maxlen=self.request_event_capacity)
-            self._request_events[request_id] = events
+        bucket = self._request_events.get(request_id)
+        if bucket is None:
+            bucket = {
+                "lifecycle": deque(maxlen=self.request_event_capacity),
+                "timing": deque(maxlen=self.request_timing_event_capacity),
+            }
+            self._request_events[request_id] = bucket
         else:
             self._request_events.move_to_end(request_id)
-        events.append(event)
+
+        if event_type in REQUEST_TIMING_EVENT_TYPES:
+            bucket["timing"].append(event)
+        else:
+            bucket["lifecycle"].append(event)
 
         while len(self._request_events) > self.request_capacity:
             self._request_events.popitem(last=False)
@@ -283,10 +297,12 @@ class TelemetryBus:
     def _request_events_for_locked(self, request_id: str) -> list[dict]:
         if not request_id:
             return []
-        events = self._request_events.get(request_id)
-        if not events:
+        bucket = self._request_events.get(request_id)
+        if not bucket:
             return []
-        return list(events)
+        merged = list(bucket["lifecycle"]) + list(bucket["timing"])
+        merged.sort(key=lambda e: e.get("seq", 0))
+        return merged
 
     @staticmethod
     def _request_id_from_payload(payload: dict) -> str:

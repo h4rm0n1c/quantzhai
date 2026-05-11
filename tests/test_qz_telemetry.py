@@ -210,6 +210,38 @@ class TelemetryBusTests(unittest.TestCase):
 
         self.assertEqual(received, emitted)
 
+    def test_timing_events_cannot_evict_lifecycle_events(self):
+        # Per-request lifecycle capacity=3, timing capacity=2.
+        # Flood with stream_event_timing, then check lifecycle events survive.
+        bus = TelemetryBus(
+            capacity=1000,
+            request_capacity=5,
+            request_event_capacity=10,
+            request_timing_event_capacity=2,
+        )
+        bus.emit("request_started", {"request_id": "req-1"})
+        bus.emit("tool_call_started", {"request_id": "req-1", "tool": "web_search"})
+        for i in range(50):
+            bus.emit("stream_event_timing", {"request_id": "req-1", "event_type": f"delta_{i}"})
+        bus.emit("tool_call_completed", {"request_id": "req-1", "tool": "web_search"})
+        bus.emit("request_completed", {"request_id": "req-1", "status": 200})
+
+        events = bus.request_events("req-1")
+        types = [e["type"] for e in events]
+        lifecycle = [t for t in types if t != "stream_event_timing"]
+        timing = [t for t in types if t == "stream_event_timing"]
+
+        # All lifecycle events present despite 50 timing events being emitted
+        self.assertIn("request_started", lifecycle)
+        self.assertIn("tool_call_started", lifecycle)
+        self.assertIn("tool_call_completed", lifecycle)
+        self.assertIn("request_completed", lifecycle)
+        # Timing is capped at request_timing_event_capacity (2), not 50
+        self.assertLessEqual(len(timing), 2)
+        # Events are sorted by seq
+        seqs = [e["seq"] for e in events]
+        self.assertEqual(seqs, sorted(seqs))
+
     def test_slow_subscriber_drops_oldest_event(self):
         bus = TelemetryBus(capacity=5, subscriber_queue_size=1)
 
