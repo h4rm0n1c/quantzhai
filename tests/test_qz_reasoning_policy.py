@@ -20,7 +20,7 @@ class ReasoningPolicyTests(unittest.TestCase):
         self.assertEqual(out["top_p"], 0.95)
         self.assertEqual(out["top_k"], 20)
         self.assertEqual(out["min_p"], 0)
-        self.assertEqual(out["presence_penalty"], 0.7)
+        self.assertEqual(out["presence_penalty"], 0.5)
         self.assertEqual(out["repeat_penalty"], 1.0)
         self.assertNotIn("repeat_last_n", out)
         self.assertNotIn("dry_multiplier", out)

@@ -19,7 +19,7 @@ _SHARED_SAMPLING = {
     #   penalty budget before answer generation.
     # 0.5 (current): enough pressure to conclude without starving answer
     #   generation on models with longer reasoning chains.
-    "presence_penalty": 0.7,
+    "presence_penalty": 0.5,
     "repeat_penalty": 1.0,
 }
 
