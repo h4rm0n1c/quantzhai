@@ -133,6 +133,7 @@ class ResponsesStreamRuntime:
         reasoning_only_char_limit: int | None = None,
         proxy_tool_registry=None,
         selected_model=None,
+        reasoning_carry_forward: bool = False,
     ):
         self.upstream = upstream.rstrip("/")
         self.authorization = authorization or "Bearer local"
@@ -145,6 +146,7 @@ class ResponsesStreamRuntime:
         self.selected_model = selected_model if isinstance(selected_model, dict) else None
         self.telemetry_emitter = RequestTelemetryEmitter(telemetry, self.request_id)
         self.proxy_tool_registry = proxy_tool_registry or make_proxy_local_tool_registry(web_runtime)
+        self.reasoning_carry_forward = bool(reasoning_carry_forward)
         self.private_function_call_timeout_s = (
             PRIVATE_FUNCTION_CALL_TIMEOUT_S
             if private_function_call_timeout_s is None
@@ -929,6 +931,21 @@ class ResponsesStreamRuntime:
                 if error_injected or (completed_call and self.proxy_tool_registry.is_proxy_local_call(completed_call)):
                     if max_output_index >= 0:
                         output_index_offset += max_output_index + 1
+                    # Experimental: carry a compact prior-turn reasoning summary
+                    # forward as a lightweight context anchor for the next hop.
+                    # Controlled by reasoning_carry_forward; off by default.
+                    if self.reasoning_carry_forward and reasoning_only_sample.strip():
+                        snippet = reasoning_only_sample.strip()[:300]
+                        carry_msg = {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{
+                                "type": "input_text",
+                                "text": f"[Prior reasoning summary: {snippet}]",
+                            }],
+                        }
+                        next_input.insert(0, carry_msg)
+                        self._emit("reasoning_carry_forward", {"chars": len(snippet)})
                     working_body["input"] = next_input
                     continue
 

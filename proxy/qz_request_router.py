@@ -722,6 +722,7 @@ class RequestRouter:
             request_id=request_id,
             proxy_tool_registry=self._proxy_tool_registry(web_runtime),
             selected_model=selected_model,
+            reasoning_carry_forward=bool(os.environ.get("QZ_REASONING_CARRY_FORWARD", "")),
         )
         return runtime.run(body, requested_model, apply_patch_output_style)
 

@@ -75,6 +75,7 @@ backend_args=(
   --kv-unified
   --reasoning on
   --reasoning-budget "$QZ_REASONING_BUDGET"
+  --reasoning-budget-message "$QZ_REASONING_BUDGET_MESSAGE"
   --cache-ram "$QZ_CACHE_RAM"
   --cache-reuse "$QZ_CACHE_REUSE"
   --mlock
