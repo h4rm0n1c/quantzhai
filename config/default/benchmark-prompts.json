@@ -9,95 +9,95 @@
       "goal": "Measure startup style latch and response overhead. No tool use expected at any effort level."
     },
     {
-      "id": "gguf-definition",
-      "category": "snap",
-      "expected_tools": [],
-      "prompt": "What does GGUF stand for?",
-      "goal": "Simple factual question answerable from training knowledge. Should be short and fast at every effort level."
-    },
-    {
       "id": "bash-set-e",
       "category": "snap",
       "expected_tools": [],
       "prompt": "What does `set -e` do in bash?",
-      "goal": "Simple factual question. No tool use expected. Higher effort should not make this slower without reason."
+      "goal": "Simple factual question answerable from training knowledge. No tool use expected."
     },
     {
-      "id": "proxy-default-port",
+      "id": "obs-websocket-question",
+      "category": "snap",
+      "expected_tools": [],
+      "prompt": "What is OBS websocket and what is it used for?",
+      "goal": "General knowledge question relevant to the repo domain. No tool use expected."
+    },
+    {
+      "id": "readme-summary",
       "category": "local",
       "expected_tools": ["shell"],
-      "prompt": "What port does the QuantZhai proxy listen on by default? Check the source to confirm.",
-      "goal": "Answer is in scripts/qz-env. Low effort may hallucinate; high effort should inspect the file."
+      "prompt": "What does this project do? Read the README to find out, then summarise in two sentences.",
+      "goal": "README.md exists at repo root. Low effort may guess; high effort should read the file."
     },
     {
-      "id": "test-file-count",
+      "id": "list-shell-scripts",
       "category": "local",
       "expected_tools": ["shell"],
-      "prompt": "How many test files are in the tests/ directory? Give the exact count.",
-      "goal": "Requires a shell command to count accurately. Tests whether the model inspects rather than guesses."
+      "prompt": "List every shell script in this repository. Give the relative paths.",
+      "goal": "Requires find or ls to enumerate accurately. Tests whether the model inspects rather than guesses."
     },
     {
-      "id": "bounded-readme-launcher",
+      "id": "license-check",
       "category": "local",
       "expected_tools": ["shell"],
-      "prompt": "Inspect README.md and scripts/qz-codex. Run at most two read-only commands. Report what this stack does and how Codex is launched in under 140 words.",
-      "goal": "Measure bounded inspection, repo-specific accuracy, and concise final reporting."
+      "prompt": "Does this repo have a license? If so, what type? Read the file to confirm.",
+      "goal": "LICENSE file exists. Tests whether the model reads before asserting."
     },
     {
-      "id": "qz-doctor-exists",
+      "id": "streamlinkbgm-purpose",
       "category": "local",
       "expected_tools": ["shell"],
-      "prompt": "Does scripts/qz-doctor exist? If so, what does it check? Read the file to find out.",
-      "goal": "Requires file inspection. Tests whether the model reads before answering rather than guessing."
+      "prompt": "What does streamlinkbgm do? Read its README to find out.",
+      "goal": "streamlinkbgm/README.md exists. Tests targeted file read over broad guessing."
     },
     {
-      "id": "run-qz-doctor",
+      "id": "count-all-files",
       "category": "tool",
       "expected_tools": ["shell"],
-      "prompt": "Run scripts/qz-doctor and summarise what it reports. Quote any warnings or errors exactly.",
-      "goal": "Shell execution required. Tests whether the model runs the command and accurately reports output."
+      "prompt": "How many files are in this repository (excluding .git)? Give the exact count.",
+      "goal": "Shell command required. Tests whether the model runs a command rather than estimating."
     },
     {
-      "id": "count-proxy-functions",
+      "id": "streamlink-script-lines",
       "category": "tool",
       "expected_tools": ["shell"],
-      "prompt": "Read proxy/qz_tool_apply_patch.py and count the top-level functions defined at module level (lines starting with `def `). Give the exact number.",
-      "goal": "File inspection required. Tests accuracy of reported count against ground truth."
+      "prompt": "How many lines does streamlinkbgm/streamlink_3.sh have? Give the exact number.",
+      "goal": "Requires wc -l or equivalent. Answer is 521 lines — tests factual accuracy via tool use."
     },
     {
-      "id": "count-capture-dirs",
+      "id": "find-python-scripts",
       "category": "tool",
       "expected_tools": ["shell"],
-      "prompt": "How many request capture directories are currently under var/captures/requests/? Give the exact count.",
-      "goal": "Shell command required; answer varies per run. Tests whether the model runs a command rather than guessing."
+      "prompt": "Find all Python scripts in this repository. List their paths and line counts.",
+      "goal": "Shell command required. Tests multi-step tool use: find then wc."
+    },
+    {
+      "id": "project-assessment",
+      "category": "reasoning",
+      "expected_tools": [],
+      "prompt": "Is this project well-documented? Give an honest assessment in under 150 words.",
+      "goal": "Judgment call. Higher effort should reference specific docs and gaps rather than generalities."
+    },
+    {
+      "id": "riskiest-file",
+      "category": "reasoning",
+      "expected_tools": [],
+      "prompt": "What is the riskiest file to modify in this repo and why? Think before answering.",
+      "goal": "Reasoning about code structure. No single correct answer — human reads whether higher effort is more specific."
+    },
+    {
+      "id": "commit-message",
+      "category": "reasoning",
+      "expected_tools": [],
+      "prompt": "Create no files. Write a professional git commit subject and body for adding a new streaming source to streamlinkbgm. Do not use compressed wording.",
+      "goal": "Artifact quality — whether higher effort produces more contextually appropriate output."
     },
     {
       "id": "stack-evaluate-report",
       "category": "reasoning",
       "expected_tools": ["shell"],
-      "prompt": "examine current dir, this stack runs you: evaluate, report.",
-      "goal": "Measure repo comprehension, tool discipline, and useful reporting. Higher effort should produce more thorough analysis."
-    },
-    {
-      "id": "apply-patch-readiness",
-      "category": "reasoning",
-      "expected_tools": [],
-      "prompt": "Is the QuantZhai apply_patch adapter production-ready? Give your honest assessment in under 200 words.",
-      "goal": "Judgment based on code and docs. Low effort should still be coherent; high effort should be more specific and evidence-based."
-    },
-    {
-      "id": "riskiest-proxy-file",
-      "category": "reasoning",
-      "expected_tools": [],
-      "prompt": "What is the riskiest single file to change in the QuantZhai proxy and why? Think carefully before answering.",
-      "goal": "Reasoning about code structure. No single correct answer; human reads whether higher effort produces visibly more thorough reasoning."
-    },
-    {
-      "id": "artifact-boundary",
-      "category": "reasoning",
-      "expected_tools": [],
-      "prompt": "Create no files. Draft a normal professional git commit subject and body for adding a profile eval framework to the benchmark harness. Do not use compressed mode wording in the commit text.",
-      "goal": "Artifact quality — whether compact profiles keep generated text professional rather than leaking chat style."
+      "prompt": "Examine this repo. What does it do, who is it for, and what is missing? Investigate before answering.",
+      "goal": "Repo comprehension requiring tool use. Higher effort should produce more thorough multi-file analysis."
     }
   ]
 }

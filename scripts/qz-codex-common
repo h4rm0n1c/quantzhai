@@ -51,6 +51,21 @@ PY
   export QZ_CODEX_MODEL_PROVIDER
 }
 
+qz_resolve_codex_profile() {
+  local profile="${1:-medium}"
+  QZ_CODEX_MODEL="Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ4_NL"
+  QZ_CODEX_EXTRA_ARGS=()
+  if [[ -n "${QZ_CODEX_MODEL_PROVIDER:-}" ]]; then
+    QZ_CODEX_EXTRA_ARGS+=(-c "model_provider=\"$QZ_CODEX_MODEL_PROVIDER\"")
+  fi
+  # Profile names are reasoning effort levels on the base IQ4 model.
+  case "$profile" in
+    low|medium|high|xhigh) QZ_CODEX_EXTRA_ARGS+=(-c "model_reasoning_effort=\"$profile\"") ;;
+    *) QZ_CODEX_EXTRA_ARGS+=(-c "model_reasoning_effort=\"medium\"") ;;
+  esac
+  export QZ_CODEX_MODEL
+}
+
 qz_proxy_loaded_model() {
   python3 - "$QZ_PROXY_HOST" "$QZ_PROXY_PORT" <<'PY'
 import json

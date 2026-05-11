@@ -23,6 +23,7 @@ Options:
   --no-ephemeral       Persist Codex exec sessions
   --no-manage-proxy    Do not start a temporary proxy if proxy health is down
   --search             Enable Codex web search for benchmark runs
+  --workspace DIR      Working directory for Codex exec (default: repo root)
   --dry-run            Print planned runs without executing Codex
   -h, --help           Show this help
 
@@ -40,6 +41,7 @@ ephemeral=1
 manage_proxy=1
 enable_search=0
 dry_run=0
+workspace="$QZ_ROOT"
 profiles=()
 only_ids=()
 
@@ -84,6 +86,10 @@ while [[ $# -gt 0 ]]; do
     --search)
       enable_search=1
       shift
+      ;;
+    --workspace)
+      workspace="$2"
+      shift 2
       ;;
     --dry-run)
       dry_run=1
@@ -302,7 +308,7 @@ while IFS= read -r prompt_json; do
       exec
       --json
       --color never
-      -C "$QZ_ROOT"
+      -C "$workspace"
       -m "$QZ_CODEX_MODEL"
       -s "$sandbox_mode"
       -o "$case_dir/final.txt"
@@ -325,10 +331,10 @@ while IFS= read -r prompt_json; do
     start_ts="$(now_seconds)"
     set +e
     if command -v timeout >/dev/null 2>&1; then
-      timeout "$timeout_seconds" "${cmd[@]}" > "$case_dir/events.jsonl" 2> "$case_dir/stderr.txt"
+      timeout "$timeout_seconds" "${cmd[@]}" < /dev/null > "$case_dir/events.jsonl" 2> "$case_dir/stderr.txt"
       exit_code=$?
     else
-      "${cmd[@]}" > "$case_dir/events.jsonl" 2> "$case_dir/stderr.txt"
+      "${cmd[@]}" < /dev/null > "$case_dir/events.jsonl" 2> "$case_dir/stderr.txt"
       exit_code=$?
     fi
     set -e
@@ -480,6 +486,7 @@ _TOOL_TYPE_MAP = {
     "shell": "shell",
     "exec_command": "shell",
     "command": "shell",
+    "command_execution": "shell",
     "file_read": "read",
     "read_file": "read",
     "file_change": "apply_patch",
