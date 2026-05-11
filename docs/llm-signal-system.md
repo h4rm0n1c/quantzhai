@@ -2,264 +2,186 @@
 
 Date: 2026-05-11
 
-## The core idea
-
-An LLM doing agentic work is a feedback control system. The loop is:
-
-```
-action → observation → updated belief → next action
-```
-
-The proxy sits in the middle and controls what observations the model receives.
-Every signal the proxy silently discards, truncates, or genericises is a
-degraded observation. Degraded observations produce worse next actions.
-
-The coercion system (built 2026-05-11) was the first concrete implementation of
-this principle: instead of silently dropping malformed tool calls, the proxy
-now injects specific error feedback so the model can self-correct. It trades one
-extra hop (10–30 seconds) for task completion instead of failure.
-
-This document tracks all the signals the model needs, what's implemented, and
-what remains. Every item here is the same class of problem: the model flying
-blind because the proxy was not relaying information it had.
-
-**Design rule:** The proxy should be a faithful information relay. Filtering,
-truncation, and genericisation are explicit decisions with documented reasons,
-not default behaviour. The cost of an extra hop to give the model better
-information is almost always lower than the cost of a failed task the user
-has to manually restart.
+Status: early thinking. This document is exploratory, not a binding spec.
+The signal system is being felt out as we implement pieces of it. Update
+this as understanding develops, not as a retrospective checklist.
 
 ---
 
-## Signal inventory
+## The idea
 
-### Implemented
+A local LLM doing agentic work is a feedback control system. It takes
+actions, observes results, updates its belief, and acts again. The quality
+of its decisions depends entirely on the quality of the observations it
+receives.
 
-**Tool argument recovery (coercion system)**
-Status: ✅ shipped 2026-05-11
+QuantZhai sits in the middle of that loop. It sees everything: the model's
+output, the tool calls it makes, what Codex does with them, what fails, what
+succeeds, how full the context is, how many hops remain. The model sees
+none of that unless the proxy explicitly surfaces it.
 
-When the model emits a malformed function_call, the proxy tries to recover the
-arguments. On success it corrects silently. On failure it injects a specific
-`function_call_output` error back to the model: "apply_patch: missing 'diff'
-for create_file; include file content as operation.diff." The model retries with
-the right shape. No task failure, no user involvement.
+Hosted LLMs get this from the platform. Local proxies typically throw it
+away. The signal system is about closing that gap: making the proxy an
+active participant in the model's feedback loop rather than a passive relay
+that silently discards information.
 
-Covers: apply_patch argument coercion, web_search structural validation, dropped
-tool feedback, unknown tool feedback, Codex-native tool passthrough.
-
-See: `proxy/qz_proxy_tools.py`, `docs/tool-coercion-design.md`.
-
-**Compaction signal preservation**
-Status: ✅ shipped 2026-05-11
-
-Old tool outputs in compacted conversation history used to become an opaque
-"payload dropped" placeholder. Now the placeholder carries the essential signal:
-"Tool exec_command (call_1): FAILED. Output: No such file or directory."
-The model retains success/failure context even for old turns.
-
-See: `proxy/qz_responses.py:_tool_output_signal()`.
-
-**Stack health state (QZSTATE)**
-Status: ✅ implemented, but opt-in and incomplete
-
-When `QZSTATE=1` is set, the proxy injects a compact state block into
-instructions:
-
-```
-<QZSTATE v=1 ready=1 load=loaded ctx=262144 prof=caveman sel=caveman>
-```
-
-Fields: ready, load_state, context_length, profile, selected model.
-
-**Not included:** context usage, hop budget, token counts, reasoning budget.
-**Not on by default.** Sessions without QZSTATE get no environmental signals.
-
-See: `proxy/qz_model_router.py:runtime_state_block()`.
-
-**Tool execution result passthrough**
-Status: ✅ working
-
-apply_patch results (success/failure/error) are explicitly normalized and reach
-the model. exec_command and shell_command results come back as
-`function_call_output` and pass through to llama.cpp natively. Codex execution
-errors are not lost.
+This is not QZSTATE. QZSTATE is a separate experiment with a different
+purpose and is not part of this system.
 
 ---
 
-### Planned / not implemented
+## Two categories of signal
 
-**Context window pressure**
-Priority: HIGH
+**Self-management signals** — constraints the model needs to know so it can
+regulate its own behaviour within the local stack's actual limits.
 
-The model does not know how full its context window is. At 85% of 256k tokens
-it continues building long responses, requesting more tool calls, and reasoning
-at full depth — exactly when it should be more concise and convergent.
+**Quality signals** — information about the outcome of its actions so it
+can self-correct when things go wrong.
 
-What to add to QZSTATE or per-turn metadata:
-```
-ctx_used=218000 ctx_max=262144 ctx_pct=83
-```
-
-The model can read this and self-manage: shorter answers, tighter tool use,
-earlier summarization of what it has learned.
-
-Implementation: the proxy receives `usage.input_tokens` in each `response.completed`
-event. It can track cumulative context usage per session and inject it. llama.cpp
-also reports context usage via `/props` and health endpoints.
-
-**Hop budget**
-Priority: HIGH
-
-The model does not know how many continuation hops it has remaining. It behaves
-identically on hop 1 and hop 5 of 6. On the last hop the proxy emits a fallback
-message the model never asked for. This is disorienting.
-
-What to add:
-```
-hops_used=4 hops_max=6 hops_remaining=2
-```
-
-With this, the model can adapt: on hop 5 of 6, prefer direct answers over more
-tool calls. Stop reasoning deeply and converge. Avoid starting a new search that
-won't complete before the cutoff.
-
-Implementation: the proxy already tracks hop count in the stream runtime loop.
-Injecting it per-hop requires threading it into the body metadata or a per-turn
-instruction block.
-
-**Reasoning budget**
-Priority: MEDIUM
-
-The proxy controls `QZ_REASONING_BUDGET` at the backend level. The model doesn't
-know how much reasoning budget it has or how much it has spent. For a complex
-task on a low-budget profile, the model may reason past the limit without knowing
-it.
-
-What to add:
-```
-reasoning_budget=8192 reasoning_mode=low
-```
-
-The model can calibrate reasoning depth to the available budget.
-
-**Backend error vs task error distinction**
-Priority: MEDIUM
-
-When llama.cpp returns a 500 or times out mid-stream, the model currently sees
-nothing — the stream ends. It cannot distinguish "my tool call failed because I
-gave bad arguments" from "the backend had a transient error and I should retry
-as-is." These require completely different responses.
-
-What to add: a synthetic error message injected into the conversation when the
-proxy detects a backend error (not a model error):
-"Backend error: upstream returned 500. Your tool call was not executed. Retry."
-
-Implementation: the stream runtime already detects backend failures. Injecting
-a model-visible signal requires the error-feedback path from the coercion system
-(kind="error" → function_call_output).
-
-**Web search quality signals**
-Priority: MEDIUM
-
-When a search returns zero results, hits only quarantined engines, or uses the
-low-result fallback, the model gets an empty results list or a generic error.
-It tends to retry the same query. The signal needed is WHY the search produced
-poor results.
-
-What to add to search results:
-```json
-{
-  "search_quality": "low_result_fallback_used",
-  "engines_available": 3,
-  "engines_tried": 5,
-  "results_before_fallback": 0
-}
-```
-
-The model can then try a different query, a different profile, or open a page
-directly.
-
-Implementation: `qz_tool_web.py` already has the routing and fallback logic;
-adding this metadata to the result payload is additive.
-
-**Search result provenance / quality scoring**
-Priority: LOW
-
-The model treats all search results as equally credible. A primary source and
-a low-signal mirror look the same. A `"source_quality": "primary"` vs
-`"mirror"` vs `"low_signal"` field per result would let the model weight
-evidence and prioritise opening the primary source.
-
-**Tool call provenance in error results**
-Priority: LOW
-
-The coercion system injects error results as `function_call_output`. The model
-cannot distinguish "tool executed but failed" from "proxy couldn't form a valid
-call." Both look like an error output. Adding a `"source": "proxy_coercion"` vs
-`"source": "codex_execution"` field would let the model reason about whether
-it should fix its call shape or try a different approach.
+These are different in character. Self-management signals are proactive:
+inject them before the model acts so it acts appropriately. Quality signals
+are reactive: inject them after an action so the model knows what happened
+and can adjust.
 
 ---
 
-## The bigger picture
+## What exists today
 
-These signals cluster into two categories:
+### Coercion system (quality signals, tool actions)
 
-**Self-management signals** (context pressure, hop budget, reasoning budget):
-The model needs these to make good decisions about how to proceed within its
-constraints. A model that knows it has 2 hops left on a 90%-full context behaves
-very differently from one that doesn't. Without these, the proxy has to impose
-hard limits that surprise the model at the worst possible moment.
+Implemented. When the model emits a malformed tool call the proxy either:
+- Recovers the arguments and proceeds (zero extra hops)
+- Injects a specific error result upstream with a precise reason so the
+  model can retry with the right shape
 
-**Quality signals** (tool errors, search quality, backend errors, result
-provenance): The model needs these to know whether its actions are having the
-intended effect. The coercion system delivered the first tier. The remaining
-items deliver finer-grained feedback for more precise self-correction.
+This applies to any tool through the registry's `coerce()` interface.
+Previously the proxy silently dropped malformed calls. Now the model gets
+actionable feedback. See `docs/tool-coercion-design.md`.
 
-Together these form the LLM signal system: the proxy's role is not just to
-translate formats but to ensure the model has the information it needs to make
-good decisions under the constraints of the local stack.
+### Informative compaction placeholders (quality signals, history)
 
----
-
-## Why this is a differentiator
-
-Hosted LLMs get these signals from the platform — OpenAI knows the context
-window, manages hops, knows the backend state. Local proxies typically don't
-bother because the model "just works" against a stable hosted API.
-
-QuantZhai is different: the backend is a local llama.cpp server with real
-constraints (context limit, hop budget, reasoning budget, backend health).
-Without explicit signals, the model acts as if it has unlimited resources and
-a reliable backend — which it doesn't. The signal system closes this gap.
-
-Coercion in particular is the most visible part of this: it makes the model
-self-correcting at the tool-call level, which is the most common failure mode
-in local agentic sessions. A proxy that silently drops malformed calls and a
-proxy that recovers them and continues are qualitatively different products.
+Implemented. When old tool outputs get microcompacted, the placeholder now
+carries the success/failure signal and first-line error context rather than
+a generic "payload dropped" message. The model retains essential history
+even after compaction.
 
 ---
 
-## Implementation order
+## What we're thinking about next
 
-1. **Hop budget** — inject `hops_used` / `hops_remaining` per-turn. Low risk,
-   high value, contained change in the stream runtime.
-2. **Context pressure** — inject `ctx_used` / `ctx_pct` from usage data. Requires
-   accumulating token counts across hops; moderate complexity.
-3. **Backend error injection** — reuse coercion's kind="error" path when the
-   upstream returns a non-200. Contained.
-4. **Web search quality metadata** — additive to existing result payload.
-5. **Reasoning budget** — inject from QZ_REASONING_BUDGET; low complexity.
-6. **Search provenance / tool error provenance** — lower priority; more data
-   needed first.
+These are directions, not commitments. Priority and shape may change as we
+implement and observe.
+
+### Hop budget (self-management)
+
+The model doesn't know how many continuation hops remain in the current
+turn. It behaves identically on hop 1 and hop 5 of 6. When the proxy hits
+the limit it emits a fallback message the model never asked for.
+
+If the model knew the remaining budget it could self-regulate: fewer tool
+calls when budget is tight, more direct answers, earlier summarisation.
+
+**Open questions before implementing:**
+- How is the signal injected? As a line appended to system instructions
+  each hop? As part of a function_call_output-style context message? As
+  metadata the model can reference?
+- What hop counts are meaningful? Does the model respond differently at
+  "5 remaining" vs "1 remaining" or does it only care about "low budget"?
+- Does this interact with the reasoning budget?
+
+### Context pressure (self-management)
+
+The model doesn't know the context window is filling up. It builds long
+responses and chains long reasoning without knowing compaction is imminent
+or that prior history has already been dropped.
+
+If the model knew context was at 80% it could choose to summarise, be more
+concise, prioritise the most important remaining work, or wrap up a task
+before history gets compacted in ways that harm continuity.
+
+**Open questions:**
+- What does "context pressure" mean precisely? Tokens used / configured
+  context? Or the more complex measure of what the model will actually see
+  after compaction?
+- Per-request token count is available from usage in the Responses API.
+  Accumulating it across hops gives an estimate.
+- Is a percentage threshold the right signal, or a raw token count, or
+  a qualitative level (low / medium / high / critical)?
+
+### Backend errors vs task errors (quality signals)
+
+When llama.cpp returns a 500 or times out, the stream ends. The model can't
+tell the difference between "my tool call was malformed" and "the backend
+had a transient error, retry as-is." These require different responses.
+
+Currently a backend failure looks identical to a task failure from the
+model's perspective.
+
+### Search result quality (quality signals)
+
+web_search returns results ranked by SearXNG. The model can't tell whether
+a result is a primary source, a mirror, or low-signal noise. It weighs all
+evidence equally.
+
+A per-result quality hint (primary, mirror, low_signal) would let the model
+reason about evidence quality and decide when to open a page vs trust a
+snippet.
+
+### Tool call provenance (quality signals)
+
+A `function_call_output` error in the model's history could be:
+- A proxy-injected coercion error (model's arguments were malformed)
+- A Codex execution failure (arguments were valid, execution failed)
+- A proxy-local tool runtime error (web search returned nothing)
+
+The model can't distinguish these from the output alone. Different
+provenances warrant different responses: retry with fixed arguments vs
+retry as-is vs try a different approach entirely.
 
 ---
 
-## Related documents
+## What we are deliberately not doing
 
-- `docs/tool-coercion-design.md` — the coercion system that kicked this off
-- `docs/compaction-bridge-plan.md` — the compaction system needs its own signals
-- `docs/conversation-history-audit-plan.md` — related: what does the model
-  actually see in history?
-- `proxy/qz_model_router.py` — current QZSTATE implementation
-- `proxy/qz_responses_stream.py` — hop tracking, context accumulation
+- **QZSTATE** — separate experiment, out of scope for this system.
+- **Prompt stuffing** — injecting large chunks of state into the system
+  prompt at every turn. Signals should be compact, targeted, and only
+  present when they carry information the model can actually act on.
+- **Signals the model can't use** — adding fields to responses just
+  because we can. Each signal needs a plausible response from the model
+  before it's worth implementing.
+- **Mandatory signals** — all of this should degrade gracefully if not
+  implemented. The model should still function (less optimally) without
+  any of these signals.
+
+---
+
+## Design principles (current thinking, subject to change)
+
+**Reactive over proactive where possible.** Quality signals in response
+to events are cheaper and less noisy than proactive signals injected
+constantly.
+
+**Specific over generic.** "apply_patch: missing 'diff' for create_file"
+is useful. "tool call failed" is not.
+
+**Compact.** Signals should be a sentence, not a paragraph. The signal
+competes with task content for context budget.
+
+**Injected at the right point in the loop.** Self-management signals
+before the model acts. Quality signals as tool results, not as system
+prompt additions.
+
+**No QZSTATE.** See above.
+
+---
+
+## Relationship to other docs
+
+- `docs/tool-coercion-design.md` — the coercion system, the first concrete
+  implementation of quality signals for tool calls.
+- `docs/compaction-bridge-plan.md` — compaction research needed before
+  context pressure signals can be designed properly.
+- `docs/conversation-history-audit-plan.md` — reasoning channel and
+  tool history filter questions that may surface more signal gaps.
+- `proxy/qz_proxy_tools.py` — the coercion dispatch point; future signals
+  may plug in here or into the stream runtime.
