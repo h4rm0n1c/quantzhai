@@ -67,15 +67,15 @@ _PROXY_LOCAL_ITEM_TYPES: frozenset[str] = frozenset(
 _UPSTREAM_TRANSIENT_ITEM_TYPES: frozenset[str] = frozenset({"reasoning"})
 _COMPACTION_DROP_TYPES: frozenset[str] = _PROXY_LOCAL_ITEM_TYPES | _UPSTREAM_TRANSIENT_ITEM_TYPES
 
-LOCAL_COMPACTION_PREFIX = "localcmp:v1:"
+LOCAL_COMPACTION_PREFIX = "localcmp:v2:"
 COMPACTION_CONFIG = {
     "keep_recent_items": 8,
     "min_preserve_items": 4,
-    "max_summary_chars": 12000,
-    "max_tool_output_chars": 600,
-    "max_item_summary_chars": 500,
-    "max_compaction_depth": 6,
-    "target_output_tokens": 10000,
+    "max_summary_chars": 16000,
+    "max_tool_output_chars": 800,
+    "max_item_summary_chars": 600,
+    "max_compaction_depth": 8,
+    "target_output_tokens": 12000,
 }
 
 FUNCTION_CALL_TYPES = {"function_call", "computer_call", "code_interpreter_call", "apply_patch_call", "custom_tool_call"}
@@ -127,9 +127,19 @@ def _approx_tokens(text: str) -> int:
 
 
 def _decode_local_compaction_blob(blob: str):
-    if not isinstance(blob, str) or not blob.startswith(LOCAL_COMPACTION_PREFIX):
+    if not isinstance(blob, str):
         return None
-    raw = blob[len(LOCAL_COMPACTION_PREFIX):]
+    
+    prefix = ""
+    for p in ("localcmp:v2:", "localcmp:v1:"):
+        if blob.startswith(p):
+            prefix = p
+            break
+            
+    if not prefix:
+        return None
+        
+    raw = blob[len(prefix):]
     try:
         padded = raw + "=" * (-len(raw) % 4)
         decoded = base64.urlsafe_b64decode(padded.encode("ascii"))
@@ -289,16 +299,24 @@ def _expand_local_compaction_items(items):
     expanded = []
     for item in items:
         if isinstance(item, dict) and item.get("type") == "compaction":
-            payload = _decode_local_compaction_blob(item.get("encrypted_content", ""))
+            encrypted = item.get("encrypted_content", "")
+            is_local = isinstance(encrypted, str) and (
+                encrypted.startswith("localcmp:v2:") or 
+                encrypted.startswith("localcmp:v1:")
+            )
+            if not is_local:
+                # Native or unknown compaction.
+                expanded.append(item)
+                continue
+
+            payload = _decode_local_compaction_blob(encrypted)
             if payload:
                 summary_text = _normalize_ws(payload.get("summary_text", ""))
                 if summary_text:
-                    # Keep local compaction summaries alive. normalize_responses_input_for_qwen()
-                    # drops replayed developer/system messages when the active Codex harness
-                    # is present, so carry this as ordinary user-visible context to llama.cpp.
+                    # Keep local compaction summaries alive.
                     expanded.append(_make_input_text_message(
                         "user",
-                        "Context carried forward from local compaction:\n" + summary_text,
+                        summary_text,
                     ))
                 continue
         expanded.append(item)
@@ -317,7 +335,7 @@ def _summarize_items_for_compaction(items):
             lines.append(text)
     if not lines:
         return ""
-    summary = "Earlier conversation summary:\n" + "\n".join(f"- {line}" for line in lines)
+    summary = "<|history_summary|>\nPrior turn summary:\n" + "\n".join(f"- {line}" for line in lines) + "\n<|end_history_summary|>"
     return _truncate(summary, COMPACTION_CONFIG["max_summary_chars"])
 
 
@@ -375,12 +393,16 @@ def _build_local_compaction_response(body: dict) -> dict:
     depth = min(existing_depth + 1, COMPACTION_CONFIG["max_compaction_depth"])
 
     payload = {
-        "version": 1,
+        "version": 2,
         "source": "turboquant-local",
         "depth": depth,
         "created_at": _now_ts(),
         "summary_text": summary_text,
         "preserved_items": len(recent),
+        "metadata": {
+            "engine": "qwen3.6-bridge",
+            "format": "structured-markers-v2"
+        }
     }
     encrypted = _encode_local_compaction_blob(payload)
 
