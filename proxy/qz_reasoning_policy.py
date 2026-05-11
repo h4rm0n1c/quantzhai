@@ -10,13 +10,16 @@ _SHARED_SAMPLING = {
     "top_p": 0.95,
     "top_k": 20,
     "min_p": 0,
-    # presence_penalty=1.5 is intentional for agentic multi-hop use.
-    # The official Qwen model card recommends 0 for thinking-mode coding,
-    # but that guidance is for single-turn inference. In multi-hop agentic
-    # sessions, 0 causes the model to produce intermediate answers and keep
-    # exploring indefinitely rather than committing to a final answer. 1.5
-    # applies enough pressure to conclude. Do not change this to 0.
-    "presence_penalty": 1.5,
+    # presence_penalty for agentic multi-hop use — value is model-dependent.
+    # 0 (Qwen model card recommendation for thinking-mode coding): causes
+    #   looping on open-ended tasks; model produces intermediate messages and
+    #   never commits to a final answer.
+    # 1.5 (original): works for HauhauCS but causes kuato-DPO to produce no
+    #   output at all on some prompts — DPO reasoning chains exhaust the
+    #   penalty budget before answer generation.
+    # 0.5 (current): enough pressure to conclude without starving answer
+    #   generation on models with longer reasoning chains.
+    "presence_penalty": 0.5,
     "repeat_penalty": 1.0,
 }
 
