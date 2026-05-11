@@ -27,10 +27,10 @@ REASONING_POLICIES: Dict[str, Dict[str, Any]] = {
     },
     "medium": {
         "effort": "medium",
-        "description": "Default coding-agent balance. 2-3 tool calls, concise answer.",
+        "description": "Default coding-agent balance. 3 tool calls max, concise answer.",
         "prompt": (
-            "Run 2-3 tool calls as needed — read the files directly relevant to the question. "
-            "Stop once you have enough to answer confidently. "
+            "Use at most 3 tool calls. "
+            "Stop after 3 regardless of task complexity — work with what you have. "
             "Give a concise answer with brief supporting detail."
         ),
         "sampling": dict(_SHARED_SAMPLING),
