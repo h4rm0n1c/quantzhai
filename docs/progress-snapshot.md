@@ -1,13 +1,13 @@
 # QuantZhai Progress Snapshot
 
-Last updated: 2026-05-11 (session 4, mid).
+Last updated: 2026-05-11 (session 4, end).
 
 This is a periodic high-level progress note. Use it when someone asks "where are
 we overall?" without needing to reread every roadmap.
 
 ## Overall
 
-Current estimate: **86% through stabilisation for the local Codex + Qwen goal**.
+Current estimate: **88% through stabilisation for the local Codex + Qwen goal**.
 
 Three long sessions plus a fourth. The proxy is substantially more capable and
 more honest about what it knows. The compaction bridge is now shipped and live-
@@ -25,16 +25,18 @@ smoked — Qwen correctly recalls compacted context in follow-up turns.
   Unchanged from prior.
 - **Observability/status:** 70%
   Unchanged. VRAM backend telemetry still open.
-- **LLM signal system:** 57%
+- **LLM signal system:** 65%
   Coercion error feedback, informative compaction placeholders, reasoning-budget-
   message, carry-forward all live. Hop budget and context pressure signals live.
-  Compaction bridge delivered: v2 blob format, auto-compaction trigger via
-  `compact_threshold`, native blob passthrough, improved limits, 29 unit tests,
-  live smoke (10/10, model recalled file names from compacted context).
-  Telemetry bus capacity fixed: `stream_event_timing` partitioned into its own
-  per-request ring so it can no longer evict `tool_call_started`,
-  `hop_budget_signal`, `auto_compaction_triggered`, etc.
-  Next: empirical A/B format testing for signal formats; profile eval framework.
+  Compaction bridge delivered. Telemetry bus capacity fixed.
+  Profile eval framework complete: 14-prompt benchmark across 4 effort levels,
+  Qwen self-report interrogation (3 rounds, including negative space), effort
+  prompts rewritten with explicit tool budgets and unified sampling. Medium
+  well-behaved on 13/14 prompts. Open-ended exploration tasks structurally
+  resist effort caps — documented in `docs/benchmark-findings-effort-tuning.md`
+  with open questions for future stack work.
+  Next: config/var layout cleanup; redundant re-read and workspace anchoring
+  issues documented as future considerations.
 - **Docs/tests/replay:** 93%
   Compaction bridge plan and telemetry bus bug note updated to reflect delivery.
   293/293 tests green.
@@ -54,10 +56,7 @@ Revised after research:
 
 ## Immediate next priorities (in order)
 
-1. **Profile eval framework** — build the prompt test battery from
-   `docs/profile-eval-plan.md`. Prerequisite for A/B testing signal formats
-   and profile preset tuning.
-2. **Config/var layout + script cleanup** — Phase 3 of master plan. `var/`
+1. **Config/var layout + script cleanup** — Phase 3 of master plan. `var/`
    restructure and script sprawl reduction. Housekeeping, long deferred.
 
 ## Remaining Big Rocks

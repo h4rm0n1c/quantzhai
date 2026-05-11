@@ -684,19 +684,19 @@ deque (`maxlen=150`) separate from the lifecycle deque (`maxlen=200`). Timing
 events can no longer evict `tool_call_started`, `hop_budget_signal`,
 `auto_compaction_triggered`, etc. See `docs/bugs/telemetry-bus-capacity.md`.
 
+The profile eval framework is delivered and the first tuning cycle is complete.
+See `docs/benchmark-findings-effort-tuning.md` for full findings.
+
+Summary: three benchmark runs, Qwen self-report interrogation (3 rounds),
+effort prompts rewritten with explicit tool budgets and unified sampling.
+Medium is well-behaved on 13/14 prompts. Open-ended exploration tasks
+("examine this repo") structurally override effort caps — documented as
+a known limitation with open questions for future stack work.
+
 Start with:
 
 ```text
-profile eval framework — build the prompt test battery from
-docs/profile-eval-plan.md
-```
-
-Reason:
-
-```text
-Prerequisite for empirical A/B testing of signal formats and profile preset
-tuning. Without a fixed prompt set and scoring harness, signal format changes
-and profile adjustments are guesswork.
+reduce script/config ownership duplication and continue var layout migration
 ```
 
 Then do:
