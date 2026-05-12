@@ -225,19 +225,16 @@ The existing `tests/test_qz_codex_request_metadata.py` already defines tests
 for all these functions. They will pass once the body-parser functions are
 implemented.
 
-### `extract_codex_request_context` (planned, not yet implemented)
+### `extract_codex_request_context`
 
-The planned merge function for cross-checking header and body identity is not
-yet needed for the signals observed (no conflicts found), but will be required
-once `x-codex-installation-id` may appear in both header and body paths.
+Implemented. Merges header-based `CodexIdentity` and body-based
+`CodexRequestMetadata` into a single `CodexRequestContext`.
+Resolves `workspace_id`, `qz_session_id`, and `memory_domain` policy.
 
-### `parse_codex_window_id` (planned, not yet implemented)
+### `parse_codex_window_id`
 
-The window-id format `{thread_id}:{generation}` is consistent across all 6
-captures. `thread_id` is a UUID without colons, so `rsplit(":", 1)` is safe
-for this probe. The existing tests in `test_qz_codex_request_metadata.py`
-already handle edge cases (thread IDs with colons, missing generation,
-negative generation).
+Implemented. Parses `{thread_id}:{generation}` using `rsplit(":", 1)`.
+Supports stable thread_id extraction and generation tracking.
 
 ## SQLite readiness
 

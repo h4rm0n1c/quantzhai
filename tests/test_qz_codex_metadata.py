@@ -327,6 +327,75 @@ class ExtractCodexIdentityTests(unittest.TestCase):
         self.assertIsNone(identity.turn_metadata_raw)
         self.assertFalse(identity.identity_conflict)
         self.assertIsNone(identity.conflict_notes)
+        self.assertEqual(identity.workspace_id, "unknown")
+
+
+class WorkspaceResolutionTests(unittest.TestCase):
+    def test_resolve_workspace_id_from_remote_url(self):
+        candidates = [
+            WorkspaceCandidate(
+                repo_root="/home/user/project",
+                associated_remote_urls={"origin": "https://github.com/user/project"}
+            )
+        ]
+        from proxy.qz_codex_metadata import resolve_workspace_id
+        ws_id, source = resolve_workspace_id(candidates)
+        self.assertEqual(ws_id, "remote:https://github.com/user/project")
+        self.assertEqual(source, "codex_turn_metadata_remote")
+
+    def test_resolve_workspace_id_from_repo_root_hash(self):
+        candidates = [
+            WorkspaceCandidate(repo_root="/home/user/project")
+        ]
+        from proxy.qz_codex_metadata import resolve_workspace_id
+        ws_id, source = resolve_workspace_id(candidates)
+        self.assertTrue(ws_id.startswith("path:"))
+        self.assertEqual(source, "codex_turn_metadata_repo_root")
+        # Verify stable hash
+        import hashlib
+        expected_hash = hashlib.sha256(b"/home/user/project").hexdigest()
+        self.assertEqual(ws_id, f"path:{expected_hash}")
+
+    def test_resolve_workspace_id_unknown_for_no_candidates(self):
+        from proxy.qz_codex_metadata import resolve_workspace_id
+        ws_id, source = resolve_workspace_id([])
+        self.assertEqual(ws_id, "unknown")
+        self.assertEqual(source, "unknown")
+
+
+class MemoryDomainPolicyTests(unittest.TestCase):
+    def test_memory_domain_defaults_to_isolated(self):
+        from proxy.qz_codex_metadata import extract_codex_request_context
+        ctx = extract_codex_request_context({}, {})
+        self.assertEqual(ctx.memory_domain, "isolated")
+
+    def test_no_memory_domain_inference(self):
+        # Contract: Missing memory_domain must resolve to isolated.
+        # It must NOT be inferred from client name, model name, etc.
+        from proxy.qz_codex_metadata import extract_codex_request_context
+        headers = {
+            "originator": "codex_exec",
+            "user-agent": "coding-assistant/1.0",
+        }
+        body = {
+            "model": "qwen3.6turbo-coding",
+            "tools": [{"type": "code_interpreter"}]
+        }
+        ctx = extract_codex_request_context(headers, body)
+        self.assertEqual(ctx.memory_domain, "isolated")
+
+
+class SessionIdTests(unittest.TestCase):
+    def test_qz_session_id_maps_from_client_session_id(self):
+        from proxy.qz_codex_metadata import extract_codex_request_context
+        headers = {"session_id": "client-sid-123"}
+        ctx = extract_codex_request_context(headers, {})
+        self.assertEqual(ctx.qz_session_id, "qz_sid_client-sid-123")
+
+    def test_missing_client_session_id_gets_anonymous_qz_session_id(self):
+        from proxy.qz_codex_metadata import extract_codex_request_context
+        ctx = extract_codex_request_context({}, {})
+        self.assertTrue(ctx.qz_session_id.startswith("qz_sid_anon_"))
 
 
 if __name__ == "__main__":

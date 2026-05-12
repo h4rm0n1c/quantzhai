@@ -31,6 +31,7 @@ class CodexRequestMetadata:
     service_tier: str | None = None
     reasoning_effort: str | None = None
     reasoning_summary: str | None = None
+    text_verbosity: str | None = None
     parallel_tool_calls: bool | None = None
     tool_choice: str | dict | None = None
     store: bool | None = None
@@ -61,6 +62,8 @@ class CodexIdentity:
     turn_id: str | None = None
     turn_started_at_unix_ms: int | None = None
     workspace_candidates: list[WorkspaceCandidate] | None = None
+    workspace_id: str | None = None
+    workspace_id_source: str | None = None
     codex_turn_state_raw: str | None = None
     installation_id: str | None = None
     parent_thread_id: str | None = None
@@ -77,6 +80,7 @@ class CodexRequestContext:
     identity: CodexIdentity
     body_metadata: CodexRequestMetadata | None = None
     qz_session_id: str | None = None
+    memory_domain: str = "isolated"
 
 
 def header_lookup(headers_raw: dict, name: str) -> str | None:
@@ -241,6 +245,42 @@ def extract_workspace_candidates(parsed_turn_metadata: dict | None) -> list[Work
     return candidates
 
 
+def resolve_workspace_id(candidates: list[WorkspaceCandidate] | None) -> tuple[str, str]:
+    """
+    Resolves a stable workspace_id from Codex turn metadata candidates.
+    Logic from codex-context-memory-contract.md.
+    """
+    if not candidates:
+        return "unknown", "unknown"
+
+    # Rule: If any workspace candidate has normalized remote url, use it.
+    # Prefer 'origin' if available.
+    for cand in candidates:
+        if not cand.associated_remote_urls:
+            continue
+        url = cand.associated_remote_urls.get("origin")
+        if not url:
+            # Pick any available remote URL
+            for remote_name, remote_url in cand.associated_remote_urls.items():
+                if remote_url:
+                    url = remote_url
+                    break
+        if url:
+            return f"remote:{url}", "codex_turn_metadata_remote"
+
+    # Rule: Else if any workspace candidate has repo_root, use its sha256 hash.
+    for cand in candidates:
+        if cand.repo_root:
+            import hashlib
+            # Normalize: strip trailing slash and lowercase for stable hashing on some OSs,
+            # though repo_root from Codex is usually already normalized.
+            root = cand.repo_root.rstrip("/")
+            root_hash = hashlib.sha256(root.encode("utf-8")).hexdigest()
+            return f"path:{root_hash}", "codex_turn_metadata_repo_root"
+
+    return "unknown", "unknown"
+
+
 def extract_codex_identity(headers_raw: dict) -> CodexIdentity:
     conflict_notes: list[str] = []
 
@@ -328,6 +368,7 @@ def extract_codex_identity(headers_raw: dict) -> CodexIdentity:
         )
 
     workspace_candidates = extract_workspace_candidates(parsed_tm)
+    workspace_id, workspace_id_source = resolve_workspace_id(workspace_candidates)
 
     return CodexIdentity(
         client_session_id=client_session_id,
@@ -346,6 +387,8 @@ def extract_codex_identity(headers_raw: dict) -> CodexIdentity:
         turn_id=turn_id,
         turn_started_at_unix_ms=turn_started_at_unix_ms,
         workspace_candidates=workspace_candidates if workspace_candidates else None,
+        workspace_id=workspace_id,
+        workspace_id_source=workspace_id_source,
         codex_turn_state_raw=codex_turn_state_raw,
         installation_id=installation_id,
         parent_thread_id=parent_thread_id,
@@ -419,10 +462,14 @@ def extract_codex_body_metadata(body: dict) -> CodexRequestMetadata:
                 tool_names.append(name)
 
     has_output_schema = False
+    text_verbosity = None
     text_field = body.get("text")
     if isinstance(text_field, dict):
         if "format" in text_field or "schema" in text_field:
             has_output_schema = True
+        tv_val = text_field.get("verbosity")
+        if isinstance(tv_val, str):
+            text_verbosity = tv_val
 
     return CodexRequestMetadata(
         previous_response_id=prev_resp_id if isinstance(prev_resp_id, str) else None,
@@ -430,6 +477,7 @@ def extract_codex_body_metadata(body: dict) -> CodexRequestMetadata:
         service_tier=service_tier if isinstance(service_tier, str) else None,
         reasoning_effort=reasoning_effort,
         reasoning_summary=reasoning_summary,
+        text_verbosity=text_verbosity,
         parallel_tool_calls=body.get("parallel_tool_calls") if isinstance(body.get("parallel_tool_calls"), bool) else None,
         tool_choice=body.get("tool_choice") if isinstance(body.get("tool_choice"), (str, dict)) else None,
         store=body.get("store") if isinstance(body.get("store"), bool) else None,
@@ -441,6 +489,31 @@ def extract_codex_body_metadata(body: dict) -> CodexRequestMetadata:
         tools_count=tools_count,
         tool_names=tool_names if tool_names else None,
     )
+
+
+def resolve_memory_domain(identity: CodexIdentity, body_metadata: CodexRequestMetadata) -> str:
+    """
+    Resolves the memory_domain for the request.
+    Current skeleton: default to "isolated".
+    No inference from identity or body is allowed per the contract.
+    """
+    # Phase 1: Skeleton only. Default to isolated.
+    # Future: check model/profile overrides for an explicit memory_domain.
+    return "isolated"
+
+
+def generate_qz_session_id(client_session_id: str | None) -> str:
+    """
+    Generates a QuantZhai internal session ID.
+    If client_session_id is provided, use it as a base for stability.
+    """
+    if client_session_id and isinstance(client_session_id, str):
+        # Use a prefix to distinguish from raw Codex session IDs
+        return f"qz_sid_{client_session_id}"
+    
+    # Fallback to an anonymous session ID
+    import uuid
+    return f"qz_sid_anon_{uuid.uuid4().hex[:12]}"
 
 
 def extract_codex_request_context(headers_raw: dict, body: dict) -> CodexRequestContext:
@@ -460,7 +533,12 @@ def extract_codex_request_context(headers_raw: dict, body: dict) -> CodexRequest
             else:
                 identity.conflict_notes.append(note)
 
+    memory_domain = resolve_memory_domain(identity, body_metadata)
+    qz_session_id = generate_qz_session_id(identity.client_session_id)
+
     return CodexRequestContext(
         identity=identity,
         body_metadata=body_metadata,
+        qz_session_id=qz_session_id,
+        memory_domain=memory_domain,
     )

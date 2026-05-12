@@ -14,6 +14,7 @@ try:
     from .qz_config_report import effective_config_payload
     from .qz_telemetry import TELEMETRY_RECENT_SCHEMA, TELEMETRY_REQUEST_SCHEMA
     from .qz_proxy_config import CURRENT_API_ENDPOINTS, LEGACY_API_ENDPOINTS, api_contract_payload
+    from .qz_codex_metadata import extract_codex_request_context
     from .qz_responses import (
         _apply_patch_output_style,
         _build_local_compaction_response,
@@ -887,14 +888,29 @@ class RequestRouter:
             pass
 
         try:
+            headers_raw = incoming_headers_payload(self.handler)
             headers_capture = {
                 "schema": "qz.incoming.request.capture.v2",
                 "request_id": request_id,
                 "method": "POST",
                 "path": self.handler.path,
-                "headers_raw": incoming_headers_payload(self.handler),
+                "headers_raw": headers_raw,
             }
             write_dual_capture("latest-request-headers.json", request_id, "incoming-request-headers.json", headers_capture)
+        except Exception:
+            headers_raw = {}
+
+        try:
+            qz_ctx = extract_codex_request_context(headers_raw, body)
+            metadata = body.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["qz_session_id"] = qz_ctx.qz_session_id
+            metadata["qz_workspace_id"] = qz_ctx.identity.workspace_id
+            metadata["qz_memory_domain"] = qz_ctx.memory_domain
+            if qz_ctx.body_metadata and qz_ctx.body_metadata.text_verbosity:
+                metadata["qz_text_verbosity"] = qz_ctx.body_metadata.text_verbosity
+            body["metadata"] = metadata
         except Exception:
             pass
 
