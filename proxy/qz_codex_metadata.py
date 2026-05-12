@@ -65,6 +65,8 @@ class CodexIdentity:
     installation_id: str | None = None
     parent_thread_id: str | None = None
     subagent: str | None = None
+    memgen_raw: str | None = None
+    memgen_parse_error: bool = False
     is_memgen: bool = False
     identity_conflict: bool = False
     conflict_notes: list[str] | None = None
@@ -102,11 +104,10 @@ def parse_codex_window_id(value: str | None) -> tuple[str | None, int | None]:
     if ":" not in value:
         return None, None
 
-    parts = value.rsplit(":", 1)
-    if len(parts) != 2:
+    thread_id, gen_str = value.rsplit(":", 1)
+    if not thread_id:
         return None, None
 
-    thread_id, gen_str = parts
     try:
         generation = int(gen_str)
         if generation < 0:
@@ -116,11 +117,20 @@ def parse_codex_window_id(value: str | None) -> tuple[str | None, int | None]:
         return None, None
 
 
-def parse_memgen_header(value: str | None) -> bool:
-    if not value:
-        return False
-    v = str(value).lower().strip()
-    return v in ("true", "1", "yes")
+def parse_memgen_header(value: str | None) -> tuple[bool, bool]:
+    if value is None:
+        return False, False
+    if not isinstance(value, str):
+        return False, True
+
+    normalized = value.lower().strip()
+    if not normalized:
+        return False, False
+    if normalized in ("true", "1", "yes"):
+        return True, False
+    if normalized in ("false", "0", "no"):
+        return False, False
+    return False, True
 
 
 def _header_values(headers_raw: dict, names: tuple[str, ...]) -> list[tuple[str, str]]:
@@ -259,7 +269,9 @@ def extract_codex_identity(headers_raw: dict) -> CodexIdentity:
     parent_thread_id = header_lookup(headers_raw, "x-codex-parent-thread-id")
     subagent = header_lookup(headers_raw, "x-openai-subagent")
     memgen_raw = header_lookup(headers_raw, "x-openai-memgen-request")
-    is_memgen = parse_memgen_header(memgen_raw)
+    is_memgen, memgen_parse_error = parse_memgen_header(memgen_raw)
+    if memgen_parse_error:
+        conflict_notes.append(f"Unrecognised x-openai-memgen-request value: {memgen_raw}")
 
     win_thread_id, win_gen = parse_codex_window_id(codex_window_id)
     codex_window_parse_error = False
@@ -338,10 +350,35 @@ def extract_codex_identity(headers_raw: dict) -> CodexIdentity:
         installation_id=installation_id,
         parent_thread_id=parent_thread_id,
         subagent=subagent,
+        memgen_raw=memgen_raw,
+        memgen_parse_error=memgen_parse_error,
         is_memgen=is_memgen,
         identity_conflict=identity_conflict,
         conflict_notes=conflict_notes if conflict_notes else None,
     )
+
+
+def _extract_tool_name(tool: dict) -> str | None:
+    if not isinstance(tool, dict):
+        return None
+
+    # OpenAI Responses/Codex tool declarations commonly use top-level name.
+    name = tool.get("name")
+    if isinstance(name, str):
+        return name
+
+    # Some function-call shapes nest the function name.
+    function = tool.get("function")
+    if isinstance(function, dict):
+        nested_name = function.get("name")
+        if isinstance(nested_name, str):
+            return nested_name
+
+    tool_type = tool.get("type")
+    if isinstance(tool_type, str) and tool_type != "function":
+        return tool_type
+
+    return None
 
 
 def extract_codex_body_metadata(body: dict) -> CodexRequestMetadata:
@@ -370,27 +407,17 @@ def extract_codex_body_metadata(body: dict) -> CodexRequestMetadata:
         if isinstance(ci_val, str):
             client_inst_id = ci_val
 
-    # Tools summary
     tools = body.get("tools")
     tools_count = 0
     tool_names = None
     if isinstance(tools, list):
         tools_count = len(tools)
         tool_names = []
-        for t in tools:
-            if not isinstance(t, dict):
-                continue
-            t_type = t.get("type")
-            if t_type == "function":
-                func = t.get("function")
-                if isinstance(func, dict):
-                    name = func.get("name")
-                    if isinstance(name, str):
-                        tool_names.append(name)
-            elif isinstance(t_type, str):
-                tool_names.append(t_type)
+        for tool in tools:
+            name = _extract_tool_name(tool)
+            if name is not None:
+                tool_names.append(name)
 
-    # Output schema detection
     has_output_schema = False
     text_field = body.get("text")
     if isinstance(text_field, dict):
