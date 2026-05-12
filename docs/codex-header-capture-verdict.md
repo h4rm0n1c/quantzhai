@@ -1,23 +1,36 @@
 # Codex Header Capture Verdict
 
-Date: 2026-05-12T13:53:05.212600+08:00
+Date: 2026-05-12T13:59:37.605471+08:00
 Source: recent `var/captures/requests/*/incoming-request-headers.json` files
 
 Status: local protocol-discovery summary. Raw captures are not committed.
 
 ## Files inspected
 
-- Count: 0
+- Count: 4
 
 ## Header key counts
 
+- `accept`: 4
+- `authorization`: 4
+- `content-length`: 4
+- `content-type`: 4
+- `host`: 4
+- `originator`: 4
+- `session_id`: 4
+- `user-agent`: 4
+- `x-client-request-id`: 4
+- `x-codex-turn-metadata`: 4
+- `x-codex-window-id`: 4
 
 ## Interesting header verdict
 
 ### `session_id`
 
-- Found: no
-- Count: 0
+- Found: yes
+- Count: 4
+- Example file: `var/captures/requests/qz_req_1778565428276_fad0/incoming-request-headers.json`
+- Example value: `019e1ac2-b40c-7b03-ade6-4c7d8814af8c`
 
 ### `session-id`
 
@@ -36,18 +49,29 @@ Status: local protocol-discovery summary. Raw captures are not committed.
 
 ### `originator`
 
-- Found: no
-- Count: 0
+- Found: yes
+- Count: 4
+- Example file: `var/captures/requests/qz_req_1778565428276_fad0/incoming-request-headers.json`
+- Example value: `codex_exec`
 
 ### `authorization`
+
+- Found: yes
+- Count: 4
+- Example file: `var/captures/requests/qz_req_1778565428276_fad0/incoming-request-headers.json`
+- Example value: `[present; redacted in committed summary]`
+
+### `cookie`
 
 - Found: no
 - Count: 0
 
 ### `user-agent`
 
-- Found: no
-- Count: 0
+- Found: yes
+- Count: 4
+- Example file: `var/captures/requests/qz_req_1778565428276_fad0/incoming-request-headers.json`
+- Example value: `codex_exec/0.125.0 (Linux Unknown; x86_64) xterm (codex_exec; 0.125.0)`
 
 ### `User-Agent`
 
@@ -56,8 +80,10 @@ Status: local protocol-discovery summary. Raw captures are not committed.
 
 ### `content-type`
 
-- Found: no
-- Count: 0
+- Found: yes
+- Count: 4
+- Example file: `var/captures/requests/qz_req_1778565428276_fad0/incoming-request-headers.json`
+- Example value: `application/json`
 
 ### `Content-Type`
 
@@ -66,8 +92,10 @@ Status: local protocol-discovery summary. Raw captures are not committed.
 
 ### `accept`
 
-- Found: no
-- Count: 0
+- Found: yes
+- Count: 4
+- Example file: `var/captures/requests/qz_req_1778565428276_fad0/incoming-request-headers.json`
+- Example value: `text/event-stream`
 
 ### `Accept`
 
@@ -86,12 +114,13 @@ Status: local protocol-discovery summary. Raw captures are not committed.
 
 ## Interpretation
 
-- client session id: absent in inspected incoming headers. Phase 1 should use proxy-owned synthetic session IDs only.
+- client session id: present in incoming headers. QuantZhai should map it as nullable external identity while keeping `qz_session_id` primary.
 - client thread id: absent in inspected incoming headers. Phase 1 should use proxy-owned synthetic session IDs only.
-- `authorization`: absent in inspected incoming headers.
+- `authorization`: present in raw local captures. Keep raw header captures local/ignored; commit summaries only.
 
 ## Recommended next action
 
-- If session/thread headers are present, update the state/memory plan to map them as external client IDs.
-- If absent, keep the current synthetic-session Phase 1 decision.
-- Do not implement DB until this verdict is reviewed.
+- Review this verdict before DB implementation.
+- If session/thread IDs are present, update the state/memory plan to map them as external client IDs.
+- If absent, keep the synthetic-session Phase 1 decision.
+
