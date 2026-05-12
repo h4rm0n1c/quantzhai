@@ -127,6 +127,25 @@ This catches common cross-request Codex-native repeated reads because the prior
 `exec_command`/`shell_command` call is usually present in the replayed input
 history.
 
+Known dependency:
+
+```text
+This refinement relies on Codex sending full conversation history in
+body["input"] when using QuantZhai. The proxy currently has no
+previous_response_id support in the local Responses path, so Codex cannot rely
+on a server-side previous response chain being resolved by the proxy. Under the
+current local-proxy contract, Codex therefore uses the manual history-management
+shape where prior function_call and function_call_output items are replayed in
+input.
+
+If a future Codex/Responses/proxy path starts forwarding and resolving
+previous_response_id, input may shrink to only incremental items. That would
+make body["input"] seeding insufficient for cross-request repeated reads.
+Mitigation for that future path: add a session-keyed cache or explicitly strip /
+ignore previous_response_id for local Responses requests until such a cache
+exists.
+```
+
 The seed pass must stay cheap:
 
 ```text
@@ -573,6 +592,8 @@ Tests:
 | `test_seed_from_prior_function_call` | input history seeds `read_paths` |
 | `test_seed_from_prior_function_call_detects_cross_request_repeat` | prior `cat README.md` in input history makes current `cat README.md` signal |
 | `test_seed_write_from_apply_patch` | apply_patch marks `written_paths` |
+| `test_seed_from_body_with_compacted_items` | compacted/localcmp or summary-shaped input degrades safely and does not crash; add richer assertions if compaction preserves function_call shape |
+| `test_seed_with_previous_response_id_minimal_input_degrades_gracefully` | body/input with only incremental items starts empty rather than guessing prior reads |
 | `test_repeat_from_history_signals` | repeated read from seeded input signals |
 | `test_repeat_after_write_does_not_signal` | written path suppresses signal |
 | `test_warn_once_then_allow` | second repeat after warning allows in the same run |
@@ -635,6 +656,14 @@ repeated_read_signal retained in per-request lifecycle bucket
 payload contains paths/action/scope/call_id
 ```
 
+Specific telemetry coverage:
+
+```text
+test_telemetry_request_retained_repeated_read_signal
+  repeated_read_signal is in REQUEST_LIFECYCLE_EVENT_TYPES
+  repeated_read_signal appears in /qz/telemetry/request retained lifecycle events
+```
+
 ---
 
 ## 9. Edge cases
@@ -650,9 +679,10 @@ payload contains paths/action/scope/call_id
 | Complex bash/heredocs/process substitution | Best effort only; pass through if unclear |
 | `ls`/`find` orientation waste | Deferred to separate orientation signal |
 | `web_search` result mentions files | Ignore; not a local file operation |
-| Compaction dropped context | Signal remains advisory; model can re-read after warning |
+| Compaction interaction | Verify local compaction/microcompaction preserves function_call shape or at least degrades safely; if older tool calls are replaced by summaries, input-history seeding may miss prior reads |
 | No prior input history | State starts empty; current-run tracking still works |
-| Missing stable session id | Not required for v1 because input replay is used |
+| previous_response_id / minimal incremental input | Degrade gracefully by starting with whatever input items are present; do not infer unseen history |
+| Missing stable session id | Not required for v1 because current local path relies on input replay; required if previous_response_id support is added later |
 
 ---
 
@@ -662,6 +692,7 @@ Do not include in v1:
 
 ```text
 persistent per-session read cache
+previous_response_id-aware session cache / history lookup
 full shell parser
 symlink/canonical filesystem resolution
 content-hash similarity detection
@@ -677,6 +708,7 @@ Future v2 ideas:
 
 ```text
 session-keyed state once a reliable conversation/session identifier is found
+previous_response_id contract support if QuantZhai ever resolves prior responses server-side
 orientation signal for repeated `pwd`, `ls /`, `ls -la`, and root-directory probes
 content-hash/diminishing-return signal for similar outputs
 warning replay by parsing prior repeated_read_signal outputs from body["input"]
@@ -698,10 +730,14 @@ The feature is acceptable when:
    in v1, and this behaviour is covered by an explicit policy test.
 6. The seed pass scans only function_call/function_call_output-style items and
    skips ordinary message blobs.
-7. apply_patch, web_search, unknown tools, and dropped-tool errors keep existing behaviour.
-8. repeated_read_signal telemetry appears in /qz/telemetry/request.
-9. repeated-read signals do not emit tool_call_error telemetry.
-10. Full unit suite remains green.
+7. previous_response_id/minimal-input shapes degrade safely without inferred
+   hidden history.
+8. Compaction-shaped or summary-shaped input degrades safely; if compaction
+   retains function_call items, seeding still finds them.
+9. apply_patch, web_search, unknown tools, and dropped-tool errors keep existing behaviour.
+10. repeated_read_signal telemetry appears in /qz/telemetry/request.
+11. repeated-read signals do not emit tool_call_error telemetry.
+12. Full unit suite remains green.
 ```
 
 Live smoke is optional after unit coverage:
@@ -720,9 +756,10 @@ Recommended order:
 
 ```text
 1. Add proxy/qz_file_signal.py with parser/state only.
-2. Add tests/test_qz_file_signal.py, including standalone write extraction tests.
+2. Add tests/test_qz_file_signal.py, including standalone write extraction,
+   compaction-shaped input, and previous_response_id/minimal-input tests.
 3. Add explicit v1 warning-replay policy test.
-4. Add repeated_read_signal telemetry type.
+4. Add repeated_read_signal telemetry type and retained telemetry test.
 5. Add CompletedToolCallDecision kind="signal" support.
 6. Thread RepeatedReadState into completed_call_decision() with no behaviour change.
 7. Enable signal path for repeated reads.
