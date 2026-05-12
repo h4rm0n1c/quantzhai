@@ -1,322 +1,648 @@
 # Codex Capture Shape Audit
 
-Source: -rw-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-Date: 2026-05-12T12:46:21+08:00
+Date: 2026-05-12T12:49:31.846047+08:00
+Repo: /home/harri/turboquant/quantzhai
+
+Status: clean summary generated from recent files under `var/captures` only.
+
+## Files inspected
+
+- `var/captures/latest-dropped-tools.txt`
+- `var/captures/latest-json-api.log`
+- `var/captures/latest-paths.log`
+- `var/captures/latest-request-contract.json`
+- `var/captures/latest-request-id.txt`
+- `var/captures/latest-web-search-route.json`
+- `var/captures/requests/qz_req_1778482588194_fc70/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778482588194_fc70/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778482588194_fc70/forwarded-request.json`
+- `var/captures/requests/qz_req_1778482588194_fc70/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778482588194_fc70/incoming-request.json`
+- `var/captures/requests/qz_req_1778482588194_fc70/request-contract.json`
+- `var/captures/requests/qz_req_1778482588194_fc70/upstream-response.raw`
+- `var/captures/requests/qz_req_1778482588194_fc70/upstream-status.txt`
+- `var/captures/requests/qz_req_1778482993236_eea0/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778482993236_eea0/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778482993236_eea0/forwarded-request.json`
+- `var/captures/requests/qz_req_1778482993236_eea0/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778482993236_eea0/incoming-request.json`
+- `var/captures/requests/qz_req_1778482993236_eea0/request-contract.json`
+- `var/captures/requests/qz_req_1778482993236_eea0/upstream-response.raw`
+- `var/captures/requests/qz_req_1778482993236_eea0/upstream-status.txt`
+- `var/captures/requests/qz_req_1778485663092_9010/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778485663092_9010/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778485663092_9010/forwarded-request.json`
+- `var/captures/requests/qz_req_1778485663092_9010/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778485663092_9010/incoming-request.json`
+- `var/captures/requests/qz_req_1778485663092_9010/request-contract.json`
+- `var/captures/requests/qz_req_1778485663092_9010/upstream-response.raw`
+- `var/captures/requests/qz_req_1778485663092_9010/upstream-status.txt`
+- `var/captures/requests/qz_req_1778485691033_4d50/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778485691033_4d50/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778485691033_4d50/forwarded-request.json`
+- `var/captures/requests/qz_req_1778485691033_4d50/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778485691033_4d50/incoming-request.json`
+- `var/captures/requests/qz_req_1778485691033_4d50/request-contract.json`
+- `var/captures/requests/qz_req_1778485691033_4d50/upstream-response.raw`
+- `var/captures/requests/qz_req_1778485691033_4d50/upstream-status.txt`
+- `var/captures/requests/qz_req_1778485693159_5300/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778485693159_5300/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778485693159_5300/forwarded-request.json`
+- `var/captures/requests/qz_req_1778485693159_5300/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778485693159_5300/incoming-request.json`
+- `var/captures/requests/qz_req_1778485693159_5300/request-contract.json`
+- `var/captures/requests/qz_req_1778485693159_5300/upstream-response.raw`
+- `var/captures/requests/qz_req_1778485693159_5300/upstream-status.txt`
+- `var/captures/requests/qz_req_1778486069043_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486069043_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486069043_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486073873_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486073873_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486073873_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486074968_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486074968_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486074968_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486076340_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486076340_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486076340_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486078268_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486078268_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486078268_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486080095_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486080095_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486080095_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486081524_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486081524_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486081524_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486083250_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486083250_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486083250_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486084914_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486084914_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486084914_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486086389_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486086389_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486086389_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486088150_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486088150_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486088150_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486089708_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486089708_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486089708_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486091088_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486091088_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486091088_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486096315_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486096315_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486096315_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486098759_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486098759_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486098759_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486100374_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486100374_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486100374_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486105386_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486105386_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486105386_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486107459_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486107459_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486107459_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486114962_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486114962_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486114962_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486116962_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486116962_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486116962_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486119005_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486119005_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486119005_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486120780_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486120780_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486120780_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486124471_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486124471_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486124471_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486126294_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486126294_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486126294_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486128751_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486128751_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486128751_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486197491_9e60/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778486197491_9e60/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778486197491_9e60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486197491_9e60/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778486197491_9e60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486197491_9e60/request-contract.json`
+- `var/captures/requests/qz_req_1778486197491_9e60/upstream-response.raw`
+- `var/captures/requests/qz_req_1778486197491_9e60/upstream-status.txt`
+- `var/captures/requests/qz_req_1778486808965_bd40/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486808965_bd40/incoming-request.json`
+- `var/captures/requests/qz_req_1778486808965_bd40/request-contract.json`
+- `var/captures/requests/qz_req_1778486828875_bd40/forwarded-request.json`
+- `var/captures/requests/qz_req_1778486828875_bd40/incoming-request.json`
+- `var/captures/requests/qz_req_1778486828875_bd40/request-contract.json`
+- `var/captures/requests/qz_req_1778486873759_de60/incoming-request.json`
+- `var/captures/requests/qz_req_1778486979866_1d90/incoming-request.json`
+- `var/captures/requests/qz_req_1778487003899_1d90/incoming-request.json`
+- `var/captures/requests/qz_req_1778487003912_1d90/forwarded-request.json`
+- `var/captures/requests/qz_req_1778487003912_1d90/incoming-request.json`
+- `var/captures/requests/qz_req_1778487003912_1d90/request-contract.json`
+- `var/captures/requests/qz_req_1778487033238_1d90/incoming-request.json`
+- `var/captures/requests/qz_req_1778487033252_1d90/forwarded-request.json`
+- `var/captures/requests/qz_req_1778487033252_1d90/incoming-request.json`
+- `var/captures/requests/qz_req_1778487033252_1d90/request-contract.json`
+- `var/captures/requests/qz_req_1778495123433_b790/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495123433_b790/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495123433_b790/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495123433_b790/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495123433_b790/incoming-request.json`
+- `var/captures/requests/qz_req_1778495123433_b790/request-contract.json`
+- `var/captures/requests/qz_req_1778495123433_b790/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495123433_b790/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495137552_8460/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495137552_8460/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495137552_8460/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495137552_8460/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495137552_8460/incoming-request.json`
+- `var/captures/requests/qz_req_1778495137552_8460/request-contract.json`
+- `var/captures/requests/qz_req_1778495137552_8460/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495137552_8460/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495143408_bd40/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495143408_bd40/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495143408_bd40/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495143408_bd40/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495143408_bd40/incoming-request.json`
+- `var/captures/requests/qz_req_1778495143408_bd40/request-contract.json`
+- `var/captures/requests/qz_req_1778495143408_bd40/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495143408_bd40/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495170923_a1a0/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495170923_a1a0/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495170923_a1a0/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495170923_a1a0/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495170923_a1a0/incoming-request.json`
+- `var/captures/requests/qz_req_1778495170923_a1a0/request-contract.json`
+- `var/captures/requests/qz_req_1778495170923_a1a0/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495170923_a1a0/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495175726_a1a0/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495175726_a1a0/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495175726_a1a0/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495175726_a1a0/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495175726_a1a0/incoming-request.json`
+- `var/captures/requests/qz_req_1778495175726_a1a0/request-contract.json`
+- `var/captures/requests/qz_req_1778495175726_a1a0/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495175726_a1a0/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495180592_ed00/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495180592_ed00/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495180592_ed00/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495180592_ed00/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495180592_ed00/incoming-request.json`
+- `var/captures/requests/qz_req_1778495180592_ed00/request-contract.json`
+- `var/captures/requests/qz_req_1778495180592_ed00/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495180592_ed00/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495182662_3790/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495182662_3790/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495182662_3790/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495182662_3790/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495182662_3790/incoming-request.json`
+- `var/captures/requests/qz_req_1778495182662_3790/request-contract.json`
+- `var/captures/requests/qz_req_1778495182662_3790/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495182662_3790/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495193581_c2c0/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495193581_c2c0/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495193581_c2c0/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495193581_c2c0/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495193581_c2c0/incoming-request.json`
+- `var/captures/requests/qz_req_1778495193581_c2c0/request-contract.json`
+- `var/captures/requests/qz_req_1778495193581_c2c0/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495193581_c2c0/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495204374_1d90/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495204374_1d90/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495204374_1d90/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495204374_1d90/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495204374_1d90/incoming-request.json`
+- `var/captures/requests/qz_req_1778495204374_1d90/request-contract.json`
+- `var/captures/requests/qz_req_1778495204374_1d90/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495204374_1d90/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495207066_ec30/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495207066_ec30/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495207066_ec30/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495207066_ec30/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495207066_ec30/incoming-request.json`
+- `var/captures/requests/qz_req_1778495207066_ec30/request-contract.json`
+- `var/captures/requests/qz_req_1778495207066_ec30/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495207066_ec30/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495208273_7e10/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495208273_7e10/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495208273_7e10/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495208273_7e10/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495208273_7e10/incoming-request.json`
+- `var/captures/requests/qz_req_1778495208273_7e10/request-contract.json`
+- `var/captures/requests/qz_req_1778495208273_7e10/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495208273_7e10/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495213659_7790/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495213659_7790/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495213659_7790/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495213659_7790/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495213659_7790/incoming-request.json`
+- `var/captures/requests/qz_req_1778495213659_7790/request-contract.json`
+- `var/captures/requests/qz_req_1778495213659_7790/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495213659_7790/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495233333_3a00/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495233333_3a00/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495233333_3a00/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495233333_3a00/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495233333_3a00/incoming-request.json`
+- `var/captures/requests/qz_req_1778495233333_3a00/request-contract.json`
+- `var/captures/requests/qz_req_1778495233333_3a00/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495233333_3a00/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495236917_e5b0/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495236917_e5b0/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495236917_e5b0/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495236917_e5b0/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495236917_e5b0/incoming-request.json`
+- `var/captures/requests/qz_req_1778495236917_e5b0/request-contract.json`
+- `var/captures/requests/qz_req_1778495236917_e5b0/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495236917_e5b0/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495238911_df30/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495238911_df30/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495238911_df30/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495238911_df30/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495238911_df30/incoming-request.json`
+- `var/captures/requests/qz_req_1778495238911_df30/request-contract.json`
+- `var/captures/requests/qz_req_1778495238911_df30/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495238911_df30/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495240589_65b0/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495240589_65b0/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495240589_65b0/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495240589_65b0/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495240589_65b0/incoming-request.json`
+- `var/captures/requests/qz_req_1778495240589_65b0/request-contract.json`
+- `var/captures/requests/qz_req_1778495240589_65b0/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495240589_65b0/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495245884_9980/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495245884_9980/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495245884_9980/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495245884_9980/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495245884_9980/incoming-request.json`
+- `var/captures/requests/qz_req_1778495245884_9980/request-contract.json`
+- `var/captures/requests/qz_req_1778495245884_9980/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495245884_9980/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495250216_e8f0/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495250216_e8f0/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495250216_e8f0/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495250216_e8f0/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495250216_e8f0/incoming-request.json`
+- `var/captures/requests/qz_req_1778495250216_e8f0/request-contract.json`
+- `var/captures/requests/qz_req_1778495250216_e8f0/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495250216_e8f0/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495253997_81f0/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495253997_81f0/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495253997_81f0/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495253997_81f0/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495253997_81f0/incoming-request.json`
+- `var/captures/requests/qz_req_1778495253997_81f0/request-contract.json`
+- `var/captures/requests/qz_req_1778495253997_81f0/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495253997_81f0/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495256983_9b20/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495256983_9b20/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495256983_9b20/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495256983_9b20/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495256983_9b20/incoming-request.json`
+- `var/captures/requests/qz_req_1778495256983_9b20/request-contract.json`
+- `var/captures/requests/qz_req_1778495256983_9b20/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495256983_9b20/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495263119_8600/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495263119_8600/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495263119_8600/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495263119_8600/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495263119_8600/incoming-request.json`
+- `var/captures/requests/qz_req_1778495263119_8600/request-contract.json`
+- `var/captures/requests/qz_req_1778495263119_8600/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495263119_8600/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495271502_ed00/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495271502_ed00/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495271502_ed00/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495271502_ed00/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495271502_ed00/incoming-request.json`
+- `var/captures/requests/qz_req_1778495271502_ed00/request-contract.json`
+- `var/captures/requests/qz_req_1778495271502_ed00/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495271502_ed00/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495275022_4390/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495275022_4390/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495275022_4390/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495275022_4390/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495275022_4390/incoming-request.json`
+- `var/captures/requests/qz_req_1778495275022_4390/request-contract.json`
+- `var/captures/requests/qz_req_1778495275022_4390/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495275022_4390/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495280534_530/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495280534_530/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495280534_530/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495280534_530/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495280534_530/incoming-request.json`
+- `var/captures/requests/qz_req_1778495280534_530/request-contract.json`
+- `var/captures/requests/qz_req_1778495280534_530/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495280534_530/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495285467_32b0/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495285467_32b0/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495285467_32b0/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495285467_32b0/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495285467_32b0/incoming-request.json`
+- `var/captures/requests/qz_req_1778495285467_32b0/request-contract.json`
+- `var/captures/requests/qz_req_1778495285467_32b0/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495285467_32b0/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495289887_b1e0/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495289887_b1e0/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495289887_b1e0/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495289887_b1e0/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495289887_b1e0/incoming-request.json`
+- `var/captures/requests/qz_req_1778495289887_b1e0/request-contract.json`
+- `var/captures/requests/qz_req_1778495289887_b1e0/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495289887_b1e0/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495292762_2f70/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495292762_2f70/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495292762_2f70/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495292762_2f70/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495292762_2f70/incoming-request.json`
+- `var/captures/requests/qz_req_1778495292762_2f70/request-contract.json`
+- `var/captures/requests/qz_req_1778495292762_2f70/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495292762_2f70/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495296053_93d0/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495296053_93d0/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495296053_93d0/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495296053_93d0/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495296053_93d0/incoming-request.json`
+- `var/captures/requests/qz_req_1778495296053_93d0/request-contract.json`
+- `var/captures/requests/qz_req_1778495296053_93d0/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495296053_93d0/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495300386_ed00/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495300386_ed00/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495300386_ed00/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495300386_ed00/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495300386_ed00/incoming-request.json`
+- `var/captures/requests/qz_req_1778495300386_ed00/request-contract.json`
+- `var/captures/requests/qz_req_1778495300386_ed00/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495300386_ed00/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495306922_7860/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495306922_7860/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495306922_7860/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495306922_7860/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495306922_7860/incoming-request.json`
+- `var/captures/requests/qz_req_1778495306922_7860/request-contract.json`
+- `var/captures/requests/qz_req_1778495306922_7860/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495306922_7860/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495311260_9bf0/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495311260_9bf0/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495311260_9bf0/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495311260_9bf0/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495311260_9bf0/incoming-request.json`
+- `var/captures/requests/qz_req_1778495311260_9bf0/request-contract.json`
+- `var/captures/requests/qz_req_1778495311260_9bf0/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495311260_9bf0/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495314509_4d50/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495314509_4d50/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495314509_4d50/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495314509_4d50/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495314509_4d50/incoming-request.json`
+- `var/captures/requests/qz_req_1778495314509_4d50/request-contract.json`
+- `var/captures/requests/qz_req_1778495314509_4d50/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495314509_4d50/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495320130_6750/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495320130_6750/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495320130_6750/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495320130_6750/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495320130_6750/incoming-request.json`
+- `var/captures/requests/qz_req_1778495320130_6750/request-contract.json`
+- `var/captures/requests/qz_req_1778495320130_6750/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495320130_6750/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495325391_9b20/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495325391_9b20/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495325391_9b20/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495325391_9b20/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495325391_9b20/incoming-request.json`
+- `var/captures/requests/qz_req_1778495325391_9b20/request-contract.json`
+- `var/captures/requests/qz_req_1778495325391_9b20/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495325391_9b20/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495329408_fc0/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495329408_fc0/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495329408_fc0/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495329408_fc0/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495329408_fc0/incoming-request.json`
+- `var/captures/requests/qz_req_1778495329408_fc0/request-contract.json`
+- `var/captures/requests/qz_req_1778495329408_fc0/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495329408_fc0/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495333859_93d0/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495333859_93d0/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495333859_93d0/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495333859_93d0/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495333859_93d0/incoming-request.json`
+- `var/captures/requests/qz_req_1778495333859_93d0/request-contract.json`
+- `var/captures/requests/qz_req_1778495333859_93d0/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495333859_93d0/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495338249_60d0/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495338249_60d0/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495338249_60d0/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495338249_60d0/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495338249_60d0/incoming-request.json`
+- `var/captures/requests/qz_req_1778495338249_60d0/request-contract.json`
+- `var/captures/requests/qz_req_1778495338249_60d0/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495338249_60d0/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495359164_3a00/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495359164_3a00/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495359164_3a00/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495359164_3a00/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495359164_3a00/incoming-request.json`
+- `var/captures/requests/qz_req_1778495359164_3a00/request-contract.json`
+- `var/captures/requests/qz_req_1778495359164_3a00/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495359164_3a00/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495387319_5a50/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495387319_5a50/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495387319_5a50/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495387319_5a50/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495387319_5a50/incoming-request.json`
+- `var/captures/requests/qz_req_1778495387319_5a50/request-contract.json`
+- `var/captures/requests/qz_req_1778495387319_5a50/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495387319_5a50/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495393435_e000/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495393435_e000/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495393435_e000/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495393435_e000/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495393435_e000/incoming-request.json`
+- `var/captures/requests/qz_req_1778495393435_e000/request-contract.json`
+- `var/captures/requests/qz_req_1778495393435_e000/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495393435_e000/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495404875_36c0/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495404875_36c0/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495404875_36c0/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495404875_36c0/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495404875_36c0/incoming-request.json`
+- `var/captures/requests/qz_req_1778495404875_36c0/request-contract.json`
+- `var/captures/requests/qz_req_1778495404875_36c0/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495404875_36c0/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495407856_d230/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495407856_d230/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495407856_d230/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495407856_d230/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495407856_d230/incoming-request.json`
+- `var/captures/requests/qz_req_1778495407856_d230/request-contract.json`
+- `var/captures/requests/qz_req_1778495407856_d230/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495407856_d230/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495412223_e5b0/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495412223_e5b0/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495412223_e5b0/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495412223_e5b0/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495412223_e5b0/incoming-request.json`
+- `var/captures/requests/qz_req_1778495412223_e5b0/request-contract.json`
+- `var/captures/requests/qz_req_1778495412223_e5b0/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495412223_e5b0/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495418011_ab60/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495418011_ab60/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495418011_ab60/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495418011_ab60/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495418011_ab60/incoming-request.json`
+- `var/captures/requests/qz_req_1778495418011_ab60/request-contract.json`
+- `var/captures/requests/qz_req_1778495418011_ab60/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495418011_ab60/upstream-status.txt`
+- `var/captures/requests/qz_req_1778495425918_58b0/dropped-tools.txt`
+- `var/captures/requests/qz_req_1778495425918_58b0/forwarded-request-after-tools.json`
+- `var/captures/requests/qz_req_1778495425918_58b0/forwarded-request.json`
+- `var/captures/requests/qz_req_1778495425918_58b0/forwarded-sse.raw`
+- `var/captures/requests/qz_req_1778495425918_58b0/incoming-request.json`
+- `var/captures/requests/qz_req_1778495425918_58b0/request-contract.json`
+- `var/captures/requests/qz_req_1778495425918_58b0/upstream-response.raw`
+- `var/captures/requests/qz_req_1778495425918_58b0/upstream-status.txt`
 
 ## Counts
 
-- "previous_response_id": 2
-- session_id: 31
-- session-id: 7
-- thread_id: 19
-- thread-id: 7
-- "function_call": 195
-- "function_call_output": 62
-- "exec_command": 41
-- "shell_command": 6
-- "local_shell_call": 2
-- "shell_call": 2
-- "compaction": 14
+- `"previous_response_id"`: 0
+- `session_id`: 102
+- `session-id`: 0
+- `thread_id`: 0
+- `thread-id`: 0
+- `"function_call"`: 3250
+- `"function_call_output"`: 1217
+- `"exec_command"`: 3283
+- `"shell_command"`: 0
+- `"local_shell_call"`: 0
+- `"shell_call"`: 0
+- `"compaction"`: 2
+- `README.md`: 129
 
-## Short matching excerpts
+## Evidence
 
-scripts/qz-benchmark:487:    w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: "shell",
-config/example/qwenzhai-models.json:3:    "shell_type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-scripts/qz-thoughts:576:        if suppressed == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
-proxy/quantzhai_proxy.py:334:            cmp_item = next((item for item in out.get("output", []) if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt), None)
-docs/state-and-memory-architecture-review-deepseek.md:13:1. Audit whether `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`/`w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` headers actually arrive from local Codex.
-docs/state-and-memory-architecture-review-deepseek.md:19:- **No `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`, `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`, or `previous_response_id` from Codex is captured or stored today.** The proxy generates its own `request_id` (`qz_req_<ts>_<id>`) and uses per-hop response IDs (`resp_local_<ts>`). The repeated-read plan's `previous_response_id`/minimal-input path and the architecture plan's session/response-chain tables therefore rest on unconfirmed metadata.
-docs/state-and-memory-architecture-review-deepseek.md:70:- **Evidence:** **Not present.** No w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, previous_response_id, or response chain is persisted. `_request_id()` in `qz_request_router.py:593-594` generates a unique ID per request but does not link to prior requests. Response IDs (`resp_local_<ts>`) are generated per-hop and not stored.
-docs/state-and-memory-architecture-review-deepseek.md:123:| `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` | **Not captured** | N/A | **Must audit Codex traffic first** | No handler reads `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` or `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` headers. `qz_tool_request.py:17` has a regex for `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` inside tool output, not metadata. |
-docs/state-and-memory-architecture-review-deepseek.md:124:| `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` | **Not captured** | N/A | **Must audit Codex traffic first** | No handler reads `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` or `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` headers. |
-docs/state-and-memory-architecture-review-deepseek.md:148:- `sessions` table needs a note that `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` and `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` are not currently available in local Codex traffic. Phase 1 may need to generate proxy-internal session IDs or use `response_chain_id` as the primary session identity.
-docs/state-and-memory-architecture-review-deepseek.md:157:- **Item 1 (headers):** Add the finding from this review: `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`, `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`, `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`, `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`, and `previous_response_id` are NOT present in current proxy code or known capture traffic. Audit required before session/thread tables can be populated.
-docs/state-and-memory-architecture-review-deepseek.md:165:- Phase 1: "Persist only session/request/response identity at first." Add: "If `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` is not available from client traffic, generate a proxy-owned session ID or use `request_id` chain as the session identity."
-docs/state-and-memory-architecture-review-deepseek.md:185:- Section 12 Phase 1: Add note about w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt availability being unknown.
-docs/state-and-memory-architecture-review-deepseek.md:211:> **Known limitation:** `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` and `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` are not currently present in local Codex → QuantZhai traffic. The proxy generates its own `request_id` but does not receive session or thread identifiers from the client. Phase 1 should either generate proxy-owned session IDs (via `request_id` chain or a new `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` header injection) or skip session-scoped responses until traffic confirms these identifiers exist.
-docs/state-and-memory-architecture-review-deepseek.md:217:> 1. Which headers/fields are available in real local Codex → QuantZhai traffic? w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, previous_response_id, etc.
-docs/state-and-memory-architecture-review-deepseek.md:221:> 1. **Headers audit result (2026-05-12):** `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`, `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`, `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`, `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`, and `previous_response_id` are absent from current proxy code and have not been observed in captures. The proxy generates its own `request_id` (`qz_req_<ts>_<id>`) and per-hop `resp_local_<ts>` response IDs. Before the first DB patch, run a capture audit on real Codex traffic to confirm whether any of these fields arrive in the body or headers. If none are found, Phase 1 must generate proxy-owned session/thread IDs.
-docs/state-and-memory-architecture-review-deepseek.md:237:3. **`sessions`** — w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt (generated proxy-side if client does not send one), w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt (nullable), created_ts, last_seen_ts, scope_id FK.
-docs/state-and-memory-architecture-review-deepseek.md:238:4. **`responses`** — response_id, previous_response_id (nullable), request_id, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt FK, created_ts, input_mode ("full_history" or "incremental" or "unknown"), compaction_flag.
-docs/state-and-memory-architecture-review-deepseek.md:240:6. **`file_reads`** / **`file_writes`** — path (normalised), response_id FK, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt FK, tool_call_id FK, first_read_ts, read_count.
-docs/state-and-memory-architecture-review-deepseek.md:241:7. **`signals`** — signal_type ("repeated_read", "hop_budget", "context_pressure"), w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt FK, response_id FK, payload (JSON), created_ts.
-docs/state-and-memory-architecture-review-deepseek.md:242:8. **`compaction_events`** — response_id FK, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt FK, compacted_item_count, new_item_count, created_ts.
-docs/state-and-memory-architecture-review-deepseek.md:283:| `test_same_session_operational_tool_facts_readable` | A file_read row with same `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` as the query session is returned by the operational tool memory query. |
-docs/state-and-memory-architecture-review-deepseek.md:284:| `test_cross_session_operational_tool_facts_not_readable` | A file_read row with a different `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` is not returned by the operational tool memory query. |
-docs/state-and-memory-architecture-review-deepseek.md:285:| `test_previous_response_id_resolves_within_session` | A `responses` query by `previous_response_id` returns the correct prior response row only when the query and target share the same `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`. |
-docs/state-and-memory-architecture-review-deepseek.md:304:- **`w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`/`w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` from client headers** — do not add header parsing until captures confirm these arrive.
-docs/tool-coercion-design.md:124:`{w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "write_stdin", w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "computer"}`.
-proxy/qz_codex_catalog.py:186:        "shell_type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-docs/codex-capture-shape-audit.md:8:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 2
-docs/codex-capture-shape-audit.md:9:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 31
-docs/codex-capture-shape-audit.md:10:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 7
-docs/codex-capture-shape-audit.md:11:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 19
-docs/codex-capture-shape-audit.md:12:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 7
-docs/codex-capture-shape-audit.md:13:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 195
-docs/codex-capture-shape-audit.md:14:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 62
-docs/codex-capture-shape-audit.md:15:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 41
-docs/codex-capture-shape-audit.md:16:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 6
-docs/codex-capture-shape-audit.md:17:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 2
-docs/codex-capture-shape-audit.md:18:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 2
-docs/codex-capture-shape-audit.md:19:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 14
-proxy/qz_responses.py:81:FUNCTION_CALL_TYPES = {w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "computer_call", "code_interpreter_call", "apply_patch_call", "custom_tool_call"}
-proxy/qz_responses.py:83:    w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-proxy/qz_responses.py:202:    if item_type == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
-proxy/qz_responses.py:301:        if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
-proxy/qz_responses.py:377:        if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
-proxy/qz_responses.py:411:        if not (isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
-proxy/qz_responses.py:417:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-proxy/qz_request_normalization.py:272:        if role in ("assistant", "tool") or item_type in (w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt):
-docs/state-and-memory-architecture-plan.md:117:  client w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-docs/state-and-memory-architecture-plan.md:118:  client w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-docs/state-and-memory-architecture-plan.md:601:w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-docs/state-and-memory-architecture-plan.md:604:w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-docs/state-and-memory-architecture-plan.md:632:w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt / w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-docs/state-and-memory-architecture-plan.md:920:   w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, previous_response_id, etc.
-docs/state-and-memory-architecture-plan.md:954:rg -n 'w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt|w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt|w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt|w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt|w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt|w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt|w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt|w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt|w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt' var/captures proxy tests docs
-docs/state-and-memory-architecture-plan.md:985:If client w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt/w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt is unavailable, generate proxy-owned session ids.
-docs/state-and-memory-architecture-plan.md:1125:client w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt/w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt parsing before captures confirm those fields
-docs/repeated-read-dedup-plan.md:168:    if item_type == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
-docs/repeated-read-dedup-plan.md:170:    elif item_type == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
-docs/repeated-read-dedup-plan.md:441:  "tool": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-docs/repeated-read-dedup-plan.md:544:  "tool": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-proxy/qz_proxy_tools.py:35:            and call.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-proxy/qz_proxy_tools.py:175:            and call.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-proxy/qz_tool_lifecycle.py:36:        if item_type == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
-proxy/qz_tool_lifecycle.py:45:        if item_type == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
-proxy/qz_tool_lifecycle.py:85:        and call.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-proxy/qz_tool_request.py:17:EXEC_SESSION_OUTPUT_RE = re.compile(r"(?i)\b(?:w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt|session id)\s*[:=]\s*\d+\b")
-proxy/qz_tool_request.py:50:        if not isinstance(item, dict) or item.get("type") != w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
-proxy/qz_tool_request.py:99:            if tool_name == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
-proxy/qz_tools.py:12:    w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-proxy/qz_tools.py:14:    w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-proxy/qz_tools.py:77:        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-proxy/qz_responses_stream.py:902:                                suppressed=w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-proxy/qz_sse.py:397:        if item_type == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
-proxy/qz_sse.py:405:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-proxy/qz_sse.py:433:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-proxy/qz_tool_apply_patch.py:197:        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-proxy/qz_tool_apply_patch.py:211:        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-proxy/qz_tool_apply_patch.py:220:        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-proxy/qz_tool_apply_patch.py:230:        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-proxy/qz_tool_apply_patch.py:634:            and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/test_qz_tool_request.py:15:                {"type": "function", "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "description": "Run command."},
-tests/test_qz_tool_request.py:27:            w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_request.py:43:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_request.py:45:                "output": "w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt=42\nstill running",
-tests/test_qz_tool_request.py:61:            "tools": [{"type": "function", "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt}],
-proxy/qz_tool_web.py:955:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_web.py:62:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_web.py:79:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tools.py:25:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tools.py:71:        call = {"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "name": "my_tool", "call_id": "c1", "arguments": "{}"}
-tests/test_qz_tools.py:73:        self.assertEqual(result["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
-tests/test_qz_tools.py:118:        call = {"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "name": "secret_tool", "call_id": "c1", "arguments": "{}"}
-tests/test_qz_tools.py:129:        call = {"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "name": "totally_unknown", "call_id": "c1", "arguments": "{}"}
-tests/test_qz_tools.py:136:        call = {"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "call_id": "c1", "arguments": "{}"}
-tests/smoke_web_stream_proxy.py:99:            and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/smoke_web_stream_proxy.py:188:                        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/smoke_web_stream_proxy.py:204:                        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/smoke_web_stream_proxy.py:320:        assert w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt not in stream_text, stream_text
-tests/smoke_web_stream_proxy.py:326:        assert any(item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt for item in second_body.get("input") or []), second_body
-tests/smoke_compaction_live.py:244:        (i for i in (body.get("output") or []) if isinstance(i, dict) and i.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt),
-tests/test_qz_telemetry.py:59:            suppressed=w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_telemetry.py:64:        self.assertEqual(payload["suppressed"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
-tests/smoke_apply_patch_proxy.py:82:                        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/smoke_apply_patch_proxy.py:98:                        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/smoke_apply_patch_proxy.py:121:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/smoke_apply_patch_proxy.py:259:        assert followup_body["input"][0]["type"] == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, followup_body["input"]
-tests/test_qz_streaming.py:45:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_streaming.py:66:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_streaming.py:85:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_streaming.py:102:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_streaming.py:113:            "item": {"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt},
-tests/smoke_apply_patch_codex_exec.py:191:                        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/smoke_apply_patch_codex_exec.py:207:                        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/smoke_apply_patch_codex_exec.py:226:    if value.get("type") in (w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "apply_patch_call_output"):
-tests/smoke_apply_patch_codex_exec.py:266:                "shell_type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:32:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:39:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:48:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:53:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:62:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:65:            "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:69:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:74:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:92:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:95:                "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:100:        self.assertEqual(state.call_name, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
-tests/test_qz_tool_lifecycle.py:118:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:121:                "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:133:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:145:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:147:            "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:157:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:173:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:188:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:206:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:208:            "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:222:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:239:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:251:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_tool_lifecycle.py:270:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:32:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:82:                    "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:100:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:104:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:113:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:128:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:143:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:162:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:185:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:198:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:218:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:232:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:239:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:253:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:255:            "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:268:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:286:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:308:        self.assertEqual(result.upstream_items[1]["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
-tests/test_qz_proxy_tools.py:316:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:342:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:356:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_proxy_tools.py:389:        self.assertEqual(result.upstream_items[1]["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
-tests/test_qz_request_router.py:48:                    "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_request_router.py:90:                        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_request_router.py:132:        self.assertEqual(router.request_bodies[1]["input"][-1]["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
-tests/test_qz_compaction.py:33:        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_compaction.py:97:        self.assertNotIn(w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, types)
-tests/test_qz_compaction.py:113:        self.assertNotIn(w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, types)
-tests/test_qz_compaction.py:117:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_compaction.py:148:        self.assertEqual(result["output"][0]["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
-proxy/qz_streaming.py:51:        return isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-proxy/qz_streaming.py:184:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-proxy/qz_streaming.py:201:            if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
-proxy/qz_streaming.py:207:                        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-proxy/qz_streaming.py:238:            if not isinstance(item, dict) or item.get("type") != w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
-proxy/qz_streaming.py:246:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_apply_patch_adapter.py:99:                {"type": "function", "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "description": "Runs shell commands."},
-tests/test_apply_patch_adapter.py:108:        self.assertEqual(names, [w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "apply_patch"])
-tests/test_apply_patch_adapter.py:114:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_apply_patch_adapter.py:144:        self.assertEqual(out["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
-tests/test_apply_patch_adapter.py:159:        self.assertEqual(out["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
-tests/test_apply_patch_adapter.py:166:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_apply_patch_adapter.py:191:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_apply_patch_adapter.py:214:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_apply_patch_adapter.py:238:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_apply_patch_adapter.py:263:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_apply_patch_adapter.py:290:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_apply_patch_adapter.py:349:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_apply_patch_adapter.py:382:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_apply_patch_adapter.py:401:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_apply_patch_adapter.py:417:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_apply_patch_adapter.py:468:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_apply_patch_adapter.py:503:        self.assertEqual(out["input"][0]["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
-tests/test_apply_patch_adapter.py:504:        self.assertEqual(out["input"][1]["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
-tests/test_apply_patch_adapter.py:510:                    "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_apply_patch_adapter.py:511:                    "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_apply_patch_adapter.py:516:                    "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_apply_patch_adapter.py:598:        self.assertEqual(call_out["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
-tests/test_apply_patch_adapter.py:601:        self.assertEqual(output_out["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
-tests/test_apply_patch_adapter.py:701:        return {"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "name": "apply_patch",
-tests/test_qz_responses_stream.py:87:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_responses_stream.py:118:                    "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_responses_stream.py:163:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_responses_stream.py:179:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_responses_stream.py:539:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_responses_stream.py:555:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_responses_stream.py:583:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_responses_stream.py:586:                "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_responses_stream.py:604:            "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_responses_stream.py:610:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_responses_stream.py:613:                "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_responses_stream.py:636:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
-tests/test_qz_responses_stream.py:730:                and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/test_qz_responses_stream.py:742:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:743:        self.assertTrue(any(item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt for item in requests[1]["input"]))
-tests/test_qz_responses_stream.py:753:                and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/test_qz_responses_stream.py:768:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:769:        self.assertTrue(any(item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt for item in requests[1]["input"]))
-tests/test_qz_responses_stream.py:790:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:808:        self.assertEqual(added_payload["item"]["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
-tests/test_qz_responses_stream.py:810:        self.assertEqual(added_payload["item"]["name"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
-tests/test_qz_responses_stream.py:826:            and payload["item"].get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/test_qz_responses_stream.py:837:        self.assertEqual(public_call_events[0][1]["item"]["name"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
-tests/test_qz_responses_stream.py:852:            and payload["item"].get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/test_qz_responses_stream.py:907:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1056:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1117:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', "".join(written_text))
-tests/test_qz_responses_stream.py:1185:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1214:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1259:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1281:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1303:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1328:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1359:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1390:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1414:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1444:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1474:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1495:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1515:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1539:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1569:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1590:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1620:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1644:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1753:        error_results = [i for i in second_input if isinstance(i, dict) and i.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt]
-tests/test_qz_responses_stream.py:1790:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1797:                isinstance(i, dict) and i.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/test_qz_responses_stream.py:1824:            if isinstance(i, dict) and i.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/test_qz_responses_stream.py:1898:                and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/test_qz_responses_stream.py:1931:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:1976:                if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/test_qz_responses_stream.py:2015:            if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/test_qz_responses_stream.py:2020:            if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/test_qz_responses_stream.py:2032:                if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/test_qz_responses_stream.py:2061:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:2065:            if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/test_qz_responses_stream.py:2070:            if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/test_qz_responses_stream.py:2078:                if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/test_qz_responses_stream.py:2115:                and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/test_qz_responses_stream.py:2150:                and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/test_qz_responses_stream.py:2180:                and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/test_qz_responses_stream.py:2201:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:2210:                and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/test_qz_responses_stream.py:2231:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/test_qz_responses_stream.py:2240:                and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
-tests/test_qz_responses_stream.py:2261:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
-tests/fixtures/sse/custom_apply_patch_delete_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_custom_patch_delete","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_custom_patch_delete","name":"apply_patch","arguments":""},"type":"response.output_item.added","sequence_number":3}
-tests/fixtures/sse/custom_apply_patch_delete_call.raw:17:data: {"output_index":0,"item":{"id":"fc_fixture_custom_patch_delete","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_custom_patch_delete","name":"apply_patch"},"type":"response.output_item.done","sequence_number":6}
-tests/fixtures/sse/custom_apply_patch_update_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_custom_patch_update","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_custom_patch_update","name":"apply_patch","arguments":""},"type":"response.output_item.added","sequence_number":3}
-tests/fixtures/sse/custom_apply_patch_update_call.raw:17:data: {"output_index":0,"item":{"id":"fc_fixture_custom_patch_update","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_custom_patch_update","name":"apply_patch"},"type":"response.output_item.done","sequence_number":6}
-tests/fixtures/sse/apply_patch_multihunk_update_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_patch_multihunk_update","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_patch_multihunk_update","name":"apply_patch","arguments":""},"type":"response.output_item.added","sequence_number":3}
-tests/fixtures/sse/apply_patch_multihunk_update_call.raw:17:data: {"output_index":0,"item":{"id":"fc_fixture_patch_multihunk_update","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_patch_multihunk_update","name":"apply_patch"},"type":"response.output_item.done","sequence_number":6}
-tests/fixtures/sse/custom_apply_patch_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_custom_patch","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_custom_patch","name":"apply_patch","arguments":""},"type":"response.output_item.added","sequence_number":3}
-tests/fixtures/sse/custom_apply_patch_call.raw:17:data: {"output_index":0,"item":{"id":"fc_fixture_custom_patch","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_custom_patch","name":"apply_patch"},"type":"response.output_item.done","sequence_number":6}
-tests/fixtures/sse/custom_apply_patch_move_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_custom_patch_move","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_custom_patch_move","name":"apply_patch","arguments":""},"type":"response.output_item.added","sequence_number":3}
-tests/fixtures/sse/custom_apply_patch_move_call.raw:17:data: {"output_index":0,"item":{"id":"fc_fixture_custom_patch_move","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_custom_patch_move","name":"apply_patch"},"type":"response.output_item.done","sequence_number":6}
-tests/fixtures/sse/apply_patch_unified_diff_update_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_patch_unified_update","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_patch_unified_update","name":"apply_patch","arguments":""},"type":"response.output_item.added","sequence_number":3}
-tests/fixtures/sse/apply_patch_unified_diff_update_call.raw:17:data: {"output_index":0,"item":{"id":"fc_fixture_patch_unified_update","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_patch_unified_update","name":"apply_patch"},"type":"response.output_item.done","sequence_number":6}
-tests/fixtures/sse/public_function_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_exec","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_exec","name":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"arguments":""},"type":"response.output_item.added","sequence_number":3}
-tests/fixtures/sse/public_function_call.raw:17:data: {"item_id":"fc_fixture_exec","output_index":0,"arguments":"{\"cmd\":\"cat > sample_v2.md\",\"yield_time_ms\":1000}","name":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"type":"response.function_call_arguments.done","sequence_number":6}
-tests/fixtures/sse/public_function_call.raw:20:data: {"output_index":0,"item":{"id":"fc_fixture_exec","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_exec","name":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt},"type":"response.output_item.done","sequence_number":7}
-tests/fixtures/sse/custom_apply_patch_rename_alias_move_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_patch_rename_alias_move","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_patch_rename_alias_move","name":"apply_patch","arguments":""},"type":"response.output_item.added","sequence_number":3}
-tests/fixtures/sse/custom_apply_patch_rename_alias_move_call.raw:17:data: {"output_index":0,"item":{"id":"fc_fixture_patch_rename_alias_move","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_patch_rename_alias_move","name":"apply_patch"},"type":"response.output_item.done","sequence_number":6}
-tests/fixtures/sse/apply_patch_update_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_patch_update","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_patch_update","name":"apply_patch","arguments":""},"type":"response.output_item.added","sequence_number":3}
-tests/fixtures/sse/apply_patch_update_call.raw:17:data: {"output_index":0,"item":{"id":"fc_fixture_patch_update","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_patch_update","name":"apply_patch"},"type":"response.output_item.done","sequence_number":6}
-tests/fixtures/sse/web_search_call_second.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_web_second","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_web_second","name":"web_search","arguments":""},"type":"response.output_item.added","sequence_number":3}
-tests/fixtures/sse/web_search_call_second.raw:14:data: {"output_index":0,"item":{"id":"fc_fixture_web_second","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_web_second","name":"web_search"},"type":"response.output_item.done","sequence_number":5}
-tests/fixtures/sse/apply_patch_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_patch","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_patch","name":"apply_patch","arguments":""},"type":"response.output_item.added","sequence_number":3}
-tests/fixtures/sse/apply_patch_call.raw:17:data: {"output_index":0,"item":{"id":"fc_fixture_patch","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_patch","name":"apply_patch"},"type":"response.output_item.done","sequence_number":6}
-tests/fixtures/sse/apply_patch_move_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_patch_move","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_patch_move","name":"apply_patch","arguments":""},"type":"response.output_item.added","sequence_number":3}
-tests/fixtures/sse/apply_patch_move_call.raw:17:data: {"output_index":0,"item":{"id":"fc_fixture_patch_move","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_patch_move","name":"apply_patch"},"type":"response.output_item.done","sequence_number":6}
-tests/fixtures/sse/custom_apply_patch_unified_diff_update_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_custom_patch_unified_update","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_custom_patch_unified_update","name":"apply_patch","arguments":""},"type":"response.output_item.added","sequence_number":3}
-tests/fixtures/sse/custom_apply_patch_unified_diff_update_call.raw:17:data: {"output_index":0,"item":{"id":"fc_fixture_custom_patch_unified_update","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_custom_patch_unified_update","name":"apply_patch"},"type":"response.output_item.done","sequence_number":6}
-tests/fixtures/sse/web_search_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_web","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_web","name":"web_search","arguments":""},"type":"response.output_item.added","sequence_number":3}
-tests/fixtures/sse/web_search_call.raw:14:data: {"output_index":0,"item":{"id":"fc_fixture_web","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_web","name":"web_search"},"type":"response.output_item.done","sequence_number":5}
-tests/fixtures/sse/apply_patch_delete_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_patch_delete","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_patch_delete","name":"apply_patch","arguments":""},"type":"response.output_item.added","sequence_number":3}
-tests/fixtures/sse/apply_patch_delete_call.raw:17:data: {"output_index":0,"item":{"id":"fc_fixture_patch_delete","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_patch_delete","name":"apply_patch"},"type":"response.output_item.done","sequence_number":6}
-tests/fixtures/sse/apply_patch_large_multihunk_update_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_patch_large_multihunk_update","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_patch_large_multihunk_update","name":"apply_patch","arguments":""},"type":"response.output_item.added","sequence_number":3}
-tests/fixtures/sse/apply_patch_large_multihunk_update_call.raw:17:data: {"output_index":0,"item":{"id":"fc_fixture_patch_large_multihunk_update","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_patch_large_multihunk_update","name":"apply_patch"},"type":"response.output_item.done","sequence_number":6}
+### `"previous_response_id"`
+
+- Not found in inspected capture files.
+
+### `session_id`
+
+- `var/captures/requests/qz_req_1778482588194_fc70/incoming-request.json:122` — `"session_id": {`
+- `var/captures/requests/qz_req_1778482588194_fc70/incoming-request.json:132` — `"session_id"`
+- `var/captures/requests/qz_req_1778482993236_eea0/incoming-request.json:122` — `"session_id": {`
+- `var/captures/requests/qz_req_1778482993236_eea0/incoming-request.json:132` — `"session_id"`
+- `var/captures/requests/qz_req_1778485663092_9010/incoming-request.json:122` — `"session_id": {`
+- `var/captures/requests/qz_req_1778485663092_9010/incoming-request.json:132` — `"session_id"`
+- `var/captures/requests/qz_req_1778485691033_4d50/incoming-request.json:153` — `"session_id": {`
+- `var/captures/requests/qz_req_1778485691033_4d50/incoming-request.json:163` — `"session_id"`
+- `var/captures/requests/qz_req_1778485693159_5300/incoming-request.json:174` — `"session_id": {`
+- `var/captures/requests/qz_req_1778485693159_5300/incoming-request.json:184` — `"session_id"`
+- `var/captures/requests/qz_req_1778486197491_9e60/incoming-request.json:122` — `"session_id": {`
+- `var/captures/requests/qz_req_1778486197491_9e60/incoming-request.json:132` — `"session_id"`
+
+### `session-id`
+
+- Not found in inspected capture files.
+
+### `thread_id`
+
+- Not found in inspected capture files.
+
+### `thread-id`
+
+- Not found in inspected capture files.
+
+### `"function_call"`
+
+- `var/captures/requests/qz_req_1778482588194_fc70/forwarded-request-after-tools.json:16` — `"type": "function_call",`
+- `var/captures/requests/qz_req_1778482588194_fc70/upstream-response.raw:236` — `data: {"type":"response.output_item.added","item":{"arguments":"","call_id":"fc_pzRwpX3jGA7KvVya8x8ptg9EQijwucu5","name":"web_search","type":"function_call","status":"in_progress"}}`
+- `var/captures/requests/qz_req_1778482588194_fc70/upstream-response.raw:284` — `data: {"type":"response.output_item.done","item":{"type":"function_call","status":"completed","arguments":"{\"action\":\"search\",\"query\":\"llama.cpp reasoning budget\",\"top_k\":3}","call_id":"fc_pzRwpX3jGA7KvVya8x...`
+- `var/captures/requests/qz_req_1778482993236_eea0/forwarded-request-after-tools.json:16` — `"type": "function_call",`
+- `var/captures/requests/qz_req_1778482993236_eea0/forwarded-request-after-tools.json:30` — `"type": "function_call",`
+- `var/captures/requests/qz_req_1778482993236_eea0/forwarded-request-after-tools.json:44` — `"type": "function_call",`
+- `var/captures/requests/qz_req_1778482993236_eea0/upstream-response.raw:209` — `data: {"type":"response.output_item.added","item":{"arguments":"","call_id":"fc_SsDcnsdN31Oi0nVekaKxORaygkEuCiPo","name":"web_search","type":"function_call","status":"in_progress"}}`
+- `var/captures/requests/qz_req_1778482993236_eea0/upstream-response.raw:254` — `data: {"type":"response.output_item.added","item":{"arguments":"","call_id":"fc_bgaZPA1q6Gp57QdC9pI8sLEbOD6NGNNu","name":"web_search","type":"function_call","status":"in_progress"}}`
+- `var/captures/requests/qz_req_1778482993236_eea0/upstream-response.raw:302` — `data: {"type":"response.output_item.added","item":{"arguments":"","call_id":"fc_kWjj8E9Po5Rz2r8UAnmWIKVzBghypcUt","name":"web_search","type":"function_call","status":"in_progress"}}`
+- `var/captures/requests/qz_req_1778482993236_eea0/upstream-response.raw:353` — `data: {"type":"response.output_item.done","item":{"type":"function_call","status":"completed","arguments":"{\"action\":\"search\",\"query\":\"llama.cpp latest release\",\"top_k\":3}","call_id":"fc_SsDcnsdN31Oi0nVekaKx...`
+- `var/captures/requests/qz_req_1778482993236_eea0/upstream-response.raw:362` — `data: {"type":"response.output_item.added","item":{"arguments":"","call_id":"fc_5iua0W0x2x4WEJzaGKxCp65heu54ZqsC","name":"web_search","type":"function_call","status":"in_progress"}}`
+- `var/captures/requests/qz_req_1778482993236_eea0/upstream-response.raw:410` — `data: {"type":"response.output_item.done","item":{"type":"function_call","status":"completed","arguments":"{\"action\":\"search\",\"query\":\"Qwen3 model release date\",\"top_k\":3}","call_id":"fc_5iua0W0x2x4WEJzaGKxC...`
+
+### `"function_call_output"`
+
+- `var/captures/requests/qz_req_1778482588194_fc70/forwarded-request-after-tools.json:24` — `"type": "function_call_output",`
+- `var/captures/requests/qz_req_1778482993236_eea0/forwarded-request-after-tools.json:24` — `"type": "function_call_output",`
+- `var/captures/requests/qz_req_1778482993236_eea0/forwarded-request-after-tools.json:38` — `"type": "function_call_output",`
+- `var/captures/requests/qz_req_1778482993236_eea0/forwarded-request-after-tools.json:52` — `"type": "function_call_output",`
+- `var/captures/requests/qz_req_1778485691033_4d50/forwarded-request-after-tools.json:32` — `"type": "function_call_output",`
+- `var/captures/requests/qz_req_1778485691033_4d50/forwarded-request.json:32` — `"type": "function_call_output",`
+- `var/captures/requests/qz_req_1778485691033_4d50/incoming-request.json:73` — `"type": "function_call_output",`
+- `var/captures/requests/qz_req_1778485693159_5300/forwarded-request-after-tools.json:32` — `"type": "function_call_output",`
+- `var/captures/requests/qz_req_1778485693159_5300/forwarded-request-after-tools.json:43` — `"type": "function_call_output",`
+- `var/captures/requests/qz_req_1778485693159_5300/forwarded-request.json:32` — `"type": "function_call_output",`
+- `var/captures/requests/qz_req_1778485693159_5300/forwarded-request.json:43` — `"type": "function_call_output",`
+- `var/captures/requests/qz_req_1778485693159_5300/incoming-request.json:73` — `"type": "function_call_output",`
+
+### `"exec_command"`
+
+- `var/captures/requests/qz_req_1778482588194_fc70/forwarded-request-after-tools.json:32` — `"name": "exec_command",`
+- `var/captures/requests/qz_req_1778482588194_fc70/forwarded-request.json:18` — `"name": "exec_command",`
+- `var/captures/requests/qz_req_1778482588194_fc70/incoming-request.json:50` — `"name": "exec_command",`
+- `var/captures/requests/qz_req_1778482993236_eea0/forwarded-request-after-tools.json:60` — `"name": "exec_command",`
+- `var/captures/requests/qz_req_1778482993236_eea0/forwarded-request.json:18` — `"name": "exec_command",`
+- `var/captures/requests/qz_req_1778482993236_eea0/incoming-request.json:50` — `"name": "exec_command",`
+- `var/captures/requests/qz_req_1778485663092_9010/forwarded-request-after-tools.json:18` — `"name": "exec_command",`
+- `var/captures/requests/qz_req_1778485663092_9010/forwarded-request.json:18` — `"name": "exec_command",`
+- `var/captures/requests/qz_req_1778485663092_9010/forwarded-sse.raw:563` — `data: {"output_index": 0, "item": {"id": "fc_3Ls9HwebrYCqSouwb7PZnRwxSN1MIhEx", "type": "function_call", "status": "in_progress", "call_id": "fc_3Ls9HwebrYCqSouwb7PZnRwxSN1MIhEx", "name": "exec_command", "arguments": ...`
+- `var/captures/requests/qz_req_1778485663092_9010/forwarded-sse.raw:566` — `data: {"output_index": 0, "item": {"id": "fc_3Ls9HwebrYCqSouwb7PZnRwxSN1MIhEx", "type": "function_call", "status": "completed", "call_id": "fc_3Ls9HwebrYCqSouwb7PZnRwxSN1MIhEx", "name": "exec_command", "arguments": "{...`
+- `var/captures/requests/qz_req_1778485663092_9010/forwarded-sse.raw:569` — `data: {"type": "response.completed", "response": {"id": "resp_local_1778485690", "object": "response", "created_at": 1778485690, "status": "completed", "model": "caveman", "output": [{"id": "fc_3Ls9HwebrYCqSouwb7PZnRw...`
+- `var/captures/requests/qz_req_1778485663092_9010/incoming-request.json:50` — `"name": "exec_command",`
+
+### `"shell_command"`
+
+- Not found in inspected capture files.
+
+### `"local_shell_call"`
+
+- Not found in inspected capture files.
+
+### `"shell_call"`
+
+- Not found in inspected capture files.
+
+### `"compaction"`
+
+- `var/captures/requests/qz_req_1778487003912_1d90/incoming-request.json:5` — `"type": "compaction",`
+- `var/captures/requests/qz_req_1778487033252_1d90/incoming-request.json:5` — `"type": "compaction",`
+
+### `README.md`
+
+- `var/captures/requests/qz_req_1778482588194_fc70/incoming-request.json:28` — `"text": "# AGENTS.md instructions for /home/harri/turboquant/quantzhai\n\n<INSTRUCTIONS>\n# QuantZhai Agent Notes\n\n## Project Shape\n\nQuantZhai is a local Codex stack for running Qwen through a TurboQuant llama.cpp...`
+- `var/captures/requests/qz_req_1778482993236_eea0/incoming-request.json:28` — `"text": "# AGENTS.md instructions for /home/harri/turboquant/quantzhai\n\n<INSTRUCTIONS>\n# QuantZhai Agent Notes\n\n## Project Shape\n\nQuantZhai is a local Codex stack for running Qwen through a TurboQuant llama.cpp...`
+- `var/captures/requests/qz_req_1778485663092_9010/incoming-request.json:28` — `"text": "# AGENTS.md instructions for /home/harri/turboquant/quantzhai\n\n<INSTRUCTIONS>\n# QuantZhai Agent Notes\n\n## Project Shape\n\nQuantZhai is a local Codex stack for running Qwen through a TurboQuant llama.cpp...`
+- `var/captures/requests/qz_req_1778485691033_4d50/incoming-request.json:28` — `"text": "# AGENTS.md instructions for /home/harri/turboquant/quantzhai\n\n<INSTRUCTIONS>\n# QuantZhai Agent Notes\n\n## Project Shape\n\nQuantZhai is a local Codex stack for running Qwen through a TurboQuant llama.cpp...`
+- `var/captures/requests/qz_req_1778485693159_5300/incoming-request.json:28` — `"text": "# AGENTS.md instructions for /home/harri/turboquant/quantzhai\n\n<INSTRUCTIONS>\n# QuantZhai Agent Notes\n\n## Project Shape\n\nQuantZhai is a local Codex stack for running Qwen through a TurboQuant llama.cpp...`
+- `var/captures/requests/qz_req_1778486197491_9e60/forwarded-request-after-tools.json:10` — `"text": "Summarize this: <p align=\"center\">\n  <img src=\"docs/logo.png\" alt=\"QuantZhai logo\" width=\"180\">\n</p>\n\n# QuantZhai\n\nQuantZhai is a local Codex stack for running Qwen through a turboquant llama.cp...`
+- `var/captures/requests/qz_req_1778486197491_9e60/forwarded-request.json:10` — `"text": "Summarize this: <p align=\"center\">\n  <img src=\"docs/logo.png\" alt=\"QuantZhai logo\" width=\"180\">\n</p>\n\n# QuantZhai\n\nQuantZhai is a local Codex stack for running Qwen through a turboquant llama.cp...`
+- `var/captures/requests/qz_req_1778486197491_9e60/incoming-request.json:28` — `"text": "# AGENTS.md instructions for /home/harri/turboquant/quantzhai\n\n<INSTRUCTIONS>\n# QuantZhai Agent Notes\n\n## Project Shape\n\nQuantZhai is a local Codex stack for running Qwen through a TurboQuant llama.cpp...`
+- `var/captures/requests/qz_req_1778486197491_9e60/incoming-request.json:42` — `"text": "Summarize this: <p align=\"center\">\n  <img src=\"docs/logo.png\" alt=\"QuantZhai logo\" width=\"180\">\n</p>\n\n# QuantZhai\n\nQuantZhai is a local Codex stack for running Qwen through a turboquant llama.cp...`
+- `var/captures/requests/qz_req_1778495123433_b790/incoming-request.json:28` — `"text": "# AGENTS.md instructions for /home/harri/turboquant/quantzhai\n\n<INSTRUCTIONS>\n# QuantZhai Agent Notes\n\n## Project Shape\n\nQuantZhai is a local Codex stack for running Qwen through a TurboQuant llama.cpp...`
+- `var/captures/requests/qz_req_1778495137552_8460/forwarded-request-after-tools.json:34` — `"output": "Chunk ID: 02ce6c\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 277\nOutput:\n/home/harri/turboquant/quantzhai\ntotal 96\ndrwxrwxr-x 12 harri harri  4096 May 11 16:10 .\ndrwxr...`
+- `var/captures/requests/qz_req_1778495137552_8460/forwarded-request.json:34` — `"output": "Chunk ID: 02ce6c\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 277\nOutput:\n/home/harri/turboquant/quantzhai\ntotal 96\ndrwxrwxr-x 12 harri harri  4096 May 11 16:10 .\ndrwxr...`
+
+## Initial interpretation
+
+- This file is evidence only. Do not treat absence as global impossibility; it only reflects inspected recent captures.
+- If `previous_response_id`, `session_id`, or `thread_id` are absent here, Phase 1 should assume proxy-owned synthetic session identity unless later captures prove otherwise.
+- If `function_call` / `function_call_output` are present, repeated-read v1 can stay input-history-seeded.
+- If `exec_command` / `shell_command` are present, v1 parser should target those Codex-native function-call tool names.
+- If `local_shell_call` / `shell_call` are absent or only present in docs/config-like capture noise, they should remain safe-ignore/deferred.
