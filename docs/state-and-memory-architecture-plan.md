@@ -177,6 +177,61 @@ If `profile_family` and `workspace_id` are not grounded, cross-profile and
 cross-workspace memory queries must remain disabled or limited to explicitly
 known scope.
 
+### 3.4 Capture audit result: 2026-05-12
+
+Raw counts from `docs/codex-capture-shape-audit.md` against recent `var/captures/` files:
+
+```text
+"previous_response_id": 0
+session_id:              102  # all hits are tool-parameter schema, not metadata
+session-id:              0
+thread_id:               0
+thread-id:               0
+"function_call":        3250
+"function_call_output": 1217
+"exec_command":         3283
+"shell_command":          0
+"local_shell_call":       0
+"shell_call":             0
+"compaction":             2
+"README.md":            129
+```
+
+Key findings:
+
+**`previous_response_id` was absent** from all inspected captures. Phase 1 must
+not rely on server-side response chaining. Repeated-read v1 and Phase 1 DB work
+use input-history seeding only. `previous_response_id` resolution is deferred
+until captures prove it arrives from Codex.
+
+**`session_id` hits are tool-parameter schema text, not request/body metadata.**
+Every hit is inside the `exec_command` tool definition's parameter schema
+(`"session_id": { "type": "number", "description": "Identifier of the running
+unified exec session." }`). No actual session identifier is present in the
+request body top level, headers, or `metadata` block. Phase 1 must use
+proxy-owned synthetic session IDs. Client `session_id`/`thread_id` parsing
+remains deferred unless future captures prove real metadata arrives.
+
+**`thread_id` and `thread-id` were absent.** No header or body field carries
+thread identity.
+
+**`function_call` and `function_call_output` were present in high volume**
+(3250 and 1217 hits). Repeated-read v1 can remain input-history-seeded from
+these shapes.
+
+**`exec_command` was present in high volume** (3283 hits). This is the observed
+Codex-native tool shape. V1 parser must target `exec_command`/`function_call`.
+
+**`shell_command`, `local_shell_call`, and `shell_call` were absent.**
+V1 should not attempt to parse these shapes. They are deferred until captures
+prove they arrive through QuantZhai traffic.
+
+**`compaction` was present at low volume** (2 hits). Compaction handling is
+already implemented. No change needed.
+
+**`README.md` appeared** (129 hits), confirming the deliberate repeated-read
+probe marker hit captures.
+
 ---
 
 ## 4. Memory classes
@@ -982,7 +1037,13 @@ Open var/state/qz-state.sqlite.
 Enable WAL and foreign keys.
 Add migrations and tests.
 Persist only request/session/response identity and basic operational facts.
-If client session_id/thread_id is unavailable, generate proxy-owned session ids.
+Assume proxy-owned synthetic sessions by default. Client session_id/thread_id
+  may be adopted later only if capture evidence proves it is real metadata.
+previous_response_id support remains deferred: it was absent in inspected
+  captures.
+shell_command/local_shell_call/shell_call parsing remains deferred: those
+  shapes were absent in inspected captures. Target exec_command only.
+Phase 1 DB remains identity/scope/session/response/tool/signal facts only.
 Do not change model behaviour.
 DB failure must not stop the proxy from starting.
 ```
@@ -1122,8 +1183,9 @@ HSM/Holstrom connector
 separate DB files
 workspace-scoped memory without a workspace_id source
 profile_family-based isolation without explicit profile_family classification
-client session_id/thread_id parsing before captures confirm those fields
-previous_response_id server-side resolution before Codex sends it locally
+client session_id/thread_id parsing (captures show only tool-parameter schema text, not real metadata)
+previous_response_id server-side resolution (absent in inspected captures)
+shell_command/local_shell_call/shell_call support (absent in inspected captures; target exec_command only)
 cross-profile preference promotion
 repeated-read v2
 full shell parser for file read/write extraction

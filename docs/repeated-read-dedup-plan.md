@@ -18,6 +18,16 @@ V2 note: persistent/session-keyed repeated-read memory now belongs to
 until profile/privacy scope, session identity, and cross-scope isolation are
 grounded there.
 
+Capture audit (2026-05-12): confirms v1 assumptions.
+- `function_call`/`function_call_output`: present in high volume (3250/1217).
+- `exec_command`: present in high volume (3283) — the observed Codex-native tool
+  shape for v1 parsing.
+- `previous_response_id`: absent — v1 must not rely on server-side response
+  chaining.
+- `shell_command`/`local_shell_call`/`shell_call`: absent — stay safe-ignore
+  for v1.
+- Repeated-read v1 remains stateless and input-history-seeded.
+
 This feature is deliberately named **repeated-read signal**, not "dedup". The
 goal is convergence feedback for the model, not blind suppression of tool calls.
 
@@ -102,11 +112,16 @@ Current decision order:
 Codex-native tools are defined in `proxy/qz_tools.py`:
 
 ```text
-exec_command
+exec_command    # v1 target — confirmed present in captures
 write_stdin
-shell_command
+shell_command   # deferred — absent in inspected captures
 computer
 ```
+
+Capture audit note (2026-05-12): `exec_command` is the observed Codex-native
+tool shape (3283 hits). `shell_command`, `local_shell_call`, and `shell_call`
+were absent from inspected captures. V1 parses `exec_command`/`function_call`
+only. The other names remain safe-ignore/deferred.
 
 For Codex-native tools, QuantZhai normally forwards the function call to Codex.
 Codex executes locally and sends the function_call_output in a later request.
@@ -130,8 +145,8 @@ body["input"].
 ```
 
 This catches common cross-request Codex-native repeated reads because the prior
-`exec_command`/`shell_command` call is usually present in the replayed input
-history.
+`exec_command` call is usually present in the replayed input history. Capture
+audit (2026-05-12) confirms exec_command at 3283 hits; shell_command was absent.
 
 Known dependency:
 
@@ -708,6 +723,8 @@ web_search-derived file operation inference
 proxy-side file reading
 seeding warned_paths from previous repeated_read_signal outputs
 signal-over-error-path shim unless kind="signal" proves too invasive
+shell_command/local_shell_call/shell_call parsing (absent in inspected captures;
+  target exec_command only for v1)
 ```
 
 V2 depends on typed memory architecture:
