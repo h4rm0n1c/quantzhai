@@ -3,8 +3,6 @@ import unittest
 
 from proxy.qz_codex_metadata import (
     TURN_METADATA_MAX_BYTES,
-    CodexIdentity,
-    CodexTurnMetadata,
     WorkspaceCandidate,
     extract_codex_identity,
     extract_workspace_candidates,
@@ -151,6 +149,21 @@ class WorkspaceCandidateTests(unittest.TestCase):
         self.assertIsNone(ws.latest_git_commit_hash)
         self.assertIsNone(ws.has_changes)
 
+    def test_extract_workspace_candidates_skips_non_string_remote_names(self):
+        raw = json.dumps({
+            "workspaces": {
+                "/repo/a": {
+                    "associated_remote_urls": {
+                        "origin": "https://github.com/user/a.git",
+                        123: "https://github.com/bad/key.git",
+                    }
+                }
+            }
+        })
+        parsed = parse_codex_turn_metadata_header(raw)
+        candidates = extract_workspace_candidates(parsed)
+        self.assertEqual(candidates[0].associated_remote_urls, {"origin": "https://github.com/user/a"})
+
     def test_extract_workspace_candidates_empty_for_no_workspaces(self):
         self.assertEqual(extract_workspace_candidates(None), [])
         self.assertEqual(extract_workspace_candidates({}), [])
@@ -181,6 +194,24 @@ class ExtractCodexIdentityTests(unittest.TestCase):
         })
         self.assertEqual(identity.client_session_id, "hyphenated-session-val")
         self.assertEqual(identity.client_session_id_source, "session-id")
+
+    def test_extract_codex_identity_detects_session_header_variant_conflict(self):
+        identity = extract_codex_identity({
+            "session_id": "underscore-session",
+            "session-id": "hyphen-session",
+        })
+        self.assertEqual(identity.client_session_id, "underscore-session")
+        self.assertTrue(identity.identity_conflict)
+        self.assertTrue(any("session_id header variants disagree" in note for note in identity.conflict_notes))
+
+    def test_extract_codex_identity_detects_thread_header_variant_conflict(self):
+        identity = extract_codex_identity({
+            "thread_id": "underscore-thread",
+            "thread-id": "hyphen-thread",
+        })
+        self.assertEqual(identity.client_thread_id, "underscore-thread")
+        self.assertTrue(identity.identity_conflict)
+        self.assertTrue(any("thread_id header variants disagree" in note for note in identity.conflict_notes))
 
     def test_extract_codex_identity_reads_client_request_id(self):
         identity = extract_codex_identity({
@@ -235,6 +266,17 @@ class ExtractCodexIdentityTests(unittest.TestCase):
         self.assertTrue(identity.identity_conflict)
         self.assertIsNotNone(identity.conflict_notes)
         self.assertTrue(any("thread_id" in note for note in identity.conflict_notes))
+
+    def test_turn_started_at_ignores_float_and_bool(self):
+        for value in (1234.5, True):
+            with self.subTest(value=value):
+                identity = extract_codex_identity({
+                    "x-codex-turn-metadata": json.dumps({
+                        "turn_started_at_unix_ms": value,
+                    }),
+                })
+                self.assertIsNone(identity.turn_started_at_unix_ms)
+                self.assertIsNone(identity.turn_metadata.turn_started_at_unix_ms)
 
     def test_turn_metadata_invalid_json_left_raw_only(self):
         headers = {
