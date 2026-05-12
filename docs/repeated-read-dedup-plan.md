@@ -2,15 +2,21 @@
 
 Date: 2026-05-12
 
-Status: approved plan. Implements Option 1 from `docs/llm-signal-system.md`,
-with one important refinement: the signal must seed state from the incoming
-Responses history, not only from calls seen in the current proxy loop.
+Status: approved plan for v1. Implements Option 1 from
+`docs/llm-signal-system.md`, with one important refinement: the signal must seed
+state from the incoming Responses history, not only from calls seen in the
+current proxy loop.
 
 Review update: v1 intentionally reconstructs prior read/write state from
 `body["input"]`, but does not reconstruct prior warning state. A repeated read
 may therefore be signalled once per Responses request boundary. This is
 acceptable for v1 because the signal is advisory and avoids hidden session
 state.
+
+V2 note: persistent/session-keyed repeated-read memory now belongs to
+`docs/state-and-memory-architecture-plan.md`. Do not implement repeated-read v2
+until profile/privacy scope, session identity, and cross-scope isolation are
+grounded there.
 
 This feature is deliberately named **repeated-read signal**, not "dedup". The
 goal is convergence feedback for the model, not blind suppression of tool calls.
@@ -141,9 +147,9 @@ input.
 If a future Codex/Responses/proxy path starts forwarding and resolving
 previous_response_id, input may shrink to only incremental items. That would
 make body["input"] seeding insufficient for cross-request repeated reads.
-Mitigation for that future path: add a session-keyed cache or explicitly strip /
-ignore previous_response_id for local Responses requests until such a cache
-exists.
+Mitigation for that future path: add a session-keyed cache through the typed
+memory architecture, or explicitly strip/ignore previous_response_id for local
+Responses requests until such a cache exists.
 ```
 
 The seed pass must stay cheap:
@@ -215,8 +221,8 @@ Scope:
 
 ```text
 Default: per request/run, seeded from incoming body["input"].
-Deferred: persistent per-session cache once a stable session/conversation key is
-identified.
+Deferred: persistent per-session cache through the typed memory architecture
+once a safe session/conversation key and profile/workspace scope are identified.
 ```
 
 Explicit v1 decision:
@@ -704,11 +710,20 @@ seeding warned_paths from previous repeated_read_signal outputs
 signal-over-error-path shim unless kind="signal" proves too invasive
 ```
 
-Future v2 ideas:
+V2 depends on typed memory architecture:
 
 ```text
 session-keyed state once a reliable conversation/session identifier is found
 previous_response_id contract support if QuantZhai ever resolves prior responses server-side
+same-scope file_reads/file_writes/signals from the persistent store
+profile_family or equivalent privacy class to prevent private/coding leakage
+workspace_id or an explicit decision to omit workspace scope for the first DB pass
+cross-scope isolation tests before any model-visible persistent memory is used
+```
+
+Future v2+ ideas:
+
+```text
 orientation signal for repeated `pwd`, `ls /`, `ls -la`, and root-directory probes
 content-hash/diminishing-return signal for similar outputs
 warning replay by parsing prior repeated_read_signal outputs from body["input"]
@@ -719,7 +734,7 @@ true `kind="signal"` lifecycle path separate from `kind="error"`
 
 ## 11. Acceptance criteria
 
-The feature is acceptable when:
+The v1 feature is acceptable when:
 
 ```text
 1. Parser/state tests pass without touching stream code.
@@ -752,7 +767,7 @@ third redundant read.
 
 ## 12. Implementation order
 
-Recommended order:
+Recommended v1 order:
 
 ```text
 1. Add proxy/qz_file_signal.py with parser/state only.
