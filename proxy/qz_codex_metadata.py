@@ -81,6 +81,7 @@ class CodexRequestContext:
     body_metadata: CodexRequestMetadata | None = None
     qz_session_id: str | None = None
     memory_domain: str = "isolated"
+    memory_domain_warning: str | None = None
 
 
 def header_lookup(headers_raw: dict, name: str) -> str | None:
@@ -491,15 +492,46 @@ def extract_codex_body_metadata(body: dict) -> CodexRequestMetadata:
     )
 
 
-def resolve_memory_domain(identity: CodexIdentity, body_metadata: CodexRequestMetadata) -> str:
+def normalize_memory_domain_config(value: str | None) -> tuple[str, str | None]:
+    """
+    Normalizes and validates a memory_domain config value.
+    Returns (resolved_domain, warning_if_any).
+    Logic from codex-context-memory-contract.md.
+    """
+    if value is None:
+        return "isolated", None
+
+    if not isinstance(value, str):
+        return "isolated", f"Non-string memory_domain type '{type(value).__name__}' falls back to isolated."
+
+    stripped = value.strip()
+    if not stripped:
+        return "isolated", "Empty or whitespace-only memory_domain falls back to isolated."
+
+    normalized = stripped.lower()
+    if normalized == "isolated":
+        return "isolated", None
+
+    # Syntactic validation: ^[a-z0-9][a-z0-9_.:-]{0,63}$
+    import re
+    pattern = r"^[a-z0-9][a-z0-9_.:-]{0,63}$"
+    if re.match(pattern, normalized):
+        return normalized, None
+
+    return "isolated", f"Invalid memory_domain syntax '{value}' falls back to isolated."
+
+
+def resolve_memory_domain(
+    identity: CodexIdentity,
+    body_metadata: CodexRequestMetadata,
+    explicit_domain: str | None = None,
+) -> tuple[str, str | None]:
     """
     Resolves the memory_domain for the request.
-    Current skeleton: default to "isolated".
-    No inference from identity or body is allowed per the contract.
+    Returns (domain, warning).
     """
-    # Phase 1: Skeleton only. Default to isolated.
-    # Future: check model/profile overrides for an explicit memory_domain.
-    return "isolated"
+    # memory_domain is explicit config only per the contract.
+    return normalize_memory_domain_config(explicit_domain)
 
 
 def generate_qz_session_id(client_session_id: str | None) -> str:
@@ -516,7 +548,11 @@ def generate_qz_session_id(client_session_id: str | None) -> str:
     return f"qz_sid_anon_{uuid.uuid4().hex[:12]}"
 
 
-def extract_codex_request_context(headers_raw: dict, body: dict) -> CodexRequestContext:
+def extract_codex_request_context(
+    headers_raw: dict,
+    body: dict,
+    explicit_memory_domain: str | None = None,
+) -> CodexRequestContext:
     identity = extract_codex_identity(headers_raw)
     body_metadata = extract_codex_body_metadata(body)
 
@@ -533,7 +569,7 @@ def extract_codex_request_context(headers_raw: dict, body: dict) -> CodexRequest
             else:
                 identity.conflict_notes.append(note)
 
-    memory_domain = resolve_memory_domain(identity, body_metadata)
+    memory_domain, memory_domain_warning = resolve_memory_domain(identity, body_metadata, explicit_memory_domain)
     qz_session_id = generate_qz_session_id(identity.client_session_id)
 
     return CodexRequestContext(
@@ -541,4 +577,5 @@ def extract_codex_request_context(headers_raw: dict, body: dict) -> CodexRequest
         body_metadata=body_metadata,
         qz_session_id=qz_session_id,
         memory_domain=memory_domain,
+        memory_domain_warning=memory_domain_warning,
     )

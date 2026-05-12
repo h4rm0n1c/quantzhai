@@ -32,6 +32,7 @@ try:
     from .qz_responses_stream import ResponsesStreamRuntime
     from .qz_sse import _normalize_response_usage, make_sse_block
     from .qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
+    from .qz_codex_metadata import extract_codex_request_context
     from .qz_search_policy import resolve_search_policy_selection
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import (
@@ -67,6 +68,7 @@ except ImportError:
     from qz_responses_stream import ResponsesStreamRuntime
     from qz_sse import _normalize_response_usage, make_sse_block
     from qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
+    from qz_codex_metadata import extract_codex_request_context
     from qz_search_policy import resolve_search_policy_selection
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import (
@@ -466,23 +468,43 @@ class RequestRouter:
             runtime_metrics["reasoning_stream_format"] = prompt_contract.get("reasoning_stream_format")
         return runtime_metrics
 
-    def _prompt_contract(self, body: dict, selected_model: dict, client_model: str, backend_model: str) -> dict:
+    def _prompt_contract(
+        self,
+        body: dict,
+        selected_model: dict,
+        client_model: str,
+        backend_model: str,
+        memory_domain: str | None = None,
+        memory_domain_warning: str | None = None,
+    ) -> dict:
         if not isinstance(body, dict):
             body = {}
         if not isinstance(selected_model, dict):
             selected_model = {}
         metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
-        prompt_policy = metadata.get("qz_prompt_policy") if isinstance(metadata.get("qz_prompt_policy"), dict) else {}
-        turn_harness = metadata.get("qz_turn_harness") if isinstance(metadata.get("qz_turn_harness"), dict) else {}
-        qz_runtime = metadata.get("qz_runtime") if isinstance(metadata.get("qz_runtime"), dict) else {}
-        qz_reasoning = metadata.get("qz_reasoning") if isinstance(metadata.get("qz_reasoning"), dict) else {}
+        prompt_policy = (
+            metadata.get("qz_prompt_policy")
+            if isinstance(metadata.get("qz_prompt_policy"), dict)
+            else {}
+        )
+        turn_harness = (
+            metadata.get("qz_turn_harness") if isinstance(metadata.get("qz_turn_harness"), dict) else {}
+        )
+        qz_runtime = (
+            metadata.get("qz_runtime") if isinstance(metadata.get("qz_runtime"), dict) else {}
+        )
+        qz_reasoning = (
+            metadata.get("qz_reasoning") if isinstance(metadata.get("qz_reasoning"), dict) else {}
+        )
 
         def _display_path(value: str) -> str:
             text = str(value or "")
             if not text:
                 return ""
             try:
-                root = str(Path(os.environ.get("QZ_ROOT", Path(__file__).resolve().parents[1])).resolve())
+                root = str(
+                    Path(os.environ.get("QZ_ROOT", Path(__file__).resolve().parents[1])).resolve()
+                )
                 if text.startswith(root + "/"):
                     return text[len(root) + 1 :]
             except Exception:
@@ -521,12 +543,18 @@ class RequestRouter:
                 if raw_sampling.get(key) is not None:
                     sampling[key] = raw_sampling.get(key)
 
-        selected_key = selected_model.get("key") or selected_model.get("slug") or client_model or ""
-        profile = selected_model.get("label") or selected_model.get("name") or selected_key or client_model
+        selected_key = (
+            selected_model.get("key") or selected_model.get("slug") or client_model or ""
+        )
+        profile = (
+            selected_model.get("label") or selected_model.get("name") or selected_key or client_model
+        )
         return {
             "schema": PROMPT_CONTRACT_SCHEMA,
             "request_id": metadata.get("qz_request_id") or "",
             "profile": profile,
+            "memory_domain": memory_domain or "isolated",
+            "memory_domain_warning": memory_domain_warning,
             "requested_model": client_model or "",
             "selected_key": selected_key,
             "selected_label": profile,
@@ -556,8 +584,12 @@ class RequestRouter:
                 "unknown": _strings(turn_harness.get("unknown")),
             },
             "prompt_files": prompt_files,
-            "reasoning_level": qz_reasoning.get("level") or qz_runtime.get("reasoning_level") or "",
-            "reasoning_policy": qz_reasoning.get("policy") or qz_runtime.get("reasoning_policy") or "",
+            "reasoning_level": qz_reasoning.get("level")
+            or qz_runtime.get("reasoning_level")
+            or "",
+            "reasoning_policy": qz_reasoning.get("policy")
+            or qz_runtime.get("reasoning_policy")
+            or "",
             "reasoning_stream_format": metadata.get("qz_reasoning_stream_format") or "",
             "thinking_budget_tokens": qz_reasoning.get("thinking_budget_tokens"),
             "sampling": sampling,
@@ -595,7 +627,14 @@ class RequestRouter:
     def _request_id(self, started_at: float) -> str:
         return f"qz_req_{int(started_at * 1000)}_{id(self.handler) & 0xffff:x}"
 
-    def _capture_contract(self, request_id: str, prompt_contract: dict, runtime_metrics: dict) -> dict:
+    def _capture_contract(
+        self,
+        request_id: str,
+        prompt_contract: dict,
+        runtime_metrics: dict,
+        memory_domain: str | None = None,
+        memory_domain_warning: str | None = None,
+    ) -> dict:
         prompt_contract = prompt_contract if isinstance(prompt_contract, dict) else {}
         runtime_metrics = runtime_metrics if isinstance(runtime_metrics, dict) else {}
         return {
@@ -604,9 +643,18 @@ class RequestRouter:
             "status_schema": "qz.status.snapshot.v1",
             "runtime_metrics_schema": runtime_metrics.get("schema") or RUNTIME_METRICS_SCHEMA,
             "prompt_contract_schema": prompt_contract.get("schema") or PROMPT_CONTRACT_SCHEMA,
-            "requested_model": prompt_contract.get("requested_model") or runtime_metrics.get("selected_model") or "",
-            "selected_key": prompt_contract.get("selected_key") or runtime_metrics.get("selected_key") or "",
-            "selected_backend_id": prompt_contract.get("selected_backend_id") or runtime_metrics.get("selected_backend_id") or "",
+            "requested_model": prompt_contract.get("requested_model")
+            or runtime_metrics.get("selected_model")
+            or "",
+            "selected_key": prompt_contract.get("selected_key")
+            or runtime_metrics.get("selected_key")
+            or "",
+            "selected_backend_id": prompt_contract.get("selected_backend_id")
+            or runtime_metrics.get("selected_backend_id")
+            or "",
+            "memory_domain": memory_domain or prompt_contract.get("memory_domain") or "isolated",
+            "memory_domain_warning": memory_domain_warning
+            or prompt_contract.get("memory_domain_warning"),
             "prompt_policy": prompt_contract.get("prompt_policy") or {},
             "turn_harness": prompt_contract.get("turn_harness") or {},
             "runtime_metrics": runtime_metrics,
@@ -930,13 +978,29 @@ class RequestRouter:
                     })
                 return
 
-            selected_identity = selected_model.get("slug") or selected_model.get("key") or selected_model.get("backend_id") or ""
+            selected_identity = (
+                selected_model.get("slug")
+                or selected_model.get("key")
+                or selected_model.get("backend_id")
+                or ""
+            )
 
             backend_model = selected_model.get("backend_id") or selected_identity or client_model
             runtime_metrics = self._runtime_metrics(client_model)
             runtime_metrics["request_id"] = request_id
+
+            overrides = (
+                selected_model.get("overrides", {}) if isinstance(selected_model, dict) else {}
+            )
+            explicit_domain = overrides.get("memory_domain")
+            ctx = extract_codex_request_context(
+                headers_raw, body, explicit_memory_domain=explicit_domain
+            )
+
             upstream_instructions = body.get("instructions")
-            upstream_instructions_present = isinstance(upstream_instructions, str) and bool(upstream_instructions.strip())
+            upstream_instructions_present = isinstance(upstream_instructions, str) and bool(
+                upstream_instructions.strip()
+            )
             metadata = body.get("metadata")
             if not isinstance(metadata, dict):
                 metadata = {}
@@ -945,7 +1009,9 @@ class RequestRouter:
             body["metadata"] = metadata
             body["model"] = backend_model
             body = self.handler._model_router().apply_reasoning_policy(body, selected_model)
-            effective_reasoning_stream_format = self._effective_reasoning_stream_format(selected_model)
+            effective_reasoning_stream_format = self._effective_reasoning_stream_format(
+                selected_model
+            )
             metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
             metadata["qz_reasoning_stream_format"] = effective_reasoning_stream_format
             body["metadata"] = metadata
@@ -956,8 +1022,10 @@ class RequestRouter:
                 apply_patch_output_style = _apply_patch_output_style(body)
                 input_items = body.get("input")
                 if isinstance(input_items, list):
-                    body["input"] = _microcompact_old_tool_results(_expand_local_compaction_items(input_items))
-                
+                    body["input"] = _microcompact_old_tool_results(
+                        _expand_local_compaction_items(input_items)
+                    )
+
                 # Support context_management.compact_threshold
                 context_mgmt = body.get("context_management")
                 if isinstance(context_mgmt, dict):
@@ -978,14 +1046,36 @@ class RequestRouter:
                             return
                 body = normalize_responses_input_for_qwen(body, selected_model=selected_model)
                 body = normalize_tools_for_llamacpp(body)
-                prompt_contract = self._prompt_contract(body, selected_model, client_model, backend_model)
-                runtime_metrics = self._promote_prompt_contract_runtime_truth(runtime_metrics, prompt_contract)
+                prompt_contract = self._prompt_contract(
+                    body,
+                    selected_model,
+                    client_model,
+                    backend_model,
+                    memory_domain=ctx.memory_domain,
+                    memory_domain_warning=ctx.memory_domain_warning,
+                )
+                runtime_metrics = self._promote_prompt_contract_runtime_truth(
+                    runtime_metrics, prompt_contract
+                )
                 runtime_metrics["prompt_contract"] = prompt_contract
                 self._emit_prompt_contract(prompt_contract)
                 try:
-                    capture_contract = self._capture_contract(request_id, prompt_contract, runtime_metrics)
-                    write_dual_capture("latest-normalized-request.json", request_id, "forwarded-request.json", body)
-                    write_dual_capture("latest-request-contract.json", request_id, "request-contract.json", capture_contract)
+                    capture_contract = self._capture_contract(
+                        request_id,
+                        prompt_contract,
+                        runtime_metrics,
+                        memory_domain=ctx.memory_domain,
+                        memory_domain_warning=ctx.memory_domain_warning,
+                    )
+                    write_dual_capture(
+                        "latest-normalized-request.json", request_id, "forwarded-request.json", body
+                    )
+                    write_dual_capture(
+                        "latest-request-contract.json",
+                        request_id,
+                        "request-contract.json",
+                        capture_contract,
+                    )
                 except Exception:
                     pass
 

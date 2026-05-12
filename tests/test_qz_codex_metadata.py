@@ -363,28 +363,6 @@ class WorkspaceResolutionTests(unittest.TestCase):
         self.assertEqual(source, "unknown")
 
 
-class MemoryDomainPolicyTests(unittest.TestCase):
-    def test_memory_domain_defaults_to_isolated(self):
-        from proxy.qz_codex_metadata import extract_codex_request_context
-        ctx = extract_codex_request_context({}, {})
-        self.assertEqual(ctx.memory_domain, "isolated")
-
-    def test_no_memory_domain_inference(self):
-        # Contract: Missing memory_domain must resolve to isolated.
-        # It must NOT be inferred from client name, model name, etc.
-        from proxy.qz_codex_metadata import extract_codex_request_context
-        headers = {
-            "originator": "codex_exec",
-            "user-agent": "coding-assistant/1.0",
-        }
-        body = {
-            "model": "qwen3.6turbo-coding",
-            "tools": [{"type": "code_interpreter"}]
-        }
-        ctx = extract_codex_request_context(headers, body)
-        self.assertEqual(ctx.memory_domain, "isolated")
-
-
 class SessionIdTests(unittest.TestCase):
     def test_qz_session_id_maps_from_client_session_id(self):
         from proxy.qz_codex_metadata import extract_codex_request_context
@@ -396,6 +374,109 @@ class SessionIdTests(unittest.TestCase):
         from proxy.qz_codex_metadata import extract_codex_request_context
         ctx = extract_codex_request_context({}, {})
         self.assertTrue(ctx.qz_session_id.startswith("qz_sid_anon_"))
+
+
+class MemoryDomainTests(unittest.TestCase):
+    def test_missing_memory_domain_is_isolated(self):
+        from proxy.qz_codex_metadata import extract_codex_request_context
+        ctx = extract_codex_request_context({}, {})
+        self.assertEqual(ctx.memory_domain, "isolated")
+        self.assertIsNone(ctx.memory_domain_warning)
+
+    def test_non_string_memory_domain_is_isolated_and_warning_present(self):
+        from proxy.qz_codex_metadata import extract_codex_request_context
+        ctx = extract_codex_request_context({}, {}, explicit_memory_domain=123)
+        self.assertEqual(ctx.memory_domain, "isolated")
+        self.assertIn("Non-string memory_domain type 'int'", ctx.memory_domain_warning)
+
+    def test_empty_memory_domain_is_isolated_and_warning_present(self):
+        from proxy.qz_codex_metadata import extract_codex_request_context
+        ctx = extract_codex_request_context({}, {}, explicit_memory_domain="  ")
+        self.assertEqual(ctx.memory_domain, "isolated")
+        self.assertIn("Empty or whitespace-only", ctx.memory_domain_warning)
+
+    def test_configured_custom_domain_project_foo_is_accepted(self):
+        from proxy.qz_codex_metadata import extract_codex_request_context
+        ctx = extract_codex_request_context({}, {}, explicit_memory_domain="project.foo")
+        self.assertEqual(ctx.memory_domain, "project.foo")
+        self.assertIsNone(ctx.memory_domain_warning)
+
+    def test_configured_custom_domain_quantzhai_dev_is_accepted(self):
+        from proxy.qz_codex_metadata import extract_codex_request_context
+        ctx = extract_codex_request_context({}, {}, explicit_memory_domain="quantzhai:dev")
+        self.assertEqual(ctx.memory_domain, "quantzhai:dev")
+        self.assertIsNone(ctx.memory_domain_warning)
+
+    def test_configured_custom_domain_ech0_kn1ght_is_accepted(self):
+        from proxy.qz_codex_metadata import extract_codex_request_context
+        ctx = extract_codex_request_context({}, {}, explicit_memory_domain="ech0-kn1ght")
+        self.assertEqual(ctx.memory_domain, "ech0-kn1ght")
+        self.assertIsNone(ctx.memory_domain_warning)
+
+    def test_configured_arbitrary_syntactically_safe_domain_voodoo_is_accepted(self):
+        from proxy.qz_codex_metadata import extract_codex_request_context
+        ctx = extract_codex_request_context({}, {}, explicit_memory_domain="voodoo")
+        self.assertEqual(ctx.memory_domain, "voodoo")
+        self.assertIsNone(ctx.memory_domain_warning)
+
+    def test_uppercase_configured_domain_normalizes_to_lowercase(self):
+        from proxy.qz_codex_metadata import extract_codex_request_context
+        ctx = extract_codex_request_context({}, {}, explicit_memory_domain="CODING")
+        self.assertEqual(ctx.memory_domain, "coding")
+        self.assertIsNone(ctx.memory_domain_warning)
+
+    def test_invalid_domain_with_space_falls_back_isolated_and_warning_present(self):
+        from proxy.qz_codex_metadata import extract_codex_request_context
+        ctx = extract_codex_request_context({}, {}, explicit_memory_domain="coding memory")
+        self.assertEqual(ctx.memory_domain, "isolated")
+        self.assertIn("Invalid memory_domain syntax", ctx.memory_domain_warning)
+
+    def test_invalid_traversal_like_oops_falls_back_isolated_and_warning_present(self):
+        from proxy.qz_codex_metadata import extract_codex_request_context
+        ctx = extract_codex_request_context({}, {}, explicit_memory_domain="../../oops")
+        self.assertEqual(ctx.memory_domain, "isolated")
+        self.assertIn("Invalid memory_domain syntax", ctx.memory_domain_warning)
+
+    def test_invalid_html_like_script_falls_back_isolated_and_warning_present(self):
+        from proxy.qz_codex_metadata import extract_codex_request_context
+        ctx = extract_codex_request_context({}, {}, explicit_memory_domain="<script>")
+        self.assertEqual(ctx.memory_domain, "isolated")
+        self.assertIn("Invalid memory_domain syntax", ctx.memory_domain_warning)
+
+    def test_tool_names_do_not_grant_memory_domain(self):
+        from proxy.qz_codex_metadata import extract_codex_request_context
+        # body with coding-related tools
+        body = {
+            "tools": [
+                {"type": "function", "name": "exec_command"},
+                {"type": "custom", "name": "apply_patch"}
+            ]
+        }
+        ctx = extract_codex_request_context({}, body)
+        self.assertEqual(ctx.memory_domain, "isolated")
+
+    def test_client_headers_do_not_grant_memory_domain(self):
+        from proxy.qz_codex_metadata import extract_codex_request_context
+        headers = {
+            "user-agent": "codex_exec/0.130.0",
+            "originator": "codex_exec"
+        }
+        ctx = extract_codex_request_context(headers, {})
+        self.assertEqual(ctx.memory_domain, "isolated")
+
+    def test_prompt_text_does_not_grant_memory_domain(self):
+        from proxy.qz_codex_metadata import extract_codex_request_context
+        body = {
+            "input": [{"role": "user", "content": "Let's do some coding in the coding domain."}]
+        }
+        ctx = extract_codex_request_context({}, body)
+        self.assertEqual(ctx.memory_domain, "isolated")
+
+    def test_model_profile_names_do_not_grant_memory_domain_unless_explicit_override_present(self):
+        from proxy.qz_codex_metadata import extract_codex_request_context
+        # The request context doesn't know about model names/profiles unless passed as explicit_memory_domain
+        ctx = extract_codex_request_context({}, {"model": "coding-profile"})
+        self.assertEqual(ctx.memory_domain, "isolated")
 
 
 if __name__ == "__main__":

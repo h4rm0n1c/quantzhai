@@ -259,7 +259,9 @@ class WorkspaceResolutionTests(unittest.TestCase):
 
     def test_resolve_memory_domain_is_skeleton_isolated(self):
         ctx = extract_codex_request_context({}, {})
-        self.assertEqual(resolve_memory_domain(ctx.identity, ctx.body_metadata), "isolated")
+        domain, warning = resolve_memory_domain(ctx.identity, ctx.body_metadata)
+        self.assertEqual(domain, "isolated")
+        self.assertIsNone(warning)
 
 
 if __name__ == "__main__":

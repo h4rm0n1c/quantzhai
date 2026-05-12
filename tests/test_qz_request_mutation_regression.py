@@ -71,8 +71,11 @@ class RequestMutationRegressionTests(unittest.TestCase):
     def test_proxy_json_api_does_not_inject_qz_metadata(self, mock_write_capture, mock_write_dual, mock_headers):
         mock_headers.return_value = {"session_id": "client-sid"}
         handler = FakeHandler()
-        # Mocking _resolve_model_selection on handler
-        handler._resolve_model_selection = MagicMock(return_value=({"slug": "test-model"}, "ok"))
+        # Mocking _resolve_model_selection on handler with memory_domain override
+        handler._resolve_model_selection = MagicMock(return_value=(
+            {"slug": "test-model", "overrides": {"memory_domain": "coding"}}, 
+            "ok"
+        ))
         
         router = RequestRouter(handler)
         
@@ -97,6 +100,7 @@ class RequestMutationRegressionTests(unittest.TestCase):
         self.assertIsNotNone(last_body, "Upstream was never called")
         metadata = last_body.get("metadata", {})
         
+        # Contract: internal qz metadata must not leak upstream
         self.assertNotIn("qz_session_id", metadata)
         self.assertNotIn("qz_workspace_id", metadata)
         self.assertNotIn("qz_memory_domain", metadata)
