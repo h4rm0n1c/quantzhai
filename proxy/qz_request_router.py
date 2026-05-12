@@ -38,6 +38,7 @@ try:
         append_capture,
         append_request_capture,
         capture_enabled,
+        incoming_headers_payload,
         open_dual_capture_append,
         runtime_log,
         write_capture,
@@ -72,6 +73,7 @@ except ImportError:
         append_capture,
         append_request_capture,
         capture_enabled,
+        incoming_headers_payload,
         open_dual_capture_append,
         runtime_log,
         write_capture,
@@ -881,6 +883,18 @@ class RequestRouter:
         try:
             write_dual_capture("latest-request.json", request_id, "incoming-request.json", body)
             write_capture("latest-request-id.txt", request_id)
+        except Exception:
+            pass
+
+        try:
+            headers_capture = {
+                "schema": "qz.incoming.request.capture.v2",
+                "request_id": request_id,
+                "method": "POST",
+                "path": self.handler.path,
+                "headers_raw": incoming_headers_payload(self.handler),
+            }
+            write_dual_capture("latest-request-headers.json", request_id, "incoming-request-headers.json", headers_capture)
         except Exception:
             pass
 

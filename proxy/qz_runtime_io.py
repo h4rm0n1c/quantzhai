@@ -186,6 +186,15 @@ def open_dual_capture_append(latest_name: str, request_id: str | None = None, re
     return handles
 
 
+def incoming_headers_payload(handler) -> dict:
+    """Extract all incoming request headers as a plain dict.
+
+    Python's http.server preserves original header name casing in
+    handler.headers.items(). This function returns those items as-is.
+    """
+    return dict(handler.headers.items())
+
+
 def runtime_log(name: str, payload):
     write_capture(name, payload)
 
