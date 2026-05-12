@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import json
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 TURN_METADATA_MAX_BYTES = 100_000
 
@@ -58,6 +57,52 @@ def header_lookup(headers_raw: dict, name: str) -> str | None:
     return None
 
 
+def _header_values(headers_raw: dict, names: tuple[str, ...]) -> list[tuple[str, str]]:
+    if not isinstance(headers_raw, dict):
+        return []
+
+    wanted = {name.lower() for name in names}
+    seen_keys: set[str] = set()
+    values: list[tuple[str, str]] = []
+
+    # Prefer exact names first so source labels remain stable in normal captures.
+    for name in names:
+        if name in headers_raw and isinstance(headers_raw[name], str):
+            values.append((name, headers_raw[name]))
+            seen_keys.add(name)
+
+    for key, value in headers_raw.items():
+        if key in seen_keys:
+            continue
+        if isinstance(key, str) and key.lower() in wanted and isinstance(value, str):
+            values.append((key, value))
+            seen_keys.add(key)
+
+    return values
+
+
+def _choose_header_identity(
+    headers_raw: dict,
+    names: tuple[str, ...],
+    label: str,
+    conflict_notes: list[str],
+) -> tuple[str | None, str | None, bool]:
+    values = _header_values(headers_raw, names)
+    if not values:
+        return None, None, False
+
+    first_source, first_value = values[0]
+    distinct_values = {value for _, value in values}
+    if len(distinct_values) > 1:
+        conflict_notes.append(
+            f"{label} header variants disagree: "
+            + ", ".join(f"{source}={value}" for source, value in values)
+        )
+        return first_value, first_source, True
+
+    return first_value, first_source, False
+
+
 def _normalize_remote_url(url: str) -> str:
     if not isinstance(url, str):
         return ""
@@ -99,6 +144,8 @@ def extract_workspace_candidates(parsed_turn_metadata: dict | None) -> list[Work
         if isinstance(remotes, dict):
             normalized_remotes = {}
             for remote_name, url in remotes.items():
+                if not isinstance(remote_name, str):
+                    continue
                 if isinstance(url, str):
                     normalized_remotes[remote_name] = _normalize_remote_url(url)
                 elif url is not None:
@@ -119,23 +166,20 @@ def extract_workspace_candidates(parsed_turn_metadata: dict | None) -> list[Work
 
 
 def extract_codex_identity(headers_raw: dict) -> CodexIdentity:
-    client_session_id: str | None = None
-    client_session_id_source: str | None = None
-    for name in ("session_id", "session-id"):
-        val = header_lookup(headers_raw, name)
-        if val is not None:
-            client_session_id = val
-            client_session_id_source = name
-            break
+    conflict_notes: list[str] = []
 
-    client_thread_id: str | None = None
-    client_thread_id_source: str | None = None
-    for name in ("thread_id", "thread-id"):
-        val = header_lookup(headers_raw, name)
-        if val is not None:
-            client_thread_id = val
-            client_thread_id_source = name
-            break
+    client_session_id, client_session_id_source, session_variant_conflict = _choose_header_identity(
+        headers_raw,
+        ("session_id", "session-id"),
+        "session_id",
+        conflict_notes,
+    )
+    client_thread_id, client_thread_id_source, thread_variant_conflict = _choose_header_identity(
+        headers_raw,
+        ("thread_id", "thread-id"),
+        "thread_id",
+        conflict_notes,
+    )
 
     client_request_id = header_lookup(headers_raw, "x-client-request-id") or None
     codex_window_id = header_lookup(headers_raw, "x-codex-window-id") or None
@@ -147,8 +191,7 @@ def extract_codex_identity(headers_raw: dict) -> CodexIdentity:
     turn_metadata: CodexTurnMetadata | None = None
     turn_id: str | None = None
     turn_started_at_unix_ms: int | None = None
-    conflict_notes: list[str] = []
-    identity_conflict = False
+    identity_conflict = session_variant_conflict or thread_variant_conflict
 
     if parsed_tm is not None:
         tm_session_id = parsed_tm.get("session_id")
@@ -156,7 +199,8 @@ def extract_codex_identity(headers_raw: dict) -> CodexIdentity:
         raw_turn_id = parsed_tm.get("turn_id")
         turn_id = raw_turn_id if isinstance(raw_turn_id, str) else None
         ts_val = parsed_tm.get("turn_started_at_unix_ms")
-        turn_started_at_unix_ms = int(ts_val) if isinstance(ts_val, (int, float)) else None
+        if isinstance(ts_val, int) and not isinstance(ts_val, bool):
+            turn_started_at_unix_ms = ts_val
 
         if client_session_id and isinstance(tm_session_id, str):
             if client_session_id != tm_session_id:
