@@ -1,0 +1,322 @@
+# Codex Capture Shape Audit
+
+Source: -rw-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+Date: 2026-05-12T12:45:56+08:00
+
+## Counts
+
+- "previous_response_id": 2
+- session_id: 28
+- session-id: 7
+- thread_id: 16
+- thread-id: 7
+- "function_call": 195
+- "function_call_output": 62
+- "exec_command": 41
+- "shell_command": 6
+- "local_shell_call": 2
+- "shell_call": 2
+- "compaction": 14
+
+## Short matching excerpts
+
+scripts/qz-benchmark:487:    w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: "shell",
+proxy/quantzhai_proxy.py:334:            cmp_item = next((item for item in out.get("output", []) if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt), None)
+scripts/qz-thoughts:576:        if suppressed == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
+docs/repeated-read-dedup-plan.md:162:    if item_type == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
+docs/repeated-read-dedup-plan.md:164:    elif item_type == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
+docs/repeated-read-dedup-plan.md:435:  "tool": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+docs/repeated-read-dedup-plan.md:538:  "tool": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+config/example/qwenzhai-models.json:3:    "shell_type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+proxy/qz_codex_catalog.py:186:        "shell_type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+docs/state-and-memory-architecture-review-deepseek.md:13:1. Audit whether `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`/`w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` headers actually arrive from local Codex.
+docs/state-and-memory-architecture-review-deepseek.md:19:- **No `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`, `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`, or `previous_response_id` from Codex is captured or stored today.** The proxy generates its own `request_id` (`qz_req_<ts>_<id>`) and uses per-hop response IDs (`resp_local_<ts>`). The repeated-read plan's `previous_response_id`/minimal-input path and the architecture plan's session/response-chain tables therefore rest on unconfirmed metadata.
+docs/state-and-memory-architecture-review-deepseek.md:70:- **Evidence:** **Not present.** No w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, previous_response_id, or response chain is persisted. `_request_id()` in `qz_request_router.py:593-594` generates a unique ID per request but does not link to prior requests. Response IDs (`resp_local_<ts>`) are generated per-hop and not stored.
+docs/state-and-memory-architecture-review-deepseek.md:123:| `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` | **Not captured** | N/A | **Must audit Codex traffic first** | No handler reads `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` or `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` headers. `qz_tool_request.py:17` has a regex for `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` inside tool output, not metadata. |
+docs/state-and-memory-architecture-review-deepseek.md:124:| `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` | **Not captured** | N/A | **Must audit Codex traffic first** | No handler reads `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` or `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` headers. |
+docs/state-and-memory-architecture-review-deepseek.md:148:- `sessions` table needs a note that `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` and `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` are not currently available in local Codex traffic. Phase 1 may need to generate proxy-internal session IDs or use `response_chain_id` as the primary session identity.
+docs/state-and-memory-architecture-review-deepseek.md:157:- **Item 1 (headers):** Add the finding from this review: `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`, `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`, `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`, `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`, and `previous_response_id` are NOT present in current proxy code or known capture traffic. Audit required before session/thread tables can be populated.
+docs/state-and-memory-architecture-review-deepseek.md:165:- Phase 1: "Persist only session/request/response identity at first." Add: "If `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` is not available from client traffic, generate a proxy-owned session ID or use `request_id` chain as the session identity."
+docs/state-and-memory-architecture-review-deepseek.md:185:- Section 12 Phase 1: Add note about w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt availability being unknown.
+docs/state-and-memory-architecture-review-deepseek.md:211:> **Known limitation:** `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` and `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` are not currently present in local Codex → QuantZhai traffic. The proxy generates its own `request_id` but does not receive session or thread identifiers from the client. Phase 1 should either generate proxy-owned session IDs (via `request_id` chain or a new `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` header injection) or skip session-scoped responses until traffic confirms these identifiers exist.
+docs/state-and-memory-architecture-review-deepseek.md:217:> 1. Which headers/fields are available in real local Codex → QuantZhai traffic? w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, previous_response_id, etc.
+docs/state-and-memory-architecture-review-deepseek.md:221:> 1. **Headers audit result (2026-05-12):** `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`, `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`, `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`, `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`, and `previous_response_id` are absent from current proxy code and have not been observed in captures. The proxy generates its own `request_id` (`qz_req_<ts>_<id>`) and per-hop `resp_local_<ts>` response IDs. Before the first DB patch, run a capture audit on real Codex traffic to confirm whether any of these fields arrive in the body or headers. If none are found, Phase 1 must generate proxy-owned session/thread IDs.
+docs/state-and-memory-architecture-review-deepseek.md:237:3. **`sessions`** — w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt (generated proxy-side if client does not send one), w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt (nullable), created_ts, last_seen_ts, scope_id FK.
+docs/state-and-memory-architecture-review-deepseek.md:238:4. **`responses`** — response_id, previous_response_id (nullable), request_id, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt FK, created_ts, input_mode ("full_history" or "incremental" or "unknown"), compaction_flag.
+docs/state-and-memory-architecture-review-deepseek.md:240:6. **`file_reads`** / **`file_writes`** — path (normalised), response_id FK, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt FK, tool_call_id FK, first_read_ts, read_count.
+docs/state-and-memory-architecture-review-deepseek.md:241:7. **`signals`** — signal_type ("repeated_read", "hop_budget", "context_pressure"), w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt FK, response_id FK, payload (JSON), created_ts.
+docs/state-and-memory-architecture-review-deepseek.md:242:8. **`compaction_events`** — response_id FK, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt FK, compacted_item_count, new_item_count, created_ts.
+docs/state-and-memory-architecture-review-deepseek.md:283:| `test_same_session_operational_tool_facts_readable` | A file_read row with same `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` as the query session is returned by the operational tool memory query. |
+docs/state-and-memory-architecture-review-deepseek.md:284:| `test_cross_session_operational_tool_facts_not_readable` | A file_read row with a different `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` is not returned by the operational tool memory query. |
+docs/state-and-memory-architecture-review-deepseek.md:285:| `test_previous_response_id_resolves_within_session` | A `responses` query by `previous_response_id` returns the correct prior response row only when the query and target share the same `w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`. |
+docs/state-and-memory-architecture-review-deepseek.md:304:- **`w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt`/`w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt` from client headers** — do not add header parsing until captures confirm these arrive.
+proxy/qz_responses.py:81:FUNCTION_CALL_TYPES = {w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "computer_call", "code_interpreter_call", "apply_patch_call", "custom_tool_call"}
+proxy/qz_responses.py:83:    w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+proxy/qz_responses.py:202:    if item_type == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
+proxy/qz_responses.py:301:        if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
+proxy/qz_responses.py:377:        if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
+proxy/qz_responses.py:411:        if not (isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
+proxy/qz_responses.py:417:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+proxy/qz_request_normalization.py:272:        if role in ("assistant", "tool") or item_type in (w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt):
+docs/codex-capture-shape-audit.md:8:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 2
+docs/codex-capture-shape-audit.md:9:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 28
+docs/codex-capture-shape-audit.md:10:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 7
+docs/codex-capture-shape-audit.md:11:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 16
+docs/codex-capture-shape-audit.md:12:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 7
+docs/codex-capture-shape-audit.md:13:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 195
+docs/codex-capture-shape-audit.md:14:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 62
+docs/codex-capture-shape-audit.md:15:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 41
+docs/codex-capture-shape-audit.md:16:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 6
+docs/codex-capture-shape-audit.md:17:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 2
+docs/codex-capture-shape-audit.md:18:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 2
+docs/codex-capture-shape-audit.md:19:- w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt: 14
+proxy/qz_tool_apply_patch.py:197:        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+proxy/qz_tool_apply_patch.py:211:        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+proxy/qz_tool_apply_patch.py:220:        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+proxy/qz_tool_apply_patch.py:230:        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+proxy/qz_tool_apply_patch.py:634:            and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+docs/tool-coercion-design.md:124:`{w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "write_stdin", w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "computer"}`.
+proxy/qz_tools.py:12:    w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+proxy/qz_tools.py:14:    w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+proxy/qz_tools.py:77:        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+docs/state-and-memory-architecture-plan.md:446:w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+docs/state-and-memory-architecture-plan.md:449:w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+docs/state-and-memory-architecture-plan.md:570:  w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt/w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt/request source, linked to scope
+docs/state-and-memory-architecture-plan.md:701:   w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, previous_response_id, etc.
+docs/state-and-memory-architecture-plan.md:724:rg -n 'w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt|w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt|w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt|w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt|w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt|w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt|w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt|w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt|w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt' var/captures proxy tests docs
+proxy/qz_tool_lifecycle.py:36:        if item_type == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
+proxy/qz_tool_lifecycle.py:45:        if item_type == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
+proxy/qz_tool_lifecycle.py:85:        and call.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+proxy/qz_tool_request.py:17:EXEC_SESSION_OUTPUT_RE = re.compile(r"(?i)\b(?:w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt|session id)\s*[:=]\s*\d+\b")
+proxy/qz_tool_request.py:50:        if not isinstance(item, dict) or item.get("type") != w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
+proxy/qz_tool_request.py:99:            if tool_name == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
+proxy/qz_streaming.py:51:        return isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+proxy/qz_streaming.py:184:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+proxy/qz_streaming.py:201:            if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
+proxy/qz_streaming.py:207:                        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+proxy/qz_streaming.py:238:            if not isinstance(item, dict) or item.get("type") != w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
+proxy/qz_streaming.py:246:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+proxy/qz_responses_stream.py:902:                                suppressed=w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+proxy/qz_proxy_tools.py:35:            and call.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+proxy/qz_proxy_tools.py:175:            and call.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+proxy/qz_sse.py:397:        if item_type == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt:
+proxy/qz_sse.py:405:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+proxy/qz_sse.py:433:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+proxy/qz_tool_web.py:955:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/smoke_apply_patch_codex_exec.py:191:                        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/smoke_apply_patch_codex_exec.py:207:                        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/smoke_apply_patch_codex_exec.py:226:    if value.get("type") in (w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "apply_patch_call_output"):
+tests/smoke_apply_patch_codex_exec.py:266:                "shell_type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/smoke_web_stream_proxy.py:99:            and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+tests/smoke_web_stream_proxy.py:188:                        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/smoke_web_stream_proxy.py:204:                        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/smoke_web_stream_proxy.py:320:        assert w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt not in stream_text, stream_text
+tests/smoke_web_stream_proxy.py:326:        assert any(item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt for item in second_body.get("input") or []), second_body
+tests/test_qz_tools.py:25:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tools.py:71:        call = {"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "name": "my_tool", "call_id": "c1", "arguments": "{}"}
+tests/test_qz_tools.py:73:        self.assertEqual(result["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
+tests/test_qz_tools.py:118:        call = {"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "name": "secret_tool", "call_id": "c1", "arguments": "{}"}
+tests/test_qz_tools.py:129:        call = {"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "name": "totally_unknown", "call_id": "c1", "arguments": "{}"}
+tests/test_qz_tools.py:136:        call = {"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "call_id": "c1", "arguments": "{}"}
+tests/test_qz_request_router.py:48:                    "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_request_router.py:90:                        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_request_router.py:132:        self.assertEqual(router.request_bodies[1]["input"][-1]["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
+tests/test_qz_tool_request.py:15:                {"type": "function", "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "description": "Run command."},
+tests/test_qz_tool_request.py:27:            w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_request.py:43:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_request.py:45:                "output": "w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt=42\nstill running",
+tests/test_qz_tool_request.py:61:            "tools": [{"type": "function", "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt}],
+tests/smoke_compaction_live.py:244:        (i for i in (body.get("output") or []) if isinstance(i, dict) and i.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt),
+tests/test_qz_telemetry.py:59:            suppressed=w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_telemetry.py:64:        self.assertEqual(payload["suppressed"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
+tests/test_qz_proxy_tools.py:32:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_proxy_tools.py:82:                    "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_proxy_tools.py:100:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_proxy_tools.py:104:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_proxy_tools.py:113:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_proxy_tools.py:128:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_proxy_tools.py:143:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_proxy_tools.py:162:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_proxy_tools.py:185:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_proxy_tools.py:198:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_proxy_tools.py:218:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_proxy_tools.py:232:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_proxy_tools.py:239:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_proxy_tools.py:253:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_proxy_tools.py:255:            "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_proxy_tools.py:268:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_proxy_tools.py:286:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_proxy_tools.py:308:        self.assertEqual(result.upstream_items[1]["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
+tests/test_qz_proxy_tools.py:316:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_proxy_tools.py:342:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_proxy_tools.py:356:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_proxy_tools.py:389:        self.assertEqual(result.upstream_items[1]["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
+tests/test_qz_tool_lifecycle.py:32:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:39:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:48:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:53:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:62:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:65:            "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:69:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:74:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:92:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:95:                "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:100:        self.assertEqual(state.call_name, w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
+tests/test_qz_tool_lifecycle.py:118:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:121:                "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:133:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:145:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:147:            "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:157:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:173:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:188:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:206:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:208:            "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:222:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:239:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:251:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_lifecycle.py:270:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_apply_patch_adapter.py:99:                {"type": "function", "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "description": "Runs shell commands."},
+tests/test_apply_patch_adapter.py:108:        self.assertEqual(names, [w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "apply_patch"])
+tests/test_apply_patch_adapter.py:114:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_apply_patch_adapter.py:144:        self.assertEqual(out["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
+tests/test_apply_patch_adapter.py:159:        self.assertEqual(out["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
+tests/test_apply_patch_adapter.py:166:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_apply_patch_adapter.py:191:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_apply_patch_adapter.py:214:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_apply_patch_adapter.py:238:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_apply_patch_adapter.py:263:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_apply_patch_adapter.py:290:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_apply_patch_adapter.py:349:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_apply_patch_adapter.py:382:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_apply_patch_adapter.py:401:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_apply_patch_adapter.py:417:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_apply_patch_adapter.py:468:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_apply_patch_adapter.py:503:        self.assertEqual(out["input"][0]["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
+tests/test_apply_patch_adapter.py:504:        self.assertEqual(out["input"][1]["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
+tests/test_apply_patch_adapter.py:510:                    "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_apply_patch_adapter.py:511:                    "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_apply_patch_adapter.py:516:                    "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_apply_patch_adapter.py:598:        self.assertEqual(call_out["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
+tests/test_apply_patch_adapter.py:601:        self.assertEqual(output_out["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
+tests/test_apply_patch_adapter.py:701:        return {"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, "name": "apply_patch",
+tests/test_qz_tool_web.py:62:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_tool_web.py:79:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_streaming.py:45:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_streaming.py:66:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_streaming.py:85:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_streaming.py:102:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_streaming.py:113:            "item": {"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt},
+tests/fixtures/responses_input/malformed_empty_tool_history.json:5:        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/fixtures/responses_input/malformed_empty_tool_history.json:6:        "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/fixtures/responses_input/malformed_empty_tool_history.json:11:        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/fixtures/responses_input/malformed_empty_tool_history.json:16:        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/fixtures/responses_input/malformed_empty_tool_history.json:17:        "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/fixtures/responses_input/malformed_empty_tool_history.json:22:        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/fixtures/responses_input/malformed_empty_tool_history.json:40:      "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/fixtures/responses_input/malformed_empty_tool_history.json:41:      "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/fixtures/responses_input/malformed_empty_tool_history.json:46:      "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_responses_stream.py:87:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_responses_stream.py:118:                    "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_responses_stream.py:163:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_responses_stream.py:179:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_responses_stream.py:539:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_responses_stream.py:555:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_responses_stream.py:583:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_responses_stream.py:586:                "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_responses_stream.py:604:            "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_responses_stream.py:610:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_responses_stream.py:613:                "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_responses_stream.py:636:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_responses_stream.py:730:                and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+tests/test_qz_responses_stream.py:742:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:743:        self.assertTrue(any(item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt for item in requests[1]["input"]))
+tests/test_qz_responses_stream.py:753:                and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+tests/test_qz_responses_stream.py:768:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:769:        self.assertTrue(any(item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt for item in requests[1]["input"]))
+tests/test_qz_responses_stream.py:790:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:808:        self.assertEqual(added_payload["item"]["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
+tests/test_qz_responses_stream.py:810:        self.assertEqual(added_payload["item"]["name"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
+tests/test_qz_responses_stream.py:826:            and payload["item"].get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+tests/test_qz_responses_stream.py:837:        self.assertEqual(public_call_events[0][1]["item"]["name"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
+tests/test_qz_responses_stream.py:852:            and payload["item"].get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+tests/test_qz_responses_stream.py:907:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1056:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1117:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', "".join(written_text))
+tests/test_qz_responses_stream.py:1185:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1214:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1259:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1281:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1303:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1328:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1359:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1390:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1414:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1444:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1474:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1495:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1515:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1539:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1569:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1590:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1620:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1644:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1753:        error_results = [i for i in second_input if isinstance(i, dict) and i.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt]
+tests/test_qz_responses_stream.py:1790:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1797:                isinstance(i, dict) and i.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+tests/test_qz_responses_stream.py:1824:            if isinstance(i, dict) and i.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+tests/test_qz_responses_stream.py:1898:                and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+tests/test_qz_responses_stream.py:1931:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:1976:                if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+tests/test_qz_responses_stream.py:2015:            if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+tests/test_qz_responses_stream.py:2020:            if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+tests/test_qz_responses_stream.py:2032:                if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+tests/test_qz_responses_stream.py:2061:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:2065:            if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+tests/test_qz_responses_stream.py:2070:            if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+tests/test_qz_responses_stream.py:2078:                if isinstance(item, dict) and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+tests/test_qz_responses_stream.py:2115:                and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+tests/test_qz_responses_stream.py:2150:                and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+tests/test_qz_responses_stream.py:2180:                and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+tests/test_qz_responses_stream.py:2201:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:2210:                and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+tests/test_qz_responses_stream.py:2231:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/test_qz_responses_stream.py:2240:                and item.get("type") == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt
+tests/test_qz_responses_stream.py:2261:        self.assertNotIn('"type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt', stream_text)
+tests/fixtures/responses_input/tool_declaration_normalization.json:7:        "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/fixtures/responses_input/tool_declaration_normalization.json:31:    w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/smoke_apply_patch_proxy.py:82:                        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/smoke_apply_patch_proxy.py:98:                        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/smoke_apply_patch_proxy.py:121:                "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/smoke_apply_patch_proxy.py:259:        assert followup_body["input"][0]["type"] == w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, followup_body["input"]
+tests/fixtures/responses_input/native_codex_first_request_shape.json:40:        "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/fixtures/responses_input/native_codex_first_request_shape.json:58:            "w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt": {
+tests/fixtures/responses_input/native_codex_first_request_shape.json:216:    w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_compaction.py:33:        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_compaction.py:97:        self.assertNotIn(w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, types)
+tests/test_qz_compaction.py:113:        self.assertNotIn(w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt, types)
+tests/test_qz_compaction.py:117:            "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/test_qz_compaction.py:148:        self.assertEqual(result["output"][0]["type"], w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt)
+tests/fixtures/sse/qwen_update_file_bare_operation.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_qwen_bare_update","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_qwen_bare_update","name":"apply_patch","arguments":""},"type":"response.output_item.added","sequence_number":3}
+tests/fixtures/sse/qwen_update_file_bare_operation.raw:17:data: {"output_index":0,"item":{"id":"fc_fixture_qwen_bare_update","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_qwen_bare_update","name":"apply_patch"},"type":"response.output_item.done","sequence_number":6}
+tests/fixtures/responses_input/mixed_history_normalization.json:94:        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/fixtures/responses_input/mixed_history_normalization.json:95:        "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/fixtures/responses_input/mixed_history_normalization.json:100:        "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/fixtures/responses_input/mixed_history_normalization.json:140:      "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/fixtures/responses_input/mixed_history_normalization.json:147:      "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/fixtures/responses_input/mixed_history_normalization.json:153:      "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/fixtures/responses_input/mixed_history_normalization.json:160:      "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/fixtures/responses_input/mixed_history_normalization.json:165:      "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/fixtures/responses_input/mixed_history_normalization.json:166:      "name": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/fixtures/responses_input/mixed_history_normalization.json:171:      "type": w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,
+tests/fixtures/sse/invalid_apply_patch_move_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_invalid_patch_move","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_invalid_patch_move","name":"apply_patch","arguments":""},"type":"response.output_item.added","sequence_number":3}
+tests/fixtures/sse/invalid_apply_patch_move_call.raw:17:data: {"output_index":0,"item":{"id":"fc_fixture_invalid_patch_move","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_invalid_patch_move","name":"apply_patch"},"type":"response.output_item.done","sequence_number":6}
+tests/fixtures/sse/web_search_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_web","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_web","name":"web_search","arguments":""},"type":"response.output_item.added","sequence_number":3}
+tests/fixtures/sse/web_search_call.raw:14:data: {"output_index":0,"item":{"id":"fc_fixture_web","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_web","name":"web_search"},"type":"response.output_item.done","sequence_number":5}
+tests/fixtures/sse/custom_apply_patch_delete_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_custom_patch_delete","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_custom_patch_delete","name":"apply_patch","arguments":""},"type":"response.output_item.added","sequence_number":3}
+tests/fixtures/sse/custom_apply_patch_delete_call.raw:17:data: {"output_index":0,"item":{"id":"fc_fixture_custom_patch_delete","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_custom_patch_delete","name":"apply_patch"},"type":"response.output_item.done","sequence_number":6}
+tests/fixtures/sse/custom_apply_patch_rename_alias_move_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_patch_rename_alias_move","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_patch_rename_alias_move","name":"apply_patch","arguments":""},"type":"response.output_item.added","sequence_number":3}
+tests/fixtures/sse/custom_apply_patch_rename_alias_move_call.raw:17:data: {"output_index":0,"item":{"id":"fc_fixture_patch_rename_alias_move","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_patch_rename_alias_move","name":"apply_patch"},"type":"response.output_item.done","sequence_number":6}
+tests/fixtures/sse/apply_patch_delete_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_patch_delete","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_patch_delete","name":"apply_patch","arguments":""},"type":"response.output_item.added","sequence_number":3}
+tests/fixtures/sse/apply_patch_delete_call.raw:17:data: {"output_index":0,"item":{"id":"fc_fixture_patch_delete","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"completed","call_id":"call_fixture_patch_delete","name":"apply_patch"},"type":"response.output_item.done","sequence_number":6}
+tests/fixtures/sse/apply_patch_update_call.raw:8:data: {"output_index":0,"item":{"id":"fc_fixture_patch_update","type":w-rw-r-- 1 harri harri 432K May 12 12:43 var/audits/codex-capture-shape-audit-20260512-124339.txt,"status":"in_progress","call_id":"call_fixture_patch_update","name":"apply_patch","arguments":""},"type":"response.output_item.added","sequence_number":3}
