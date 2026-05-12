@@ -9,11 +9,13 @@ Start here when you want to understand the repo without reading every note in th
 3. [Master stabilisation plan](master-stabilisation-plan.md) — controlling map for the current stabilisation work, bug relationships, and fix order.
 4. [Progress snapshot](progress-snapshot.md) — short overall percentage/status view.
 5. [Responses stream and tool state contract](responses-stream-tool-state-contract.md) — current runtime contract for streamed Responses events, tool-call state, telemetry, and captures.
-6. [Edge case and config contract plan](edge-case-config-contract-plan.md) — planned audit/refactor for edge cases, compact errors, profile safety, config layout, and script-sprawl reduction.
-7. [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) — current focused TODO/review plan for `/status`, `qz-top`, `qz-thoughts`, profiles, and streaming.
-8. [Benchmark harness](quantzhai-benchmark-harness.md) — how to compare profiles and prove whether changes help.
-9. [Runtime observability notes](runtime-observability-notes.md) — how to inspect live proxy/model behaviour.
-10. [Search roadmap](search-roadmap.md) — local web-search routing plan and policy direction.
+6. [Codex context and memory contract](codex-context-memory-contract.md) — source-grounded v2 contract for Codex 0.130 identity, workspace candidates, thread/turn scope, and QuantZhai memory domains.
+7. [State and memory architecture plan](state-and-memory-architecture-plan.md) — older typed-memory plan; still useful for memory classes, but superseded by the Codex context contract for Codex identity/workspace/domain terminology.
+8. [Edge case and config contract plan](edge-case-config-contract-plan.md) — planned audit/refactor for edge cases, compact errors, profile safety, config layout, and script-sprawl reduction.
+9. [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) — current focused TODO/review plan for `/status`, `qz-top`, `qz-thoughts`, profiles, and streaming.
+10. [Benchmark harness](quantzhai-benchmark-harness.md) — how to compare profiles and prove whether changes help.
+11. [Runtime observability notes](runtime-observability-notes.md) — how to inspect live proxy/model behaviour.
+12. [Search roadmap](search-roadmap.md) — local web-search routing plan and policy direction.
 
 ## Documentation by area
 
@@ -24,7 +26,10 @@ Start here when you want to understand the repo without reading every note in th
 | Master plan | [Master stabilisation plan](master-stabilisation-plan.md) | Controlling map for current bugs, contracts, dependencies, and fix order. |
 | Progress | [Progress snapshot](progress-snapshot.md) | Short overall percentage/status view for periodic project check-ins. |
 | Runtime contract | [Responses stream and tool state contract](responses-stream-tool-state-contract.md) | State contract for streamed Responses events, tool calls, telemetry, and captures. |
+| Codex contract | [Codex context and memory contract](codex-context-memory-contract.md) | Authoritative v2 contract for Codex 0.130 session/thread/turn/window/workspace metadata, SQLite scope direction, and `memory_domain` terminology. |
+| Codex contract | [Codex 0.130 live signal capture](codex-0130-live-signal-capture.md) | Live capture evidence for Codex 0.130 request/header/body/turn/workspace signals. |
 | Runtime contract | [Codex native first request capture](codex-native-request-capture.md) | Clean local reference for the raw first request shape Codex CLI sends before QuantZhai wrapper/proxy normalization. |
+| Memory architecture | [State and memory architecture plan](state-and-memory-architecture-plan.md) | Typed-memory classes, storage roles, and old planning context; note that v2 Codex identity/workspace/domain language lives in the Codex context contract. |
 | Config and error handling | [Edge case and config contract plan](edge-case-config-contract-plan.md) | Audit/refactor plan for edge cases, compact errors, profile safety, config layering, and reducing script sprawl. |
 | Current bugfix focus | [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) | Triage, review plan, proposed fixes, and acceptance checks for `/status`, monitor tools, profile tuning, and proxy streaming. |
 | Fixed bug / regression guard | [Stale profile symlink bug](bugs/stale-profile-server-alias.md) | Symlink profile contract, compact invalid-profile errors, and `qz-doctor` regression checks. |
@@ -59,11 +64,31 @@ scripts/qz-codex high
 scripts/qz-down
 ```
 
+### I want to understand Codex identity, workspace, and memory scope
+
+Read:
+
+- [Codex context and memory contract](codex-context-memory-contract.md)
+- [Codex 0.130 live signal capture](codex-0130-live-signal-capture.md)
+- [Codex native first request capture](codex-native-request-capture.md)
+- [State and memory architecture plan](state-and-memory-architecture-plan.md)
+
+Focus:
+
+```text
+Codex 0.130 provides session_id, thread_id, turn_id, window id, installation id, prompt_cache_key, and workspace candidates.
+QuantZhai owns qz_session_id, qz_turn_id, qz_request_id, workspace_id resolution, and memory_domain policy.
+Use memory_domain, not profile_family, for new code/docs.
+Missing memory_domain means isolated.
+Capability detection from tools must not grant durable memory access.
+```
+
 ### I want to understand what needs fixing next
 
 Read:
 
 - [Master stabilisation plan](master-stabilisation-plan.md)
+- [Codex context and memory contract](codex-context-memory-contract.md)
 - [Edge case and config contract plan](edge-case-config-contract-plan.md)
 - [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md)
 - [Known bug notes](bugs/)
@@ -75,8 +100,27 @@ Stale symlink profile validation, compact errors, and doctor checks are done.
 qz-thoughts delta coalescing is done.
 Stream timing telemetry is done.
 Summary-mode SSE transform and missing DONE marker are fixed and live-smoked.
-Next keep the Responses stream/tool contract current, add golden replay fixtures, then extract tool lifecycle handling.
+Codex 0.130 identity/workspace parsing is now source/capture grounded.
+Next keep the Responses stream/tool contract current, add golden replay fixtures, then extract tool lifecycle/state handling.
 Do not start broad config movement before auditing data paths.
+```
+
+### I want to work on SQLite/state/memory
+
+Read:
+
+- [Codex context and memory contract](codex-context-memory-contract.md)
+- [Codex 0.130 live signal capture](codex-0130-live-signal-capture.md)
+- [State and memory architecture plan](state-and-memory-architecture-plan.md)
+- [Runtime observability notes](runtime-observability-notes.md)
+
+Focus:
+
+```text
+Phase 1 stores identity, turns, requests, workspace candidates, resolved workspace bindings, and operational facts.
+Do not implement learned preferences, profile-private memory, HSM/archive memory, or promotion in Phase 1.
+Do not store giant raw request bodies in SQLite by default.
+Raw captures remain debug artifacts.
 ```
 
 ### I want to work on edge cases, config layout, or profile safety
@@ -84,6 +128,7 @@ Do not start broad config movement before auditing data paths.
 Read:
 
 - [Master stabilisation plan](master-stabilisation-plan.md)
+- [Codex context and memory contract](codex-context-memory-contract.md)
 - [Edge case and config contract plan](edge-case-config-contract-plan.md)
 - [Stale profile symlink bug](bugs/stale-profile-server-alias.md)
 - [Runtime observability notes](runtime-observability-notes.md)
@@ -92,7 +137,9 @@ Focus:
 
 ```text
 Audit before refactor.
-Compact errors and invalid-profile handling are done; keep doctor checks green before broad config movement.
+Use memory_domain as explicit config for memory boundaries.
+Missing memory_domain must resolve to isolated.
+Do not infer memory authority from tools, client names, profile names, or model names.
 Do not add new one-off shell scripts unless there is a strong reason.
 ```
 
@@ -102,6 +149,7 @@ Read:
 
 - [Master stabilisation plan](master-stabilisation-plan.md)
 - [Responses stream and tool state contract](responses-stream-tool-state-contract.md)
+- [Codex context and memory contract](codex-context-memory-contract.md)
 - [Codex native first request capture](codex-native-request-capture.md)
 - [Responses streaming and qz-thoughts bug](bugs/responses-streaming-and-qz-thoughts.md)
 - [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md)
@@ -181,6 +229,8 @@ AGENTS.md
 docs/README.md
 docs/bugs/responses-streaming-and-qz-thoughts.md
 docs/bugs/stale-profile-server-alias.md
+docs/codex-0130-live-signal-capture.md
+docs/codex-context-memory-contract.md
 docs/codex-native-request-capture.md
 docs/deep-research-report.md
 docs/edge-case-config-contract-plan.md
@@ -195,6 +245,7 @@ docs/qz-caveman-codex-model-instructions-v2.md
 docs/responses-stream-tool-state-contract.md
 docs/runtime-observability-notes.md
 docs/search-roadmap.md
+docs/state-and-memory-architecture-plan.md
 ```
 
 ## Maintenance rule
