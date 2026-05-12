@@ -135,6 +135,22 @@ Skip message blobs, assistant prose, user text, and large output payload bodies.
 Extract command arguments and minimal call metadata only.
 ```
 
+Seed dispatch shape:
+
+```python
+for item in input_items:
+    item_type = item.get("type") if isinstance(item, dict) else ""
+    if item_type == "function_call":
+        record_tool_call(item, state)
+    elif item_type == "function_call_output":
+        record_tool_output(item, state)  # v1 mostly for future warning replay hooks
+    else:
+        continue
+```
+
+Do not scan ordinary message text for shell commands. That would add cost and
+false positives for little gain.
+
 Persistent session state is still deferred. First use what the client already
 sends.
 
@@ -238,11 +254,38 @@ streamlink_3.sh. Use the existing context unless you believe they changed.
 
 Do not say "error" in the human text. This is a feedback signal, not a failure.
 
-Implementation may initially reuse `CompletedToolCallDecision(kind="error")`
-because the stream/non-stream continuation path already handles injected
-`function_call_output` items. If that route is used, document it as
-**signal-over-error-path** and keep the payload clearly advisory. A cleaner
-follow-up is a first-class `kind="signal"` decision.
+Preferred implementation:
+
+```text
+Add CompletedToolCallDecision(kind="signal") for repeated-read feedback.
+```
+
+Reason:
+
+```text
+The existing kind="error" path would work mechanically, but it also emits
+`tool_call_error` telemetry and semantically mixes model-feedback signals with
+real tool failures. A first-class `signal` kind keeps telemetry and behaviour
+clean without requiring string-parsing of a synthetic error payload.
+```
+
+Signal continuation behaviour should mirror the current error continuation path:
+
+```text
+append the advisory function_call_output to next_input
+continue the hop loop
+emit repeated_read_signal telemetry
+emit no public Codex lifecycle event for a tool that was not executed
+```
+
+Temporary fallback, only if `kind="signal"` proves too invasive:
+
+```text
+Use kind="error" as a signal-over-error-path shim, but add an explicit marker on
+the decision/result so stream and non-streaming paths can emit
+repeated_read_signal instead of tool_call_error. Do not infer signal status by
+matching the human text.
+```
 
 ---
 
@@ -264,6 +307,7 @@ extract_write_paths(call: dict) -> frozenset[str]
 seed_repeated_read_state(input_items: list) -> RepeatedReadState
 repeated_read_signal(call: dict, state: RepeatedReadState) -> RepeatedReadDecision
 record_tool_call(call: dict, state: RepeatedReadState) -> None
+record_tool_output(item: dict, state: RepeatedReadState) -> None
 ```
 
 Suggested decision type:
@@ -338,6 +382,9 @@ apply_patch create/update/delete/move paths
 obvious shell redirection only if easy and low-risk
 ```
 
+Write-path parsing must have standalone unit tests. Do not only test writes via
+state seeding; otherwise write extraction bugs are hidden behind the seed helper.
+
 Do not infer local file reads or writes from `web_search` output. web_search is
 not a local file tool.
 
@@ -345,7 +392,39 @@ not a local file tool.
 
 ## 7. Integration points
 
-### 7.1 `proxy/qz_proxy_tools.py`
+### 7.1 `proxy/qz_tool_lifecycle.py`
+
+Change:
+
+```text
+CompletedToolCallDecision
+```
+
+Add support for:
+
+```text
+kind="signal"
+signal_result: dict | None
+signal_metadata: dict
+```
+
+`signal_result` is the function_call_output advisory item appended to
+`next_input`. `signal_metadata` carries telemetry-safe fields:
+
+```json
+{
+  "tool": "exec_command",
+  "call_id": "...",
+  "paths": ["README.md"],
+  "action": "signalled",
+  "scope": "input_history"
+}
+```
+
+If adding fields is too much churn, reuse `error_result` for the advisory output
+but still use `kind="signal"` so callers do not treat it as a real error.
+
+### 7.2 `proxy/qz_proxy_tools.py`
 
 Change:
 
@@ -374,24 +453,11 @@ Codex-native read tools are where repeated reads mostly appear.
 Unknown tools should still produce normal unknown-tool errors.
 ```
 
-If `repeated_read_signal()` returns `should_signal=True`, return an injected
+If `repeated_read_signal()` returns `should_signal=True`, return
+`CompletedToolCallDecision(kind="signal", ...)` with an advisory
 function_call_output using the original call_id.
 
-Implementation choice for first patch:
-
-```text
-Use existing kind="error" continuation path, but payload message must be
-advisory and telemetry must identify it as repeated_read_signal.
-```
-
-Preferred later cleanup:
-
-```text
-Add CompletedToolCallDecision(kind="signal") so feedback signals are not
-semantically mixed with true errors.
-```
-
-### 7.2 `proxy/qz_responses_stream.py`
+### 7.3 `proxy/qz_responses_stream.py`
 
 Change:
 
@@ -409,10 +475,18 @@ Pass `repeated_read_state` to `completed_call_decision()`.
 
 After each non-signalled completed call, update state with `record_tool_call()`.
 
-Emit telemetry through the existing request-scoped emitter when a signal fires
-or a previously-warned repeat is allowed.
+When `decision.kind == "signal"`:
 
-### 7.3 `proxy/qz_request_router.py`
+```text
+append decision.signal_result to next_input
+emit repeated_read_signal telemetry from decision.signal_metadata
+mark the hop as needing continuation
+break inner stream loop
+```
+
+Do not emit `tool_call_error` for this path.
+
+### 7.4 `proxy/qz_request_router.py`
 
 Change:
 
@@ -426,10 +500,11 @@ Same pattern as streaming:
 seed state from body["input"]
 pass state to completed_call_decision()
 record calls after handling
-emit telemetry
+handle kind="signal" separately from kind="error"
+emit repeated_read_signal telemetry
 ```
 
-### 7.4 `proxy/qz_telemetry.py`
+### 7.5 `proxy/qz_telemetry.py`
 
 Add retained lifecycle event type:
 
@@ -489,6 +564,9 @@ Tests:
 | `test_extract_sed_read` | `sed -n '1,80p' README.md` |
 | `test_extract_rg_search_path` | `rg pattern src` |
 | `test_extract_grep_search_path` | `grep -R pattern src` |
+| `test_extract_write_paths_from_apply_patch_create_update_delete` | standalone apply_patch write extraction |
+| `test_extract_write_paths_empty_for_read_command` | read commands do not mark writes |
+| `test_extract_write_paths_invalid_args` | malformed write call returns empty set |
 | `test_skip_ls` | `ls -la` returns no file-read paths |
 | `test_skip_find` | `find . -type f` returns no file-read paths |
 | `test_invalid_json_args` | malformed arguments returns empty paths |
@@ -525,7 +603,9 @@ Tests:
 
 | Test | Covers |
 |---|---|
-| `test_repeated_read_signal_before_codex_native_passthrough` | repeat shell/exec command becomes injected signal |
+| `test_repeated_read_signal_before_codex_native_passthrough` | repeat shell/exec command becomes `kind="signal"` |
+| `test_repeated_read_signal_uses_original_call_id` | advisory function_call_output is tied to original call |
+| `test_repeated_read_signal_not_tool_call_error` | signal path is distinct from real error path |
 | `test_first_read_codex_native_passthrough` | first read remains public |
 | `test_repeat_after_warning_passthrough` | avoids infinite advisory loop |
 | `test_apply_patch_unaffected` | protocol adapter path unchanged |
@@ -541,6 +621,8 @@ streaming path:
   seeded input history contains prior read
   model emits same read
   proxy appends advisory function_call_output upstream and continues
+  repeated_read_signal telemetry emitted
+  tool_call_error telemetry not emitted
 
 non-streaming path:
   same as above for _run_responses_locally()
@@ -588,8 +670,7 @@ orientation/redundant ls/find signal
 web_search-derived file operation inference
 proxy-side file reading
 seeding warned_paths from previous repeated_read_signal outputs
-first-class CompletedToolCallDecision(kind="signal") unless the error-path shim
-proves too ugly
+signal-over-error-path shim unless kind="signal" proves too invasive
 ```
 
 Future v2 ideas:
@@ -619,7 +700,8 @@ The feature is acceptable when:
    skips ordinary message blobs.
 7. apply_patch, web_search, unknown tools, and dropped-tool errors keep existing behaviour.
 8. repeated_read_signal telemetry appears in /qz/telemetry/request.
-9. Full unit suite remains green.
+9. repeated-read signals do not emit tool_call_error telemetry.
+10. Full unit suite remains green.
 ```
 
 Live smoke is optional after unit coverage:
@@ -638,15 +720,16 @@ Recommended order:
 
 ```text
 1. Add proxy/qz_file_signal.py with parser/state only.
-2. Add tests/test_qz_file_signal.py.
+2. Add tests/test_qz_file_signal.py, including standalone write extraction tests.
 3. Add explicit v1 warning-replay policy test.
 4. Add repeated_read_signal telemetry type.
-5. Thread RepeatedReadState into completed_call_decision() with no behaviour change.
-6. Enable signal-over-error-path for repeated reads.
-7. Add decision tests.
-8. Add stream/non-stream seeded-history tests.
-9. Run full suite.
-10. Live smoke against a known redundant-read prompt.
+5. Add CompletedToolCallDecision kind="signal" support.
+6. Thread RepeatedReadState into completed_call_decision() with no behaviour change.
+7. Enable signal path for repeated reads.
+8. Add decision tests.
+9. Add stream/non-stream seeded-history tests.
+10. Run full suite.
+11. Live smoke against a known redundant-read prompt.
 ```
 
 This keeps the first patch boring and testable. Boring is good. Boring means the
