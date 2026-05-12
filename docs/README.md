@@ -49,6 +49,8 @@ QuantZhai-owned qz_* context must not be injected into forwarded /v1/responses r
 | Codex contract | [Codex context and memory contract](codex-context-memory-contract.md) | Authoritative v2 contract for Codex 0.130 session/thread/turn/window/workspace metadata, SQLite scope direction, and `memory_domain` terminology. |
 | Codex evidence | [Codex 0.130 live signal capture](codex-0130-live-signal-capture.md) | Live capture evidence for Codex 0.130 request/header/body/turn/workspace signals. Historical sections may contain later-corrected implementation status; see the current-status note. |
 | Runtime contract | [Codex native first request capture](codex-native-request-capture.md) | Clean local reference for the raw first request shape Codex CLI sends before QuantZhai wrapper/proxy normalization. |
+| LimbiCore contract | [Model state signal contract](model-state-signal-contract.md) | Future-facing state/signal/memory envelope. Current rule: store scoped records internally, render small purpose-specific packets later; no clever memory in Phase 1. |
+| Deferred client/control UX | [qz-codex control plane future plan](qz-codex-control-plane-future.md) | Parked future seam for qz-codex fork/wrapper, /qz control plane, remote single-user mode, nginx/auth, and model/profile loading UX. Not active work. |
 | Memory architecture | [State and memory architecture plan](state-and-memory-architecture-plan.md) | Typed-memory classes, storage roles, and old planning context. Superseded for Codex identity/workspace/domain decisions. |
 | Config and error handling | [Edge case and config contract plan](edge-case-config-contract-plan.md) | Audit/refactor plan for edge cases, compact errors, profile safety, config layering, and reducing script sprawl. |
 | Current bugfix focus | [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) | Triage, review plan, proposed fixes, and acceptance checks for `/status`, monitor tools, profile tuning, and proxy streaming. |
@@ -111,6 +113,7 @@ Read:
 - [Current architecture authority map](current-architecture-authority.md)
 - [Codex context and memory contract](codex-context-memory-contract.md)
 - [Codex 0.130 live signal capture](codex-0130-live-signal-capture.md)
+- [Model state signal contract](model-state-signal-contract.md)
 - [State and memory architecture plan](state-and-memory-architecture-plan.md)
 - [Runtime observability notes](runtime-observability-notes.md)
 
@@ -122,6 +125,7 @@ Do not implement learned preferences, profile-private memory, HSM/archive memory
 Do not store giant raw request bodies in SQLite by default.
 Raw captures remain debug artifacts.
 Do not inject qz_session_id/qz_workspace_id/qz_memory_domain/qz_text_verbosity into forwarded request bodies.
+If a future LimbiCore renderer may use a fact, store enough scope/provenance/visibility metadata to keep it safe later.
 ```
 
 ### I want to understand what needs fixing next
@@ -144,6 +148,7 @@ Stream timing telemetry is done.
 Summary-mode SSE transform and missing DONE marker are fixed and live-smoked.
 Codex 0.130 identity/workspace parsing is source/capture grounded.
 Next state/memory work is Phase 1 SQLite substrate, optional/non-fatal and parser-boundary only.
+The qz-codex control plane plan is parked future work, not the next task.
 ```
 
 ### I want to work on edge cases, config layout, or profile safety
@@ -246,6 +251,26 @@ Read:
 - [Patch tool roadmap](patch-tool-roadmap.md)
 - [Proxy capability roadmap](proxy-capability-roadmap.md)
 
+### I want to revisit future qz-codex/client UX
+
+Read:
+
+- [qz-codex control plane future plan](qz-codex-control-plane-future.md)
+- [Runtime observability notes](runtime-observability-notes.md)
+- [Zombie model slot bug](bugs/zombie-model-slot.md)
+- [Proxy capability roadmap](proxy-capability-roadmap.md)
+
+Focus:
+
+```text
+This is parked future work.
+Keep /v1/responses upstream-compatible.
+Use /qz/* as a QuantZhai control plane.
+A qz-codex fork/wrapper should be a thin overlay, not a divergent client.
+Remote nginx/TLS/auth appliance mode is plausible later, still single-user.
+Do SQLite, runtime correctness, and script/data-path cleanup first.
+```
+
 ## Current doc inventory
 
 ```text
@@ -253,8 +278,11 @@ README.md
 AGENTS.md
 docs/README.md
 docs/current-architecture-authority.md
+docs/model-state-signal-contract.md
+docs/qz-codex-control-plane-future.md
 docs/bugs/responses-streaming-and-qz-thoughts.md
 docs/bugs/stale-profile-server-alias.md
+docs/bugs/zombie-model-slot.md
 docs/codex-0130-live-signal-capture.md
 docs/codex-context-memory-contract.md
 docs/codex-native-request-capture.md
