@@ -22,7 +22,7 @@ Use these documents for current implementation decisions:
 | Request-body ownership / no internal qz metadata injection | `tests/test_qz_request_mutation_regression.py` and commit `0d7ae3b7dd2869cf9c9819464c4cceeb4adddbd1` |
 | Responses stream/tool lifecycle | `docs/responses-stream-tool-state-contract.md` |
 | Current stabilisation order | `docs/master-stabilisation-plan.md`, with this map and the Codex contract taking precedence for state/memory terms |
-| Repeated-read v2 scope policy | `docs/codex-context-memory-contract.md` plus `docs/repeated-read-dedup-plan.md` |
+| Repeated-read v2 scope policy | `docs/codex-context-memory-contract.md` plus `docs/repeated-read-dedup-plan.md`; if stale terms conflict, use `memory_domain` + `workspace_id` from the Codex context contract |
 
 ---
 
@@ -32,6 +32,7 @@ Do not use these assumptions for new code or schema design:
 
 ```text
 profile_family
+profile_family or equivalent privacy class
 workspace not derivable proxy-side
 client_thread_id absent
 synthetic sessions only
@@ -46,6 +47,7 @@ Use these replacements:
 | Old language | Current replacement |
 | --- | --- |
 | `profile_family` | `memory_domain` |
+| `profile_family or equivalent privacy class` | explicit `memory_domain` plus `workspace_id` scope; no inference from profile/model/tool names |
 | workspace not derivable | Codex provides workspace candidates; QuantZhai resolves `workspace_id` internally |
 | client_thread_id absent | Codex 0.130 sends `thread_id`; older 0.125 captures did not |
 | synthetic sessions only | QuantZhai owns `qz_session_id`, mapped to external Codex `session_id`/`thread_id` when present |
@@ -97,7 +99,34 @@ facts changed later.
 | `docs/codex-request-signal-inventory.md` | Historical signal inventory. Useful checklist; use current parser/tests for implementation state. |
 | `docs/codex-header-capture-verdict.md` | Historical 0.125-era capture verdict. Important because it explains why `thread_id` must remain nullable/backward-compatible. |
 | `docs/codex-0130-live-signal-capture.md` | Current live evidence after status update. If older wording inside it conflicts with parser implementation, the current-status note wins. |
-| `docs/repeated-read-dedup-plan.md` | Current v1 repeated-read design and v2 scope motivation, but v2 persistence must use `memory_domain`/`workspace_id` from the Codex context contract. |
+| `docs/repeated-read-dedup-plan.md` | Current v1 repeated-read design and v2 scope motivation. Any older `profile_family` wording inside it is superseded: v2 persistence must use explicit `memory_domain`, `workspace_id`, and same-scope file read/write/signal facts from the Codex context contract. |
+
+---
+
+## Repeated-read v2 scope rule
+
+Repeated-read v2 must not use a generic profile privacy class.
+
+Current required scope inputs:
+
+```text
+qz_session_id
+qz_turn_id / codex_turn_id
+qz_request_id
+workspace_id
+memory_domain
+same-scope file_reads / file_writes / signals
+```
+
+Rules:
+
+```text
+memory_domain is explicit config only.
+Missing memory_domain means isolated.
+Do not infer durable memory authority from model name, profile name, client name, originator, user-agent, or tools list.
+Do not share roleplay/private/HSM facts into coding memory.
+Do not share coding workspace facts into roleplay/private/HSM memory.
+```
 
 ---
 
