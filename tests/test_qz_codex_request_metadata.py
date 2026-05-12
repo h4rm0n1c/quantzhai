@@ -31,6 +31,11 @@ class CodexRequestMetadataTests(unittest.TestCase):
         self.assertIsNone(tid)
         self.assertIsNone(gen)
 
+    def test_parse_codex_window_id_invalid_empty_thread(self):
+        tid, gen = parse_codex_window_id(":42")
+        self.assertIsNone(tid)
+        self.assertIsNone(gen)
+
     def test_extract_identity_parses_window_thread_and_generation(self):
         identity = extract_codex_identity({
             "x-codex-window-id": "thread-abc:42",
@@ -80,14 +85,27 @@ class CodexRequestMetadataTests(unittest.TestCase):
                     "x-openai-memgen-request": val,
                 })
                 self.assertTrue(identity.is_memgen)
+                self.assertEqual(identity.memgen_raw, val)
+                self.assertFalse(identity.memgen_parse_error)
 
     def test_extract_identity_captures_memgen_false(self):
-        for val in ("false", "0", "no", "anything-else", ""):
+        for val in ("false", "0", "no", ""):
             with self.subTest(val=val):
                 identity = extract_codex_identity({
                     "x-openai-memgen-request": val,
                 })
                 self.assertFalse(identity.is_memgen)
+                self.assertEqual(identity.memgen_raw, val)
+                self.assertFalse(identity.memgen_parse_error)
+
+    def test_extract_identity_captures_memgen_unknown_as_parse_error(self):
+        identity = extract_codex_identity({
+            "x-openai-memgen-request": "anything-else",
+        })
+        self.assertFalse(identity.is_memgen)
+        self.assertEqual(identity.memgen_raw, "anything-else")
+        self.assertTrue(identity.memgen_parse_error)
+        self.assertTrue(any("Unrecognised x-openai-memgen-request" in note for note in identity.conflict_notes))
 
     def test_extract_body_metadata_extracts_previous_response_id(self):
         meta = extract_codex_body_metadata({"previous_response_id": "resp-123"})
@@ -134,6 +152,19 @@ class CodexRequestMetadataTests(unittest.TestCase):
         meta = extract_codex_body_metadata(body)
         self.assertEqual(meta.tools_count, 3)
         self.assertEqual(meta.tool_names, ["read_file", "write_file", "web_search"])
+
+    def test_extract_body_metadata_summarises_codex_top_level_function_tools(self):
+        body = {
+            "tools": [
+                {"type": "function", "name": "exec_command", "parameters": {"type": "object"}},
+                {"type": "function", "name": "write_stdin"},
+                {"type": "custom", "name": "apply_patch"},
+                {"type": "web_search"},
+            ]
+        }
+        meta = extract_codex_body_metadata(body)
+        self.assertEqual(meta.tools_count, 4)
+        self.assertEqual(meta.tool_names, ["exec_command", "write_stdin", "apply_patch", "web_search"])
 
     def test_extract_body_metadata_detects_output_schema_without_storing_blob(self):
         body = {
