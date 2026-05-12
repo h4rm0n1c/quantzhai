@@ -150,7 +150,9 @@ class WorkspaceCandidateTests(unittest.TestCase):
         self.assertIsNone(ws.has_changes)
 
     def test_extract_workspace_candidates_skips_non_string_remote_names(self):
-        raw = json.dumps({
+        # JSON object keys are always strings after json.loads(), so exercise the
+        # parser helper directly with an already-materialised dict.
+        parsed = {
             "workspaces": {
                 "/repo/a": {
                     "associated_remote_urls": {
@@ -159,8 +161,7 @@ class WorkspaceCandidateTests(unittest.TestCase):
                     }
                 }
             }
-        })
-        parsed = parse_codex_turn_metadata_header(raw)
+        }
         candidates = extract_workspace_candidates(parsed)
         self.assertEqual(candidates[0].associated_remote_urls, {"origin": "https://github.com/user/a"})
 
