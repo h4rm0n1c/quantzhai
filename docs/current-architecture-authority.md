@@ -17,12 +17,34 @@ Use these documents for current implementation decisions:
 | Area | Current authority |
 | --- | --- |
 | Codex identity/thread/turn/window/workspace/memory-domain contract | `docs/codex-context-memory-contract.md` |
+| LimbiCore model state/signal/memory envelope | `docs/model-state-signal-contract.md` |
 | Live Codex 0.130 evidence | `docs/codex-0130-live-signal-capture.md` |
 | Parser boundary | `proxy/qz_codex_metadata.py` and its tests |
 | Request-body ownership / no internal qz metadata injection | `tests/test_qz_request_mutation_regression.py` and commit `0d7ae3b7dd2869cf9c9819464c4cceeb4adddbd1` |
 | Responses stream/tool lifecycle | `docs/responses-stream-tool-state-contract.md` |
 | Current stabilisation order | `docs/master-stabilisation-plan.md`, with this map and the Codex contract taking precedence for state/memory terms |
 | Repeated-read v2 scope policy | `docs/codex-context-memory-contract.md` plus `docs/repeated-read-dedup-plan.md`; if stale terms conflict, use `memory_domain` + `workspace_id` from the Codex context contract |
+
+---
+
+## LimbiCore state/signal rule
+
+For state or memory work above the Phase 1 SQLite substrate, use the LimbiCore
+contract:
+
+```text
+LimbiCore stores scoped StateRecords with provenance, then renders small purpose-specific packets or recall results to models.
+```
+
+Current rule:
+
+```text
+SQLite stores operational facts.
+Renderers decide model-facing packets.
+Storage records are not automatically model-facing memory.
+Recall results are not automatically model-facing memory.
+No clever memory, active memory tools, or model-visible durable memory in Phase 1.
+```
 
 ---
 
@@ -93,6 +115,7 @@ facts changed later.
 | Document | Current reading rule |
 | --- | --- |
 | `docs/state-and-memory-architecture-plan.md` | Useful for typed-memory taxonomy and DB motivation. Superseded by `codex-context-memory-contract.md` for Codex identity, workspace, and memory-domain policy. |
+| `docs/model-state-signal-contract.md` | Current LimbiCore envelope for future model-facing packets, recall, utility LLM jobs, and active memory tool direction. Does not change Phase 1 SQLite scope. |
 | `docs/state-and-memory-architecture-review-deepseek.md` | Historical review input. Do not treat stale `profile_family` or missing-thread assumptions as implementation authority. |
 | `docs/state-and-memory-architecture-codex-metadata-delta.md` | Historical bridge between early header capture and the current contract. Useful context, not the final authority. |
 | `docs/codex-client-header-metadata-audit.md` | Historical source audit. Superseded by later live Codex 0.130 evidence where they differ. |
