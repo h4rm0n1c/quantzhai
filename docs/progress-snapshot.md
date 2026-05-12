@@ -1,76 +1,176 @@
 # QuantZhai Progress Snapshot
 
-Last updated: 2026-05-11 (session 4, end).
+Last updated: 2026-05-12 (resource-planning / task-hierarchy pass).
 
 This is a periodic high-level progress note. Use it when someone asks "where are
-we overall?" without needing to reread every roadmap.
+we overall?" without rereading every roadmap.
 
 ## Overall
 
 Current estimate: **88% through stabilisation for the local Codex + Qwen goal**.
 
-Three long sessions plus a fourth. The proxy is substantially more capable and
-more honest about what it knows. The compaction bridge is now shipped and live-
-smoked — Qwen correctly recalls compacted context in follow-up turns.
+The local Codex/Qwen stack is usable and heavily tested. The proxy now has strong
+contracts around profiles, tool lifecycle, streaming, telemetry, compaction, and
+request mutation safety. The current risk is no longer one obvious bug. The risk
+is planning drift: many docs now exist, and implementation needs a short active
+task hierarchy so agents do not keep rediscovering old decisions.
 
-## Area Estimates
+New control sheet:
+
+```text
+docs/current-task-hierarchy.md
+```
+
+Current strategic direction:
+
+```text
+memory_domain config plumbing first
+Phase 1 SQLite operational substrate second
+repeated-read v1 signal third or parallel after terminology is stable
+config/var/script ownership cleanup after the state spine is safe
+```
+
+## Area estimates
 
 - **Core usable stack:** 88%
-  Suite is 256/256 green.
+  Known-good local flow exists. Prior suite checkpoints were green; rerun before
+  implementation agents make code changes.
 - **Config/model/profile correctness:** 84%
-  Unchanged. var/ layout restructure deferred.
+  Profile/catalog safety has improved, but memory_domain is not yet wired from
+  explicit config. Broad config/var cleanup remains deferred until the state
+  spine is safer.
 - **Streaming reliability:** 80%
-  Unchanged from prior.
+  Streaming/tool lifecycle work is substantially improved. Remaining work is
+  long-running TUI validation and edge-case relay polish.
 - **Tool handling:** 87%
-  Unchanged from prior.
+  Generic tool coercion/registry work is live. apply_patch and web_search paths
+  are now much better bounded. Repeated-read signalling is planned but not yet
+  implemented.
 - **Observability/status:** 70%
-  Unchanged. VRAM backend telemetry still open.
-- **LLM signal system:** 65%
-  Coercion error feedback, informative compaction placeholders, reasoning-budget-
-  message, carry-forward all live. Hop budget and context pressure signals live.
-  Compaction bridge delivered. Telemetry bus capacity fixed.
-  Profile eval framework complete: 14-prompt benchmark across 4 effort levels,
-  Qwen self-report interrogation (3 rounds, including negative space), effort
-  prompts rewritten with explicit tool budgets and unified sampling. Medium
-  well-behaved on 13/14 prompts. Open-ended exploration tasks structurally
-  resist effort caps — documented in `docs/benchmark-findings-effort-tuning.md`
-  with open questions for future stack work.
-  Next: config/var layout cleanup; redundant re-read and workspace anchoring
-  issues documented as future considerations.
-- **Docs/tests/replay:** 93%
-  Compaction bridge plan and telemetry bus bug note updated to reflect delivery.
-  293/293 tests green.
+  Shared telemetry exists. VRAM backend allocation telemetry and some first-status
+  correctness checks remain open.
+- **LLM signal system:** 68%
+  Reasoning-budget message, compact reasoning summary carry-forward, hop/context
+  pressure signals, compaction bridge, and profile eval work are delivered or
+  partly delivered. Benchmarking showed redundant re-reads and workspace
+  orientation waste are real practical problems. Repeated-read v1 now has an
+  approved implementation plan.
+- **State/memory substrate:** 25%
+  Parser/context boundary exists and is source-grounded. `memory_domain` still
+  resolves to isolated in code. SQLite Phase 1 is planned but not implemented.
+- **Docs/tests/replay:** 94%
+  The docs are now indexed better and the active task hierarchy exists. Keep
+  docs/current-architecture-authority.md and docs/current-task-hierarchy.md in
+  sync when direction changes.
 - **Packaging/architecture:** 35%
-  Unchanged.
+  Unchanged. Split proxy/package/backend adapter work remains later.
 
-## What the research changed
+## Current blockers and sequencing
 
-The original signal priority was: hop budget → context pressure → backend errors.
+### P1: memory_domain config plumbing
 
-Revised after research:
-1. **Reasoning budget message** (done — `--reasoning-budget-message`)
-2. **Compact reasoning summary carry-forward** (done — experimental flag)
-3. **Hop budget as ephemeral in-turn message** — next implementation target
-4. **Context pressure** — same pattern as hop budget
-5. **Empirical validation** — fuzz the signal format question before building more
+Status:
 
-## Immediate next priorities (in order)
+```text
+Next implementation target.
+```
 
-1. **Config/var layout + script cleanup** — Phase 3 of master plan. `var/`
-   restructure and script sprawl reduction. Housekeeping, long deferred.
+Why first:
 
-## Remaining Big Rocks
+```text
+SQLite needs explicit memory-domain boundaries before any durable same-scope
+state can be trusted. Missing memory_domain must remain isolated, and no tool,
+profile, model, client, or prompt inference may grant memory access.
+```
 
-1. ~~Fix pre-existing test failures~~ — done.
-2. ~~Tool lifecycle boundary cleanup~~ — done.
-3. ~~Config/user/runtime cleanup (immediate tier)~~ — done.
-4. ~~Generic tool coercion system~~ — done.
-5. Streaming reliability — in progress. Still open: long-running TUI
-   validation, profile preset tuning (blocked on profile eval framework).
-6. LLM signal system — **in progress**. Hop budget + context pressure signals
-   live. Next: empirical A/B format testing; compaction bridge.
-7. ~~Compaction bridge~~ — done. v2 format, auto-compaction trigger, live smoke.
-8. Profile eval framework — prompt set (docs/profile-eval-plan.md).
-9. Split proxy into a conventional Python package.
-10. Add backend adapter boundary.
-11. Later: MCP/app bridge, search packet mode, redaction, run grouping.
+### P2: Phase 1 SQLite operational substrate
+
+Status:
+
+```text
+Planned, blocked on P1.
+```
+
+Scope:
+
+```text
+Store sessions, turns, requests, workspace candidates, resolved workspaces,
+session/workspace bindings, identity conflicts, and request metadata summaries.
+Optional/non-fatal only. No model-visible memory.
+```
+
+### P3: repeated-read signal
+
+Status:
+
+```text
+V1 plan approved. Parser-only prep can start any time; integration is cleaner
+after P1. V2 is blocked on P2 same-scope SQLite facts.
+```
+
+Scope:
+
+```text
+V1 is advisory, stateless, and input-history-seeded from body["input"]. It warns
+about repeated file reads but does not suppress execution blindly.
+```
+
+### P4: config/var/script cleanup
+
+Status:
+
+```text
+Still needed, but do not let it preempt the memory-domain/state spine unless a
+live breakage demands it.
+```
+
+## Immediate next priorities
+
+1. **Implement explicit memory_domain config plumbing.**
+2. **Implement optional/non-fatal Phase 1 SQLite operational substrate.**
+3. **Implement repeated-read v1 signal or at least its parser/state tests.**
+4. **Continue config/var/script ownership cleanup after the state substrate is safe.**
+5. **Add backend VRAM allocation telemetry and remaining monitor polish.**
+
+## Resource plan
+
+Tonight / low-credit mode:
+
+```text
+DeepSeek/OpenCode:
+  doc inventory, stale terminology search, parser-test drafts, issue drafts.
+
+Gemini 9%:
+  one contradiction review only.
+
+ChatGPT/GitHub API:
+  repo-level triage, docs updates, task hierarchy, implementation prompts.
+```
+
+After Codex/Claude refresh:
+
+```text
+Codex/Claude:
+  P1 memory_domain config patch,
+  P2 SQLite substrate patch,
+  P3 repeated-read integration.
+```
+
+Do not spend refreshed premium agent cycles rediscovering the plan.
+
+## Remaining big rocks
+
+1. ~~Fix pre-existing test failures~~ — done in prior passes.
+2. ~~Tool lifecycle boundary cleanup~~ — largely done.
+3. ~~Config/user/runtime cleanup immediate tier~~ — done in prior passes.
+4. ~~Generic tool coercion system~~ — done in prior passes.
+5. Streaming reliability — mostly improved; long-running TUI and edge cases remain.
+6. LLM signal system — in progress; repeated-read v1 is next practical signal.
+7. ~~Compaction bridge~~ — delivered in prior passes.
+8. Profile eval framework — delivered; findings captured in benchmark docs.
+9. memory_domain config plumbing — next.
+10. Phase 1 SQLite substrate — next after memory_domain.
+11. Split proxy into a conventional Python package — later.
+12. Add backend adapter boundary — later.
+13. Later: MCP/app bridge, search packet mode, redaction, run grouping, rendered
+    state packets, roleplay/HSM-specific renderers.
