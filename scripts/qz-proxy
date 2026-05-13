@@ -32,9 +32,33 @@ else
 fi
 
 echo "$!" > "$pid_file"
-sleep 0.5
-if ! kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+proxy_pid="$(cat "$pid_file")"
+proxy_start_timeout="${QZ_PROXY_START_TIMEOUT:-20}"
+if ! [[ "$proxy_start_timeout" =~ ^[0-9]+$ ]] || [[ "$proxy_start_timeout" -lt 1 ]]; then
+  proxy_start_timeout=20
+fi
+deadline=$((SECONDS + proxy_start_timeout))
+proxy_ready=0
+
+while (( SECONDS < deadline )); do
+  if ! kill -0 "$proxy_pid" 2>/dev/null; then
+    break
+  fi
+  if curl -fsS --max-time 1 "http://$QZ_PROXY_HOST:$QZ_PROXY_PORT/health" >/dev/null 2>&1; then
+    proxy_ready=1
+    break
+  fi
+  sleep 0.2
+done
+
+if ! kill -0 "$proxy_pid" 2>/dev/null; then
   echo "proxy failed to start; see $QZ_VAR_DIR/logs/qz-proxy.log" >&2
   exit 1
 fi
+
+if [[ "$proxy_ready" != 1 ]]; then
+  echo "proxy did not answer /health on http://$QZ_PROXY_HOST:$QZ_PROXY_PORT within ${proxy_start_timeout}s; see $QZ_VAR_DIR/logs/qz-proxy.log" >&2
+  exit 1
+fi
+
 printf 'proxy listening: http://%s:%s\n' "$QZ_PROXY_HOST" "$QZ_PROXY_PORT"

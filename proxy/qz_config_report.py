@@ -303,6 +303,19 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
         }:
             warnings.append({"path": record["path"], "warning": f"{record['name']} is active but missing"})
 
+    proxy_initialization = None
+    if handler is not None:
+        payload_fn = getattr(handler, "_initialization_payload", None)
+        if callable(payload_fn):
+            try:
+                proxy_initialization = payload_fn()
+            except Exception:
+                proxy_initialization = {
+                    "schema": "qz.proxy.initialization.v1",
+                    "state": "unknown",
+                    "ready": False,
+                }
+
     return {
         "schema": EFFECTIVE_CONFIG_SCHEMA,
         "root": str(root),
@@ -312,4 +325,5 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
         "capture": capture,
         "prompt_files": prompt_file_summary,
         "warnings": warnings,
+        "proxy_initialization": proxy_initialization,
     }

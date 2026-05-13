@@ -77,6 +77,84 @@ class ModelRouter:
     def __init__(self, handler):
         self.handler = handler
 
+    def _initialization_payload(self) -> dict:
+        payload_fn = getattr(self.handler, "_initialization_payload", None)
+        if not callable(payload_fn):
+            return {"state": "ready", "ready": True}
+        try:
+            payload = payload_fn()
+        except Exception:
+            return {"state": "unknown", "ready": False}
+        return payload if isinstance(payload, dict) else {"state": "unknown", "ready": False}
+
+    def _initializing_status_snapshot(self, initialization: dict):
+        latest_request = {}
+        try:
+            telemetry = getattr(self.handler, "telemetry", None)
+            if telemetry is not None and hasattr(telemetry, "latest_request_summary"):
+                latest_request = telemetry.latest_request_summary()
+        except Exception:
+            latest_request = {}
+        state = initialization.get("state") or "initializing"
+        return {
+            "schema": STATUS_SNAPSHOT_SCHEMA,
+            "status": state,
+            "router_mode": True,
+            "ready": False,
+            "proxy_initialization": initialization,
+            "health": {
+                "status": None,
+                "body": {
+                    "status": state,
+                    "initialization": initialization,
+                },
+            },
+            "selected": {},
+            "backend": {
+                "selected_key": "",
+                "selected_backend_id": "",
+                "selected_state": state,
+                "selected_path": None,
+                "selected_reasoning_level": "medium",
+                "selected_reasoning_policy": reasoning_policy_mode(),
+                "selected_reasoning_prompt": None,
+                "selected_sampling_params": {},
+                "selected_thinking_budget_tokens": None,
+                "backend_reasoning_budget": backend_reasoning_budget(),
+                "selected_context_length": None,
+                "selected_context_length_state": "unknown",
+                "selected_context_length_source": "",
+                "backend_context_length": None,
+                "backend_context_length_state": "unknown",
+                "backend_context_length_source": "",
+                "restart_required": False,
+                "restart_required_state": "pending",
+                "loaded_model": "",
+                "loaded_count": 0,
+                "loaded_models": [],
+                "models": {},
+            },
+            "prompt": {
+                "schema": "qz.prompt.status.v1",
+                "mode": "",
+                "disabled": False,
+                "prompt_empty": True,
+                "policy": {},
+                "files_loaded": [],
+                "files_missing": [],
+                "files_failed": [],
+            },
+            "load": {
+                "state": state,
+                "started_at": initialization.get("started_at"),
+                "finished_at": initialization.get("finished_at"),
+                "error": initialization.get("error"),
+                "model": "",
+            },
+            "latest_request": latest_request,
+            "timestamp": time.time(),
+        }
+
     def _parse_context_length(self, value, default=None):
         if value is None:
             return default
@@ -624,6 +702,10 @@ class ModelRouter:
         return selected, reason
 
     def status_snapshot(self):
+        initialization = self._initialization_payload()
+        if not initialization.get("ready") and getattr(self.handler.__class__, "model_catalog", None) is None:
+            return self._initializing_status_snapshot(initialization)
+
         selected = self.selected_model_entry()
         probe_timeout = control_plane_backend_timeout()
         backend_models = self.backend_models(timeout=probe_timeout)
@@ -1166,10 +1248,21 @@ class ModelRouter:
         return selected, reason
 
     def model_catalog_payload(self):
+        initialization = self._initialization_payload()
+        if not initialization.get("ready") and getattr(self.handler.__class__, "model_catalog", None) is None:
+            return {
+                "object": "list",
+                "data": [],
+                "status": initialization.get("state") or "initializing",
+                "initialization": initialization,
+            }
         catalog = self.handler._model_catalog()
         return catalog.to_v1_models(backend_models=self.backend_models())
 
     def ollama_models(self):
+        initialization = self._initialization_payload()
+        if not initialization.get("ready") and getattr(self.handler.__class__, "model_catalog", None) is None:
+            return []
         catalog = self.handler._model_catalog()
         return catalog.to_ollama_models(backend_models=self.backend_models())
 
