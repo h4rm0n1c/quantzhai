@@ -266,6 +266,13 @@ artifacts are common compatibility traps.
 6. Drop malformed empty tool-call history before replaying context upstream.
 7. Keep telemetry/status live and request-scoped captures replayable.
 8. Emit one terminal completion path per logical client stream.
+9. A clean upstream `response.completed` with reasoning but no visible
+   `output_text` and no valid public/tool item is not a successful answer. The
+   stream runtime may suppress that terminal event, append one protocol repair
+   message to the next upstream request, and forward only the repaired logical
+   completion. If the repair also completes without visible output, emit a
+   visible fallback and classify it as
+   `reasoning_only_completed_without_answer`.
 
 ## Codex-Facing Live Lifecycle Relay
 

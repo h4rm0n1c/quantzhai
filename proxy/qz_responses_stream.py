@@ -55,6 +55,16 @@ PRIVATE_FUNCTION_CALL_DELTA_LIMIT = int(os.environ.get("QZ_PRIVATE_TOOL_CALL_DEL
 REASONING_ONLY_TIMEOUT_S = float(os.environ.get("QZ_REASONING_ONLY_TIMEOUT_S", "120"))
 REASONING_ONLY_CHAR_LIMIT = int(os.environ.get("QZ_REASONING_ONLY_CHAR_LIMIT", "-1"))
 REASONING_ARTIFACT_SCAN_LIMIT = int(os.environ.get("QZ_REASONING_ARTIFACT_SCAN_LIMIT", "8192"))
+EMPTY_ANSWER_REPAIR_HOPS = int(os.environ.get("QZ_EMPTY_ANSWER_REPAIR_HOPS", "1"))
+EMPTY_ANSWER_REPAIR_DISABLE_TOOLS = int(os.environ.get("QZ_EMPTY_ANSWER_REPAIR_DISABLE_TOOLS", "1")) != 0
+EMPTY_ANSWER_REPAIR_MESSAGE = (
+    "Protocol repair: your previous completion ended without any user-visible output_text.\n\n"
+    "Produce the final answer for the original user request now.\n"
+    "Do not call tools.\n"
+    "Do not continue reasoning.\n"
+    "Do not mention this repair step.\n"
+    "Write only the final assistant answer."
+)
 
 # Hop budget signal: inject a plain-instruction message when remaining continuation
 # hops fall to this threshold or below. Set to -1 to disable entirely.
@@ -104,6 +114,70 @@ def _looks_like_reasoning_tool_artifact(text: str) -> bool:
     return has_patch_shape and hits >= 3
 
 
+def _message_content_output_text(content) -> str:
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for part in content:
+        if not isinstance(part, dict) or part.get("type") != "output_text":
+            continue
+        text = part.get("text")
+        if isinstance(text, str):
+            parts.append(text)
+    return "".join(parts)
+
+
+def _response_output_items(response: dict) -> list:
+    output = response.get("output") if isinstance(response, dict) else None
+    return output if isinstance(output, list) else []
+
+
+def _response_has_visible_output_text(response: dict) -> bool:
+    for item in _response_output_items(response):
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue
+        if _message_content_output_text(item.get("content")).strip():
+            return True
+    return False
+
+
+def _response_reasoning_chars(response: dict) -> int:
+    total = 0
+    for item in _response_output_items(response):
+        if not isinstance(item, dict) or item.get("type") != "reasoning":
+            continue
+        for part in item.get("content") or []:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") in {"reasoning_text", "summary_text"}:
+                total += len(str(part.get("text") or ""))
+    return total
+
+
+def _is_valid_public_output_item(item: dict) -> bool:
+    if not isinstance(item, dict):
+        return False
+    item_type = item.get("type")
+    if item_type in {None, "reasoning", "message"}:
+        return False
+    if item.get("status") in {"in_progress", "incomplete"}:
+        return False
+    return True
+
+
+def _response_has_valid_public_item(response: dict) -> bool:
+    return any(_is_valid_public_output_item(item) for item in _response_output_items(response))
+
+
+def _usage_telemetry_fields(usage: dict | None) -> dict:
+    usage = usage if isinstance(usage, dict) else {}
+    return {
+        "usage": _normalize_response_usage(usage),
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("output_tokens"),
+    }
+
+
 class _MultiRawLog:
     def __init__(self, handles):
         self.handles = [handle for handle in handles if handle is not None]
@@ -144,6 +218,8 @@ class ResponsesStreamRuntime:
         reasoning_carry_forward: bool = False,
         hop_budget_signal_threshold: int | None = None,
         context_pressure_signal_threshold: float | None = None,
+        empty_answer_repair_hops: int | None = None,
+        empty_answer_repair_disable_tools: bool | None = None,
     ):
         self.upstream = upstream.rstrip("/")
         self.authorization = authorization or "Bearer local"
@@ -186,6 +262,16 @@ class ResponsesStreamRuntime:
             REASONING_ONLY_CHAR_LIMIT
             if reasoning_only_char_limit is None
             else int(reasoning_only_char_limit)
+        )
+        self.empty_answer_repair_hops = (
+            EMPTY_ANSWER_REPAIR_HOPS
+            if empty_answer_repair_hops is None
+            else int(empty_answer_repair_hops)
+        )
+        self.empty_answer_repair_disable_tools = (
+            EMPTY_ANSWER_REPAIR_DISABLE_TOOLS
+            if empty_answer_repair_disable_tools is None
+            else bool(empty_answer_repair_disable_tools)
         )
 
     def _open_upstream_stream(self, body: dict):
@@ -556,6 +642,66 @@ class ResponsesStreamRuntime:
         )
         return self._make_signal_message(text)
 
+    def _empty_answer_repair_payload(
+        self,
+        requested_model: str,
+        reasoning_chars: int,
+        upstream_output_items: int,
+        usage,
+        repair_hop_index: int,
+    ) -> dict:
+        payload = {
+            "model": requested_model,
+            "reasoning_chars": int(reasoning_chars),
+            "upstream_output_items": int(upstream_output_items),
+            "repair_hop_index": int(repair_hop_index),
+        }
+        payload.update(_usage_telemetry_fields(usage))
+        return payload
+
+    def _apply_empty_answer_repair(self, body: dict, next_input: list) -> dict:
+        repair_body = json.loads(json.dumps(body))
+        repair_body["input"] = list(next_input) + [self._make_signal_message(EMPTY_ANSWER_REPAIR_MESSAGE)]
+        if self.empty_answer_repair_disable_tools:
+            repair_body.pop("tools", None)
+            repair_body.pop("tool_choice", None)
+        return repair_body
+
+    def _emit_reasoning_only_completed_without_answer(
+        self,
+        requested_model: str,
+        summary_started: set,
+        final_usage,
+        reasoning_chars: int,
+        public_index: int = 0,
+        sequence: int = 0,
+        prefix_output: list | None = None,
+    ) -> tuple:
+        text = (
+            "The model completed a reasoning-only response without producing a "
+            "user-visible answer. Please retry with a narrower request."
+        )
+        output_item = {
+            "id": f"msg_local_{_now_ts()}",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": text, "annotations": []}],
+        }
+        self._emit("reasoning_only_completed_without_answer", {
+            "model": requested_model,
+            "reason": "reasoning_only_completed_without_answer",
+            "reasoning_chars": int(reasoning_chars),
+        })
+        sequence = self._stream_fallback_message(output_item, public_index, sequence)
+        self._emit_completed(
+            requested_model,
+            list(prefix_output or []) + [output_item],
+            summary_started,
+            usage=final_usage,
+        )
+        return [output_item], sequence
+
     def run(self, body: dict, requested_model: str, apply_patch_output_style: str = "native"):
         working_body = json.loads(json.dumps(body))
         working_body["stream"] = True
@@ -591,8 +737,14 @@ class ResponsesStreamRuntime:
         })
 
         max_hops = self.proxy_tool_registry.max_continuation_hops or WEB_SEARCH_MAX_HOPS
+        repair_hops_used = 0
+        pending_repair_hop_index = None
         try:
-            for hop_index in range(max_hops):
+            for hop_index in range(max_hops + max(0, self.empty_answer_repair_hops)):
+                active_repair_hop_index = pending_repair_hop_index
+                pending_repair_hop_index = None
+                if hop_index >= max_hops and active_repair_hop_index is None:
+                    break
                 hop_body = json.loads(json.dumps(working_body))
                 hop_body["stream"] = True
                 hop_body = normalize_responses_input_for_qwen(hop_body, selected_model=self.selected_model)
@@ -608,11 +760,13 @@ class ResponsesStreamRuntime:
                     next_input = list(hop_body.get("input") or [])
                     completed_call = None
                     error_injected = False
+                    repair_injected = False
                     reasoning_only_started_at = None
                     reasoning_only_last_delta_at = None
                     reasoning_only_chars = 0
                     reasoning_only_sample = ""
-                    output_text_seen = False
+                    output_text_chars = 0
+                    visible_output_text_seen = False
                     public_item_seen = False
                     max_output_index = -1
 
@@ -644,14 +798,18 @@ class ResponsesStreamRuntime:
                             max_output_index = max(max_output_index, payload["output_index"])
                         if isinstance(payload, dict) and isinstance(payload.get("sequence_number"), int):
                             sequence = max(sequence, payload["sequence_number"])
-                        if event_type == "response.output_text.delta":
-                            output_text_seen = True
+                        if event_type == "response.output_text.delta" and isinstance(payload, dict):
+                            delta = payload.get("delta")
+                            delta_text = delta if isinstance(delta, str) else ""
+                            output_text_chars += len(delta_text)
+                            if delta_text.strip():
+                                visible_output_text_seen = True
                         if event_type in {
                             "response.output_item.added",
                             "response.output_item.done",
                         } and isinstance(payload, dict):
                             item = payload.get("item")
-                            if isinstance(item, dict) and item.get("type") not in {"reasoning"}:
+                            if event_type == "response.output_item.done" and _is_valid_public_output_item(item):
                                 public_item_seen = True
                         if event_type == "response.completed":
                             response = payload.get("response") if isinstance(payload, dict) else {}
@@ -707,7 +865,7 @@ class ResponsesStreamRuntime:
                                 "response.reasoning_summary_text.delta",
                             }
                             and isinstance(payload, dict)
-                            and not output_text_seen
+                            and not visible_output_text_seen
                             and not public_item_seen
                         ):
                             if reasoning_only_started_at is None:
@@ -919,6 +1077,113 @@ class ResponsesStreamRuntime:
                             event_lines = []
                             continue
 
+                        if event_type == "response.completed" and isinstance(payload, dict):
+                            response = payload.get("response") or {}
+                            if isinstance(response, dict):
+                                upstream_output_items = len(_response_output_items(response))
+                                completed_reasoning_chars = max(
+                                    int(reasoning_only_chars),
+                                    _response_reasoning_chars(response),
+                                )
+                                completed_without_visible_answer = (
+                                    not visible_output_text_seen
+                                    and not public_item_seen
+                                    and not _response_has_visible_output_text(response)
+                                    and not _response_has_valid_public_item(response)
+                                )
+                                completed_without_answer = (
+                                    completed_without_visible_answer
+                                    and (
+                                        completed_reasoning_chars > 0
+                                        or active_repair_hop_index is not None
+                                    )
+                                )
+                                if completed_without_answer:
+                                    if repair_hops_used < max(0, self.empty_answer_repair_hops):
+                                        repair_hop_index = repair_hops_used
+                                        repair_hops_used += 1
+                                        working_body = self._apply_empty_answer_repair(hop_body, next_input)
+                                        pending_repair_hop_index = repair_hop_index
+                                        repair_injected = True
+                                        self._emit(
+                                            "empty_answer_repair_started",
+                                            self._empty_answer_repair_payload(
+                                                requested_model,
+                                                completed_reasoning_chars,
+                                                upstream_output_items,
+                                                final_usage,
+                                                repair_hop_index,
+                                            ),
+                                        )
+                                        self._emit_stream_event_timing(
+                                            event_type,
+                                            event_received_at,
+                                            event_parsed_at,
+                                            None,
+                                            suppressed="empty_answer_repair_started",
+                                        )
+                                        event_lines = []
+                                        break
+
+                                    repair_hop_index = (
+                                        active_repair_hop_index
+                                        if active_repair_hop_index is not None
+                                        else max(0, repair_hops_used - 1)
+                                    )
+                                    payload_fields = self._empty_answer_repair_payload(
+                                        requested_model,
+                                        completed_reasoning_chars,
+                                        upstream_output_items,
+                                        final_usage,
+                                        repair_hop_index,
+                                    )
+                                    self._emit("empty_answer_repair_failed", payload_fields)
+                                    self._emit_stream_event_timing(
+                                        event_type,
+                                        event_received_at,
+                                        event_parsed_at,
+                                        None,
+                                        suppressed="reasoning_only_completed_without_answer",
+                                    )
+                                    fallback_items, sequence = self._emit_reasoning_only_completed_without_answer(
+                                        requested_model,
+                                        summary_started,
+                                        final_usage,
+                                        completed_reasoning_chars,
+                                        public_index=len(public_trace),
+                                        sequence=sequence,
+                                        prefix_output=public_trace,
+                                    )
+                                    public_trace.extend(fallback_items)
+                                    self._emit_stream_completed(
+                                        requested_model,
+                                        len(public_trace),
+                                        started_at,
+                                        fallback=True,
+                                    )
+                                    completed_at = time.time()
+                                    return self._build_result(
+                                        requested_model,
+                                        started_at,
+                                        first_output_at,
+                                        completed_at,
+                                        final_usage,
+                                        len(public_trace),
+                                        fallback=True,
+                                    )
+
+                                if active_repair_hop_index is not None:
+                                    self._emit(
+                                        "empty_answer_repair_completed",
+                                        self._empty_answer_repair_payload(
+                                            requested_model,
+                                            completed_reasoning_chars,
+                                            upstream_output_items,
+                                            final_usage,
+                                            active_repair_hop_index,
+                                        ),
+                                    )
+
                         if event_type in {"response.created", "response.in_progress"}:
                             if sent_response_start:
                                 self._emit_stream_event_timing(
@@ -1029,6 +1294,9 @@ class ResponsesStreamRuntime:
                         raw_log.close()
                     if resp is not None:
                         resp.close()
+
+                if repair_injected:
+                    continue
 
                 if error_injected or (completed_call and self.proxy_tool_registry.is_proxy_local_call(completed_call)):
                     if max_output_index >= 0:

@@ -16,8 +16,12 @@ UNKNOWN_RUNTIME_SCHEMA = "qz.runtime.summary.v1"
 
 REQUEST_LIFECYCLE_EVENT_TYPES = {
     "client_disconnected",
+    "empty_answer_repair_completed",
+    "empty_answer_repair_failed",
+    "empty_answer_repair_started",
     "prompt_contract",
     "private_tool_call_aborted",
+    "reasoning_only_completed_without_answer",
     "reasoning_only_aborted",
     "request_admitted",
     "request_completed",
