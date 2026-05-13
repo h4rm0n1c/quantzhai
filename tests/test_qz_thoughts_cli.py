@@ -308,6 +308,34 @@ class QzThoughtsCliTests(unittest.TestCase):
         self.assertIn(("proxy", "reconnected"), state.backend)
         self.assertIn(("request", "POST /v1/responses"), state.activity)
 
+    def test_idle_stream_reconnect_does_not_mark_proxy_unavailable_or_reset_sequence(self):
+        ns = _load_qz_thoughts_namespace()
+        state = ns["ThoughtState"](path=Path("proxy-telemetry"))
+        state.status = "ok"
+        state.last_seq = 500
+
+        feed = object.__new__(ns["TelemetryFeed"])
+        feed.state = state
+        feed._apply_event({
+            "type": "monitor_connection",
+            "payload": {"status": "idle_reconnecting", "url": "http://127.0.0.1/qz/telemetry/stream"},
+        })
+
+        self.assertEqual(state.status, "reconnecting")
+        self.assertEqual(state.parse_error, "")
+        self.assertEqual(state.last_seq, 500)
+        self.assertIn(("stream", "idle reconnecting"), state.backend)
+
+        feed._apply_event({
+            "type": "monitor_connection",
+            "payload": {"status": "idle_reconnected", "url": "http://127.0.0.1/qz/telemetry/stream"},
+        })
+
+        self.assertEqual(state.status, "ok")
+        self.assertEqual(state.parse_error, "")
+        self.assertEqual(state.last_seq, 500)
+        self.assertIn(("stream", "idle reconnected"), state.backend)
+
 
 if __name__ == "__main__":
     unittest.main()
