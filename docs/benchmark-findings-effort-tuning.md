@@ -239,7 +239,7 @@ mechanisms.
 
 ## Current state
 
-Effort prompts as of 2026-05-11 (post-tuning):
+Effort prompts as of 2026-05-13 (post issue #11 retuning):
 
 ```
 low:    Use at most one tool call. Do not follow imports, explore subdirectories,
@@ -249,15 +249,20 @@ low:    Use at most one tool call. Do not follow imports, explore subdirectories
 medium: Use at most 3 tool calls. Stop after 3 regardless of task complexity —
         work with what you have. Give a concise answer with brief supporting detail.
 
-high:   Investigate across multiple files. Read at least two relevant files and
-        cross-reference their contents before answering. Stop when you are
-        confident there are no conflicting definitions or missing context.
-        Explain your reasoning.
+high:   Use up to 8 tool calls. Read the most relevant files first.
+        Cross-reference at least two sources when the answer depends on code
+        behaviour. Stop early if the answer is clear. Do not chase every possible
+        dependency. If uncertainty remains after the budget, state the uncertainty
+        and answer from the evidence gathered. Give a concise answer with the key
+        evidence.
 
-xhigh:  Perform exhaustive investigation: map the directory structure, read every
-        file that could affect the answer, trace dependencies between modules, and
-        verify assumptions from source rather than inference. Stop only when you
-        have no remaining uncertainty about the answer. Document all relevant findings.
+xhigh:  Use up to 16 tool calls. Map the relevant area before editing or judging
+        architecture. Trace only dependencies that can change the answer. Avoid
+        rereading the same file unless it changed or you need a specific line
+        range. Stop when further reads are unlikely to change the answer, not when
+        all uncertainty is gone. If uncertainty remains after the budget, list the
+        remaining checks instead of continuing. Document the important findings
+        and the decision.
 ```
 
 All four levels share medium's sampling params (temp=0.6, top_p=0.95).

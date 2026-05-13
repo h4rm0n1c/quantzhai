@@ -46,23 +46,29 @@ REASONING_POLICIES: Dict[str, Dict[str, Any]] = {
     },
     "high": {
         "effort": "high",
-        "description": "Multi-file investigation. Cross-reference before answering.",
+        "description": "Bounded multi-file investigation. Cross-reference before answering.",
         "prompt": (
-            "Investigate across multiple files. "
-            "Read at least two relevant files and cross-reference their contents before answering. "
-            "Stop when you are confident there are no conflicting definitions or missing context. "
-            "Explain your reasoning."
+            "Use up to 8 tool calls. "
+            "Read the most relevant files first. "
+            "Cross-reference at least two sources when the answer depends on code behaviour. "
+            "Stop early if the answer is clear. "
+            "Do not chase every possible dependency. "
+            "If uncertainty remains after the budget, state the uncertainty and answer from the evidence gathered. "
+            "Give a concise answer with the key evidence."
         ),
         "sampling": dict(_SHARED_SAMPLING),
     },
     "xhigh": {
         "effort": "xhigh",
-        "description": "Exhaustive investigation. Trace dependencies, verify everything.",
+        "description": "Bounded architecture investigation. Trace dependencies that matter.",
         "prompt": (
-            "Perform exhaustive investigation: map the directory structure, read every file that could affect the answer, "
-            "trace dependencies between modules, and verify assumptions from source rather than inference. "
-            "Stop only when you have no remaining uncertainty about the answer. "
-            "Document all relevant findings."
+            "Use up to 16 tool calls. "
+            "Map the relevant area before editing or judging architecture. "
+            "Trace only dependencies that can change the answer. "
+            "Avoid rereading the same file unless it changed or you need a specific line range. "
+            "Stop when further reads are unlikely to change the answer, not when all uncertainty is gone. "
+            "If uncertainty remains after the budget, list the remaining checks instead of continuing. "
+            "Document the important findings and the decision."
         ),
         "sampling": dict(_SHARED_SAMPLING),
     },
