@@ -506,8 +506,13 @@ not a contract yet.
 
 Stream telemetry names currently owned by the proxy are:
 `stream_event_timing`, `stream_completed`, `client_disconnected`,
-`private_tool_call_aborted`, and `reasoning_only_aborted`. Proxy-local tool runtimes also emit
-`tool_call_started` and `tool_call_completed` for monitor/status consumers.
+`private_tool_call_aborted`, `reasoning_only_aborted`,
+`reasoning_only_completed_without_answer`, `empty_answer_repair_started`,
+`empty_answer_repair_completed`, and `empty_answer_repair_failed`.
+Proxy-local tool runtimes also emit `web_search_route`, `tool_call_started`,
+and `tool_call_completed` for monitor/status consumers. `qz-thoughts` should
+render these as lifecycle rows rather than raw event-name noise and should keep
+merging retained `latest_completed_events` with recent telemetry.
 
 ## Coverage Matrix
 

@@ -88,6 +88,12 @@ Date: 2026-04-29
   latest response window, and filters health/telemetry poll noise from its
   activity view. Raw capture replay is explicit with `--file`; the monitor no
   longer reads latest capture files as live truth.
+- `scripts/qz-thoughts` now labels newer stream lifecycle telemetry explicitly:
+  empty-answer repair start/done/failure, reasoning-only fallback, private
+  tool-call aborts, stream fallback completion, web-search route details, and
+  retained latest-completed events merged with recent telemetry. It also shows
+  capture-mode hints from `/qz/config/effective` and marks proxy unavailable
+  and reconnected states while the live telemetry stream reconnects.
 - `scripts/qz-top` GPU rows now separate current VRAM `USED` from a per-GPU
   low-water `BASE` and live `DELTA`. `DELTA` is useful for cache/buffer pressure
   testing, but it is an approximation until the backend reports exact model,
