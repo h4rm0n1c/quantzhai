@@ -125,9 +125,71 @@ class ProxyHandler(BaseHTTPRequestHandler):
     model_load_health = None
     model_state_path = None
     backend_state_path = None
+    root = None
+    initialization_lock = threading.Lock()
+    initialization_state = "ready"
+    initialization_error = None
+    initialization_started_at = None
+    initialization_finished_at = None
 
     def log_message(self, fmt, *args):
         return
+
+    @classmethod
+    def _set_initialization_state(cls, state: str, error: str | None = None):
+        now = time.time()
+        with cls.initialization_lock:
+            previous = getattr(cls, "initialization_state", "ready")
+            cls.initialization_state = state or "unknown"
+            cls.initialization_error = error or None
+            if state == "initializing" and not cls.initialization_started_at:
+                cls.initialization_started_at = now
+                cls.initialization_finished_at = None
+            elif state in {"ready", "failed"}:
+                cls.initialization_finished_at = now
+        try:
+            cls.telemetry.emit("proxy_initialization", {
+                "state": cls.initialization_state,
+                "previous": previous,
+                "error": cls.initialization_error,
+            })
+        except Exception:
+            pass
+
+    def _initialization_payload(self):
+        cls = self.__class__
+        with cls.initialization_lock:
+            state = getattr(cls, "initialization_state", "ready") or "ready"
+            error = getattr(cls, "initialization_error", None)
+            started_at = getattr(cls, "initialization_started_at", None)
+            finished_at = getattr(cls, "initialization_finished_at", None)
+        return {
+            "schema": "qz.proxy.initialization.v1",
+            "state": state,
+            "ready": state == "ready",
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "error": error,
+            "catalog_ready": getattr(cls, "model_catalog", None) is not None,
+            "search_ready": bool(getattr(cls, "searxng_policy", None) or getattr(cls, "searxng_capabilities", None)),
+        }
+
+    def _startup_ready(self) -> bool:
+        return bool(self._initialization_payload().get("ready"))
+
+    def _initializing_error_payload(self):
+        init = self._initialization_payload()
+        if init.get("state") == "failed":
+            return {
+                "error": "proxy initialization failed",
+                "reason": init.get("error") or "startup initialization failed",
+                "initialization": init,
+            }
+        return {
+            "error": "proxy initializing",
+            "reason": "model catalog and startup policy are still loading",
+            "initialization": init,
+        }
 
     def _send_json(self, status, obj):
         data = json.dumps(obj).encode("utf-8")
@@ -429,6 +491,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def _model_catalog(self):
         if self.model_catalog is None:
+            if not self._startup_ready():
+                raise RuntimeError("proxy initialization is not complete")
             root = Path(os.environ.get("QZ_ROOT", Path(__file__).resolve().parents[1]))
             self.__class__.model_catalog = ModelCatalog.from_env(root)
             self.__class__.model_catalog_path = str(self.model_catalog.cache_path)
@@ -511,21 +575,21 @@ def main():
     script_dir = Path(__file__).resolve().parent
     policy_path = Path(args.searxng_policy) if args.searxng_policy else _default_search_policy_path(root, script_dir)
     capabilities_path = Path(args.searxng_capabilities) if args.searxng_capabilities else script_dir / "searxng-capabilities.json"
-    policy = _safe_json_file(policy_path)
-    capabilities = _safe_json_file(capabilities_path)
-    catalog = ModelCatalog.from_env(root)
-    ProxyHandler.model_catalog = catalog
     ProxyHandler.root = str(root)
-    ProxyHandler.model_catalog_path = str(catalog.cache_path)
+    ProxyHandler.model_catalog = None
+    ProxyHandler.model_catalog_path = None
     ProxyHandler.model_state_path = str(Path(os.environ.get("QZ_MODEL_STATE_PATH", str(root / "var" / "model-state.json"))).expanduser())
     ProxyHandler.backend_state_path = str(Path(os.environ.get("QZ_BACKEND_STATE_PATH", str(root / "var" / "backend-state.json"))).expanduser())
 
     ProxyHandler.searxng_policy_path = str(policy_path)
     ProxyHandler.searxng_capabilities_path = str(capabilities_path)
-    ProxyHandler.searxng_policy = policy
-    ProxyHandler.searxng_capabilities = capabilities
-    ProxyHandler.searxng_base_url = args.searxng_base_url or policy.get("searxng_base") or capabilities.get("base")
+    ProxyHandler.searxng_policy = {}
+    ProxyHandler.searxng_capabilities = {}
+    ProxyHandler.searxng_base_url = args.searxng_base_url
     ProxyHandler.searxng_timeout = args.searxng_timeout
+    ProxyHandler.initialization_started_at = None
+    ProxyHandler.initialization_finished_at = None
+    ProxyHandler._set_initialization_state("initializing")
 
     server = ThreadingHTTPServer((args.listen, args.port), ProxyHandler)
 
@@ -564,9 +628,29 @@ def main():
             except Exception:
                 time.sleep(0.5)
 
-    threading.Thread(target=_preload_last_model, daemon=True).start()
+    def _initialize_proxy_state():
+        try:
+            policy = _safe_json_file(policy_path)
+            capabilities = _safe_json_file(capabilities_path)
+            catalog = ModelCatalog.from_env(root)
+            ProxyHandler.model_catalog = catalog
+            ProxyHandler.model_catalog_path = str(catalog.cache_path)
+            ProxyHandler.searxng_policy = policy
+            ProxyHandler.searxng_capabilities = capabilities
+            ProxyHandler.searxng_base_url = args.searxng_base_url or policy.get("searxng_base") or capabilities.get("base")
+            ProxyHandler._set_initialization_state("ready")
+            threading.Thread(target=_preload_last_model, daemon=True).start()
+            print(
+                f"QuantZhai proxy initialized: catalog={ProxyHandler.model_catalog_path}, searxng_base={ProxyHandler.searxng_base_url}",
+                flush=True,
+            )
+        except Exception as exc:
+            ProxyHandler._set_initialization_state("failed", str(exc))
+            print(f"QuantZhai proxy initialization failed: {exc}", flush=True)
+
+    threading.Thread(target=_initialize_proxy_state, daemon=True).start()
     print(
-        f"QuantZhai proxy listening on {args.listen}:{args.port} -> {ProxyHandler.upstream}, reasoning_stream_format={ProxyHandler.reasoning_stream_format}, searxng_base={ProxyHandler.searxng_base_url}",
+        f"QuantZhai proxy listening on {args.listen}:{args.port} -> {ProxyHandler.upstream}, reasoning_stream_format={ProxyHandler.reasoning_stream_format}, initialization=background",
         flush=True,
     )
     server.serve_forever()

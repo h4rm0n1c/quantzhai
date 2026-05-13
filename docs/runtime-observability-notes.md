@@ -84,6 +84,11 @@ Date: 2026-04-29
   `/qz/status` are intended to answer while the backend is still loading or
   unavailable. If the backend health wait times out or the container exits,
   `qz-up` exits non-zero but leaves the proxy running for diagnostics.
+- `qz-proxy` binds its HTTP listener before model catalog and search policy
+  initialization. `/health`, `/qz/config/effective`, and telemetry routes expose
+  `proxy_initialization` while startup work runs in the background; model and
+  data-plane routes return a clear initializing 503 until the catalog is ready.
+  The launcher prints `proxy listening` only after `/health` responds.
 - `scripts/qz-up` has convenience modes:
   - `--hold` starts the proxy and then opens `qz-top` while backend readiness
     continues to settle.

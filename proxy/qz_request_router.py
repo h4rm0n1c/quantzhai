@@ -136,6 +136,29 @@ class RequestRouter:
     def __init__(self, handler):
         self.handler = handler
 
+    def _proxy_startup_ready(self) -> bool:
+        ready_fn = getattr(self.handler, "_startup_ready", None)
+        if callable(ready_fn):
+            try:
+                return bool(ready_fn())
+            except Exception:
+                return False
+        return True
+
+    def _proxy_initializing_error_payload(self) -> dict:
+        payload_fn = getattr(self.handler, "_initializing_error_payload", None)
+        if callable(payload_fn):
+            try:
+                payload = payload_fn()
+                if isinstance(payload, dict):
+                    return payload
+            except Exception:
+                pass
+        return {
+            "error": "proxy initializing",
+            "reason": "model catalog and startup policy are still loading",
+        }
+
     def _request_gate(self, upstream_path: str, client_model: str = "", stream: bool = False):
         gate = getattr(self.handler.__class__, "request_gate", None)
 
@@ -226,10 +249,19 @@ class RequestRouter:
             return
 
         if self.handler.path == "/health":
+            initialization = self.handler._initialization_payload()
+            if not initialization.get("ready"):
+                catalog_payload = {
+                    "status": initialization.get("state") or "initializing",
+                    "initialization": initialization,
+                }
+            else:
+                catalog_payload = self.handler._model_catalog_payload()
             self.handler._send_json(200, {
-                "status": "ok",
+                "status": "ok" if initialization.get("ready") else (initialization.get("state") or "initializing"),
                 "upstream": self.handler.upstream,
-                "catalog": self.handler._model_catalog_payload(),
+                "proxy_initialization": initialization,
+                "catalog": catalog_payload,
                 "supports": list(CURRENT_API_ENDPOINTS),
                 "api_contract": api_contract_payload(),
             })
@@ -293,6 +325,9 @@ class RequestRouter:
             return
 
         if self.handler.path == "/qz/models":
+            if not self._proxy_startup_ready():
+                self.handler._send_json(503, self._proxy_initializing_error_payload())
+                return
             catalog = self.handler._model_catalog()
             self.handler._send_json(200, {
                 "catalog": catalog.to_payload(),
@@ -322,6 +357,9 @@ class RequestRouter:
             return
 
         if self.handler.path == "/qz/models/refresh":
+            if not self._proxy_startup_ready():
+                self.handler._send_json(503, self._proxy_initializing_error_payload())
+                return
             catalog = self.handler._model_catalog()
             catalog.refresh()
             codex_catalog_written = self._refresh_codex_catalog(catalog)
@@ -333,6 +371,9 @@ class RequestRouter:
             return
 
         if self.handler.path in ("/qz/models/load", "/qz/models/select"):
+            if not self._proxy_startup_ready():
+                self.handler._send_json(503, self._proxy_initializing_error_payload())
+                return
             length = int(self.handler.headers.get("Content-Length", "0") or "0")
             raw = self.handler.rfile.read(length) if length else b"{}"
             try:
@@ -946,6 +987,20 @@ class RequestRouter:
             write_dual_capture("latest-request-headers.json", request_id, "incoming-request-headers.json", headers_capture)
         except Exception:
             headers_raw = {}
+
+        if not self._proxy_startup_ready():
+            payload = self._proxy_initializing_error_payload()
+            self._emit_request_telemetry(
+                "request_failed",
+                started_at,
+                upstream_path,
+                body.get("model") or "",
+                error=payload.get("reason") or payload.get("error"),
+                phase="proxy_initialization",
+                request_id=request_id,
+            )
+            self.handler._send_json(503, payload)
+            return
 
         try:
             status_summary = self.handler._model_router().status_summary(self.handler.path)
