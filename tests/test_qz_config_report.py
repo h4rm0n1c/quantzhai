@@ -17,6 +17,7 @@ class EffectiveConfigReportTests(unittest.TestCase):
             "QZ_MODEL_DIR",
             "QZ_MODEL_OVERRIDES",
             "QZ_MODEL_INVENTORY_CACHE",
+            "QZ_CAPTURE_MODE",
             "SEARXNG_POLICY",
             "SEARXNG_CAPABILITIES",
         )}
@@ -40,6 +41,7 @@ class EffectiveConfigReportTests(unittest.TestCase):
                 os.environ["QZ_ROOT"] = str(root)
                 os.environ["QZ_VAR_DIR"] = str(var_dir)
                 os.environ.pop("QZ_MODEL_OVERRIDES", None)
+                os.environ["QZ_CAPTURE_MODE"] = "off"
                 os.environ.pop("SEARXNG_POLICY", None)
                 os.environ["SEARXNG_CAPABILITIES"] = str(root / "proxy" / "searxng-capabilities.json")
 
@@ -60,8 +62,49 @@ class EffectiveConfigReportTests(unittest.TestCase):
                 self.assertEqual(paths["searxng_policy"]["path"], str(root / "config" / "default" / "search-policy.json"))
                 self.assertIn("prompt_file:system_prompt_file", paths)
                 self.assertEqual(paths["prompt_file:system_prompt_file"]["state"], "missing")
+                settings = {item["name"]: item for item in payload["settings"]}
+                self.assertEqual(settings["capture_mode"]["active_value"], "off")
+                self.assertEqual(settings["capture_mode"]["classification"], "debug_capture_policy")
+                self.assertEqual(settings["capture_mode"]["source_layer"], "environment")
+                self.assertEqual(payload["capture"]["mode"], "off")
+                self.assertFalse(payload["capture"]["enabled"])
+                self.assertEqual(payload["capture"]["state"], "disabled")
+                self.assertTrue(any("captures are disabled" in item.get("warning", "") for item in payload["warnings"]))
                 self.assertEqual(payload["prompt_files"]["schema"], "qz.prompt.files.v1")
                 self.assertIn(str(root / "config" / "user" / "prompts" / "profile.md"), payload["prompt_files"]["missing"])
+        finally:
+            for name, value in old_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+    def test_capture_mode_reports_normalized_env_policy(self):
+        old_env = {name: os.environ.get(name) for name in (
+            "QZ_ROOT",
+            "QZ_VAR_DIR",
+            "QZ_CAPTURE_MODE",
+        )}
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                var_dir = root / "var"
+                var_dir.mkdir()
+                os.environ["QZ_ROOT"] = str(root)
+                os.environ["QZ_VAR_DIR"] = str(var_dir)
+                os.environ["QZ_CAPTURE_MODE"] = "minimal"
+
+                payload = effective_config_payload()
+
+                settings = {item["name"]: item for item in payload["settings"]}
+                self.assertEqual(settings["capture_mode"]["active_value"], "minimal")
+                self.assertEqual(settings["capture_mode"]["env_value"], "minimal")
+                self.assertEqual(payload["capture"]["mode"], "minimal")
+                self.assertTrue(payload["capture"]["enabled"])
+                self.assertTrue(payload["capture"]["write_latest"])
+                self.assertTrue(payload["capture"]["write_request_scoped"])
+                self.assertEqual(payload["capture"]["state"], "enabled")
+                self.assertFalse(any("captures are disabled" in item.get("warning", "") for item in payload["warnings"]))
         finally:
             for name, value in old_env.items():
                 if value is None:

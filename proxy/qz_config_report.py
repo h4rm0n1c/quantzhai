@@ -4,6 +4,11 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+try:
+    from .qz_runtime_io import capture_policy
+except ImportError:
+    from qz_runtime_io import capture_policy
+
 
 EFFECTIVE_CONFIG_SCHEMA = "qz.config.effective.v1"
 
@@ -57,6 +62,30 @@ def _record(
         "env_value": env_value if isinstance(env_value, str) else "",
         "default": default,
         "active": bool(active),
+        "note": note,
+    }
+
+
+def _setting_record(
+    name: str,
+    *,
+    active_value: Any,
+    default: Any,
+    source_layer: str,
+    classification: str,
+    env_var: str = "",
+    env_value: str = "",
+    note: str = "",
+) -> Dict[str, Any]:
+    return {
+        "name": name,
+        "active_value": active_value,
+        "default": default,
+        "source_layer": source_layer,
+        "classification": classification,
+        "env_var": env_var,
+        "env_value": env_value,
+        "active": True,
         "note": note,
     }
 
@@ -194,6 +223,21 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
     else:
         searxng_capabilities = Path(os.environ.get("SEARXNG_CAPABILITIES") or script_dir / "searxng-capabilities.json").expanduser()
 
+    capture_env_present = "QZ_CAPTURE_MODE" in os.environ
+    capture_env_value = os.environ.get("QZ_CAPTURE_MODE", "")
+    capture = capture_policy().as_dict()
+    capture["env_var"] = "QZ_CAPTURE_MODE"
+    capture["env_value"] = capture_env_value
+    capture["default"] = "off"
+    capture["source_layer"] = "environment" if capture_env_present else "default"
+    capture["classification"] = "debug_capture_policy"
+    capture["state"] = "enabled" if capture["enabled"] else "disabled"
+    capture["note"] = (
+        "captures disabled; existing latest/request-scoped capture files may be stale"
+        if not capture["enabled"]
+        else f"captures enabled in {capture['mode']} mode"
+    )
+
     default_overrides = _first_existing_path(
         root / "config" / "default" / "model-overrides.json",
         root / "config" / "qz-model-overrides.default.json",
@@ -225,10 +269,28 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
         _record("searxng_policy", searxng_policy, source_layer="tracked_or_env_config", classification="active_search_policy", env_var="SEARXNG_POLICY"),
         _record("searxng_capabilities", searxng_capabilities, source_layer="tracked_or_env_config", classification="active_search_capabilities", env_var="SEARXNG_CAPABILITIES"),
     ]
+    settings = [
+        _setting_record(
+            "capture_mode",
+            active_value=capture["mode"],
+            default="off",
+            source_layer=capture["source_layer"],
+            classification="debug_capture_policy",
+            env_var="QZ_CAPTURE_MODE",
+            env_value=capture_env_value,
+            note=capture["note"],
+        )
+    ]
     prompt_records, prompt_file_summary = _prompt_file_records(root, [default_overrides, model_overrides])
     records.extend(prompt_records)
 
     warnings = []
+    if not capture["enabled"]:
+        warnings.append({
+            "env_var": "QZ_CAPTURE_MODE",
+            "active_value": capture["mode"],
+            "warning": "captures are disabled; latest/request-scoped capture files may be stale",
+        })
     if "docs" in searxng_policy.parts:
         warnings.append({
             "path": str(searxng_policy),
@@ -246,6 +308,8 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
         "root": str(root),
         "var_dir": str(var_dir),
         "paths": records,
+        "settings": settings,
+        "capture": capture,
         "prompt_files": prompt_file_summary,
         "warnings": warnings,
     }
