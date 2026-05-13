@@ -186,7 +186,7 @@ def _named_function_call_stream(item_id, call_id, name, arguments):
     ]
 
 
-def _final_message_stream(usage=None):
+def _final_message_stream(usage=None, text="searched."):
     usage = usage if isinstance(usage, dict) else {}
     return [
         _sse_block("response.created", {
@@ -213,7 +213,7 @@ def _final_message_stream(usage=None):
             "item_id": "msg_final",
             "output_index": 0,
             "content_index": 0,
-            "delta": "searched.",
+            "delta": text,
         }),
         _sse_block("response.completed", {
             "response": {
@@ -227,7 +227,7 @@ def _final_message_stream(usage=None):
                     "type": "message",
                     "status": "completed",
                     "role": "assistant",
-                    "content": [{"type": "output_text", "text": "searched.", "annotations": []}],
+                    "content": [{"type": "output_text", "text": text, "annotations": []}],
                 }],
                 "usage": usage,
             },
@@ -470,6 +470,193 @@ def _stuck_reasoning_only_stream(delta_count=5):
     return chunks
 
 
+def _reasoning_only_completed_stream(delta="answer-shaped reasoning"):
+    return [
+        _sse_block("response.created", {
+            "response": {
+                "id": "resp_fake_reasoning_only_completed",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "in_progress",
+                "model": "fake",
+                "output": [],
+            },
+        }),
+        _sse_block("response.output_item.added", {
+            "output_index": 0,
+            "item": {
+                "id": "rs_done",
+                "type": "reasoning",
+                "status": "in_progress",
+                "summary": [],
+                "content": [],
+            },
+        }),
+        _sse_block("response.reasoning_text.delta", {
+            "item_id": "rs_done",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": delta,
+        }),
+        _sse_block("response.completed", {
+            "response": {
+                "id": "resp_fake_reasoning_only_completed",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "completed",
+                "model": "fake",
+                "output": [{
+                    "id": "rs_done",
+                    "type": "reasoning",
+                    "status": "completed",
+                    "summary": [],
+                    "content": [{"type": "reasoning_text", "text": delta}],
+                }, {
+                    "id": "msg_empty",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "", "annotations": []}],
+                }],
+                "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+            },
+        }),
+        b"data: [DONE]\n\n",
+    ]
+
+
+def _empty_completed_stream():
+    return [
+        _sse_block("response.created", {
+            "response": {
+                "id": "resp_fake_empty",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "in_progress",
+                "model": "fake",
+                "output": [],
+            },
+        }),
+        _sse_block("response.completed", {
+            "response": {
+                "id": "resp_fake_empty",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "completed",
+                "model": "fake",
+                "output": [],
+                "usage": {},
+            },
+        }),
+        b"data: [DONE]\n\n",
+    ]
+
+
+def _whitespace_output_text_completed_stream(delta=" \n\t"):
+    return [
+        _sse_block("response.created", {
+            "response": {
+                "id": "resp_fake_whitespace",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "in_progress",
+                "model": "fake",
+                "output": [],
+            },
+        }),
+        _sse_block("response.output_item.added", {
+            "output_index": 0,
+            "item": {
+                "id": "msg_ws",
+                "type": "message",
+                "status": "in_progress",
+                "role": "assistant",
+                "content": [],
+            },
+        }),
+        _sse_block("response.output_text.delta", {
+            "item_id": "msg_ws",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": delta,
+        }),
+        _sse_block("response.completed", {
+            "response": {
+                "id": "resp_fake_whitespace",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "completed",
+                "model": "fake",
+                "output": [{
+                    "id": "msg_ws",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "", "annotations": []}],
+                }],
+                "usage": {},
+            },
+        }),
+        b"data: [DONE]\n\n",
+    ]
+
+
+def _public_item_completed_stream():
+    return [
+        _sse_block("response.created", {
+            "response": {
+                "id": "resp_fake_public_item",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "in_progress",
+                "model": "fake",
+                "output": [],
+            },
+        }),
+        _sse_block("response.output_item.added", {
+            "output_index": 0,
+            "item": {
+                "id": "public_1",
+                "type": "custom_tool_call",
+                "status": "in_progress",
+                "call_id": "call_public",
+                "name": "external_tool",
+                "input": "{}",
+            },
+        }),
+        _sse_block("response.output_item.done", {
+            "output_index": 0,
+            "item": {
+                "id": "public_1",
+                "type": "custom_tool_call",
+                "status": "completed",
+                "call_id": "call_public",
+                "name": "external_tool",
+                "input": "{}",
+            },
+        }),
+        _sse_block("response.completed", {
+            "response": {
+                "id": "resp_fake_public_item",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "completed",
+                "model": "fake",
+                "output": [{
+                    "id": "public_1",
+                    "type": "custom_tool_call",
+                    "status": "completed",
+                    "call_id": "call_public",
+                    "name": "external_tool",
+                    "input": "{}",
+                }],
+                "usage": {},
+            },
+        }),
+        b"data: [DONE]\n\n",
+    ]
+
+
 def _reasoning_tool_artifact_stream():
     artifact = (
         'json\n'
@@ -668,6 +855,8 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         selected_model=None,
         hop_budget_signal_threshold=None,
         context_pressure_signal_threshold=None,
+        empty_answer_repair_hops=None,
+        empty_answer_repair_disable_tools=None,
     ):
         chunks = []
         runtime = ResponsesStreamRuntime(
@@ -688,6 +877,8 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             selected_model=selected_model,
             hop_budget_signal_threshold=hop_budget_signal_threshold,
             context_pressure_signal_threshold=context_pressure_signal_threshold,
+            empty_answer_repair_hops=empty_answer_repair_hops,
+            empty_answer_repair_disable_tools=empty_answer_repair_disable_tools,
         )
         body = {
             "model": "test-model.gguf",
@@ -940,6 +1131,185 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             and (event.get("payload") or {}).get("suppressed") == "reasoning_only_aborted"
             for event in events
         ))
+
+    def test_reasoning_only_completed_triggers_exactly_one_repair_hop(self):
+        telemetry = TelemetryBus()
+        requests = []
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            if len(requests) == 1:
+                return FakeStream(_reasoning_only_completed_stream())
+            return FakeStream(_final_message_stream(text="repaired answer"))
+
+        stream_text = self._run_runtime(
+            opener,
+            telemetry=telemetry,
+            request_id="req-empty-answer-repair",
+            reasoning_stream_format="summary",
+        )
+        events = telemetry.recent()
+        names = [event for event, _payload in _parse_sse_events(stream_text)]
+
+        self.assertEqual(len(requests), 2)
+        self.assertIn("repaired answer", stream_text)
+        self.assertEqual(names.count("response.completed"), 1)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        repair_msgs = [
+            item for item in requests[1].get("input") or []
+            if isinstance(item, dict)
+            and "Protocol repair: your previous completion ended" in json.dumps(item.get("content") or "")
+        ]
+        self.assertEqual(len(repair_msgs), 1)
+        self.assertNotIn("tools", requests[1])
+        self.assertNotIn("tool_choice", requests[1])
+        started = [event for event in events if event.get("type") == "empty_answer_repair_started"]
+        completed = [event for event in events if event.get("type") == "empty_answer_repair_completed"]
+        self.assertEqual(len(started), 1)
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(started[0]["payload"]["repair_hop_index"], 0)
+        self.assertEqual(started[0]["payload"]["input_tokens"], 11)
+        self.assertEqual(started[0]["payload"]["output_tokens"], 7)
+
+    def test_successful_empty_answer_repair_streams_repaired_answer(self):
+        def opener(body):
+            if not getattr(opener, "_called", False):
+                opener._called = True
+                return FakeStream(_reasoning_only_completed_stream())
+            return FakeStream(_final_message_stream(text="final from repair"))
+
+        stream_text = self._run_runtime(opener, reasoning_stream_format="summary")
+        names = [event for event, _payload in _parse_sse_events(stream_text)]
+
+        self.assertIn("final from repair", stream_text)
+        self.assertIn("response.reasoning_summary_text.delta", stream_text)
+        self.assertNotIn("response.reasoning_text.delta", stream_text)
+        self.assertEqual(names.count("response.created"), 1)
+        self.assertEqual(names.count("response.completed"), 1)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+
+    def test_failed_empty_answer_repair_emits_visible_fallback_without_looping(self):
+        telemetry = TelemetryBus()
+        requests = []
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            return FakeStream(_reasoning_only_completed_stream())
+
+        stream_text = self._run_runtime(
+            opener,
+            telemetry=telemetry,
+            request_id="req-empty-answer-repair-failed",
+            reasoning_stream_format="summary",
+        )
+        events = telemetry.recent()
+        names = [event for event, _payload in _parse_sse_events(stream_text)]
+
+        self.assertEqual(len(requests), 2)
+        self.assertIn("reasoning-only response", stream_text)
+        self.assertEqual(names.count("response.completed"), 1)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertEqual(len([event for event in events if event.get("type") == "empty_answer_repair_started"]), 1)
+        self.assertEqual(len([event for event in events if event.get("type") == "empty_answer_repair_failed"]), 1)
+        self.assertTrue(any(
+            event.get("type") == "reasoning_only_completed_without_answer"
+            for event in events
+        ))
+
+    def test_empty_repair_completion_without_reasoning_fails_repair_without_looping(self):
+        telemetry = TelemetryBus()
+        requests = []
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            if len(requests) == 1:
+                return FakeStream(_reasoning_only_completed_stream())
+            return FakeStream(_empty_completed_stream())
+
+        stream_text = self._run_runtime(
+            opener,
+            telemetry=telemetry,
+            request_id="req-empty-repair-empty-completed",
+            reasoning_stream_format="summary",
+        )
+        events = telemetry.recent()
+        names = [event for event, _payload in _parse_sse_events(stream_text)]
+
+        self.assertEqual(len(requests), 2)
+        self.assertIn("reasoning-only response", stream_text)
+        self.assertEqual(names.count("response.completed"), 1)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertEqual(len([event for event in events if event.get("type") == "empty_answer_repair_started"]), 1)
+        self.assertEqual(len([event for event in events if event.get("type") == "empty_answer_repair_failed"]), 1)
+        self.assertFalse(any(event.get("type") == "empty_answer_repair_completed" for event in events))
+        self.assertTrue(any(
+            event.get("type") == "reasoning_only_completed_without_answer"
+            for event in events
+        ))
+
+    def test_whitespace_only_repair_output_delta_fails_repair_without_completed_telemetry(self):
+        telemetry = TelemetryBus()
+        requests = []
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            if len(requests) == 1:
+                return FakeStream(_reasoning_only_completed_stream())
+            return FakeStream(_whitespace_output_text_completed_stream())
+
+        stream_text = self._run_runtime(
+            opener,
+            telemetry=telemetry,
+            request_id="req-empty-repair-whitespace-output",
+            reasoning_stream_format="summary",
+        )
+        events = telemetry.recent()
+        names = [event for event, _payload in _parse_sse_events(stream_text)]
+
+        self.assertEqual(len(requests), 2)
+        self.assertIn("reasoning-only response", stream_text)
+        self.assertEqual(names.count("response.completed"), 1)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertEqual(len([event for event in events if event.get("type") == "empty_answer_repair_started"]), 1)
+        self.assertEqual(len([event for event in events if event.get("type") == "empty_answer_repair_failed"]), 1)
+        self.assertFalse(any(event.get("type") == "empty_answer_repair_completed" for event in events))
+        self.assertTrue(any(
+            event.get("type") == "reasoning_only_completed_without_answer"
+            for event in events
+        ))
+
+    def test_valid_public_item_completion_does_not_trigger_empty_answer_repair(self):
+        telemetry = TelemetryBus()
+        requests = []
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            return FakeStream(_public_item_completed_stream())
+
+        stream_text = self._run_runtime(opener, telemetry=telemetry)
+        events = telemetry.recent()
+        names = [event for event, _payload in _parse_sse_events(stream_text)]
+
+        self.assertEqual(len(requests), 1)
+        self.assertIn('"type": "custom_tool_call"', stream_text)
+        self.assertEqual(names.count("response.completed"), 1)
+        self.assertFalse(any(event.get("type", "").startswith("empty_answer_repair") for event in events))
+
+    def test_empty_completion_without_reasoning_does_not_trigger_empty_answer_repair(self):
+        telemetry = TelemetryBus()
+        requests = []
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            return FakeStream(_empty_completed_stream())
+
+        stream_text = self._run_runtime(opener, telemetry=telemetry)
+        events = telemetry.recent()
+
+        self.assertEqual(len(requests), 1)
+        self.assertIn("response.completed", stream_text)
+        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
+        self.assertFalse(any(event.get("type", "").startswith("empty_answer_repair") for event in events))
 
     def test_default_reasoning_only_char_limit_does_not_abort_long_active_output(self):
         telemetry = TelemetryBus()
