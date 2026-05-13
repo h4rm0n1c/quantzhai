@@ -601,6 +601,497 @@ The generated Codex catalog is always consistent with the proxy's current
 model state.
 ```
 
+## Profile-Bundle Config Design
+
+Status: Design/documentation pass. No implementation in this section.
+
+This section records the design direction for a future profile-bundle config
+format. It does not replace or change the current `model-overrides.json` loader,
+the current proxy routing, the current `memory_domain` contract, or Codex-visible
+profile slugs.
+
+### Why not foreign-key JSON soup
+
+The alternative to profile bundles is to split each profile concept into linked
+files. For example:
+
+```text
+profiles/prompt-compiler/backend.json
+profiles/prompt-compiler/prompt.json
+profiles/prompt-compiler/harness.json
+profiles/prompt-compiler/memory.json
+profiles/prompt-compiler/runtime.json
+```
+
+That layout is technically tidy but hostile to users, admins, and agents alike.
+
+Problems:
+
+```text
+Understanding one profile requires reading five files.
+Adding a profile requires creating five files and linking five cross-references.
+Renaming a profile requires finding and updating every reference across the tree.
+Portable export requires knowing exactly which files belong together.
+No single file represents a deployable profile unit.
+A future persona or project bundle cannot be expressed as one copyable artifact.
+```
+
+Foreign-key config makes the admin experience look like a relational schema
+migration. Config is not a relational schema.
+
+### Why not one giant config JSON
+
+The opposite extreme is to describe all profiles, all harnesses, all defaults,
+and all metadata in one monolithic file:
+
+```text
+config/user/quantzhai.json
+```
+
+That layout is also hostile:
+
+```text
+Adding Alice's profile requires editing the single shared file.
+Removing Alice's profile requires surgery on the same file, with risk of
+  damaging unrelated profiles.
+The file grows without bound as profiles accumulate.
+Portable export is all-or-nothing; you cannot extract one profile cleanly.
+Future persona or project profiles cannot be packaged as standalone units.
+```
+
+### Proposed future shape: qz.profiles.v1
+
+The preferred direction is a shallow, cohesive profile-bundle format.
+
+Top-level keys:
+
+```text
+schema           required — version marker: "qz.profiles.v1"
+defaults         optional — values applied when a profile omits them
+shared_harnesses optional — named inline harness text, reusable across profiles
+profiles         required — map of profile-slug to profile-bundle objects
+```
+
+A profile bundle may contain:
+
+```text
+backend    backend GGUF target and target policy
+runtime    context_length, reasoning_level, and tuning overrides
+prompts    system_file, append_files, turn_harnesses
+behavior   reasoning_stream_format, privacy/display policy
+memory     memory binding and policy (domain, enabled, mode)
+metadata   notes, label, portability/export hints
+```
+
+A profile should be understandable by reading one profile object.
+
+Example `config/user/profiles.json`:
+
+```json
+{
+  "schema": "qz.profiles.v1",
+  "defaults": {
+    "system_prompt_file": "prompts/codex-core-qwenified.md",
+    "runtime": {
+      "default_reasoning_level": "medium"
+    }
+  },
+  "shared_harnesses": {
+    "caveman-ultra-lock": "Caveman ultra locked. Persist. No drift/filler/repeated drafts. Preserve exact tech terms, paths, commands, code, errors, versions, URLs, quotes. Code/artifacts normal style unless asked. Normal clarity for danger/confusion, then resume.",
+    "roleplay-private-thoughts": "Profile reminder: Continue roleplay. Keep internal reasoning, planning, uncertainty, and self-checks private. Reply only in the established character format."
+  },
+  "profiles": {
+    "prompt-compiler": {
+      "backend": {
+        "gguf": "prompt-compiler.gguf",
+        "target_policy": "symlink_or_file"
+      },
+      "runtime": {
+        "context_length": 262144,
+        "default_reasoning_level": "medium"
+      },
+      "prompts": {
+        "system_file": "config/user/prompts/prompt-compiler.md"
+      },
+      "memory": {
+        "domain": "coding"
+      },
+      "metadata": {
+        "label": "prompt-compiler",
+        "notes": "Prompt engineering profile. Create var/models/prompt-compiler.gguf as a symlink to a real GGUF."
+      }
+    },
+    "caveman": {
+      "backend": {
+        "gguf": "caveman.gguf",
+        "target_policy": "symlink_or_file"
+      },
+      "runtime": {
+        "context_length": 262144,
+        "default_reasoning_level": "medium",
+        "allow_client_reasoning_override": true
+      },
+      "prompts": {
+        "append_files": ["config/default/prompts/caveman-mode.md"],
+        "turn_harnesses": ["caveman-ultra-lock"]
+      },
+      "memory": {
+        "domain": "coding"
+      },
+      "metadata": {
+        "label": "caveman",
+        "notes": "Compact Codex profile. Create var/models/caveman.gguf as a symlink to a real GGUF."
+      }
+    },
+    "roleplay-character": {
+      "backend": {
+        "gguf": "roleplay-character.gguf",
+        "target_policy": "symlink_or_file"
+      },
+      "runtime": {
+        "default_reasoning_level": "low",
+        "allow_client_reasoning_override": false
+      },
+      "prompts": {
+        "system_file": "config/user/prompts/character.md",
+        "append_files": ["config/user/prompts/roleplay-initial-harness.md"],
+        "turn_harnesses": ["roleplay-private-thoughts"]
+      },
+      "behavior": {
+        "reasoning_stream_format": "hidden"
+      },
+      "memory": {
+        "domain": "roleplay"
+      },
+      "metadata": {
+        "label": "roleplay-character",
+        "notes": "Private roleplay profile. Keep prompts under config/user/."
+      }
+    }
+  }
+}
+```
+
+Profile slug (`"prompt-compiler"`, `"caveman"`, etc.) is the Codex-visible
+profile identity. It replaces the GGUF filename as the primary config key.
+
+The backend GGUF target (`backend.gguf`) is the routing target. It is distinct
+from the profile slug, mirroring the current symlink-profile design. The proxy
+maps profile slug to backend target at routing time, not at config load time.
+
+### Optional profiles/*.json include-directory design
+
+The profile-bundle format should support both single-file and directory-based
+layout per config layer.
+
+**Single-file layout:**
+
+```text
+config/default/profiles.json
+config/example/profiles.json
+config/user/profiles.json
+```
+
+**Directory-based layout:**
+
+```text
+config/default/profiles/
+config/example/profiles/
+config/user/profiles/
+```
+
+Each `*.json` file in a `profiles/` directory is a valid profile config. Files
+may contain one profile bundle or a small related group.
+
+Example directory layout:
+
+```text
+config/user/profiles/alice.json          Alice personal profile bundle
+config/user/profiles/project-netts.json  Project Netts profiles
+config/default/profiles/caveman.json     Default caveman profile shape
+config/example/profiles/roleplay.json    Example roleplay profile shape
+```
+
+Load order and precedence:
+
+```text
+1. config/default/profiles.json
+2. config/default/profiles/*.json  sorted alphabetically
+3. config/user/profiles.json
+4. config/user/profiles/*.json     sorted alphabetically
+```
+
+User layer wins over default layer. Within the same directory, later files
+sorted alphabetically win on duplicate profile slugs.
+
+Rules:
+
+```text
+config/example/ is never active unless QZ_LOAD_EXAMPLE_MODEL_OVERRIDES is set.
+Duplicate profile slugs in the same layer should warn or error, not silently
+  roulette to whichever file was loaded last.
+Duplicate profile slugs across layers (user wins over default) are expected
+  and are intentional overrides.
+A missing profiles/ directory is not an error.
+A missing profiles.json is not an error.
+Both layouts (single-file and directory) may coexist; they are merged.
+Adding or removing a profile must not require editing any file other than the
+  profile file itself.
+Cross-layer overrides should be visible in /qz/config/effective.
+```
+
+The directory layout gives the Apache/nginx-style pattern: drop `alice.json`
+into `config/user/profiles/`, and Alice's profile is live without touching any
+existing file. Remove the file to remove the profile.
+
+One profile per file is recommended for portability. Small related groups (e.g.,
+`alice-coding` and `alice-roleplay` in one `alice.json`) are allowed when the
+profiles share enough context to belong together and will always be deployed
+together.
+
+### Mapping from current model-overrides.json to profile bundles
+
+Current `config/example/model-overrides.json` shape (showing one entry):
+
+```json
+{
+  "system_prompt_file": "prompts/codex-core.md",
+  "turn_harness_definitions": {
+    "caveman-ultra-lock": "...",
+    "roleplay-private-thoughts": "..."
+  },
+  "models": {
+    "prompt-compiler.gguf": {
+      "label": "prompt-compiler",
+      "runtime_context_length": 262144,
+      "system_prompt_file": "config/example/prompts/prompt-compiler.md"
+    }
+  }
+}
+```
+
+Equivalent future `qz.profiles.v1` shape:
+
+```json
+{
+  "schema": "qz.profiles.v1",
+  "defaults": {
+    "system_prompt_file": "prompts/codex-core.md"
+  },
+  "shared_harnesses": {
+    "caveman-ultra-lock": "...",
+    "roleplay-private-thoughts": "..."
+  },
+  "profiles": {
+    "prompt-compiler": {
+      "backend": { "gguf": "prompt-compiler.gguf" },
+      "runtime": { "context_length": 262144 },
+      "prompts": { "system_file": "config/example/prompts/prompt-compiler.md" },
+      "metadata": { "label": "prompt-compiler" }
+    }
+  }
+}
+```
+
+Field mapping:
+
+```text
+models["prompt-compiler.gguf"]     → profiles["prompt-compiler"] + backend.gguf
+label                              → metadata.label
+runtime_context_length             → runtime.context_length
+system_prompt_file (per-model)     → prompts.system_file
+prompt_append_files                → prompts.append_files
+turn_harnesses                     → prompts.turn_harnesses
+turn_harness_definitions (top)     → shared_harnesses (top)
+system_prompt_file (top-level)     → defaults.system_prompt_file
+memory_domain                      → memory.domain (preferred) or flat memory_domain
+default_reasoning_level            → runtime.default_reasoning_level
+allow_client_reasoning_override    → runtime.allow_client_reasoning_override
+reasoning_stream_format            → behavior.reasoning_stream_format
+disable_system_prompt              → prompts.disable (or behavior.disable_system_prompt)
+notes                              → metadata.notes
+```
+
+During the transition, the loader should accept both formats. The proxy detects
+`"schema": "qz.profiles.v1"` to activate bundle loading; the existing `models`
+key loading remains active for `model-overrides.json` compatibility.
+
+### Singular memory_domain preservation
+
+The `memory_domain` contract from `docs/codex-context-memory-contract.md` must
+be preserved exactly. Do not change, extend, or weaken it as part of this
+profile-bundle work.
+
+Current semantics that must be carried forward:
+
+```text
+memory_domain is explicit config only.
+Missing memory_domain == isolated. No fallback, no inference, no gremlin.
+Same explicit memory_domain across profiles/models = intentional shared scope.
+profile_id + memory_domain = profile-private scope.
+workspace_id + memory_domain = workspace scope.
+Backend model id is distinct from profile id.
+Do not infer memory_domain from model name, profile name, client name,
+  tool declarations, prompt text, or request path.
+```
+
+In profile bundles, the **preferred future representation** is:
+
+```json
+"memory": {
+  "domain": "coding"
+}
+```
+
+The flat backwards-compatible form remains valid in both `model-overrides.json`
+and `profiles.json`:
+
+```json
+"memory_domain": "coding"
+```
+
+When loading a profile bundle, the resolver maps `memory.domain` to
+`memory_domain` before the scope decision so all existing scope logic sees the
+same field name. There is no behavioral difference between the two forms.
+
+Multiple profiles sharing the same domain is intentional and correct:
+
+```json
+{
+  "profiles": {
+    "prompt-compiler": { "memory": { "domain": "coding" } },
+    "caveman":         { "memory": { "domain": "coding" } }
+  }
+}
+```
+
+`prompt-compiler` and `caveman` share the `coding` memory domain. The domain is
+a namespace, not an owner. Multiple profiles may bind to the same domain.
+
+**Do NOT introduce `domains: []` (a multi-domain array)** as part of this design
+pass. The singular domain binding is the current contract. A multi-domain
+extension requires an explicit separate design review before it can enter the
+codebase.
+
+### Memory config vs memory state/cache/run split
+
+Profile bundles configure memory policy. They do not store memory state.
+
+**Memory config in the profile bundle:**
+
+```text
+memory.domain    explicit domain label, e.g. "coding" or "roleplay"
+memory.enabled   whether memory tools are active for this profile (optional)
+memory.mode      read_write / read_only / isolated (optional, default from domain policy)
+```
+
+**Memory state outside config (var/, never in git):**
+
+```text
+var/state/memory/<domain>/    durable memory records for this domain
+var/cache/memory/<domain>/    recall cache, disposable
+var/run/memory/<domain>/      live in-flight memory state
+```
+
+This split is load-bearing:
+
+```text
+Profile bundles can be committed, shared, or exported without leaking state.
+Memory state stays local, private, and outside version control.
+Changing memory policy (domain, mode) in the bundle does not destroy existing state.
+A domain can be shared by many profiles; the state is owned by the domain label,
+  not by any single profile file.
+```
+
+### Portability and export concept
+
+A profile bundle should eventually support a portable export/package concept.
+
+A package may contain:
+
+```text
+profile bundle JSON
+referenced prompt files (prompts.system_file, prompts.append_files)
+optional memory state snapshot for the explicit domain
+manifest describing included prompts, domain, and whether state is included
+```
+
+Memory state in a package is an explicit opt-in choice, not automatic. An export
+describes which domain it carries, not all domains.
+
+Example package manifest (design placeholder — implementation deferred):
+
+```json
+{
+  "schema": "qz.profile.package.v1",
+  "profile_slug": "alice",
+  "domain": "alice",
+  "includes_prompt_files": ["prompts/alice-system.md"],
+  "includes_memory_state": true,
+  "memory_state_domain": "alice",
+  "notes": "Alice persona bundle with personal memory state."
+}
+```
+
+Actual memory contents live under `var/state/memory/` or equivalent, not under
+`config/`. The config directory should contain only policy and prompt text that
+is safe to commit.
+
+### Compatibility expectations
+
+During the transition from `model-overrides.json` to `qz.profiles.v1`:
+
+```text
+config/user/model-overrides.json continues to work for all existing setups.
+profiles.json and profiles/*.json are additive new input paths.
+The loader merges all active config sources in precedence order.
+A setup with no profiles.json and no profiles/ directory is valid.
+A setup with only model-overrides.json (no profiles.json) continues to work.
+A setup with only profiles.json (no model-overrides.json) is the future target.
+The proxy resolves memory_domain from memory.domain or flat memory_domain,
+  preferring the bundle subobject form when both exist.
+The proxy routes using the backend GGUF target from the bundle, not the slug.
+Profile slug remains the Codex-visible profile identity.
+Cross-layer overrides (user profile overrides default profile of same slug)
+  are visible in /qz/config/effective.
+```
+
+Do not force a migration. The goal is to make the new format available first,
+then migrate example configs as a follow-up, then document the migration path for
+users.
+
+### Next smallest implementation slice (profile-bundle)
+
+The smallest safe implementation step is to add `memory_domain` plumbing to the
+existing model-overrides loader. This does not require moving to `qz.profiles.v1`
+or changing any file layout.
+
+Steps:
+
+```text
+1. In qz_model_catalog.py, read memory_domain from each model overrides entry.
+2. Store memory_domain on the catalog entry alongside label and context_length.
+3. Expose memory_domain in /v1/models response entries.
+4. Expose memory_domain in /qz/status model entries.
+5. Surface memory_domain in /qz/config/effective per-model or per-profile output.
+6. Pass memory_domain through to resolve_memory_domain() in qz_codex_metadata.py.
+7. Add tests: missing memory_domain resolves to "isolated"; explicit memory_domain
+   passes through correctly; same domain across two model entries is valid.
+```
+
+This slice:
+
+```text
+Does not change any config file layout.
+Does not change profile slugs or GGUF routing.
+Does not require implementing qz.profiles.v1.
+Unblocks Phase 1 SQLite memory_domain scope binding.
+Confirms the plumbing path before the larger profile-bundle refactor.
+```
+
+The `qz.profiles.v1` schema and `profiles/*.json` directory loader can be
+implemented as a follow-up PR once the memory_domain plumbing tests are green.
+
 ## Next steps
 
 1. Treat this plan as a living document.
@@ -609,6 +1100,8 @@ model state.
 4. Hide or compactly fail invalid profiles before touching broader layout.
 5. Design the config contract after the audit, not before.
 6. Reduce script sprawl as part of the refactor, without moving shell mess into the three remaining entry scripts.
+7. Add `memory_domain` plumbing to the existing model-overrides loader (next smallest implementation slice above).
+8. Implement `qz.profiles.v1` loader and `profiles/*.json` directory support after the plumbing is green.
 
 ## Acceptance checks
 
@@ -623,6 +1116,14 @@ Effective config can be inspected with source/layer information.
 User overrides are clearly separated from defaults and generated runtime files.
 No new one-off shell scripts were added without explicit justification.
 Profile creation guidance exists and matches actual behaviour.
+memory_domain plumbing: missing domain resolves to isolated; explicit domain passes through.
+memory_domain plumbing: same domain across multiple profiles is supported.
+qz.profiles.v1 loader: adding profiles/*.json file does not require editing any other file.
+qz.profiles.v1 loader: duplicate slugs in same layer warn or error.
+qz.profiles.v1 loader: user layer overrides default layer for same slug.
+Profile bundle memory config (memory.domain) maps correctly to existing memory_domain semantics.
+Memory state remains under var/; no state leaks into config/.
+/qz/config/effective shows cross-layer profile overrides.
 ```
 
 ## Related documents
@@ -630,4 +1131,5 @@ Profile creation guidance exists and matches actual behaviour.
 - `docs/bugs/stale-profile-server-alias.md`
 - `docs/observability-streaming-bugfix-agenda.md`
 - `docs/runtime-observability-notes.md`
+- `docs/codex-context-memory-contract.md` — authoritative memory_domain semantics; must be preserved exactly when implementing profile bundles
 - `AGENTS.md`
