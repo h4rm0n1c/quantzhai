@@ -46,6 +46,14 @@ def backend_reasoning_budget() -> int | None:
         return None
 
 
+def control_plane_backend_timeout() -> float:
+    raw = os.environ.get("QZ_CONTROL_PLANE_BACKEND_TIMEOUT", "0.75")
+    try:
+        return max(0.05, float(str(raw).strip()))
+    except Exception:
+        return 0.75
+
+
 def profile_backend_error_payload(entry: dict | None, requested_model: str = "") -> dict:
     entry = entry if isinstance(entry, dict) else {}
     profile = (
@@ -250,9 +258,15 @@ class ModelRouter:
         except Exception:
             pass
 
-    def backend_models(self):
+    def backend_models(self, timeout: float | None = None):
         try:
-            payload = self.handler._backend().get_models()
+            if timeout is None:
+                payload = self.handler._backend().get_models()
+            else:
+                try:
+                    payload = self.handler._backend().get_models(timeout=timeout)
+                except TypeError:
+                    payload = self.handler._backend().get_models()
         except Exception as exc:
             self._emit("model_inventory_failed", {"error": str(exc)})
             return {}
@@ -355,9 +369,11 @@ class ModelRouter:
                 restarted=False,
             )
 
-    def backend_health(self):
+    def backend_health(self, timeout: float | None = None):
+        if timeout is None:
+            timeout = 10
         try:
-            resp = self.handler._backend().get_health(timeout=10)
+            resp = self.handler._backend().get_health(timeout=timeout)
         except Exception as exc:
             self._emit("backend_health_failed", {"error": str(exc)})
             return 0, {"status": "unreachable", "error": str(exc)}
@@ -609,8 +625,9 @@ class ModelRouter:
 
     def status_snapshot(self):
         selected = self.selected_model_entry()
-        backend_models = self.backend_models()
-        health_status, health_body = self.backend_health()
+        probe_timeout = control_plane_backend_timeout()
+        backend_models = self.backend_models(timeout=probe_timeout)
+        health_status, health_body = self.backend_health(timeout=probe_timeout)
         selected_key = entry_identity(selected)
         selected_backend_id = self.selected_backend_id()
         backend_entry = backend_models.get(selected_backend_id or selected_key or "", {})
@@ -704,8 +721,8 @@ class ModelRouter:
             "timestamp": time.time(),
         }
 
-    def status_summary(self, reason: str = ""):
-        snapshot = self.status_snapshot()
+    def status_summary(self, reason: str = "", snapshot: dict | None = None):
+        snapshot = snapshot if isinstance(snapshot, dict) else self.status_snapshot()
         selected = snapshot.get("selected") or {}
         backend = snapshot.get("backend") or {}
         load = snapshot.get("load") or {}
@@ -1175,12 +1192,12 @@ class ModelRouter:
     def handle_ready_get(self):
         if self.handler.path in ("/ready", "/qz/ready"):
             snapshot = self.status_snapshot()
-            self._emit("status_snapshot", self.status_summary(self.handler.path))
+            self._emit("status_snapshot", self.status_summary(self.handler.path, snapshot=snapshot))
             self.handler._send_json(200 if snapshot["ready"] else 503, snapshot)
             return True
         if self.handler.path in ("/qz/status",):
             snapshot = self.status_snapshot()
-            self._emit("status_snapshot", self.status_summary(self.handler.path))
+            self._emit("status_snapshot", self.status_summary(self.handler.path, snapshot=snapshot))
             self.handler._send_json(200, snapshot)
             return True
         return False

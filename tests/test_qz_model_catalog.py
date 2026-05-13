@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from proxy.qz_model_catalog import ModelCatalog, load_manifest
 from proxy.qz_model_router import ModelRouter, profile_backend_error_payload
+from proxy.qz_backend import BackendResponse
 
 
 def _write_string(handle, value):
@@ -68,6 +69,20 @@ class FakeBackend:
     def load_model(self, model_id, timeout=120):
         self.load_calls.append(model_id)
         raise AssertionError(f"loaded backend model should be reused without POST /models/load: {model_id}")
+
+
+class FakeStatusBackend:
+    def __init__(self):
+        self.model_timeouts = []
+        self.health_timeouts = []
+
+    def get_models(self, timeout=30):
+        self.model_timeouts.append(timeout)
+        return {"data": []}
+
+    def get_health(self, timeout=10):
+        self.health_timeouts.append(timeout)
+        return BackendResponse(status=0, content_type="application/json", data=b'{"status":"loading"}')
 
 
 class FakeLoadHandler:
@@ -428,6 +443,22 @@ class ModelCatalogProfileValidationTests(unittest.TestCase):
             self.assertIsNone(FakeLoadHandler.model_load_started_at)
             self.assertIsNone(FakeLoadHandler.model_load_finished_at)
             self.assertEqual(FakeLoadHandler.model_load_state, "idle")
+
+    def test_status_snapshot_uses_short_backend_probe_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"QZ_CONTROL_PLANE_BACKEND_TIMEOUT": "0.12"}, clear=False):
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            _write_gguf(model_dir / "default.gguf")
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+            backend = FakeStatusBackend()
+            handler = FakeLoadHandler(catalog, backend)
+
+            snapshot = ModelRouter(handler).status_snapshot()
+
+            self.assertFalse(snapshot["ready"])
+            self.assertEqual(snapshot["health"]["status"], 0)
+            self.assertEqual(backend.model_timeouts, [0.12])
+            self.assertEqual(backend.health_timeouts, [0.12])
 
     def test_compact_error_payload_shape(self):
         payload = profile_backend_error_payload({
