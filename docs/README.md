@@ -62,7 +62,7 @@ No clever memory, active memory tools, learned preferences, roleplay memory, HSM
 | Repeated-read signal | [Repeated-read signal plan](repeated-read-dedup-plan.md) | Advisory repeated-read v1 plan and v2 scope blockers. |
 | LLM signal system | [LLM signal system](llm-signal-system.md) | Hop budget, context pressure, compaction, and signal design notes. |
 | Benchmarking | [Benchmark findings: effort tuning](benchmark-findings-effort-tuning.md) | Measured profile/tool-use behaviour and open questions around open-ended repo exploration. |
-| Config and error handling | [Edge case and config contract plan](edge-case-config-contract-plan.md) | Audit/refactor plan for edge cases, compact errors, profile safety, config layering, and reducing script sprawl. |
+| Config and error handling | [Edge case and config contract plan](edge-case-config-contract-plan.md) | Audit/refactor plan for edge cases, compact errors, profile safety, config layering, script sprawl, and the profile-bundle design (qz.profiles.v1, profiles/*.json, memory_domain plumbing). |
 | Current bugfix focus | [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) | Triage, review plan, proposed fixes, and acceptance checks for `/status`, monitor tools, profile tuning, and proxy streaming. |
 | Deferred client/control UX | [qz-codex control plane future plan](qz-codex-control-plane-future.md) | Parked future seam for qz-codex fork/wrapper, /qz control plane, remote single-user mode, nginx/auth, and model/profile loading UX. |
 | Memory architecture | [State and memory architecture plan](state-and-memory-architecture-plan.md) | Older typed-memory plan; useful taxonomy, superseded for Codex identity/workspace/domain decisions. |
@@ -186,6 +186,9 @@ Audit before refactor.
 Do not move model files, profile symlinks, or Codex-visible slugs casually.
 Generated Codex metadata is a view of proxy policy, not routing authority.
 Do not add new one-off shell scripts unless there is a strong reason.
+Next smallest slice: memory_domain plumbing in the existing model-overrides loader.
+After that: qz.profiles.v1 schema and profiles/*.json directory loader.
+See the "Profile-Bundle Config Design" section in edge-case-config-contract-plan.md.
 ```
 
 ### I want to fix streaming, qz-top, or qz-thoughts

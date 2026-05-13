@@ -1128,6 +1128,28 @@ test_identity_conflict_stored
 7. Add repeated-read v2 against same-scope facts.
 8. Defer preferences, profile-private memory, promotion, and HSM/archive memory.
 
+## Profile-bundle config design
+
+The future profile-bundle config format (`qz.profiles.v1`) carries `memory_domain`
+forward as the `memory.domain` subfield of a profile bundle. The semantics are
+identical to the flat `memory_domain` field described in this document.
+
+When loading a `qz.profiles.v1` profile bundle, the loader maps `memory.domain`
+to `memory_domain` before any scope decision. All existing scope logic in this
+document applies unchanged.
+
+Do NOT introduce `domains: []` (a multi-domain array) based on this design. The
+singular `memory_domain` per profile binding is the current contract. A
+multi-domain extension requires an explicit separate design review.
+
+For the full profile-bundle design, config layering rules, `profiles/*.json`
+directory support, memory config vs memory state split, and the next smallest
+implementation slice, see:
+
+```text
+docs/edge-case-config-contract-plan.md — "Profile-Bundle Config Design" section
+```
+
 ## Non-goals for Phase 1
 
 ```text
