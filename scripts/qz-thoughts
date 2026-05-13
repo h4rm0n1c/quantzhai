@@ -17,6 +17,7 @@ import json
 import os
 import re
 import signal
+import socket
 import textwrap
 import time
 import urllib.request
@@ -69,6 +70,13 @@ def fetch_json(url: str, timeout: Optional[float] = None) -> Optional[dict]:
             return json.loads(resp.read().decode("utf-8"))
     except Exception:
         return None
+
+
+def _is_read_timeout(exc: BaseException) -> bool:
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+    message = str(exc).lower()
+    return "timed out" in message or "timeout" in message
 
 
 def event_fingerprint(event: dict) -> str:
@@ -608,6 +616,19 @@ def _apply_telemetry_event(state: ThoughtState, event: dict, prefix_rows: List[T
             error = payload.get("error") or "proxy unavailable"
             state.parse_error = f"proxy unavailable: {error}"
             _append_backend(state, "proxy", "unavailable; reconnecting")
+        elif status in ("idle_reconnecting", "stream_reconnecting"):
+            state.status = "reconnecting"
+            state.parse_error = ""
+            message = payload.get("message") or "idle reconnecting"
+            _append_backend(state, "stream", str(message))
+        elif status in ("idle_reconnected", "stream_reconnected"):
+            if state.status == "reconnecting":
+                state.status = "ok"
+            state.parse_error = ""
+            for kind, message in payload.get("config_rows") or []:
+                _append_backend(state, str(kind), str(message))
+            message = payload.get("message") or "idle reconnected"
+            _append_backend(state, "stream", str(message))
         elif status in ("connected", "reconnected"):
             was_unavailable = state.status == "unavailable" or bool(state.parse_error)
             if status == "reconnected" or was_unavailable:
@@ -971,25 +992,40 @@ class TelemetryFeed:
         ]
         url_index = 0
         saw_unavailable = False
+        saw_idle_reconnect = False
         while not self.stop_event.is_set():
             url = urls[url_index]
             try:
                 req = urllib.request.Request(url, headers={"Accept": "text/event-stream"})
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     url_index = 0
+                    if saw_unavailable:
+                        connection_status = "reconnected"
+                    elif saw_idle_reconnect:
+                        connection_status = "idle_reconnected"
+                    else:
+                        connection_status = "connected"
                     yield {
                         "type": "monitor_connection",
                         "payload": {
-                            "status": "reconnected" if saw_unavailable else "connected",
+                            "status": connection_status,
                             "url": url,
                             "config_rows": load_config_hint_rows(),
                         },
                     }
                     saw_unavailable = False
+                    saw_idle_reconnect = False
                     event_name = ""
                     data_lines: List[str] = []
+                    idle_timeout = False
                     while not self.stop_event.is_set():
-                        chunk = resp.readline()
+                        try:
+                            chunk = resp.readline()
+                        except Exception as exc:
+                            if _is_read_timeout(exc):
+                                idle_timeout = True
+                                break
+                            raise
                         if not chunk:
                             break
                         line = chunk.decode("utf-8", "replace").rstrip("\r\n")
@@ -1013,15 +1049,26 @@ class TelemetryFeed:
                         elif line.startswith("data:"):
                             data_lines.append(line.split(":", 1)[1].lstrip())
                     if not self.stop_event.is_set():
-                        saw_unavailable = True
-                        yield {
-                            "type": "monitor_connection",
-                            "payload": {
-                                "status": "unavailable",
-                                "url": url,
-                                "error": "telemetry stream closed",
-                            },
-                        }
+                        if idle_timeout:
+                            saw_idle_reconnect = True
+                            yield {
+                                "type": "monitor_connection",
+                                "payload": {
+                                    "status": "idle_reconnecting",
+                                    "url": url,
+                                    "message": "idle reconnecting",
+                                },
+                            }
+                        else:
+                            saw_unavailable = True
+                            yield {
+                                "type": "monitor_connection",
+                                "payload": {
+                                    "status": "unavailable",
+                                    "url": url,
+                                    "error": "telemetry stream closed",
+                                },
+                            }
             except Exception:
                 saw_unavailable = True
                 yield {
