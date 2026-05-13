@@ -102,10 +102,26 @@ qz_docker run -d \
   --models-dir /models \
   "${backend_args[@]}"
 
+write_runtime_state --phase backend-started --source env
+
+"$QZ_ROOT/scripts/qz-proxy"
+write_runtime_state --phase proxy-started --source env --proxy-healthy --merge-proxy
+
+if [[ "$hold" == "1" ]]; then
+  printf 'QuantZhai proxy is up. Attaching qz-top while backend readiness settles; Ctrl-C closes the monitor only. Stop the stack with scripts/qz-down.\n'
+  exec "$QZ_ROOT/scripts/qz-top"
+fi
+
 printf 'waiting for backend: http://%s:%s/health\n' "$QZ_SERVER_HOST" "$QZ_SERVER_PORT"
 
 backend_ok=0
-for i in $(seq 1 120); do
+backend_failed=0
+backend_wait_seconds="${QZ_MODEL_LOAD_TIMEOUT%.*}"
+if ! [[ "$backend_wait_seconds" =~ ^[0-9]+$ ]] || [[ "$backend_wait_seconds" -lt 1 ]]; then
+  backend_wait_seconds=120
+fi
+
+for i in $(seq 1 "$backend_wait_seconds"); do
   if curl -fsS "http://$QZ_SERVER_HOST:$QZ_SERVER_PORT/health" >/dev/null 2>&1; then
     backend_ok=1
     break
@@ -114,32 +130,32 @@ for i in $(seq 1 120); do
   if ! qz_docker ps --format '{{.Names}}' | grep -qx "$QZ_CONTAINER"; then
     echo "backend container exited before becoming healthy" >&2
     qz_docker logs --tail=160 "$QZ_CONTAINER" >&2 || true
-    exit 1
+    backend_failed=1
+    break
   fi
 
   sleep 1
 done
 
 if [[ "$backend_ok" != 1 ]]; then
-  echo "backend did not become healthy on http://$QZ_SERVER_HOST:$QZ_SERVER_PORT" >&2
+  if [[ "$backend_failed" == 1 ]]; then
+    write_runtime_state --phase backend-exited --source env --proxy-healthy --merge-proxy
+    echo "proxy remains available at http://$QZ_PROXY_HOST:$QZ_PROXY_PORT for diagnostics." >&2
+    exit 1
+  fi
+  echo "backend did not become healthy on http://$QZ_SERVER_HOST:$QZ_SERVER_PORT within ${backend_wait_seconds}s" >&2
   qz_docker ps -a --filter "name=^/${QZ_CONTAINER}$" >&2 || true
   qz_docker logs --tail=160 "$QZ_CONTAINER" >&2 || true
+  write_runtime_state --phase backend-timeout --source env --proxy-healthy --merge-proxy
+  echo "proxy remains available at http://$QZ_PROXY_HOST:$QZ_PROXY_PORT for diagnostics." >&2
   exit 1
 fi
 
 printf 'backend healthy: http://%s:%s\n' "$QZ_SERVER_HOST" "$QZ_SERVER_PORT"
-write_runtime_state --phase backend-healthy --source env --backend-healthy
-
-"$QZ_ROOT/scripts/qz-proxy"
-write_runtime_state --phase proxy-started --source env --backend-healthy --proxy-healthy --merge-proxy
+write_runtime_state --phase backend-healthy --source env --backend-healthy --proxy-healthy --merge-proxy
 
 if [[ -n "$codex_profile" ]]; then
   export QZ_PROFILE="$codex_profile"
   write_runtime_state --phase codex-start --source profile --backend-healthy --proxy-healthy --merge-proxy
   exec "$QZ_ROOT/scripts/qz-codex" "$codex_profile"
-fi
-
-if [[ "$hold" == "1" ]]; then
-  printf 'QuantZhai ready. Attaching qz-top; Ctrl-C closes the monitor only. Stop the stack with scripts/qz-down.\n'
-  exec "$QZ_ROOT/scripts/qz-top"
 fi

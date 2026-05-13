@@ -78,8 +78,15 @@ Date: 2026-04-29
 - `scripts/qz-proxy` starts the proxy in a detached session when possible, so
   the proxy survives after the launcher exits under command runners or terminal
   wrappers.
+- `scripts/qz-up` now starts `qz-proxy` immediately after launching the backend
+  container, before waiting for llama.cpp `/health`. Proxy control-plane routes
+  such as `/health`, `/qz/config/effective`, `/qz/telemetry/recent`, and
+  `/qz/status` are intended to answer while the backend is still loading or
+  unavailable. If the backend health wait times out or the container exits,
+  `qz-up` exits non-zero but leaves the proxy running for diagnostics.
 - `scripts/qz-up` has convenience modes:
-  - `--hold` starts the stack and then opens `qz-top`.
+  - `--hold` starts the proxy and then opens `qz-top` while backend readiness
+    continues to settle.
   - `--codex PROFILE` starts the stack and then launches Codex with the selected
     profile.
 - `scripts/qz-thoughts` was added as a curses-style monitor for streamed
