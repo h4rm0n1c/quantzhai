@@ -71,6 +71,26 @@ def fetch_json(url: str, timeout: Optional[float] = None) -> Optional[dict]:
         return None
 
 
+def event_fingerprint(event: dict) -> str:
+    if not isinstance(event, dict):
+        return ""
+    seq = event.get("seq")
+    if seq is not None:
+        return f"seq:{seq}"
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    try:
+        payload_text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    except Exception:
+        payload_text = str(payload)
+    return "|".join(
+        [
+            str(event.get("type") or ""),
+            str(event.get("request_id") or ""),
+            payload_text,
+        ]
+    )
+
+
 def clean(text: str) -> str:
     text = (text or "").replace("\r", "\n")
     text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", text)
@@ -104,6 +124,133 @@ def _compact_sampling(sampling: dict) -> str:
         if value is not None:
             parts.append(f"{key}={value}")
     return " ".join(parts)
+
+
+def _compact_list(values, limit: int = 3) -> str:
+    if not isinstance(values, list):
+        return ""
+    clean_values = [str(value) for value in values if value not in (None, "")]
+    if not clean_values:
+        return ""
+    text = ",".join(clean_values[:limit])
+    if len(clean_values) > limit:
+        text += ",..."
+    return text
+
+
+def _payload_int(payload: dict, key: str, default: int = 0) -> int:
+    try:
+        return int(payload.get(key))
+    except Exception:
+        return default
+
+
+def _format_repair_event(stage: str, payload: dict) -> str:
+    idx = _payload_int(payload, "repair_hop_index")
+    chars = _payload_int(payload, "reasoning_chars")
+    upstream_items = _payload_int(payload, "upstream_output_items")
+    if stage == "start":
+        return f"start idx={idx} chars={chars} upstream_items={upstream_items}"
+    if stage == "done":
+        return f"done idx={idx} chars={chars} upstream_items={upstream_items}"
+    return f"failed idx={idx} chars={chars} upstream_items={upstream_items} -> fallback"
+
+
+def _format_tool_event(stage: str, payload: dict) -> str:
+    tool = payload.get("tool") or payload.get("name") or payload.get("function_name") or "tool"
+    parts = [stage, str(tool)]
+    if payload.get("public_item_type"):
+        parts.append(f"type={payload.get('public_item_type')}")
+    if payload.get("execution"):
+        parts.append(f"exec={payload.get('execution')}")
+    if payload.get("sources") is not None:
+        parts.append(f"sources={payload.get('sources')}")
+    if payload.get("upstream_items") is not None:
+        parts.append(f"upstream_items={payload.get('upstream_items')}")
+    if payload.get("error"):
+        parts.append(f"error={payload.get('error')}")
+    return " ".join(parts)
+
+
+def _format_web_route(payload: dict) -> str:
+    query = payload.get("query") or "web_search"
+    selected = payload.get("selected_profile") or payload.get("profile") or payload.get("route") or ""
+    requested = payload.get("requested_profile") or ""
+    parts = [clip(query, 48)]
+    if selected:
+        route = selected
+        if requested and requested != selected:
+            route = f"{requested}->{selected}"
+        parts.append(f"profile={route}")
+    if payload.get("result_count") is not None:
+        parts.append(f"results={payload.get('result_count')}")
+    if payload.get("fallback_used"):
+        parts.append(f"fallback={payload.get('fallback_used')}")
+    attempts = payload.get("fallback_attempts")
+    if isinstance(attempts, list) and attempts:
+        attempt_bits = []
+        for attempt in attempts[:2]:
+            if not isinstance(attempt, dict):
+                continue
+            attempt_bits.append(f"{attempt.get('profile', '?')}:{attempt.get('result_count', '?')}")
+        if attempt_bits:
+            parts.append("retries=" + ",".join(attempt_bits))
+    engines = _compact_list(payload.get("engines"), limit=2)
+    if engines:
+        parts.append(f"engines={engines}")
+    return " ".join(parts)
+
+
+def _format_stream_event(ev_type: str, payload: dict) -> str:
+    label = ev_type.replace("stream_", "")
+    parts = [label]
+    if payload.get("fallback") is not None:
+        parts.append(f"fallback={str(bool(payload.get('fallback'))).lower()}")
+    if payload.get("output_items") is not None:
+        parts.append(f"output_items={payload.get('output_items')}")
+    if payload.get("duration_ms") is not None:
+        try:
+            parts.append(f"{float(payload.get('duration_ms')):.0f}ms")
+        except Exception:
+            pass
+    if payload.get("error"):
+        parts.append(str(payload.get("error")))
+    return " ".join(parts)
+
+
+def _capture_rows_from_config(payload: dict) -> List[Tuple[str, str]]:
+    if not isinstance(payload, dict):
+        return []
+    capture = payload.get("capture") if isinstance(payload.get("capture"), dict) else {}
+    settings = payload.get("settings") if isinstance(payload.get("settings"), list) else []
+    setting = {}
+    for item in settings:
+        if isinstance(item, dict) and item.get("name") == "capture_mode":
+            setting = item
+            break
+    mode = capture.get("mode") or setting.get("active_value")
+    if not mode:
+        return []
+    state = capture.get("state") or ("enabled" if capture.get("enabled") else "disabled")
+    source = capture.get("source_layer") or setting.get("source_layer") or ""
+    default = capture.get("default") or setting.get("default") or ""
+    classification = capture.get("classification") or setting.get("classification") or ""
+    note = capture.get("note") or setting.get("note") or ""
+    parts = [f"mode={mode}", str(state)]
+    if source:
+        parts.append(f"source={source}")
+    if default:
+        parts.append(f"default={default}")
+    if classification:
+        parts.append(str(classification))
+    if note:
+        parts.append(str(note))
+    return [("capture", " ".join(parts))]
+
+
+def load_config_hint_rows() -> List[Tuple[str, str]]:
+    data = fetch_json(f"{proxy_base_url()}/qz/config/effective", timeout=min(monitor_http_timeout(), 1.0))
+    return _capture_rows_from_config(data or {})
 
 
 def _contract_rows(payload: dict) -> List[Tuple[str, str]]:
@@ -454,6 +601,35 @@ def _apply_telemetry_event(state: ThoughtState, event: dict, prefix_rows: List[T
     except Exception:
         pass
 
+    if ev_type == "monitor_connection":
+        status = str(payload.get("status") or "")
+        if status == "unavailable":
+            state.status = "unavailable"
+            error = payload.get("error") or "proxy unavailable"
+            state.parse_error = f"proxy unavailable: {error}"
+            _append_backend(state, "proxy", "unavailable; reconnecting")
+        elif status in ("connected", "reconnected"):
+            was_unavailable = state.status == "unavailable" or bool(state.parse_error)
+            if status == "reconnected" or was_unavailable:
+                state.last_seq = 0
+            if state.status == "unavailable":
+                state.status = "ok"
+            state.parse_error = ""
+            for kind, message in payload.get("config_rows") or []:
+                _append_backend(state, str(kind), str(message))
+            if status == "reconnected" or was_unavailable:
+                _append_backend(state, "proxy", "reconnected")
+        return latest_ts or time.time()
+
+    if ev_type == "telemetry_stream_open":
+        was_unavailable = state.status == "unavailable" or bool(state.parse_error)
+        state.status = "ok"
+        state.parse_error = ""
+        if was_unavailable:
+            state.last_seq = 0
+            _append_backend(state, "proxy", "reconnected")
+        return latest_ts
+
     if ev_type == "sse_event":
         event_type = payload.get("event_type") or "event"
         sse_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
@@ -526,6 +702,39 @@ def _apply_telemetry_event(state: ThoughtState, event: dict, prefix_rows: List[T
         state.backend_error = str(error)
         return latest_ts
 
+    if ev_type == "empty_answer_repair_started":
+        _append_activity(state, "repair", _format_repair_event("start", payload))
+        return latest_ts
+
+    if ev_type == "empty_answer_repair_completed":
+        _append_activity(state, "repair", _format_repair_event("done", payload))
+        return latest_ts
+
+    if ev_type == "empty_answer_repair_failed":
+        _append_activity(state, "repair", _format_repair_event("failed", payload))
+        return latest_ts
+
+    if ev_type == "reasoning_only_completed_without_answer":
+        chars = _payload_int(payload, "reasoning_chars")
+        _append_activity(state, "fallback", f"reasoning-only completed without answer chars={chars} -> fallback")
+        return latest_ts
+
+    if ev_type == "reasoning_only_aborted":
+        reason = payload.get("reason") or "reasoning_only_aborted"
+        chars = _payload_int(payload, "reasoning_chars")
+        if reason == "artifact_tool_payload":
+            message = f"reasoning artifact abort chars={chars} -> fallback"
+        else:
+            message = f"reasoning-only abort reason={reason} chars={chars} -> fallback"
+        _append_activity(state, "fallback", message)
+        return latest_ts
+
+    if ev_type == "private_tool_call_aborted":
+        tool = payload.get("tool_name") or payload.get("tool") or payload.get("function_name") or "tool"
+        reason = payload.get("reason") or "aborted"
+        _append_activity(state, "tool", f"private abort {tool} reason={reason} -> fallback")
+        return latest_ts
+
     if ev_type == "model_selected":
         requested = payload.get("requested") or "default"
         selected = payload.get("selected") or payload.get("backend_id") or "?"
@@ -546,24 +755,34 @@ def _apply_telemetry_event(state: ThoughtState, event: dict, prefix_rows: List[T
         return latest_ts
 
     if ev_type == "tool_call_started":
-        _append_backend(state, "tool", f"start {payload.get('tool', payload.get('name', 'tool'))}")
+        _append_backend(state, "tool", _format_tool_event("start", payload))
         return latest_ts
 
     if ev_type == "tool_call_completed":
-        _append_backend(state, "tool", f"done {payload.get('tool', payload.get('name', 'tool'))}")
+        _append_backend(state, "tool", _format_tool_event("done", payload))
+        return latest_ts
+
+    if ev_type == "tool_call_failed":
+        _append_backend(state, "error", _format_tool_event("failed", payload))
+        if payload.get("error"):
+            state.backend_error = str(payload.get("error"))
         return latest_ts
 
     if ev_type == "web_search_route":
-        _append_backend(state, "web", str(payload.get("query", payload.get("route", "web_search"))))
+        _append_backend(state, "web", _format_web_route(payload))
         return latest_ts
 
     if ev_type == "upstream_request":
-        _append_backend(state, "upstream", f"{payload.get('method', '')} {payload.get('path', '')}".strip())
+        bits = [f"{payload.get('method', '')} {payload.get('path', '')}".strip()]
+        if payload.get("model"):
+            bits.append(f"model={payload.get('model')}")
+        if payload.get("backend_model"):
+            bits.append(f"backend={payload.get('backend_model')}")
+        _append_backend(state, "upstream", " ".join(bit for bit in bits if bit).strip())
         return latest_ts
 
     if ev_type in ("stream_started", "stream_completed", "stream_failed"):
-        detail = payload.get("error") or payload.get("fallback") or ""
-        _append_backend(state, "stream", f"{ev_type} {detail}".strip())
+        _append_backend(state, "stream", _format_stream_event(ev_type, payload))
         return latest_ts
 
     if ev_type == "deprecated_endpoint":
@@ -575,12 +794,20 @@ def _apply_telemetry_event(state: ThoughtState, event: dict, prefix_rows: List[T
         event_type = str(payload.get("event_type") or "")
         if suppressed == "function_call":
             _append_activity(state, "tool", f"private {event_type} active")
+        elif suppressed == "function_call_private_started":
+            _append_activity(state, "tool", f"private {event_type} started")
         elif suppressed == "function_call_aborted":
             _append_activity(state, "tool", "private function call aborted")
         elif suppressed == "reasoning_artifact_aborted":
             _append_activity(state, "thought", "reasoning tool payload aborted")
         elif suppressed == "reasoning_only_aborted":
             _append_activity(state, "thought", "reasoning-only stream aborted")
+        elif suppressed == "empty_answer_repair_started":
+            _append_activity(state, "suppress", f"empty answer repair suppressed {event_type}")
+        elif suppressed == "reasoning_only_completed_without_answer":
+            _append_activity(state, "suppress", f"reasoning-only fallback suppressed {event_type}")
+        elif suppressed:
+            _append_activity(state, "suppress", f"{suppressed} {event_type}".strip())
         return latest_ts
 
     if ev_type in (
@@ -626,15 +853,15 @@ def load_telemetry_state(limit: int = 200) -> Optional[ThoughtState]:
 
     telemetry_state = data.get("state") if isinstance(data.get("state"), dict) else {}
     events = []
-    seen_seq = set()
+    seen_events = set()
     for event in (telemetry_state.get("latest_completed_events") or []) + (data.get("events") or []):
         if not isinstance(event, dict):
             continue
-        seq = event.get("seq")
-        if seq is not None and seq in seen_seq:
+        fingerprint = event_fingerprint(event)
+        if fingerprint and fingerprint in seen_events:
             continue
-        if seq is not None:
-            seen_seq.add(seq)
+        if fingerprint:
+            seen_events.add(fingerprint)
         events.append(event)
     request_floor_seq = None
     for event in events:
@@ -645,6 +872,8 @@ def load_telemetry_state(limit: int = 200) -> Optional[ThoughtState]:
 
     state = ThoughtState(path=Path("proxy-telemetry"))
     state.status = str(telemetry_state.get("status") or "ok")
+    for kind, message in load_config_hint_rows():
+        _append_backend(state, kind, message)
     prefix_rows: List[Tuple[str, str]] = []
     latest_ts = 0.0
     for event in events:
@@ -741,12 +970,22 @@ class TelemetryFeed:
             f"{proxy_base_url()}/qz/telemetry/events",
         ]
         url_index = 0
+        saw_unavailable = False
         while not self.stop_event.is_set():
             url = urls[url_index]
             try:
                 req = urllib.request.Request(url, headers={"Accept": "text/event-stream"})
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     url_index = 0
+                    yield {
+                        "type": "monitor_connection",
+                        "payload": {
+                            "status": "reconnected" if saw_unavailable else "connected",
+                            "url": url,
+                            "config_rows": load_config_hint_rows(),
+                        },
+                    }
+                    saw_unavailable = False
                     event_name = ""
                     data_lines: List[str] = []
                     while not self.stop_event.is_set():
@@ -773,7 +1012,26 @@ class TelemetryFeed:
                             event_name = line.split(":", 1)[1].strip()
                         elif line.startswith("data:"):
                             data_lines.append(line.split(":", 1)[1].lstrip())
+                    if not self.stop_event.is_set():
+                        saw_unavailable = True
+                        yield {
+                            "type": "monitor_connection",
+                            "payload": {
+                                "status": "unavailable",
+                                "url": url,
+                                "error": "telemetry stream closed",
+                            },
+                        }
             except Exception:
+                saw_unavailable = True
+                yield {
+                    "type": "monitor_connection",
+                    "payload": {
+                        "status": "unavailable",
+                        "url": url,
+                        "error": "telemetry endpoint unavailable",
+                    },
+                }
                 url_index = min(url_index + 1, len(urls) - 1)
                 if self.stop_event.wait(1.0):
                     break
@@ -861,10 +1119,14 @@ class UI:
             return self.magenta | self.bold
         if kind in ("answer", "message", "completed", "done"):
             return self.green | self.bold
-        if kind in ("prompt", "policy", "context", "generate", "total", "request", "upstream", "stream"):
+        if kind in ("fallback", "repair"):
+            return self.yellow | self.bold
+        if kind in ("prompt", "policy", "context", "generate", "total", "request", "upstream", "stream", "capture", "proxy"):
             return self.cyan | self.bold
         if kind in ("restore", "checkpoint", "tool", "web"):
             return self.yellow | self.bold
+        if kind in ("suppress",):
+            return self.dim
         if kind in ("model",):
             return self.blue | self.bold
         return self.white
