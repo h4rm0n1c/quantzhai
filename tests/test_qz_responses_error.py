@@ -213,5 +213,151 @@ class TelemetryRegistrationTests(unittest.TestCase):
         self.assertIn("responses_rejected_backend_unavailable", REQUEST_LIFECYCLE_EVENT_TYPES)
 
 
+class NormalizeErrorCodeTests(unittest.TestCase):
+    def test_spaces_become_underscores(self):
+        from proxy.qz_responses_error import normalize_error_code
+        self.assertEqual(normalize_error_code("backend unavailable"), "backend_unavailable")
+        self.assertEqual(normalize_error_code("proxy not ready"), "proxy_not_ready")
+        self.assertEqual(normalize_error_code("model not found"), "model_not_found")
+        self.assertEqual(normalize_error_code("profile backend missing"), "profile_backend_missing")
+
+    def test_empty_returns_empty(self):
+        from proxy.qz_responses_error import normalize_error_code
+        self.assertEqual(normalize_error_code(""), "")
+        self.assertEqual(normalize_error_code(None), "")  # type: ignore[arg-type]
+
+    def test_already_snake_case(self):
+        from proxy.qz_responses_error import normalize_error_code
+        self.assertEqual(normalize_error_code("backend_unavailable"), "backend_unavailable")
+
+
+class CanonicalFieldsTests(unittest.TestCase):
+    """Tests for the new additive canonical fields in qz.responses.error.v1."""
+
+    def test_existing_minimal_payload_unchanged(self):
+        """Callers that pass no new fields still get schema + error only."""
+        p = build_responses_error_payload("model not found")
+        self.assertEqual(p["schema"], QZ_RESPONSES_ERROR_SCHEMA)
+        self.assertEqual(p["error"], "model not found")
+        # error_code is derived even without explicit arg
+        self.assertEqual(p.get("error_code"), "model_not_found")
+        # new optional fields not fabricated
+        self.assertNotIn("recoverable", p)
+        self.assertNotIn("retryable", p)
+        self.assertNotIn("fatal", p)
+        self.assertNotIn("service_status", p)
+
+    def test_error_code_derived_from_error_string(self):
+        p = build_responses_error_payload("backend unavailable")
+        self.assertEqual(p["error_code"], "backend_unavailable")
+
+    def test_explicit_error_code_wins(self):
+        p = build_responses_error_payload("some error", error_code="custom_code")
+        self.assertEqual(p["error_code"], "custom_code")
+
+    def test_status_code_included_when_provided(self):
+        p = build_responses_error_payload("model not found", status_code=503)
+        self.assertEqual(p["status_code"], 503)
+
+    def test_status_code_absent_when_not_provided(self):
+        p = build_responses_error_payload("model not found")
+        self.assertNotIn("status_code", p)
+
+    def test_explicit_recoverable_retryable_fatal(self):
+        p = build_responses_error_payload(
+            "backend unavailable",
+            recoverable=True,
+            retryable=False,
+            fatal=False,
+            operator_action="start_backend",
+        )
+        self.assertTrue(p["recoverable"])
+        self.assertFalse(p["retryable"])
+        self.assertFalse(p["fatal"])
+        self.assertEqual(p["operator_action"], "start_backend")
+
+    def test_service_status_embedded(self):
+        ss = {
+            "schema": "qz.service.status.v1",
+            "proxy_state": "ready",
+            "catalog_state": "ready",
+            "backend_state": "unreachable",
+            "model_state": "unknown",
+            "request_admission": "rejected_backend_unavailable",
+            "recovery_state": "available",
+            "recoverable": True,
+            "retryable": False,
+            "fatal": False,
+            "last_error": "Connection refused",
+            "operator_action": "start_backend",
+            "operator_hints": ["Start the backend."],
+        }
+        p = build_responses_error_payload("backend unavailable", service_status=ss)
+        self.assertIn("service_status", p)
+        self.assertEqual(p["service_status"]["schema"], "qz.service.status.v1")
+
+    def test_service_status_mirrors_recovery_fields(self):
+        """recoverable/retryable/fatal/operator_action are mirrored from service_status."""
+        ss = {
+            "schema": "qz.service.status.v1",
+            "recoverable": True,
+            "retryable": False,
+            "fatal": False,
+            "operator_action": "start_backend",
+            "operator_hints": [],
+        }
+        p = build_responses_error_payload("backend unavailable", service_status=ss)
+        self.assertTrue(p["recoverable"])
+        self.assertFalse(p["retryable"])
+        self.assertFalse(p["fatal"])
+        self.assertEqual(p["operator_action"], "start_backend")
+
+    def test_explicit_overrides_service_status_mirror(self):
+        """Explicit top-level values override what service_status would mirror."""
+        ss = {"recoverable": True, "retryable": True, "fatal": False, "operator_action": "remote_wait", "operator_hints": []}
+        p = build_responses_error_payload(
+            "backend unavailable",
+            service_status=ss,
+            recoverable=False,    # explicit override
+            operator_action="inspect_logs",
+        )
+        self.assertFalse(p["recoverable"])
+        self.assertEqual(p["operator_action"], "inspect_logs")
+        # retryable is mirrored (not overridden)
+        self.assertTrue(p["retryable"])
+
+    def test_deprecated_alias_hint_unchanged(self):
+        """alias_hint still fires when requested_model is a deprecated alias."""
+        p = build_responses_error_payload("model not found", requested_model="high")
+        self.assertIn("alias_hint", p)
+        self.assertIn("deprecated", p["alias_hint"])
+
+    def test_available_models_still_sorted(self):
+        """available_models sorting is unchanged."""
+        p = build_responses_error_payload("model not found", available_models=["z", "a", "m"])
+        self.assertEqual(p["available_models"], ["a", "m", "z"])
+
+    def test_profile_backend_missing_error_code(self):
+        """profile_backend_missing error_code derives correctly."""
+        p = build_responses_error_payload("profile backend missing")
+        self.assertEqual(p["error_code"], "profile_backend_missing")
+
+    def test_payload_json_serialisable_with_all_fields(self):
+        import json
+        ss = {
+            "schema": "qz.service.status.v1", "recoverable": True, "retryable": False,
+            "fatal": False, "operator_action": "start_backend", "operator_hints": [],
+        }
+        p = build_responses_error_payload(
+            "backend unavailable",
+            reason="Connection refused",
+            status_code=502,
+            service_status=ss,
+        )
+        rt = json.loads(json.dumps(p))
+        self.assertEqual(rt["schema"], QZ_RESPONSES_ERROR_SCHEMA)
+        self.assertEqual(rt["error_code"], "backend_unavailable")
+
+
 if __name__ == "__main__":
     unittest.main()

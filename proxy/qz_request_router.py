@@ -37,6 +37,7 @@ try:
     from .qz_file_signal import record_tool_call, seed_repeated_read_state
     from .qz_responses_error import build_responses_error_payload, is_deprecated_alias
     from .qz_control_plane import build_control_plane_status
+    from .qz_service_status import build_service_status
     from .qz_search_policy import resolve_search_policy_selection
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import (
@@ -77,6 +78,7 @@ except ImportError:
     from qz_file_signal import record_tool_call, seed_repeated_read_state
     from qz_responses_error import build_responses_error_payload, is_deprecated_alias
     from qz_control_plane import build_control_plane_status
+    from qz_service_status import build_service_status
     from qz_search_policy import resolve_search_policy_selection
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import (
@@ -152,6 +154,46 @@ class RequestRouter:
             except Exception:
                 return False
         return True
+
+    @staticmethod
+    def _minimal_cp_for_service_status(
+        initialization: dict,
+        model_visible: bool = False,
+        backend_reachable: bool = False,
+        backend_ready: bool = False,
+        backend_error: str = "",
+    ) -> dict:
+        """Build a minimal control-plane-like dict for build_service_status().
+
+        Used by rejection paths that have partial readiness context and want to
+        derive a qz.service.status.v1 payload without probing the backend again.
+        """
+        return {
+            "proxy_initialization": initialization,
+            "readiness": {
+                "proxy_ready": bool(initialization.get("ready")),
+                "catalog_ready": bool(initialization.get("catalog_ready")),
+                "models_visible": model_visible,
+                "backend_reachable": backend_reachable,
+                "backend_ready": backend_ready,
+            },
+            "models": {
+                "count": 1 if model_visible else 0,
+                "ids": [],
+                "selected": "",
+                "selected_backend_id": "",
+            },
+            "backend": {
+                "reachable": backend_reachable,
+                "ready": backend_ready,
+                "health_status": 200 if backend_reachable else None,
+                "loaded_model": "",
+                "loaded_count": 0,
+                "restart_required": False,
+                "error": backend_error or None,
+            },
+            "operator_hints": [],
+        }
 
     def _proxy_initializing_error_payload(self) -> dict:
         payload_fn = getattr(self.handler, "_initializing_error_payload", None)
@@ -1071,6 +1113,8 @@ class RequestRouter:
 
         if not self._proxy_startup_ready():
             initialization = self.handler._initialization_payload()
+            _cp_a = self._minimal_cp_for_service_status(initialization)
+            _ss_a = build_service_status(_cp_a)
             payload = build_responses_error_payload(
                 error="proxy not ready",
                 reason=initialization.get("error") or "model catalog and startup policy are still loading",
@@ -1087,6 +1131,8 @@ class RequestRouter:
                     "Check /qz/status or /health for readiness details. "
                     "qz-codex does not require local Docker or llama.cpp access."
                 ),
+                status_code=503,
+                service_status=_ss_a,
             )
             self._emit_request_telemetry(
                 "request_failed",
@@ -1148,8 +1194,18 @@ class RequestRouter:
                     pass
 
                 initialization = self.handler._initialization_payload()
+                # Distinguish profile-backend-missing (broken symlink) from generic
+                # model-not-found so clients get the right error_code and action.
+                _is_profile_missing = (
+                    isinstance(selection_reason, dict)
+                    and selection_reason.get("error") == "profile backend missing"
+                )
+                _error_label = "profile backend missing" if _is_profile_missing else "model not found"
+                _op_action_b = "inspect_logs" if _is_profile_missing else "select_model"
+                _cp_b = self._minimal_cp_for_service_status(initialization)
+                _ss_b = build_service_status(_cp_b)
                 payload = build_responses_error_payload(
-                    error="model not found",
+                    error=_error_label,
                     reason=error_text or f"no model matching '{client_model}'",
                     requested_model=client_model,
                     available_models=available_ids,
@@ -1164,6 +1220,9 @@ class RequestRouter:
                         "Use a real model ID from /v1/models or POST /qz/models/refresh. "
                         "Old aliases (low/medium/high/max/caveman) are deprecated."
                     ),
+                    status_code=503,
+                    service_status=_ss_b,
+                    operator_action=_op_action_b,
                 )
                 # Carry forward profile-backend-missing fix hint if present.
                 if isinstance(selection_reason, dict) and selection_reason.get("fix"):
@@ -1487,6 +1546,14 @@ class RequestRouter:
                 request_id=request_id,
             )
             initialization = self.handler._initialization_payload()
+            _cp_c = self._minimal_cp_for_service_status(
+                initialization,
+                model_visible=True,
+                backend_reachable=False,
+                backend_ready=False,
+                backend_error=str(e),
+            )
+            _ss_c = build_service_status(_cp_c)
             _backend_payload = build_responses_error_payload(
                 error="backend unavailable",
                 reason=str(e),
@@ -1503,6 +1570,8 @@ class RequestRouter:
                     "is unreachable. Check /qz/status for backend health. "
                     "qz-codex does not need local Docker or llama.cpp access."
                 ),
+                status_code=502,
+                service_status=_ss_c,
             )
             try:
                 self.handler.telemetry.emit("responses_rejected_backend_unavailable", {

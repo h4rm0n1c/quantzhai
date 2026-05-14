@@ -388,12 +388,28 @@ Current behaviour sourced from code. Canonical state and future action are propo
   `tests/test_qz_control_plane.py::ServiceStatusInControlPlaneTests`.
 - `build_service_status()` takes the assembled control-plane payload (no double probe).
 
-### Slice 3: Extend `qz.responses.error.v1`
+### Slice 3 (done): Extend `qz.responses.error.v1`
 
-- Add `error_code` (canonical string), `recoverable`, `retryable`, `fatal`, `operator_action`.
-- Existing fields (`error`, `reason`, `requested_model`, `readiness`, `operator_hint`) remain.
-- Fix profile-backend-missing path to use `qz.responses.error.v1` schema.
-- Update tests.
+Added to `build_responses_error_payload()` in `proxy/qz_responses_error.py`:
+- `error_code` — canonical snake_case code derived from `error` string if not explicit.
+- `status_code` — HTTP status returned (503/502) when provided.
+- `service_status` — embedded `qz.service.status.v1` block when built by router.
+- `recoverable`, `retryable`, `fatal`, `operator_action` — mirrored from `service_status`
+  when not explicitly overridden; otherwise from explicit caller arguments.
+
+Added helper: `normalize_error_code(error: str) -> str`.
+
+Three `/v1/responses` rejection paths updated in `qz_request_router.py`:
+- Proxy not ready: `status_code=503`, `service_status` from minimal cp, inherits
+  `recoverable=True`, `retryable=True`, `operator_action=remote_wait`.
+- Model not found: `status_code=503`, `service_status`, `operator_action=select_model`.
+  Profile-backend-missing now uses `error_code=profile_backend_missing` and
+  `operator_action=inspect_logs` — distinguished from generic model-not-found.
+- Backend unavailable: `status_code=502`, `service_status` with
+  `backend_state=unreachable`, `operator_action=start_backend`.
+
+All existing fields unchanged (`error`, `reason`, `requested_model`, `available_models`,
+`alias_hint`, `readiness`, `proxy_initialization`, `operator_hint`, `fix`).
 
 ### Slice 4: Add `/qz/recovery/status` (read-only)
 
