@@ -1,0 +1,230 @@
+#!/usr/bin/env bash
+# qz-live-smoke: repeatable live stack smoke test for QuantZhai.
+#
+# Usage:
+#   scripts/qz-live-smoke [--model MODEL] [--telemetry-limit N] [--skip-live-codex]
+#
+# Run after qz-up. Checks proxy health, config, qz-thoughts, unit guards,
+# the normal Codex path, and the denied native command telemetry path.
+#
+# Exits 0 on success, 1 on any failure.
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Defaults and argument parsing
+# ---------------------------------------------------------------------------
+SMOKE_MODEL="kuato"
+TELEMETRY_LIMIT=2000
+SKIP_LIVE_CODEX=0
+
+usage() {
+  printf 'Usage: %s [--model MODEL] [--telemetry-limit N] [--skip-live-codex]\n' \
+    "$(basename "${BASH_SOURCE[0]}")" >&2
+  exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model)              SMOKE_MODEL="${2:?--model requires a value}"; shift 2 ;;
+    --model=*)            SMOKE_MODEL="${1#*=}"; shift ;;
+    --telemetry-limit)    TELEMETRY_LIMIT="${2:?--telemetry-limit requires a value}"; shift 2 ;;
+    --telemetry-limit=*)  TELEMETRY_LIMIT="${1#*=}"; shift ;;
+    --skip-live-codex)    SKIP_LIVE_CODEX=1; shift ;;
+    -h|--help)            usage ;;
+    *)                    usage ;;
+  esac
+done
+
+# ---------------------------------------------------------------------------
+# Environment
+# ---------------------------------------------------------------------------
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qz-env"
+
+PROXY_BASE="http://${QZ_PROXY_HOST}:${QZ_PROXY_PORT}"
+FAIL_LIST=()
+
+ok()   { printf 'OK   %s\n' "$*"; }
+fail() { printf 'FAIL %s\n' "$*" >&2; FAIL_LIST+=("$*"); }
+
+printf '=== qz-live-smoke  model=%s  proxy=%s  telemetry_limit=%s ===\n' \
+  "$SMOKE_MODEL" "$PROXY_BASE" "$TELEMETRY_LIMIT"
+echo
+
+# ---------------------------------------------------------------------------
+# 1. Required commands
+# ---------------------------------------------------------------------------
+echo "--- required commands ---"
+for _cmd in curl jq python3; do
+  if command -v "$_cmd" >/dev/null 2>&1; then
+    ok "command: $_cmd"
+  else
+    fail "required command missing: $_cmd"
+  fi
+done
+
+if [[ ${#FAIL_LIST[@]} -gt 0 ]]; then
+  echo
+  printf 'Prerequisite checks failed — aborting.\n' >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Proxy health
+# ---------------------------------------------------------------------------
+echo
+echo "--- proxy health ---"
+if HEALTH_JSON=$(curl -sf --max-time 8 "${PROXY_BASE}/health" 2>/dev/null); then
+  ok "/health responded"
+  PROXY_READY=$(echo "$HEALTH_JSON" | jq -r '.proxy_initialization.ready // false' 2>/dev/null || echo false)
+  if [[ "$PROXY_READY" == "true" ]]; then
+    ok "proxy_initialization.ready == true"
+  else
+    fail "proxy_initialization.ready is not true (got: $PROXY_READY) — is the proxy fully started?"
+  fi
+else
+  fail "/health unreachable — is qz-up running?"
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Effective config
+# ---------------------------------------------------------------------------
+echo
+echo "--- effective config ---"
+if EFF_JSON=$(curl -sf --max-time 8 "${PROXY_BASE}/qz/config/effective" 2>/dev/null); then
+  EFF_SCHEMA=$(echo "$EFF_JSON" | jq -r '.schema // ""' 2>/dev/null || echo "")
+  if [[ -n "$EFF_SCHEMA" ]]; then
+    ok "/qz/config/effective responded (schema=${EFF_SCHEMA})"
+  else
+    fail "/qz/config/effective returned no schema"
+  fi
+else
+  fail "/qz/config/effective unreachable"
+fi
+
+# ---------------------------------------------------------------------------
+# 4. qz-thoughts --once
+# ---------------------------------------------------------------------------
+echo
+echo "--- qz-thoughts ---"
+if "${QZ_ROOT}/scripts/qz-thoughts" --once >/dev/null 2>&1; then
+  ok "qz-thoughts --once exited 0"
+else
+  fail "qz-thoughts --once exited non-zero"
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Targeted unit guards
+# ---------------------------------------------------------------------------
+echo
+echo "--- unit guards ---"
+if (cd "$QZ_ROOT" && python3 -m unittest \
+    tests.test_qz_native_tool_output \
+    tests.test_codex_harness_guidance 2>/dev/null); then
+  ok "unit guards: test_qz_native_tool_output test_codex_harness_guidance"
+else
+  fail "unit guards failed — run: python3 -m unittest tests.test_qz_native_tool_output tests.test_codex_harness_guidance -v"
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Live Codex paths
+# ---------------------------------------------------------------------------
+if [[ "$SKIP_LIVE_CODEX" -eq 1 ]]; then
+  echo
+  echo "--- live Codex paths skipped (--skip-live-codex) ---"
+else
+  # 6a. Normal path
+  echo
+  echo "--- normal Codex path ---"
+  if NORMAL_OUT=$(
+    cd "$QZ_ROOT"
+    "${QZ_ROOT}/scripts/qz-codex" exec \
+      -m "$SMOKE_MODEL" \
+      --ephemeral \
+      -c approval_policy=never \
+      "Reply with exactly the token LIVE_NORMAL_OK and nothing else." \
+      2>/dev/null
+  ); then
+    if echo "$NORMAL_OUT" | grep -q "LIVE_NORMAL_OK"; then
+      ok "normal Codex path: LIVE_NORMAL_OK confirmed"
+    else
+      fail "normal Codex path: LIVE_NORMAL_OK not in output"
+    fi
+  else
+    fail "normal Codex path: qz-codex exec failed"
+  fi
+
+  # 6b. Denied native command — record pre-seq to isolate this run's events
+  echo
+  echo "--- denied native command (sandbox telemetry) ---"
+  PRE_DENIED_SEQ=$(curl -sf --max-time 8 \
+    "${PROXY_BASE}/qz/telemetry/recent?limit=50" 2>/dev/null | \
+    python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+seqs = [e.get('seq', 0) for e in d.get('events', [])]
+seqs += [e.get('seq', 0) for e in (d.get('state', {}).get('latest_completed_events') or [])]
+print(max(seqs) if seqs else 0)
+" 2>/dev/null || echo 0)
+
+  printf '  pre-run telemetry seq: %s\n' "$PRE_DENIED_SEQ"
+
+  # Run denied command; sandbox rejects the write to /etc — non-zero exit is expected
+  (
+    cd "$QZ_ROOT"
+    "${QZ_ROOT}/scripts/qz-codex" exec \
+      -m "$SMOKE_MODEL" \
+      --ephemeral \
+      -c approval_policy=never \
+      "Run exactly this command and show all output verbatim including any error text: echo qz-sandbox-denied-test > /etc/qz-denied-test" \
+      >/dev/null 2>&1
+  ) || true
+
+  # Brief pause for telemetry to propagate
+  sleep 1
+
+  # Query wide window; filter to events after PRE_DENIED_SEQ
+  SANDBOX_CHECK=$(curl -sf --max-time 10 \
+    "${PROXY_BASE}/qz/telemetry/recent?limit=${TELEMETRY_LIMIT}" 2>/dev/null | \
+    python3 -c "
+import json, sys
+pre_seq = int('${PRE_DENIED_SEQ}')
+d = json.load(sys.stdin)
+events = list(d.get('events', []))
+events += list(d.get('state', {}).get('latest_completed_events') or [])
+for e in sorted(events, key=lambda x: x.get('seq', 0), reverse=True):
+    if e.get('type') == 'tool_sandbox_denied' and e.get('seq', 0) > pre_seq:
+        p = e.get('payload', {})
+        print(p.get('classifier', ''))
+        print(p.get('matched_string', ''))
+        break
+" 2>/dev/null) || SANDBOX_CHECK=""
+
+  if [[ -z "$SANDBOX_CHECK" ]]; then
+    fail "denied command: no tool_sandbox_denied event found (seq > ${PRE_DENIED_SEQ}, limit=${TELEMETRY_LIMIT})"
+  else
+    GOT_CLASSIFIER=$(printf '%s' "$SANDBOX_CHECK" | head -1)
+    GOT_MATCHED=$(printf '%s' "$SANDBOX_CHECK" | tail -1)
+    if [[ "$GOT_CLASSIFIER" == "sandbox_denied_readonly_fs" \
+       && "$GOT_MATCHED"    == "Read-only file system" ]]; then
+      ok "denied command: tool_sandbox_denied  classifier=${GOT_CLASSIFIER}  matched=${GOT_MATCHED}"
+    else
+      fail "denied command: unexpected payload (classifier=${GOT_CLASSIFIER} matched=${GOT_MATCHED})"
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Final summary
+# ---------------------------------------------------------------------------
+echo
+if [[ ${#FAIL_LIST[@]} -eq 0 ]]; then
+  printf 'SMOKE OK — all checks passed\n'
+else
+  FAIL_COUNT=${#FAIL_LIST[@]}
+  printf 'SMOKE FAILED — %d failure(s):\n' "$FAIL_COUNT" >&2
+  for _f in "${FAIL_LIST[@]}"; do
+    printf '  FAIL %s\n' "$_f" >&2
+  done
+  exit 1
+fi
