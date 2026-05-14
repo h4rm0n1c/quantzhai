@@ -269,5 +269,69 @@ class ClassifyNativeToolOutputsTests(unittest.TestCase):
             self.assertIsInstance(payload[field], str, f"field '{field}' should be str")
 
 
+class ObserverOrderRegressionTests(unittest.TestCase):
+    """Prove the observer must run on raw input, not normalized input.
+
+    After normalize_responses_input_for_qwen / _microcompact_old_tool_results,
+    function_call_output items may be rewritten into assistant message items
+    (e.g. by microcompaction when conversation history is long). Classification
+    on the normalized items would miss the signal.
+
+    These tests document the wiring requirement: classify_native_tool_outputs()
+    must be called on the raw incoming body["input"] BEFORE any normalization.
+    """
+
+    def test_classifier_fires_on_raw_function_call_output(self):
+        """Raw function_call_output with sandbox denial is classified."""
+        raw_items = [_fco("call_ro", _READONLY_FS_OUTPUT)]
+        results = classify_native_tool_outputs(raw_items)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0][0], "tool_sandbox_denied")
+
+    def test_classifier_misses_signal_when_item_rewritten_to_message(self):
+        """After microcompaction, function_call_output becomes an assistant message.
+
+        Classification on the compacted form returns nothing — proving that the
+        observer must run BEFORE normalization to catch sandbox denials.
+        """
+        # This simulates what _microcompact_old_tool_results produces from a
+        # function_call_output that has been compacted into a placeholder message.
+        compacted_item = {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Tool exec_command: FAILED — Read-only file system"}],
+        }
+        results = classify_native_tool_outputs([compacted_item])
+        # Not a function_call_output → no event — proves classifier needs raw items
+        self.assertEqual(results, [])
+
+    def test_classifier_misses_signal_when_output_converted_to_input_text(self):
+        """Input-text message form (another normalization output) is not classified."""
+        normalized_item = {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Read-only file system"}],
+        }
+        results = classify_native_tool_outputs([normalized_item])
+        self.assertEqual(results, [])
+
+    def test_plain_permission_denied_not_classified_on_raw_input(self):
+        """Plain permission denied in raw function_call_output is NOT classified."""
+        raw_items = [_fco("call_perm", "Process exited with code 1\nOutput:\nbash: permission denied\n")]
+        self.assertEqual(classify_native_tool_outputs(raw_items), [])
+
+    def test_exit_code_alone_not_classified_on_raw_input(self):
+        """Exit code 1 alone in raw function_call_output is NOT classified."""
+        raw_items = [_fco("call_exit", "Process exited with code 1\nOutput:\n")]
+        self.assertEqual(classify_native_tool_outputs(raw_items), [])
+
+    def test_connection_refused_raw_input_classified(self):
+        """Connection refused in raw function_call_output IS classified."""
+        raw_items = [_fco("call_conn", _CONN_REFUSED_OUTPUT)]
+        results = classify_native_tool_outputs(raw_items)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0][0], "tool_connection_failed")
+
+
 if __name__ == "__main__":
     unittest.main()
