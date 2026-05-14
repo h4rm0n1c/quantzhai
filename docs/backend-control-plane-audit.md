@@ -249,8 +249,12 @@ New response fields alongside backwards-compatible existing fields:
 
 The 503 "not ready" response is also structured with the same schema.
 
-`qz-codex-common` now parses the response body and validates `ok == true`
-before proceeding. The proxy is now the authority for catalog artifact status;
+`qz-codex-common` now parses the response body and requires both `ok == true`
+**and** `catalog_updated == true` before proceeding. `ok` alone is not
+sufficient — the Codex catalog file must actually have been regenerated.
+Backwards-compatible fallback: if `catalog_updated` is absent, checks
+`codex_catalog_updated` (pre-slice-4 field); if both are absent, HTTP 200
+is treated as success (old format compatibility). The proxy is now the authority for catalog artifact status;
 scripts no longer need to interpret catalog internals. Backwards-compatible
 fields (`catalog`, `backend`, `codex_catalog_updated`) remain.
 

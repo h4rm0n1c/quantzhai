@@ -219,5 +219,76 @@ class ModelIdsFromCatalogTests(unittest.TestCase):
             self.assertNotIn("broken.gguf", model_ids)
 
 
+def _parse_catalog_ok(body: dict) -> bool:
+    """Python equivalent of the shell parser in qz-codex-common.
+
+    Rules (in priority order):
+      new schema: catalog_updated in d -> ok AND catalog_updated
+      ok present, no catalog_updated   -> ok AND codex_catalog_updated
+      only codex_catalog_updated       -> codex_catalog_updated
+      unknown old format               -> True (backwards compat)
+    """
+    if "catalog_updated" in body:
+        return bool(body.get("ok", True)) and bool(body.get("catalog_updated", False))
+    if "ok" in body:
+        return bool(body["ok"]) and bool(body.get("codex_catalog_updated", False))
+    if "codex_catalog_updated" in body:
+        return bool(body["codex_catalog_updated"])
+    return True  # unknown old format: HTTP 200 assumed success
+
+
+class CatalogOkParsingRuleTests(unittest.TestCase):
+    """Test the parsing rule that qz-codex-common applies to decide catalog success.
+
+    Mirrors the Python logic embedded in qz-codex-common's _catalog_ok check.
+    """
+
+    def test_new_schema_ok_true_catalog_updated_true_is_success(self):
+        body = {"ok": True, "catalog_updated": True, "schema": "qz.codex.catalog.refresh.v1"}
+        self.assertTrue(_parse_catalog_ok(body))
+
+    def test_new_schema_ok_true_catalog_updated_false_is_failure(self):
+        """This is the key blocker case: ok=true but catalog not regenerated."""
+        body = {"ok": True, "catalog_updated": False, "schema": "qz.codex.catalog.refresh.v1"}
+        self.assertFalse(_parse_catalog_ok(body))
+
+    def test_new_schema_ok_false_catalog_updated_false_is_failure(self):
+        body = {"ok": False, "catalog_updated": False, "error": "proxy not ready"}
+        self.assertFalse(_parse_catalog_ok(body))
+
+    def test_new_schema_ok_false_catalog_updated_true_is_failure(self):
+        """ok=false always fails regardless of catalog_updated."""
+        body = {"ok": False, "catalog_updated": True}
+        self.assertFalse(_parse_catalog_ok(body))
+
+    def test_compat_codex_catalog_updated_true_is_success(self):
+        """Pre-slice-4 response: only codex_catalog_updated available."""
+        body = {"catalog": {}, "backend": {}, "codex_catalog_updated": True}
+        self.assertTrue(_parse_catalog_ok(body))
+
+    def test_compat_codex_catalog_updated_false_is_failure(self):
+        body = {"catalog": {}, "backend": {}, "codex_catalog_updated": False}
+        self.assertFalse(_parse_catalog_ok(body))
+
+    def test_ok_with_codex_catalog_updated_compat(self):
+        """ok present but no catalog_updated: fall back to codex_catalog_updated."""
+        body = {"ok": True, "codex_catalog_updated": True}
+        self.assertTrue(_parse_catalog_ok(body))
+
+    def test_ok_true_codex_catalog_updated_false(self):
+        body = {"ok": True, "codex_catalog_updated": False}
+        self.assertFalse(_parse_catalog_ok(body))
+
+    def test_old_format_no_known_fields_is_success(self):
+        """Completely unknown HTTP-200 body: assume success for backwards compat."""
+        body = {"something": "else"}
+        self.assertTrue(_parse_catalog_ok(body))
+
+    def test_empty_body_is_success(self):
+        """Empty HTTP-200 body: backwards compat, treated as success."""
+        body = {}
+        self.assertTrue(_parse_catalog_ok(body))
+
+
 if __name__ == "__main__":
     unittest.main()

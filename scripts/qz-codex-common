@@ -29,18 +29,34 @@ qz_prepare_codex_home() {
   local proxy_url="http://$QZ_PROXY_HOST:$QZ_PROXY_PORT"
   local _refresh_body
   if _refresh_body=$(curl -fsS -X POST "$proxy_url/qz/models/refresh" 2>/dev/null); then
-    # Parse proxy-owned response to confirm catalog was updated.
-    # New schema (qz.codex.catalog.refresh.v1) has ok/model_ids/catalog_path.
-    # Old format (pre-slice-4) treated HTTP 200 as success; remain compatible.
+    # Parse proxy-owned response to confirm the catalog artifact was updated.
+    # Rules (in priority order):
+    #   new schema: ok==true AND catalog_updated==true  -> success
+    #   new schema: ok==true AND catalog_updated==false -> failure (artifact not regenerated)
+    #   new schema: ok==false                           -> failure
+    #   compat:     codex_catalog_updated==true         -> success (pre-slice-4 response)
+    #   old format: HTTP 200 without any schema fields  -> treat as success (backwards compat)
     local _catalog_ok
     _catalog_ok=$(printf '%s' "$_refresh_body" | python3 -c "
 import json, sys
 try:
     d = json.load(sys.stdin)
-    if 'ok' in d:
-        print('true' if d['ok'] else 'false')
+    # New schema: require both ok==true and catalog_updated==true.
+    if 'catalog_updated' in d:
+        ok = d.get('ok', True)
+        updated = d.get('catalog_updated', False)
+        print('true' if (ok and updated) else 'false')
+    elif 'ok' in d:
+        # ok present but no catalog_updated: check compat field
+        ok = d['ok']
+        updated = bool(d.get('codex_catalog_updated', False))
+        print('true' if (ok and updated) else 'false')
+    elif 'codex_catalog_updated' in d:
+        # Pre-slice-4 response: only codex_catalog_updated available
+        print('true' if d['codex_catalog_updated'] else 'false')
     else:
-        print('true')  # old format: HTTP 200 = success
+        # Unknown old format: HTTP 200 assumed success for backwards compat
+        print('true')
 except Exception:
     print('true')
 " 2>/dev/null || echo true)
@@ -51,11 +67,14 @@ import json, sys
 try:
     d = json.load(sys.stdin)
     parts = [p for p in [d.get('error'), d.get('reason')] if p]
+    if not parts:
+        if 'catalog_updated' in d and not d.get('catalog_updated'):
+            parts = ['Codex catalog file was not regenerated']
     print(', '.join(parts) if parts else 'catalog refresh failed')
 except Exception:
     print('catalog refresh failed')
 " 2>/dev/null || echo "catalog refresh failed")
-      printf 'qz-codex: proxy catalog refresh returned ok=false: %s\n' "$_err" >&2
+      printf 'qz-codex: proxy catalog refresh failed: %s\n' "$_err" >&2
       return 1
     fi
     : # proxy owns catalog; continue
