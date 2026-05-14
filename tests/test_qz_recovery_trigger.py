@@ -17,6 +17,7 @@ from proxy.qz_request_router import (
     RequestRouter,
 )
 from proxy.qz_recovery_state import RecoveryRuntimeState
+import unittest.mock
 
 
 # ---------------------------------------------------------------------------
@@ -41,8 +42,8 @@ class TriggerConstantsTests(unittest.TestCase):
     def test_start_backend_unimplemented(self):
         self.assertIn("start_backend", UNIMPLEMENTED_TRIGGER_ACTIONS)
 
-    def test_reload_unimplemented(self):
-        self.assertIn("reload_selected_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
+    def test_reload_now_implemented(self):
+        self.assertNotIn("reload_selected_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
 
     def test_refresh_catalog_safe(self):
         self.assertIn("refresh_catalog", SAFE_TRIGGER_ACTIONS)
@@ -511,7 +512,7 @@ class ValidateTriggerBodyTests(unittest.TestCase):
 
     def test_unimplemented_action_message_mentions_implemented(self):
         result = RequestRouter._validate_recovery_trigger_body(
-            {"action": "reload_selected_model", "reason": "x"}
+            {"action": "start_backend", "reason": "x"}
         )
         _, _, _, msg = result
         self.assertIn("refresh_catalog", msg)
@@ -557,8 +558,8 @@ class UpdatedConstantsTests(unittest.TestCase):
     def test_start_backend_still_unimplemented(self):
         self.assertIn("start_backend", UNIMPLEMENTED_TRIGGER_ACTIONS)
 
-    def test_reload_selected_model_still_unimplemented(self):
-        self.assertIn("reload_selected_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
+    def test_reload_selected_model_now_implemented(self):
+        self.assertNotIn("reload_selected_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
 
     def test_select_model_still_unimplemented(self):
         self.assertIn("select_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
@@ -794,6 +795,358 @@ class DoRestartBackendTests(unittest.TestCase):
         ok, error = router._do_restart_backend()
         self.assertFalse(ok)
         self.assertGreater(len(error), 0)
+
+
+# ---------------------------------------------------------------------------
+# 19. reload_selected_model — constants
+# ---------------------------------------------------------------------------
+
+class ReloadConstantsTests(unittest.TestCase):
+    def test_reload_in_dangerous(self):
+        self.assertIn("reload_selected_model", DANGEROUS_TRIGGER_ACTIONS)
+
+    def test_reload_in_implemented(self):
+        self.assertIn("reload_selected_model", IMPLEMENTED_TRIGGER_ACTIONS)
+
+    def test_reload_not_in_unimplemented(self):
+        self.assertNotIn("reload_selected_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
+
+    def test_start_backend_still_unimplemented(self):
+        self.assertIn("start_backend", UNIMPLEMENTED_TRIGGER_ACTIONS)
+
+    def test_select_model_still_unimplemented(self):
+        self.assertIn("select_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
+
+
+# ---------------------------------------------------------------------------
+# 20. force=true for reload_selected_model
+# ---------------------------------------------------------------------------
+
+class ReloadForceTests(unittest.TestCase):
+    def test_force_allowed_for_reload(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "reload_selected_model", "reason": "x", "force": True}
+        )
+        self.assertIsNone(result)
+
+    def test_force_still_rejected_for_safe_actions(self):
+        for action in ("refresh_catalog", "clear_failure"):
+            with self.subTest(action=action):
+                result = RequestRouter._validate_recovery_trigger_body(
+                    {"action": action, "reason": "x", "force": True}
+                )
+                self.assertIsNotNone(result)
+                _, error, _, _ = result
+                self.assertEqual(error, "force_not_allowed")
+
+
+# ---------------------------------------------------------------------------
+# 21. Confirmation phrase for reload_selected_model
+# ---------------------------------------------------------------------------
+
+class ReloadConfirmPhraseTests(unittest.TestCase):
+    def test_phrase_required(self):
+        self.assertTrue(RequestRouter._confirm_phrase_required("reload_selected_model"))
+
+    def test_rejected_when_env_unset(self):
+        with unittest.mock.patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("QZ_RECOVERY_CONFIRM_PHRASE", None)
+            ok, msg = RequestRouter._confirm_phrase_matches({}, "reload_selected_model")
+            self.assertFalse(ok)
+            self.assertIn("QZ_RECOVERY_CONFIRM_PHRASE", msg)
+
+    def test_rejected_missing_confirm(self):
+        with unittest.mock.patch.dict("os.environ", {"QZ_RECOVERY_CONFIRM_PHRASE": "abc"}):
+            ok, msg = RequestRouter._confirm_phrase_matches({"reason": "x"}, "reload_selected_model")
+            self.assertFalse(ok)
+
+    def test_rejected_wrong_confirm(self):
+        with unittest.mock.patch.dict("os.environ", {"QZ_RECOVERY_CONFIRM_PHRASE": "abc"}):
+            ok, msg = RequestRouter._confirm_phrase_matches(
+                {"confirm": "xyz"}, "reload_selected_model"
+            )
+            self.assertFalse(ok)
+            self.assertIn("mismatch", msg.lower())
+
+    def test_accepted_exact_match(self):
+        with unittest.mock.patch.dict("os.environ", {"QZ_RECOVERY_CONFIRM_PHRASE": "abc"}):
+            ok, msg = RequestRouter._confirm_phrase_matches(
+                {"confirm": "abc"}, "reload_selected_model"
+            )
+            self.assertTrue(ok)
+            self.assertEqual(msg, "")
+
+
+# ---------------------------------------------------------------------------
+# 22. _validate_recovery_trigger_body for reload_selected_model
+# ---------------------------------------------------------------------------
+
+class ReloadBodyValidationTests(unittest.TestCase):
+    def test_valid_no_force(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "reload_selected_model", "reason": "x"}
+        )
+        self.assertIsNone(result)
+
+    def test_valid_with_force(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "reload_selected_model", "reason": "x", "force": True}
+        )
+        self.assertIsNone(result)
+
+    def test_missing_reason_rejected(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "reload_selected_model"}
+        )
+        self.assertIsNotNone(result)
+        status, error, _, _ = result
+        self.assertEqual(status, 400)
+        self.assertEqual(error, "missing_reason")
+
+    def test_start_backend_still_409(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "start_backend", "reason": "x"}
+        )
+        self.assertIsNotNone(result)
+        status, error, _, _ = result
+        self.assertEqual(status, 409)
+        self.assertEqual(error, "action_not_implemented")
+
+    def test_select_model_still_409(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "select_model", "reason": "x"}
+        )
+        self.assertIsNotNone(result)
+        status, error, _, _ = result
+        self.assertEqual(status, 409)
+
+    def test_unimplemented_message_updated(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "start_backend", "reason": "x"}
+        )
+        _, _, _, msg = result
+        self.assertIn("reload_selected_model", msg)
+
+
+# ---------------------------------------------------------------------------
+# 23. _selected_model_for_reload
+# ---------------------------------------------------------------------------
+
+class SelectedModelForReloadTests(unittest.TestCase):
+    def _make_router(self, backend_id="", entry_key=""):
+        class _FakeRouter:
+            def __init__(self, bid, ek):
+                self._bid = bid
+                self._ek = ek
+
+            def selected_backend_id(self):
+                return self._bid
+
+            def selected_model_entry(self):
+                if self._ek:
+                    return {"backend_id": self._bid or self._ek, "key": self._ek}
+                return None
+
+        class _FakeHandler:
+            def _model_router(self):
+                return _FakeRouter(backend_id, entry_key)
+
+        router = RequestRouter.__new__(RequestRouter)
+        router.handler = _FakeHandler()
+        return router
+
+    def test_returns_backend_id(self):
+        router = self._make_router(backend_id="qwen3-6b")
+        model_id, err = router._selected_model_for_reload()
+        self.assertEqual(model_id, "qwen3-6b")
+        self.assertEqual(err, "")
+
+    def test_falls_back_to_entry_key(self):
+        router = self._make_router(backend_id="", entry_key="qwen3")
+        model_id, err = router._selected_model_for_reload()
+        self.assertEqual(model_id, "qwen3")
+        self.assertEqual(err, "")
+
+    def test_empty_when_no_model(self):
+        router = self._make_router(backend_id="", entry_key="")
+        model_id, err = router._selected_model_for_reload()
+        self.assertEqual(model_id, "")
+        self.assertGreater(len(err), 0)
+
+    def test_error_message_mentions_select(self):
+        router = self._make_router(backend_id="", entry_key="")
+        _, err = router._selected_model_for_reload()
+        self.assertIn("select", err.lower())
+
+
+# ---------------------------------------------------------------------------
+# 24. _do_reload_selected_model
+# ---------------------------------------------------------------------------
+
+class DoReloadSelectedModelTests(unittest.TestCase):
+    """Tests for _do_reload_selected_model helper.
+
+    Uses a proper class hierarchy (not __class__ assignment) so that
+    getattr(handler.__class__, 'model_load_state', '') works correctly.
+    """
+
+    def _make_router(self, backend_id="qwen3-6b", load_succeeds=True):
+        """Returns (router, inner_fake_router)."""
+        inner_router_ref: list = [None]
+
+        class FH:
+            model_load_state = "idle"
+            model_load_error = None
+            model_load_timeout = 30.0
+            restart_called = False
+
+            def _model_router(self):
+                return inner_router_ref[0]
+
+        class _FakeRouter:
+            def __init__(self, bid, hcls, succeeds):
+                self._bid = bid
+                self._hcls = hcls
+                self._succeeds = succeeds
+                self.load_called_with = None
+
+            def selected_backend_id(self):
+                return self._bid
+
+            def selected_model_entry(self):
+                return {"backend_id": self._bid} if self._bid else None
+
+            def load_backend_model(self, model_id, wait=False, timeout=None):
+                self.load_called_with = model_id
+                if self._succeeds:
+                    self._hcls.model_load_state = "ready"
+                    self._hcls.model_load_error = None
+                else:
+                    self._hcls.model_load_state = "failed"
+                    self._hcls.model_load_error = "load HTTP 422"
+
+            def restart_backend_for_context(self, *a, **kw):
+                FH.restart_called = True
+
+        inner = _FakeRouter(backend_id, FH, load_succeeds)
+        inner_router_ref[0] = inner
+
+        router = RequestRouter.__new__(RequestRouter)
+        router.handler = FH()
+        return router, inner
+
+    def test_success(self):
+        router, _ = self._make_router(backend_id="qwen3-6b", load_succeeds=True)
+        ok, error = router._do_reload_selected_model()
+        self.assertTrue(ok)
+        self.assertEqual(error, "")
+
+    def test_calls_load_with_model_id(self):
+        router, inner = self._make_router(backend_id="qwen3-6b", load_succeeds=True)
+        router._do_reload_selected_model()
+        self.assertEqual(inner.load_called_with, "qwen3-6b")
+
+    def test_failure(self):
+        router, _ = self._make_router(backend_id="qwen3-6b", load_succeeds=False)
+        ok, error = router._do_reload_selected_model()
+        self.assertFalse(ok)
+        self.assertIn("422", error)
+
+    def test_no_model_returns_false(self):
+        router, _ = self._make_router(backend_id="", load_succeeds=True)
+        ok, error = router._do_reload_selected_model()
+        self.assertFalse(ok)
+        self.assertGreater(len(error), 0)
+
+    def test_does_not_call_restart(self):
+        router, _ = self._make_router(backend_id="qwen3", load_succeeds=True)
+        router._do_reload_selected_model()
+        self.assertFalse(router.handler.__class__.restart_called)
+
+
+# ---------------------------------------------------------------------------
+# 25. reload_selected_model planner
+# ---------------------------------------------------------------------------
+
+class ReloadPlannerTests(unittest.TestCase):
+    def _ss(self, backend_state="healthy", model_state="unloaded", recovery_state="available"):
+        return {
+            "schema": "qz.service.status.v1",
+            "proxy_state": "ready",
+            "catalog_state": "ready",
+            "backend_state": backend_state,
+            "model_state": model_state,
+            "request_admission": "accepted",
+            "recovery_state": recovery_state,
+            "recoverable": True,
+            "retryable": False,
+            "fatal": False,
+            "last_error": "",
+            "operator_action": "",
+            "operator_hints": [],
+        }
+
+    def test_feasible_when_backend_healthy_no_active(self):
+        from proxy.qz_recovery_plan import build_recovery_plan
+        p = build_recovery_plan(
+            self._ss(),
+            "reload_selected_model",
+            authority_enabled=True,
+            local_request=True,
+            active_requests=0,
+        )
+        self.assertTrue(p["feasible"])
+
+    def test_blocked_by_active_requests_no_force(self):
+        from proxy.qz_recovery_plan import build_recovery_plan
+        p = build_recovery_plan(
+            self._ss(),
+            "reload_selected_model",
+            authority_enabled=True,
+            local_request=True,
+            active_requests=3,
+            force=False,
+        )
+        self.assertTrue(p["blocked_by_active_requests"])
+        self.assertFalse(p["feasible"])
+
+    def test_force_overrides_active_requests(self):
+        from proxy.qz_recovery_plan import build_recovery_plan
+        p = build_recovery_plan(
+            self._ss(),
+            "reload_selected_model",
+            authority_enabled=True,
+            local_request=True,
+            active_requests=3,
+            force=True,
+        )
+        self.assertFalse(p["blocked_by_active_requests"])
+        self.assertTrue(p["feasible"])
+
+    def test_blocked_by_backend_unreachable(self):
+        from proxy.qz_recovery_plan import build_recovery_plan
+        p = build_recovery_plan(
+            self._ss(backend_state="unreachable"),
+            "reload_selected_model",
+            authority_enabled=True,
+            local_request=True,
+            active_requests=0,
+        )
+        self.assertTrue(p["blocked_by_state"])
+        self.assertFalse(p["feasible"])
+
+    def test_blocked_by_backoff(self):
+        from proxy.qz_recovery_plan import build_recovery_plan
+        p = build_recovery_plan(
+            self._ss(),
+            "reload_selected_model",
+            authority_enabled=True,
+            local_request=True,
+            active_requests=0,
+            backoff_active=True,
+        )
+        self.assertTrue(p["blocked_by_backoff"])
+        self.assertFalse(p["feasible"])
 
 
 if __name__ == "__main__":

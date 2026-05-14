@@ -765,6 +765,43 @@ Total: 60 tests in `test_qz_recovery_trigger.py`. Dangerous actions still blocke
 
 **Tests:** `tests/test_qz_recovery_trigger.py` — 92 assertions across 18 test classes.
 
+### Slice 12 (done): `reload_selected_model` trigger action
+
+Added `reload_selected_model` to `POST /qz/recovery/trigger`.
+
+**Constants updated:**
+- `DANGEROUS_TRIGGER_ACTIONS = frozenset({"restart_backend", "reload_selected_model"})`
+- `IMPLEMENTED_TRIGGER_ACTIONS = SAFE_TRIGGER_ACTIONS | DANGEROUS_TRIGGER_ACTIONS`
+- `UNIMPLEMENTED_TRIGGER_ACTIONS` — start_backend, select_model remain blocked (409)
+
+**Operator flow:**
+1. `restart_backend` — restarts Docker container; backend healthy but model unloaded
+2. `reload_selected_model` — loads the currently selected model into the running backend
+
+These are two separate trigger actions. `restart_backend` does NOT auto-load.
+`reload_selected_model` does NOT restart the container.
+
+**Gates for reload_selected_model (same as restart_backend):**
+- `QZ_RECOVERY_ACTIONS=1` → 403
+- Local request (when `QZ_RECOVERY_BIND_LOCAL_ONLY=1`) → 403
+- `reason` required → 400
+- `QZ_RECOVERY_CONFIRM_PHRASE` must be set (dangerous action) → 400 `bad_confirm`
+- `body.confirm` must exactly match → 400 `bad_confirm`
+- Not in progress → 423
+- Backoff not active → 429
+- Planner feasibility → 409 `plan_not_feasible`
+  - blocked when `backend_state == unreachable`
+  - blocked when `active_requests > 0` and `force=False` (force overrides)
+- Selected model pre-check → 409 `selected_model_missing` if no model configured
+- Execute → HTTP 200 success / HTTP 500 action_failed
+
+**New helpers:**
+- `_selected_model_for_reload()` — resolves backend_id from router selected entry
+- `_do_reload_selected_model()` — calls `load_backend_model(model_id, wait=True)`;
+  checks `model_load_state == "ready"` for success; does not restart backend
+
+Tests: `tests/test_qz_recovery_trigger.py` — 124 assertions across 25 test classes.
+
 ### Future: durable state (requires #2 SQLite)
 
 - Move attempt history and backoff tracking from in-memory to SQLite.

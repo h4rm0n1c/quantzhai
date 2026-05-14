@@ -557,6 +557,18 @@ Failure triggers `mark_failed()` + backoff + `recovery_backoff_started` telemetr
 Remaining blocked: `start_backend`, `reload_selected_model`, `select_model`.
 Durable state still needs #2 SQLite. `#47` stays open.
 
+### Slice 12 (done): `reload_selected_model` trigger action
+
+Added `reload_selected_model` to `POST /qz/recovery/trigger`.
+Designed to run after `restart_backend` to load the selected model into the restarted backend.
+Same confirmation/authority/backoff gates as `restart_backend`.
+Calls `load_backend_model(model_id, wait=True)` — no Docker, no backend restart.
+Pre-checks that a model is selected (→ 409 `selected_model_missing` if not).
+Planner blocks when backend unreachable or active requests + force=false.
+
+Remaining blocked: `start_backend`, `select_model`.
+Tests: `tests/test_qz_recovery_trigger.py` — 124 assertions.
+
 ---
 
 ## Open questions

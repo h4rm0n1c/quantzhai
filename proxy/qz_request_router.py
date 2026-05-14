@@ -104,16 +104,20 @@ except ImportError:
 
 
 SAFE_TRIGGER_ACTIONS: frozenset = frozenset({"refresh_catalog", "clear_failure"})
-DANGEROUS_TRIGGER_ACTIONS: frozenset = frozenset({"restart_backend"})
+DANGEROUS_TRIGGER_ACTIONS: frozenset = frozenset({"restart_backend", "reload_selected_model"})
 IMPLEMENTED_TRIGGER_ACTIONS: frozenset = SAFE_TRIGGER_ACTIONS | DANGEROUS_TRIGGER_ACTIONS
 UNIMPLEMENTED_TRIGGER_ACTIONS: frozenset = ALLOWED_RECOVERY_ACTIONS - IMPLEMENTED_TRIGGER_ACTIONS
 RECOVERY_TRIGGER_SCHEMA = "qz.recovery.trigger.v1"
 
 _TRIGGER_WARNINGS: dict = {
-    "refresh_catalog": "Refreshing the catalog does not restart the backend.",
-    "clear_failure":   "Clearing failure state does not start or restart the backend.",
-    "restart_backend": (
+    "refresh_catalog":      "Refreshing the catalog does not restart the backend.",
+    "clear_failure":        "Clearing failure state does not start or restart the backend.",
+    "restart_backend":      (
         "Restarting the backend will interrupt active requests and requires a model reload afterward."
+    ),
+    "reload_selected_model": (
+        "Reloading the selected model may interrupt active requests. "
+        "Backend process is not restarted."
     ),
 }
 
@@ -601,8 +605,8 @@ class RequestRouter:
         if action in UNIMPLEMENTED_TRIGGER_ACTIONS:
             return 409, "action_not_implemented", "state", (
                 f"Action {action!r} is not yet implemented. "
-                "Implemented: refresh_catalog, clear_failure, restart_backend. "
-                "start_backend/reload_selected_model/select_model remain deferred."
+                "Implemented: refresh_catalog, clear_failure, restart_backend, reload_selected_model. "
+                "start_backend/select_model remain deferred."
             )
 
         # force=true is only valid for dangerous (interrupt) actions, not safe ones
@@ -668,6 +672,53 @@ class RequestRouter:
             catalog.refresh()
             self._refresh_codex_catalog(catalog)
             return True, ""
+        except Exception as exc:
+            return False, str(exc)
+
+    def _selected_model_for_reload(self) -> tuple[str, str]:
+        """Resolve the selected model id for reload_selected_model.
+
+        Returns (model_id, error_message). model_id is empty on failure.
+        Uses model router's selected entry; falls back to selected_model_entry().
+        """
+        try:
+            router = self.handler._model_router()
+            model_id = router.selected_backend_id() or ""
+            if not model_id:
+                entry = router.selected_model_entry()
+                if entry:
+                    model_id = entry.get("backend_id") or entry.get("key") or ""
+            if not model_id:
+                return "", (
+                    "No model selected. Use POST /qz/models/select to choose a model "
+                    "before calling reload_selected_model."
+                )
+            return model_id, ""
+        except Exception as exc:
+            return "", str(exc)
+
+    def _do_reload_selected_model(self) -> tuple[bool, str]:
+        """Load the currently selected model into the running backend.
+
+        Uses ModelRouter.load_backend_model(model_id, wait=True).
+        Does not restart the backend. Does not call Docker.
+        Returns (success, error_message). Never raises.
+        """
+        try:
+            model_id, resolve_err = self._selected_model_for_reload()
+            if not model_id:
+                return False, resolve_err or "No model selected."
+
+            timeout = float(getattr(self.handler.__class__, "model_load_timeout", 120.0))
+            router = self.handler._model_router()
+            router.load_backend_model(model_id, wait=True, timeout=timeout)
+
+            # load_backend_model updates cls.model_load_state; check the outcome
+            state = str(getattr(self.handler.__class__, "model_load_state", "") or "")
+            err   = str(getattr(self.handler.__class__, "model_load_error", "") or "")
+            if state == "ready":
+                return True, ""
+            return False, err or f"Model load did not complete (state={state!r})"
         except Exception as exc:
             return False, str(exc)
 
@@ -882,6 +933,19 @@ class RequestRouter:
                 ))
                 return
 
+        # --- Selected model pre-check (before mark_started to avoid spurious backoff) ---
+        if action == "reload_selected_model":
+            precheck_model_id, precheck_err = self._selected_model_for_reload()
+            if not precheck_model_id:
+                self.handler._send_json(409, self._recovery_error_payload(
+                    "selected_model_missing",
+                    precheck_err or "No model selected; use /qz/models/select before reload.",
+                    action=action,
+                    blocked_by="state",
+                    recovery_status=runtime_rs,
+                ))
+                return
+
         # --- Execute ---
         request_id = f"rec-{uuid.uuid4().hex[:12]}"
         pre_status = self._get_recovery_status_snapshot()
@@ -912,6 +976,8 @@ class RequestRouter:
                 ok, error = self._do_clear_failure(rs)
             elif action == "restart_backend":
                 ok, error = self._do_restart_backend()
+            elif action == "reload_selected_model":
+                ok, error = self._do_reload_selected_model()
             else:
                 ok, error = False, f"Unhandled action: {action!r}"
         except Exception as exc:
