@@ -3193,5 +3193,86 @@ class SandboxEscalationDetectionTests(unittest.TestCase):
         self.assertEqual(escalation_events, [])
 
 
+class RepeatedReadStreamingTests(unittest.TestCase):
+    """Tests for repeated-read signal in the streaming path."""
+
+    def _exec_stream(self, cmd, call_id="call_rr"):
+        arguments = json.dumps({"cmd": cmd})
+        return _named_function_call_stream(call_id, call_id, "exec_command", arguments)
+
+    def _run_with_history(self, history_calls, stream_cmd, call_id="call_rr"):
+        """Build body with prior history, run stream, return telemetry events."""
+        # Build input history
+        input_history = [
+            {
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": f"hist_{i}",
+                "arguments": json.dumps({"cmd": cmd}),
+            }
+            for i, cmd in enumerate(history_calls)
+        ]
+
+        stream_chunks = self._exec_stream(stream_cmd, call_id)
+        telemetry = TelemetryBus()
+
+        def opener(body):
+            # On second hop return final answer
+            has_rr_output = any(
+                isinstance(item, dict) and item.get("type") == "function_call_output"
+                and item.get("call_id") == call_id
+                for item in (body.get("input") or [])
+            )
+            return FakeStream(_final_message_stream() if has_rr_output else stream_chunks)
+
+        chunks = []
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=chunks.append,
+            stream_opener=opener,
+            capture_enabled=False,
+            telemetry=telemetry,
+            request_id="req_rr_test",
+        )
+        body = {"model": "fake", "input": input_history, "tools": []}
+        runtime.run(body, "fake")
+        return telemetry.recent()
+
+    def test_stream_emits_repeated_read_signal_for_history_read(self):
+        """Prior read in history → repeated exec_command → repeated_read_signal emitted."""
+        events = self._run_with_history(["cat README.md"], "cat README.md")
+        rr_events = [e for e in events if e["type"] == "repeated_read_signal"]
+        self.assertTrue(len(rr_events) >= 1, f"No repeated_read_signal; events: {[e['type'] for e in events]}")
+
+    def test_stream_repeated_read_signal_not_tool_call_error(self):
+        """Signal must not emit tool_call_error."""
+        events = self._run_with_history(["cat README.md"], "cat README.md")
+        error_events = [e for e in events if e["type"] == "tool_call_error"]
+        self.assertEqual(error_events, [])
+
+    def test_stream_repeated_read_signal_has_correct_payload(self):
+        events = self._run_with_history(["cat README.md"], "cat README.md", "call_rr_p")
+        rr_events = [e for e in events if e["type"] == "repeated_read_signal"]
+        self.assertTrue(len(rr_events) >= 1)
+        p = rr_events[0]["payload"]
+        self.assertIn("README.md", p.get("paths", []))
+        self.assertEqual(p.get("action"), "signalled")
+        self.assertEqual(p.get("tool"), "exec_command")
+
+    def test_stream_first_read_no_signal(self):
+        """First read (no history) — no repeated_read_signal."""
+        events = self._run_with_history([], "cat README.md")
+        rr_events = [e for e in events if e["type"] == "repeated_read_signal"]
+        self.assertEqual(rr_events, [])
+
+    def test_stream_repeated_read_signal_in_retained_telemetry(self):
+        """repeated_read_signal must be in REQUEST_LIFECYCLE_EVENT_TYPES (retained)."""
+        from proxy.qz_telemetry import REQUEST_LIFECYCLE_EVENT_TYPES
+        self.assertIn("repeated_read_signal", REQUEST_LIFECYCLE_EVENT_TYPES)
+
+
 if __name__ == "__main__":
     unittest.main()

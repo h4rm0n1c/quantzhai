@@ -9,10 +9,12 @@ except ImportError:
 
 @dataclass(frozen=True)
 class CompletedToolCallDecision:
-    kind: str          # "proxy_local" | "public" | "error"
+    kind: str          # "proxy_local" | "public" | "error" | "signal"
     call: dict
     public_item: dict | None = None
     error_result: dict | None = None   # set when kind == "error"
+    signal_result: dict | None = None  # set when kind == "signal" (advisory function_call_output)
+    signal_metadata: dict | None = None  # telemetry payload for repeated_read_signal
 
 
 @dataclass(frozen=True)

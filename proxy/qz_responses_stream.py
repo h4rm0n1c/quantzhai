@@ -26,6 +26,7 @@ try:
     from .qz_tool_lifecycle import StreamToolCallState
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS
     from .qz_telemetry import RequestTelemetryEmitter
+    from .qz_file_signal import record_tool_call, seed_repeated_read_state
 except ImportError:
     from qz_responses import (
         _now_ts,
@@ -48,6 +49,7 @@ except ImportError:
     from qz_tool_lifecycle import StreamToolCallState
     from qz_tool_web import WEB_SEARCH_MAX_HOPS
     from qz_telemetry import RequestTelemetryEmitter
+    from qz_file_signal import record_tool_call, seed_repeated_read_state
 
 
 PRIVATE_FUNCTION_CALL_TIMEOUT_S = float(os.environ.get("QZ_PRIVATE_TOOL_CALL_TIMEOUT_S", "120"))
@@ -764,6 +766,10 @@ class ResponsesStreamRuntime:
             if isinstance(metadata, dict) else []
         )
 
+        # Seed repeated-read state from incoming body["input"] before the hop loop.
+        # This detects cross-request repeated reads that Codex replays in history.
+        repeated_read_state = seed_repeated_read_state(working_body.get("input") or [])
+
         started_at = time.time()
         first_output_at = None
         completed_at = None
@@ -808,6 +814,7 @@ class ResponsesStreamRuntime:
                     next_input = list(hop_body.get("input") or [])
                     completed_call = None
                     error_injected = False
+                    signal_injected = False
                     repair_injected = False
                     reasoning_only_started_at = None
                     reasoning_only_last_delta_at = None
@@ -989,7 +996,20 @@ class ResponsesStreamRuntime:
                                 completed_call,
                                 apply_patch_output_style,
                                 dropped_tool_names=dropped_tool_names,
+                                repeated_read_state=repeated_read_state,
                             )
+
+                            if decision.kind == "signal":
+                                # Advisory repeated-read signal: inject output upstream,
+                                # continue the hop loop. No public Codex lifecycle event.
+                                next_input.append(decision.signal_result)
+                                signal_injected = True
+                                self._emit("repeated_read_signal", decision.signal_metadata or {})
+                                self._emit_stream_event_timing(
+                                    event_type, event_received_at, event_parsed_at,
+                                    time.time(), suppressed="repeated_read_signal",
+                                )
+                                break
 
                             if decision.kind == "error":
                                 # Inject the error result upstream so the model sees
@@ -1079,6 +1099,9 @@ class ResponsesStreamRuntime:
                                 break
 
                             result = self.proxy_tool_registry.continuation_result(decision)
+                            # Record this public call so within-run repeated-read
+                            # tracking works for subsequent tool calls in the same run.
+                            record_tool_call(completed_call, repeated_read_state)
                             public_item = result.public_item
                             public_trace.append(public_item)
                             sequence, forwarded_chunks, forwarded_bytes = self._emit_public_tool_item(public_item, public_index, sequence)
@@ -1335,7 +1358,7 @@ class ResponsesStreamRuntime:
                     # finally block.  Only runs on proxy-local or error breaks
                     # where the while loop exits before the terminal events.
                     if resp is not None and (
-                        error_injected
+                        error_injected or signal_injected
                         or (completed_call and self.proxy_tool_registry.is_proxy_local_call(completed_call))
                     ):
                         drained_usage = self._drain_stream_for_usage(resp)
@@ -1350,7 +1373,7 @@ class ResponsesStreamRuntime:
                 if repair_injected:
                     continue
 
-                if error_injected or (completed_call and self.proxy_tool_registry.is_proxy_local_call(completed_call)):
+                if error_injected or signal_injected or (completed_call and self.proxy_tool_registry.is_proxy_local_call(completed_call)):
                     if max_output_index >= 0:
                         output_index_offset += max_output_index + 1
                     # Experimental: carry a compact prior-turn reasoning summary

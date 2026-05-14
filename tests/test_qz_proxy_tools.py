@@ -393,5 +393,155 @@ class ProxyToolRegistryTests(unittest.TestCase):
         self.assertEqual(registry.terminal_suppression_reason(call), "qz_probe_terminal")
 
 
+class RepeatedReadDecisionTests(unittest.TestCase):
+    """Tests for repeated-read signal integration in completed_call_decision."""
+
+    def _make_registry(self):
+        return make_proxy_local_tool_registry(FakeWebRuntime())
+
+    def _exec_call(self, cmd, call_id="call_abc"):
+        return {
+            "type": "function_call",
+            "name": "exec_command",
+            "call_id": call_id,
+            "arguments": {"cmd": cmd},
+        }
+
+    def _make_state_with_read(self, path):
+        from proxy.qz_file_signal import RepeatedReadState
+        state = RepeatedReadState()
+        state.read_paths.add(path)
+        state.history_read_paths.add(path)
+        return state
+
+    def test_first_read_codex_native_passthrough(self):
+        from proxy.qz_file_signal import RepeatedReadState
+        registry = self._make_registry()
+        call = self._exec_call("cat README.md")
+        state = RepeatedReadState()
+        decision = registry.completed_call_decision(call, "native", repeated_read_state=state)
+        self.assertEqual(decision.kind, "public")
+
+    def test_repeated_read_signal_before_codex_native_passthrough(self):
+        registry = self._make_registry()
+        call = self._exec_call("cat README.md", "call_1")
+        state = self._make_state_with_read("README.md")
+        decision = registry.completed_call_decision(call, "native", repeated_read_state=state)
+        self.assertEqual(decision.kind, "signal")
+
+    def test_repeated_read_signal_uses_original_call_id(self):
+        import json
+        registry = self._make_registry()
+        call = self._exec_call("cat README.md", "call_orig_id")
+        state = self._make_state_with_read("README.md")
+        decision = registry.completed_call_decision(call, "native", repeated_read_state=state)
+        self.assertEqual(decision.kind, "signal")
+        self.assertIsNotNone(decision.signal_result)
+        self.assertEqual(decision.signal_result["call_id"], "call_orig_id")
+        self.assertEqual(decision.signal_result["type"], "function_call_output")
+
+    def test_repeated_read_signal_not_tool_call_error(self):
+        registry = self._make_registry()
+        call = self._exec_call("cat README.md")
+        state = self._make_state_with_read("README.md")
+        decision = registry.completed_call_decision(call, "native", repeated_read_state=state)
+        self.assertNotEqual(decision.kind, "error")
+        self.assertEqual(decision.kind, "signal")
+
+    def test_repeated_read_signal_output_is_not_json_ok_false(self):
+        """Signal output is advisory text, not an error JSON payload."""
+        import json
+        registry = self._make_registry()
+        call = self._exec_call("cat README.md")
+        state = self._make_state_with_read("README.md")
+        decision = registry.completed_call_decision(call, "native", repeated_read_state=state)
+        # Advisory output is plain text, not {"ok": false, ...}
+        output = decision.signal_result["output"]
+        self.assertIsInstance(output, str)
+        self.assertNotIn('"ok"', output)
+        self.assertIn("already read", output.lower())
+
+    def test_repeat_after_warning_passthrough(self):
+        from proxy.qz_file_signal import RepeatedReadState
+        registry = self._make_registry()
+        call = self._exec_call("cat README.md")
+        state = RepeatedReadState()
+        state.read_paths.add("README.md")
+        state.warned_paths.add("README.md")  # already warned
+        decision = registry.completed_call_decision(call, "native", repeated_read_state=state)
+        # After prior warning, allow through
+        self.assertEqual(decision.kind, "public")
+
+    def test_signal_marks_warned_paths(self):
+        """Returning a signal marks the paths as warned so next repeat is allowed."""
+        registry = self._make_registry()
+        call = self._exec_call("cat README.md")
+        state = self._make_state_with_read("README.md")
+        decision = registry.completed_call_decision(call, "native", repeated_read_state=state)
+        self.assertEqual(decision.kind, "signal")
+        self.assertIn("README.md", state.warned_paths)
+
+    def test_signal_metadata_present(self):
+        registry = self._make_registry()
+        call = self._exec_call("cat README.md", "call_m")
+        state = self._make_state_with_read("README.md")
+        decision = registry.completed_call_decision(call, "native", repeated_read_state=state)
+        md = decision.signal_metadata
+        self.assertIsNotNone(md)
+        self.assertIn("README.md", md.get("paths", []))
+        self.assertEqual(md.get("action"), "signalled")
+        self.assertEqual(md.get("tool"), "exec_command")
+        self.assertEqual(md.get("call_id"), "call_m")
+
+    def test_no_state_exec_command_still_public(self):
+        """Without repeated_read_state, exec_command is a normal public passthrough."""
+        registry = self._make_registry()
+        call = self._exec_call("cat README.md")
+        decision = registry.completed_call_decision(call, "native", repeated_read_state=None)
+        self.assertEqual(decision.kind, "public")
+
+    def test_apply_patch_unaffected(self):
+        from proxy.qz_file_signal import RepeatedReadState
+        registry = self._make_registry()
+        call = {
+            "type": "function_call",
+            "name": "apply_patch",
+            "call_id": "call_ap",
+            "arguments": '{"operation": "create", "path": "foo.py", "file_text": ""}',
+        }
+        state = RepeatedReadState()
+        decision = registry.completed_call_decision(call, "native", repeated_read_state=state)
+        # apply_patch goes through protocol adapter, not Codex-native signal check
+        self.assertIn(decision.kind, {"public", "error"})
+        self.assertNotEqual(decision.kind, "signal")
+
+    def test_web_search_unaffected(self):
+        from proxy.qz_file_signal import RepeatedReadState
+        registry = self._make_registry()
+        call = {
+            "type": "function_call",
+            "name": "web_search",
+            "call_id": "call_ws",
+            "arguments": '{"action": "search", "query": "quantzhai"}',
+        }
+        state = RepeatedReadState()
+        decision = registry.completed_call_decision(call, "native", repeated_read_state=state)
+        # web_search is proxy_local, not affected by repeated-read check
+        self.assertEqual(decision.kind, "proxy_local")
+
+    def test_unknown_tool_unaffected(self):
+        from proxy.qz_file_signal import RepeatedReadState
+        registry = self._make_registry()
+        call = {
+            "type": "function_call",
+            "name": "some_unknown_tool",
+            "call_id": "call_unk",
+            "arguments": "{}",
+        }
+        state = RepeatedReadState()
+        decision = registry.completed_call_decision(call, "native", repeated_read_state=state)
+        self.assertEqual(decision.kind, "error")
+
+
 if __name__ == "__main__":
     unittest.main()

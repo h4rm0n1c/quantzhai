@@ -75,6 +75,27 @@ class SignalDecision:
     confidence: str = ""
 
 
+def render_advisory_output(call: dict, message: str) -> dict:
+    """Build a function_call_output item carrying an advisory message for the model.
+
+    Used for signals like repeated-read advisories. The output field is plain text,
+    not a JSON {"ok": false, ...} payload — this is feedback the model can use or
+    ignore, not a failure report.
+
+    The call_id matches the original tool call so the model can associate the
+    advisory with the specific invocation.
+    """
+    call_id = (
+        call.get("call_id") or call.get("id")
+        if isinstance(call, dict) else None
+    ) or f"advisory_{int(time.time())}"
+    return {
+        "type": "function_call_output",
+        "call_id": call_id,
+        "output": message,
+    }
+
+
 def render_coercion_error(call: dict, message: str) -> dict:
     """Build a function_call_output item carrying a proxy/coercion error message.
 

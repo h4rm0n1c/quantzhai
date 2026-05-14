@@ -46,11 +46,12 @@ def extract_command(call: dict) -> str:
         except (json.JSONDecodeError, TypeError):
             return ""
     
-    # exec_command is the primary target for v1
+    # exec_command is the primary target for v1.
+    # Real exec_command uses the "cmd" field; "command" is accepted as a fallback.
     if name == "exec_command":
         if isinstance(args, dict):
-            return args.get("command", "")
-            
+            return args.get("cmd", "") or args.get("command", "")
+
     return ""
 
 def extract_read_paths(call: dict) -> frozenset[str]:

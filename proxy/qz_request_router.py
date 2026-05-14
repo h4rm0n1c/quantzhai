@@ -34,6 +34,7 @@ try:
     from .qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
     from .qz_codex_metadata import extract_codex_request_context
     from .qz_native_tool_output import classify_native_tool_outputs
+    from .qz_file_signal import record_tool_call, seed_repeated_read_state
     from .qz_search_policy import resolve_search_policy_selection
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import (
@@ -71,6 +72,7 @@ except ImportError:
     from qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
     from qz_codex_metadata import extract_codex_request_context
     from qz_native_tool_output import classify_native_tool_outputs
+    from qz_file_signal import record_tool_call, seed_repeated_read_state
     from qz_search_policy import resolve_search_policy_selection
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import (
@@ -873,6 +875,7 @@ class RequestRouter:
         seen_signatures = set()
         web_runtime = self._web_runtime(selected_model)
         proxy_tool_registry = self._proxy_tool_registry(web_runtime)
+        repeated_read_state = seed_repeated_read_state(working_body.get("input") or [])
 
         for _hop in range(WEB_SEARCH_MAX_HOPS):
             hop_body = json.loads(json.dumps(working_body))
@@ -906,13 +909,33 @@ class RequestRouter:
             next_input = list(hop_body.get("input") or [])
             for item in output_items:
                 if not proxy_tool_registry.is_proxy_local_call(item):
-                    next_input.append(item)
+                    # Check for repeated-read signal on Codex-native items
+                    # before passing them through.
+                    rr_decision = proxy_tool_registry.completed_call_decision(
+                        item,
+                        apply_patch_output_style,
+                        dropped_tool_names=dropped_tool_names,
+                        repeated_read_state=repeated_read_state,
+                    )
+                    if rr_decision.kind == "signal":
+                        next_input.append(rr_decision.signal_result)
+                        try:
+                            self.handler.telemetry.emit(
+                                "repeated_read_signal",
+                                {**(rr_decision.signal_metadata or {}), "request_id": request_id},
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        record_tool_call(item, repeated_read_state)
+                        next_input.append(item)
                     continue
 
                 decision = proxy_tool_registry.completed_call_decision(
                     item,
                     apply_patch_output_style,
                     dropped_tool_names=dropped_tool_names,
+                    repeated_read_state=repeated_read_state,
                 )
                 if decision.kind == "error":
                     next_input.append(decision.error_result)

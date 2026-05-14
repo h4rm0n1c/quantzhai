@@ -10,6 +10,7 @@ from proxy.qz_feedback import (
     FeedbackChannel,
     FeedbackVisibility,
     SignalDecision,
+    render_advisory_output,
     render_coercion_error,
 )
 from proxy.qz_tools import synthesize_tool_error_result
@@ -61,6 +62,41 @@ class SignalDecisionTests(unittest.TestCase):
     def test_signal_decision_payload_is_dict(self):
         sig = SignalDecision(event_type="x", payload={"k": "v"})
         self.assertIsInstance(sig.payload, dict)
+
+
+class RenderAdvisoryOutputTests(unittest.TestCase):
+    def _call(self, call_id="call_abc"):
+        return {"type": "function_call", "name": "exec_command", "call_id": call_id}
+
+    def test_type_is_function_call_output(self):
+        result = render_advisory_output(self._call(), "Note: already read this.")
+        self.assertEqual(result["type"], "function_call_output")
+
+    def test_call_id_preserved(self):
+        result = render_advisory_output({"call_id": "orig_id"}, "Note: ...")
+        self.assertEqual(result["call_id"], "orig_id")
+
+    def test_output_is_plain_text_not_json_ok_false(self):
+        """Advisory output is plain text, not an error JSON payload."""
+        msg = "Note: you already read README.md earlier."
+        result = render_advisory_output(self._call(), msg)
+        self.assertEqual(result["output"], msg)
+        # Must NOT be a JSON {"ok": false, ...} payload
+        self.assertNotIn('"ok"', result["output"])
+
+    def test_differs_from_coercion_error_in_output_format(self):
+        """render_advisory_output and render_coercion_error produce different output formats."""
+        call = self._call()
+        msg = "test message"
+        advisory = render_advisory_output(call, msg)
+        error = render_coercion_error(call, msg)
+        # Error wraps in JSON; advisory is plain text
+        self.assertEqual(advisory["output"], msg)
+        self.assertNotEqual(error["output"], msg)
+
+    def test_fallback_call_id_when_none(self):
+        result = render_advisory_output({}, "note")
+        self.assertTrue(result["call_id"].startswith("advisory_"))
 
 
 class RenderCoercionErrorTests(unittest.TestCase):

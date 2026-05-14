@@ -7,12 +7,16 @@ try:
     from .qz_tool_lifecycle import CompletedToolCallDecision, ToolContinuationResult
     from .qz_streaming import public_tool_lifecycle_event
     from .qz_tools import CODEX_NATIVE_TOOL_NAMES, ToolRegistry, synthesize_tool_error_result
+    from .qz_feedback import render_advisory_output
+    from .qz_file_signal import RepeatedReadState, repeated_read_signal
 except ImportError:
     from qz_tool_apply_patch import APPLY_PATCH_TOOL_ADAPTER
     from qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
     from qz_tool_lifecycle import CompletedToolCallDecision, ToolContinuationResult
     from qz_streaming import public_tool_lifecycle_event
     from qz_tools import CODEX_NATIVE_TOOL_NAMES, ToolRegistry, synthesize_tool_error_result
+    from qz_feedback import render_advisory_output
+    from qz_file_signal import RepeatedReadState, repeated_read_signal
 
 
 DEFAULT_TOOL_REGISTRY = ToolRegistry((APPLY_PATCH_TOOL_ADAPTER, WEB_SEARCH_TOOL_ADAPTER))
@@ -181,6 +185,7 @@ class ProxyLocalToolRegistry:
         call: dict,
         apply_patch_output_style: str,
         dropped_tool_names: frozenset[str] = frozenset(),
+        repeated_read_state: "RepeatedReadState | None" = None,
     ) -> CompletedToolCallDecision:
         name = call.get("name") if isinstance(call, dict) else None
 
@@ -222,8 +227,29 @@ class ProxyLocalToolRegistry:
                 public_item=public_item if public_item is not None else corrected,
             )
 
-        # 4. Known Codex-native tool: pass through as public, Codex handles it.
+        # 4. Known Codex-native tool: check for repeated-read signal first.
+        #    If the state indicates this read was already seen, inject an advisory
+        #    output to the model instead of passing the call through.
+        #    First read and allowed-after-warning cases pass through normally.
         if name in CODEX_NATIVE_TOOL_NAMES:
+            if repeated_read_state is not None:
+                rr_decision = repeated_read_signal(call, repeated_read_state)
+                if rr_decision.should_signal:
+                    advisory = render_advisory_output(call, rr_decision.message)
+                    metadata = {
+                        "tool": name or "unknown",
+                        "call_id": str(call.get("call_id") or call.get("id") or ""),
+                        "paths": sorted(rr_decision.paths),
+                        "action": rr_decision.action,
+                        "scope": rr_decision.scope,
+                    }
+                    repeated_read_state.warned_paths.update(rr_decision.paths)
+                    return CompletedToolCallDecision(
+                        kind="signal",
+                        call=call,
+                        signal_result=advisory,
+                        signal_metadata=metadata,
+                    )
             public_item = self.tool_registry.output_to_codex(call, apply_patch_output_style)
             return CompletedToolCallDecision(
                 kind="public",
