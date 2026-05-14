@@ -51,6 +51,7 @@ try:
     )
     from .qz_streaming import StreamedFunctionCallAssembler, parse_sse_event_lines
     from .qz_telemetry import DEFAULT_TELEMETRY
+    from .qz_recovery_state import RECOVERY_STATE
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import append_capture, read_json, runtime_log, write_capture
 except ImportError:
@@ -95,6 +96,7 @@ except ImportError:
     )
     from qz_streaming import StreamedFunctionCallAssembler, parse_sse_event_lines
     from qz_telemetry import DEFAULT_TELEMETRY
+    from qz_recovery_state import RECOVERY_STATE
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import append_capture, read_json, runtime_log, write_capture
 
@@ -104,6 +106,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
     runtime_state_enabled = False
     model_load_timeout = 120.0
     request_gate = threading.Lock()
+    recovery_state = RECOVERY_STATE
     model_catalog = None
     model_catalog_path = None
     backend_client = None

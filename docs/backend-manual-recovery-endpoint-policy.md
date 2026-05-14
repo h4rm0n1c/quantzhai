@@ -573,14 +573,38 @@ New tests added to `tests/test_qz_recovery_plan.py`:
 
 No trigger endpoint. No state mutation. No Docker calls. No action telemetry.
 
-### Slice 8: In-memory backoff and attempt tracking
+### Slice 8 (done): In-memory backoff and attempt tracking
 
-- Add `proxy/qz_recovery_state.py` with in-memory attempt tracking.
-- Fields: `last_recovery_action`, `last_recovery_started_at`, `recovery_attempt_count`,
-  `backoff_until`.
-- Expose via `GET /qz/recovery/status` as `backoff` sub-object.
-- Tests: `tests/test_qz_recovery_state.py`.
-- Still no state-changing endpoint.
+Added `proxy/qz_recovery_state.py` with `RecoveryRuntimeState` and `RECOVERY_STATE` singleton.
+
+Key API:
+- `is_backoff_active(action, now=None) -> bool` — True when time-based backoff or `manual_required`
+- `is_recovery_in_progress() -> bool`
+- `mark_started(action, request_id, now)` — for slice 9 trigger
+- `mark_completed(action, now)` — resets attempt count on success
+- `mark_failed(action, error, now)` — increments count, sets backoff; `manual_required` after N fails
+- `clear(action=None)` — resets per-action or all state
+- `snapshot(now=None) -> dict` — JSON-serialisable `qz.recovery.runtime_state.v1` payload
+- `parse_backoff_schedule(s) -> list[int]` — parses `QZ_RECOVERY_BACKOFF_SECS`
+
+Backoff schedule (default from `QZ_RECOVERY_BACKOFF_SECS=30,120,300`):
+- failure 1 → 30 s; failure 2 → 120 s; failure 3 → 300 s; failure 4+ → `manual_required`
+- `QZ_RECOVERY_MAX_ATTEMPTS=3` controls the threshold
+
+**Important caveats:**
+- In-memory only. Does not survive proxy restart.
+- Per-action, not global (refresh_catalog failure does not block restart_backend).
+- No durable crash-loop protection. Durable tracking requires #2 SQLite.
+
+Integration points:
+- `ProxyHandler.recovery_state = RECOVERY_STATE` — class var on the handler
+- `GET /qz/recovery/status` — now includes `runtime_state` and `backoff` fields
+- `GET /qz/control-plane` — `recovery` field includes `runtime_state` and `backoff` via updated `build_recovery_status()`
+- `POST /qz/recovery/plan` — now uses real `backoff_active` and `recovery_in_progress` from `RECOVERY_STATE`
+- `build_recovery_status(service_status, runtime_state=None)` — extended with optional param; existing callers unaffected
+- `active_requests` remains `None` — tracking not yet implemented (slice 9 gap)
+
+Tests: `tests/test_qz_recovery_state.py` — 14 test classes, 69 assertions.
 
 ### Slice 9: First safe state-changing action
 

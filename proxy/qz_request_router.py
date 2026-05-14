@@ -40,6 +40,7 @@ try:
     from .qz_service_status import build_service_status
     from .qz_recovery_status import build_recovery_status
     from .qz_recovery_plan import ALLOWED_RECOVERY_ACTIONS, build_recovery_plan
+    from .qz_recovery_state import RECOVERY_STATE
     from .qz_search_policy import resolve_search_policy_selection
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import (
@@ -83,6 +84,7 @@ except ImportError:
     from qz_service_status import build_service_status
     from qz_recovery_status import build_recovery_status
     from qz_recovery_plan import ALLOWED_RECOVERY_ACTIONS, build_recovery_plan
+    from qz_recovery_state import RECOVERY_STATE
     from qz_search_policy import resolve_search_policy_selection
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import (
@@ -412,7 +414,9 @@ class RequestRouter:
             try:
                 cp = build_control_plane_status(self.handler)
                 ss = cp.get("service_status") or {}
-                recovery_payload = build_recovery_status(ss)
+                rs = getattr(self.handler, "recovery_state", RECOVERY_STATE)
+                runtime_snapshot = rs.snapshot() if rs is not None else None
+                recovery_payload = build_recovery_status(ss, runtime_state=runtime_snapshot)
             except Exception as exc:
                 recovery_payload = {
                     "schema": "qz.recovery.status.v1",
@@ -521,12 +525,14 @@ class RequestRouter:
         except Exception:
             ss = {}
 
-        model          = str(body.get("model") or "")
-        force          = bool(body.get("force", False))
-        authority      = os.environ.get("QZ_RECOVERY_ACTIONS", "0").strip() == "1"
-        local_req      = self._is_local_request(self.handler)
+        model         = str(body.get("model") or "")
+        force         = bool(body.get("force", False))
+        authority     = os.environ.get("QZ_RECOVERY_ACTIONS", "0").strip() == "1"
+        local_req     = self._is_local_request(self.handler)
+        rs            = getattr(self.handler, "recovery_state", RECOVERY_STATE)
+        backoff_act   = rs.is_backoff_active(action) if rs is not None else False
+        in_progress   = rs.is_recovery_in_progress() if rs is not None else False
 
-        # active_requests, backoff_active, recovery_in_progress: slice 8
         plan = build_recovery_plan(
             ss,
             action,
@@ -534,9 +540,9 @@ class RequestRouter:
             force=force,
             authority_enabled=authority,
             local_request=local_req,
-            active_requests=None,    # tracking not yet implemented (slice 8)
-            backoff_active=False,    # tracking not yet implemented (slice 8)
-            recovery_in_progress=False,  # tracking not yet implemented (slice 8)
+            active_requests=None,   # tracking not yet implemented (slice 9)
+            backoff_active=backoff_act,
+            recovery_in_progress=in_progress,
         )
 
         self.handler._send_json(200, plan)

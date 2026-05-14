@@ -22,9 +22,11 @@ from pathlib import Path
 try:
     from .qz_service_status import build_service_status
     from .qz_recovery_status import build_recovery_status
+    from .qz_recovery_state import RECOVERY_STATE
 except ImportError:
     from qz_service_status import build_service_status
     from qz_recovery_status import build_recovery_status
+    from qz_recovery_state import RECOVERY_STATE
 from typing import Any
 
 QZ_CONTROL_PLANE_SCHEMA = "qz.control_plane.status.v1"
@@ -205,6 +207,12 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
     # Additive: canonical service/recovery status derived from this payload.
     # Does not change existing fields; safe when backend is down.
     payload["service_status"] = build_service_status(payload)
-    # Additive: read-only recovery summary derived from service_status.
-    payload["recovery"] = build_recovery_status(payload["service_status"])
+    # Additive: read-only recovery summary with in-memory runtime state snapshot.
+    try:
+        runtime_snapshot = RECOVERY_STATE.snapshot()
+    except Exception:
+        runtime_snapshot = None
+    payload["recovery"] = build_recovery_status(
+        payload["service_status"], runtime_state=runtime_snapshot
+    )
     return payload

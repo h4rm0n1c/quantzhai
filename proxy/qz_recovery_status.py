@@ -43,18 +43,26 @@ _SUMMARY_MAP: dict[str, str] = {
 }
 
 
-def build_recovery_status(service_status: dict[str, Any]) -> dict[str, Any]:
+def build_recovery_status(
+    service_status: dict[str, Any],
+    runtime_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Build a qz.recovery.status.v1 payload from a qz.service.status.v1 dict.
 
     Args:
-        service_status: A qz.service.status.v1 dict (from build_service_status()).
-                        If None or invalid, returns a safe degraded payload.
+        service_status:  A qz.service.status.v1 dict (from build_service_status()).
+                         If None or invalid, returns a safe degraded payload.
+        runtime_state:   Optional qz.recovery.runtime_state.v1 snapshot from
+                         RecoveryRuntimeState.snapshot(). When supplied, the result
+                         includes a "runtime_state" field and a per-action "backoff"
+                         summary for the current operator_action. Existing callers
+                         without this argument are unaffected.
 
     Returns:
         A qz.recovery.status.v1 dict. Always returns a valid dict; never raises.
     """
     if not isinstance(service_status, dict):
-        return {
+        result: dict[str, Any] = {
             "schema": RECOVERY_STATUS_SCHEMA,
             "ok": False,
             "state": "unknown",
@@ -69,6 +77,10 @@ def build_recovery_status(service_status: dict[str, Any]) -> dict[str, Any]:
             "service_status": None,
             "operator_hints": [],
         }
+        if runtime_state is not None:
+            result["runtime_state"] = runtime_state
+            result["backoff"] = None
+        return result
 
     recovery_state = str(service_status.get("recovery_state") or "none")
     recoverable    = bool(service_status.get("recoverable", False))
@@ -96,7 +108,7 @@ def build_recovery_status(service_status: dict[str, Any]) -> dict[str, Any]:
         if remote_action == "contact_operator":
             hints = ["Contact the local operator for backend/proxy recovery assistance."]
 
-    return {
+    result = {
         "schema": RECOVERY_STATUS_SCHEMA,
         "ok": ok,
         "state": recovery_state,
@@ -111,3 +123,19 @@ def build_recovery_status(service_status: dict[str, Any]) -> dict[str, Any]:
         "service_status": service_status,
         "operator_hints": hints,
     }
+
+    if runtime_state is not None:
+        result["runtime_state"] = runtime_state
+        # Backoff summary for the current operator_action (advisory)
+        if op_action:
+            action_state = (runtime_state.get("attempts") or {}).get(op_action, {})
+            result["backoff"] = {
+                "action": op_action,
+                "active": bool(action_state.get("backoff_active", False)),
+                "until": action_state.get("backoff_until"),
+                "manual_required": bool(action_state.get("manual_required", False)),
+            }
+        else:
+            result["backoff"] = None
+
+    return result

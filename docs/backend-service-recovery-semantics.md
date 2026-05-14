@@ -476,7 +476,24 @@ HTTP 200 for valid body + known action → `qz.recovery.plan.v1`.
 HTTP 400 for bad JSON, missing action, unknown action → `qz.recovery.error.v1`.
 
 `active_requests`, `backoff_active`, `recovery_in_progress` passed as `None`/`False`
-(slice 8 wires these up). No trigger. No state mutation. No Docker calls.
+(slice 8 wires backoff/in_progress). No trigger. No state mutation. No Docker calls.
+
+### Slice 8 (done): In-memory recovery backoff state
+
+Added `proxy/qz_recovery_state.py` with `RecoveryRuntimeState` and `RECOVERY_STATE` singleton.
+
+Schema: `qz.recovery.runtime_state.v1`. Thread-safe. Per-action failure counts,
+backoff schedule (30 s / 120 s / 300 s), and `manual_required` after exceeding
+`QZ_RECOVERY_MAX_ATTEMPTS` (default 3). In-memory only; does not survive restart.
+
+Integration:
+- `ProxyHandler.recovery_state = RECOVERY_STATE` class var
+- `GET /qz/recovery/status` includes `runtime_state` and `backoff` fields
+- `GET /qz/control-plane` `recovery` field includes `runtime_state` and `backoff`
+- `POST /qz/recovery/plan` uses real `backoff_active` / `recovery_in_progress`
+- `build_recovery_status(ss, runtime_state=None)` — optional param; backward-compatible
+
+Tests: `tests/test_qz_recovery_state.py` — 69 assertions.
 
 ---
 
