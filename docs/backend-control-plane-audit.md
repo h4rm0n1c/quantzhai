@@ -297,16 +297,42 @@ Scripts and remote clients no longer need to stitch together truth from `/health
 `/v1/models`, `/qz/status`, and runtime JSON files. Future slices can migrate
 `qz-doctor`, `qz-top`, `qz-wait-ready`, and `qz-codex-common` to consume it.
 
-**Step 8 (future):** Move Codex catalog regeneration entirely into the proxy
+**Step 8 (done — slice 7):** Migrated `scripts/qz-wait-ready` to consume
+`GET /qz/control-plane` as its primary truth source.
+
+Before: called `/health`, `/v1/models`, and `/qz/status` separately in the wait
+loop (3 endpoint calls per iteration, each parsing different JSON shapes).
+
+After: calls `/qz/control-plane` once per iteration, parses `readiness.*` and
+`models.ids` from the single proxy-owned response. Failure diagnostics now use
+`operator_hints` from the proxy.
+
+CLI interface unchanged: `--catalog`, `--model MODEL`, `--backend`, `--proxy-only`,
+`--wait-secs N`, `--proxy-url URL`, `--quiet` all work as before.
+
+Readiness mapping:
+| CLI flag | /qz/control-plane field |
+|---|---|
+| (always) | readiness.proxy_ready |
+| --catalog | readiness.catalog_ready |
+| --model M | M in models.ids |
+| --backend | readiness.backend_reachable AND backend_ready |
+| --proxy-only | HTTP response received (any code) |
+
+Legacy fallback: if `/qz/control-plane` returns no data (old proxy, mid-restart),
+a warning is printed and the old `/health` + `/v1/models` + `/qz/status` path is
+used. Marked clearly as legacy.
+
+**Step 9 (future):** Move Codex catalog regeneration entirely into the proxy
 `/qz/models/refresh` endpoint. `qz-codex-common` becomes a thin shim that just
 calls the endpoint.
 
-**Step 9 (future, SQLite era):** Merge `var/run/*.json` runtime state into
+**Step 10 (future, SQLite era):** Merge `var/run/*.json` runtime state into
 operational facts stored in the Phase 1 SQLite substrate. `qz-write-runtime-state`
 becomes a thin shim or disappears.
 
 **Remaining under #44 (deferred):**
-- Migrate qz-doctor, qz-top, qz-wait-ready, and qz-codex-common to consume
+- Migrate qz-doctor, qz-top, qz-codex-common, and qz-live-smoke to consume
   `/qz/control-plane` where useful.
 - Proxy fully owns Codex catalog file generation; `qz-codex-common` opt-in fallback
   can be removed once proxy is reliable for all cases.

@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
 # qz-wait-ready: wait for QuantZhai proxy/catalog/model readiness.
 #
+# Primary truth source: GET /qz/control-plane (qz.control_plane.status.v1)
+# This endpoint is a proxy-owned summary. Scripts do not need to stitch
+# together /health + /v1/models + /qz/status for readiness decisions.
+#
 # Usage:
 #   scripts/qz-wait-ready [--catalog] [--model MODEL] [--backend] [--proxy-only]
 #                         [--wait-secs N] [--proxy-url URL] [--quiet]
 #
-# Checks proxy HTTP responsiveness, catalog readiness, optional model
-# visibility, and optional backend/model loaded state.
+# Readiness levels (checked via /qz/control-plane readiness.*):
+#   (always)    proxy HTTP up      /qz/control-plane response received
+#   (always)    proxy ready        readiness.proxy_ready == true
+#   --catalog   catalog ready      readiness.catalog_ready == true
+#   --model M   model visible      M in models.ids
+#   --backend   backend ready      readiness.backend_reachable AND backend_ready
 #
-# Exits 0 when all requested readiness levels are satisfied.
-# Exits 1 if any level is not satisfied within the timeout.
-# Exits 2 on usage error.
-#
-# Readiness levels (checked in order when requested):
-#   (always)    proxy HTTP up     /health responds
-#   (always)    proxy ready       .proxy_initialization.ready == true
-#   --catalog   catalog ready     .proxy_initialization.catalog_ready == true
-#   --model M   model visible     /v1/models contains model ID M
-#   --backend   backend ready     /qz/status ready == true
-#
-# --proxy-only: check only proxy HTTP up (skips ready/catalog/model/backend).
-# --status:     alias for --backend (check /qz/status ready).
+# --proxy-only: check only proxy HTTP up (one /qz/control-plane attempt).
+# --status:     alias for --backend.
 # --quiet:      suppress progress dots; only print pass/fail lines.
+#
+# Legacy fallback: if /qz/control-plane returns no data (old proxy, mid-restart),
+# a warning is printed and the old /health + /v1/models + /qz/status path is used.
 
 set -euo pipefail
 
@@ -44,14 +44,16 @@ Usage: scripts/qz-wait-ready [options]
 
 Options:
   --catalog            Wait for catalog readiness (catalog_ready == true)
-  --model MODEL        Wait until MODEL appears in /v1/models
-  --backend            Wait until /qz/status ready == true (model loaded)
+  --model MODEL        Wait until MODEL appears in models.ids
+  --backend            Wait until backend is reachable and model is loaded
   --status             Alias for --backend
   --proxy-only         Check proxy HTTP up only; skip ready/catalog/model/backend
   --wait-secs N        Timeout in seconds (default: 60)
   --proxy-url URL      Override proxy base URL (default: QZ_PROXY_HOST:QZ_PROXY_PORT)
   --quiet              Suppress progress output; only print pass/fail lines
   -h, --help           Show this help
+
+Primary truth source: GET /qz/control-plane (qz.control_plane.status.v1)
 EOF
   exit 2
 }
@@ -85,181 +87,270 @@ fi
 # Helpers
 # ---------------------------------------------------------------------------
 _quiet() { [[ "$QUIET" -eq 1 ]]; }
+_dot()   { ! _quiet && printf '.'; return 0; }
 
-_dot() {
-  if ! _quiet; then printf '.'; fi
+# Parse five readiness booleans from a /qz/control-plane JSON string.
+# Output: "<proxy_ready> <catalog_ready> <model_visible> <backend_reachable> <backend_ready>"
+# All values are "true" or "false".
+_parse_cp_readiness() {
+  local _json="${1:-}" _model="${2:-}"
+  printf '%s' "$_json" | python3 -c \
+    'import json,sys
+want=sys.argv[1] if len(sys.argv)>1 else ""
+try:
+    d=json.load(sys.stdin)
+    r=d.get("readiness",{})
+    ids=d.get("models",{}).get("ids",[])
+    mo=(want in ids) if want else True
+    tf=lambda v:"true" if v else "false"
+    print(tf(r.get("proxy_ready")),tf(r.get("catalog_ready")),
+          tf(mo),tf(r.get("backend_reachable")),tf(r.get("backend_ready")))
+except Exception:
+    print("false false false false false")' \
+    "$_model" 2>/dev/null || echo "false false false false false"
 }
 
-_print_available_models() {
-  local models
-  models=$(curl -sf --max-time 5 "${PROXY_URL}/v1/models" 2>/dev/null | \
-    python3 -c "
-import json, sys
+# Print proxy-owned diagnostics from a /qz/control-plane JSON string.
+_print_cp_diagnostics() {
+  local _json="${1:-}"
+  [[ -z "$_json" ]] && return 0
+  printf '%s' "$_json" | python3 -c \
+    'import json,sys
 try:
-    d = json.load(sys.stdin)
-    ids = [m.get('id','') for m in d.get('data',[]) if isinstance(m,dict)]
-    for mid in sorted(ids):
-        print(' ', mid)
-except Exception:
-    pass
-" 2>/dev/null) || true
-  if [[ -n "$models" ]]; then
-    printf 'Available /v1/models IDs:\n%s\n' "$models" >&2
-  else
-    printf '(could not retrieve /v1/models list)\n' >&2
-  fi
-  printf '\nHint: old aliases (high/medium/low/max/caveman) are deprecated.\n' >&2
-  printf 'Use:  scripts/qz-codex exec -m MODEL ...\n' >&2
-  printf '      scripts/qz-live-smoke --model MODEL\n' >&2
+    d=json.load(sys.stdin)
+    r=d.get("readiness",{})
+    m=d.get("models",{})
+    b=d.get("backend",{})
+    hints=d.get("operator_hints",[])
+    ids=m.get("ids",[])
+    print(f"  status: {d.get(\"status\",\"unknown\")}", file=sys.stderr)
+    print(f"  proxy_ready={r.get(\"proxy_ready\")}  "
+          f"catalog_ready={r.get(\"catalog_ready\")}  "
+          f"backend_reachable={r.get(\"backend_reachable\")}  "
+          f"backend_ready={r.get(\"backend_ready\")}", file=sys.stderr)
+    if m.get("selected"):
+        print(f"  selected: {m.get(\"selected\")}", file=sys.stderr)
+    if ids:
+        top=sorted(ids)[:6]
+        print(f"  available models: {chr(44).join(top)}"
+              +(" ..." if len(ids)>6 else ""), file=sys.stderr)
+    if b.get("error"):
+        print(f"  backend error: {b.get(\"error\")}", file=sys.stderr)
+    for hint in hints:
+        print(f"  hint: {hint}", file=sys.stderr)
+    if not hints:
+        print("  hint: Old aliases (high/medium/low/max/caveman) are deprecated.", file=sys.stderr)
+        print("  hint: Use a real model ID from /v1/models.", file=sys.stderr)
+except Exception as e:
+    print(f"  (could not parse /qz/control-plane response: {e})", file=sys.stderr)' \
+    2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
 # Wait loop
 # ---------------------------------------------------------------------------
 deadline=$((SECONDS + WAIT_SECS))
-level="proxy_http"
 passed_proxy_http=0
 passed_proxy_ready=0
 passed_catalog=0
 passed_model=0
 passed_backend=0
+LAST_CP_JSON=""
+_using_legacy=0
+_printed_http=0
+_printed_pr=0
+_printed_cat=0
 
 if ! _quiet; then
   printf 'qz-wait-ready  proxy=%s  wait=%ss' "$PROXY_URL" "$WAIT_SECS"
-  [[ "$PROXY_ONLY" -eq 1 ]]  && printf '  proxy-only'
+  [[ "$PROXY_ONLY" -eq 1 ]]   && printf '  proxy-only'
   [[ "$WANT_CATALOG" -eq 1 ]] && printf '  +catalog'
-  [[ -n "$WANT_MODEL" ]]     && printf '  +model=%s' "$WANT_MODEL"
+  [[ -n "$WANT_MODEL" ]]      && printf '  +model=%s' "$WANT_MODEL"
   [[ "$WANT_BACKEND" -eq 1 ]] && printf '  +backend'
   printf '\n'
 fi
 
 while (( SECONDS <= deadline )); do
 
-  # --- Level 1: proxy HTTP up ---
-  if [[ "$passed_proxy_http" -eq 0 ]]; then
-    if HEALTH_JSON=$(curl -sf --max-time 2 "${PROXY_URL}/health" 2>/dev/null); then
+  # ---------------------------------------------------------------------------
+  # Fetch /qz/control-plane (primary truth source)
+  # Falls back to legacy /health if /qz/control-plane is unavailable.
+  # ---------------------------------------------------------------------------
+  if _CP_JSON=$(curl -sf --max-time 3 "${PROXY_URL}/qz/control-plane" 2>/dev/null) \
+     && [[ -n "$_CP_JSON" ]]; then
+    LAST_CP_JSON="$_CP_JSON"
+    _using_legacy=0
+    passed_proxy_http=1
+  else
+    # Legacy path: try bare HTTP via /health (old proxy or mid-restart)
+    if curl -sf --max-time 2 "${PROXY_URL}/health" >/dev/null 2>&1; then
+      if [[ "$_using_legacy" -eq 0 ]]; then
+        if ! _quiet; then
+          printf '\nWARN /qz/control-plane unavailable; using legacy /health path.\n' >&2
+          printf '     Upgrade the proxy for proxy-owned readiness data.\n' >&2
+        fi
+        _using_legacy=1
+      fi
       passed_proxy_http=1
-      if ! _quiet; then printf '\nOK   proxy HTTP up\n'; fi
     else
       _dot
       sleep 1
       continue
     fi
+  fi
+
+  if [[ "$_printed_http" -eq 0 ]]; then
+    if ! _quiet; then printf '\nOK   proxy HTTP up\n'; fi
+    _printed_http=1
   fi
 
   if [[ "$PROXY_ONLY" -eq 1 ]]; then
     break
   fi
 
-  # --- Level 2: proxy fully ready ---
-  if [[ "$passed_proxy_ready" -eq 0 ]]; then
-    PROXY_READY=$(printf '%s' "${HEALTH_JSON:-}" | \
-      python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('proxy_initialization',{}).get('ready','false'))" 2>/dev/null || echo false)
-    if [[ "$PROXY_READY" == "True" ]] || [[ "$PROXY_READY" == "true" ]]; then
-      passed_proxy_ready=1
-      if ! _quiet; then printf 'OK   proxy ready\n'; fi
-    else
-      _dot
-      sleep 1
-      HEALTH_JSON=$(curl -sf --max-time 2 "${PROXY_URL}/health" 2>/dev/null) || true
-      continue
+  # ---------------------------------------------------------------------------
+  # Legacy fallback: /qz/control-plane was not available
+  # Use the old /health + /v1/models + /qz/status multi-endpoint approach.
+  # ---------------------------------------------------------------------------
+  if [[ "$_using_legacy" -eq 1 ]]; then
+    _H=$(curl -sf --max-time 2 "${PROXY_URL}/health" 2>/dev/null) || _H=""
+    _lpr=$(printf '%s' "$_H" | python3 -c "import json,sys; d=json.load(sys.stdin); print('true' if d.get('proxy_initialization',{}).get('ready') else 'false')" 2>/dev/null || echo false)
+    if [[ "$_lpr" != "true" ]]; then _dot; sleep 1; continue; fi
+    if [[ "$_printed_pr" -eq 0 ]]; then
+      if ! _quiet; then printf 'OK   proxy ready (legacy)\n'; fi
+      _printed_pr=1
     fi
-  fi
+    passed_proxy_ready=1
 
-  # --- Level 3: catalog ready (optional) ---
-  if [[ "$WANT_CATALOG" -eq 1 ]] && [[ "$passed_catalog" -eq 0 ]]; then
-    CATALOG_READY=$(printf '%s' "${HEALTH_JSON:-}" | \
-      python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('proxy_initialization',{}).get('catalog_ready','false'))" 2>/dev/null || echo false)
-    if [[ "$CATALOG_READY" == "True" ]] || [[ "$CATALOG_READY" == "true" ]]; then
+    if [[ "$WANT_CATALOG" -eq 1 ]]; then
+      _lcr=$(printf '%s' "$_H" | python3 -c "import json,sys; d=json.load(sys.stdin); print('true' if d.get('proxy_initialization',{}).get('catalog_ready') else 'false')" 2>/dev/null || echo false)
+      if [[ "$_lcr" != "true" ]]; then _dot; sleep 1; continue; fi
+      if [[ "$_printed_cat" -eq 0 ]]; then
+        if ! _quiet; then printf 'OK   catalog ready (legacy)\n'; fi
+        _printed_cat=1
+      fi
       passed_catalog=1
-      if ! _quiet; then printf 'OK   catalog ready\n'; fi
+    fi
+
+    if [[ -n "$WANT_MODEL" ]]; then
+      _lmf=$(curl -sf --max-time 5 "${PROXY_URL}/v1/models" 2>/dev/null | \
+        python3 -c 'import json,sys; m=sys.argv[1]; d=json.load(sys.stdin); ids=[x.get("id","") for x in d.get("data",[])]; print("true" if m in ids else "false")' "$WANT_MODEL" 2>/dev/null || echo false)
+      if [[ "$_lmf" != "true" ]]; then _dot; sleep 1; continue; fi
+      if ! _quiet; then printf 'OK   model visible: %s (legacy)\n' "$WANT_MODEL"; fi
+      passed_model=1
+    fi
+
+    if [[ "$WANT_BACKEND" -eq 1 ]]; then
+      _lbr=$(curl -sf --max-time 5 "${PROXY_URL}/qz/status" 2>/dev/null | \
+        python3 -c 'import json,sys; d=json.load(sys.stdin); print("true" if d.get("ready") else "false")' 2>/dev/null || echo false)
+      if [[ "$_lbr" != "true" ]]; then _dot; sleep 1; continue; fi
+      if ! _quiet; then printf 'OK   backend ready (legacy)\n'; fi
+      passed_backend=1
+    fi
+
+    break  # all legacy checks passed
+  fi
+
+  # ---------------------------------------------------------------------------
+  # Primary path: parse /qz/control-plane readiness fields in one call
+  # ---------------------------------------------------------------------------
+  read -r _pr _cr _mv _br _bd <<< "$(_parse_cp_readiness "$LAST_CP_JSON" "$WANT_MODEL")"
+
+  if [[ "$passed_proxy_ready" -eq 0 ]]; then
+    if [[ "$_pr" == "true" ]]; then
+      passed_proxy_ready=1
+      if [[ "$_printed_pr" -eq 0 ]]; then
+        if ! _quiet; then printf 'OK   proxy ready\n'; fi
+        _printed_pr=1
+      fi
     else
-      _dot
-      sleep 1
-      HEALTH_JSON=$(curl -sf --max-time 2 "${PROXY_URL}/health" 2>/dev/null) || true
-      continue
+      _dot; sleep 1; continue
     fi
   fi
 
-  # --- Level 4: model visible (optional) ---
+  if [[ "$WANT_CATALOG" -eq 1 ]] && [[ "$passed_catalog" -eq 0 ]]; then
+    if [[ "$_cr" == "true" ]]; then
+      passed_catalog=1
+      if [[ "$_printed_cat" -eq 0 ]]; then
+        if ! _quiet; then printf 'OK   catalog ready\n'; fi
+        _printed_cat=1
+      fi
+    else
+      _dot; sleep 1; continue
+    fi
+  fi
+
   if [[ -n "$WANT_MODEL" ]] && [[ "$passed_model" -eq 0 ]]; then
-    MODEL_FOUND=$(curl -sf --max-time 5 "${PROXY_URL}/v1/models" 2>/dev/null | \
-      python3 -c "
-import json, sys
-model = sys.argv[1]
-try:
-    d = json.load(sys.stdin)
-    ids = [m.get('id','') for m in d.get('data',[]) if isinstance(m,dict)]
-    print('true' if model in ids else 'false')
-except Exception:
-    print('false')
-" "$WANT_MODEL" 2>/dev/null || echo false)
-    if [[ "$MODEL_FOUND" == "true" ]]; then
+    if [[ "$_mv" == "true" ]]; then
       passed_model=1
       if ! _quiet; then printf 'OK   model visible: %s\n' "$WANT_MODEL"; fi
     else
-      _dot
-      sleep 1
-      HEALTH_JSON=$(curl -sf --max-time 2 "${PROXY_URL}/health" 2>/dev/null) || true
-      continue
+      _dot; sleep 1; continue
     fi
   fi
 
-  # --- Level 5: backend/model loaded (optional) ---
   if [[ "$WANT_BACKEND" -eq 1 ]] && [[ "$passed_backend" -eq 0 ]]; then
-    BACKEND_READY=$(curl -sf --max-time 5 "${PROXY_URL}/qz/status" 2>/dev/null | \
-      python3 -c "import json,sys; d=json.load(sys.stdin); print('true' if d.get('ready') else 'false')" 2>/dev/null || echo false)
-    if [[ "$BACKEND_READY" == "true" ]]; then
+    if [[ "$_br" == "true" ]] && [[ "$_bd" == "true" ]]; then
       passed_backend=1
       if ! _quiet; then printf 'OK   backend ready\n'; fi
     else
-      _dot
-      sleep 1
-      HEALTH_JSON=$(curl -sf --max-time 2 "${PROXY_URL}/health" 2>/dev/null) || true
-      continue
+      _dot; sleep 1; continue
     fi
   fi
 
-  # All requested levels passed
-  break
+  break  # all requested levels passed
 
 done
 
 if ! _quiet; then printf '\n'; fi
 
 # ---------------------------------------------------------------------------
-# Final verdict
+# Final verdict with proxy-owned diagnostics on failure
 # ---------------------------------------------------------------------------
 FAILED=0
 
 if [[ "$passed_proxy_http" -eq 0 ]]; then
-  printf 'FAIL proxy HTTP unreachable: %s/health\n' "$PROXY_URL" >&2
+  printf 'FAIL proxy HTTP unreachable: %s\n' "${PROXY_URL}/qz/control-plane" >&2
   printf '     Is qz-up running? Check var/logs/qz-proxy.log\n' >&2
   FAILED=1
 fi
 
 if [[ "$PROXY_ONLY" -eq 0 ]]; then
   if [[ "$passed_proxy_ready" -eq 0 ]]; then
-    printf 'FAIL proxy not ready: proxy_initialization.ready is false\n' >&2
-    printf '     Check var/logs/qz-proxy.log for initialization errors\n' >&2
+    printf 'FAIL proxy not ready (proxy_ready == false)\n' >&2
+    if [[ -n "$LAST_CP_JSON" ]]; then
+      _print_cp_diagnostics "$LAST_CP_JSON"
+    else
+      printf '     Check var/logs/qz-proxy.log for initialization errors\n' >&2
+    fi
     FAILED=1
   fi
 
   if [[ "$WANT_CATALOG" -eq 1 ]] && [[ "$passed_catalog" -eq 0 ]]; then
-    printf 'FAIL catalog not ready: proxy_initialization.catalog_ready is false\n' >&2
-    printf '     Try: curl %s/qz/config/effective | jq .proxy_initialization\n' "$PROXY_URL" >&2
+    printf 'FAIL catalog not ready (catalog_ready == false)\n' >&2
+    if [[ -n "$LAST_CP_JSON" ]]; then
+      _print_cp_diagnostics "$LAST_CP_JSON"
+    else
+      printf '     Try: curl %s/qz/control-plane | jq .readiness\n' "$PROXY_URL" >&2
+    fi
     FAILED=1
   fi
 
   if [[ -n "$WANT_MODEL" ]] && [[ "$passed_model" -eq 0 ]]; then
-    printf 'FAIL model not visible: %s not in /v1/models\n' "$WANT_MODEL" >&2
-    _print_available_models
+    printf 'FAIL model not visible: %s\n' "$WANT_MODEL" >&2
+    if [[ -n "$LAST_CP_JSON" ]]; then
+      _print_cp_diagnostics "$LAST_CP_JSON"
+    fi
     FAILED=1
   fi
 
   if [[ "$WANT_BACKEND" -eq 1 ]] && [[ "$passed_backend" -eq 0 ]]; then
-    printf 'FAIL backend not ready: /qz/status ready is not true\n' >&2
-    printf '     Is the llama.cpp model loaded? Check var/logs/qz-proxy.log\n' >&2
+    printf 'FAIL backend not ready (backend_reachable or backend_ready == false)\n' >&2
+    if [[ -n "$LAST_CP_JSON" ]]; then
+      _print_cp_diagnostics "$LAST_CP_JSON"
+    else
+      printf '     Is the llama.cpp model loaded? Check curl %s/qz/control-plane\n' "$PROXY_URL" >&2
+    fi
     FAILED=1
   fi
 fi
