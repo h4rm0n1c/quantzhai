@@ -222,18 +222,30 @@ Slice 2 also:
   --model MODEL` before `exec codex`. Timeout via `QZ_CODEX_READY_TIMEOUT`
   (default 60s).
 
-**Step 4 (future):** Move Codex catalog regeneration entirely into the proxy
+**Step 4 (done — slice 3):** Gate `qz-codex-common` local catalog fallback behind
+an explicit opt-in flag. `qz_prepare_codex_home()` now:
+- Calls `POST /qz/models/refresh` as the normal path.
+- If that fails and `QZ_CODEX_ALLOW_LOCAL_CATALOG_FALLBACK=1`, runs the old
+  direct Python scan (offline/dev use only).
+- If that fails without the flag: prints a proxy-owned error message that is
+  remote-friendly (does not assume local Docker/llama.cpp), then returns 1 so
+  `qz-codex` exits with a clear error.
+`qz-codex` no longer silently owns catalog generation when a proxy is expected.
+Remote `qz-codex` users without a local backend now get a clear error rather than
+a silent partial failure.
+
+**Step 5 (future):** Move Codex catalog regeneration entirely into the proxy
 `/qz/models/refresh` endpoint. `qz-codex-common` becomes a thin shim that just
 calls the endpoint.
 
-**Step 5 (future, SQLite era):** Merge `var/run/*.json` runtime state into
+**Step 6 (future, SQLite era):** Merge `var/run/*.json` runtime state into
 operational facts stored in the Phase 1 SQLite substrate. `qz-write-runtime-state`
 becomes a thin shim or disappears.
 
 **Remaining under #44 (deferred):**
 - `/v1/responses` early-failure messaging when catalog/model routing is not ready.
-- Audit and reduce hybrid Codex catalog generation flow in qz-codex-common vs
-  /qz/models/refresh.
+- Proxy should cleanly provide all catalog artifacts; `qz-codex-common` can then
+  drop even the opt-in fallback path.
 - Audit runtime-state JSON ownership and identify what should later move behind
   /qz/* or Phase 1 SQLite.
 - Bring scripts/qz-smoke-repeated-read from #43 onto qz-wait-ready once that
