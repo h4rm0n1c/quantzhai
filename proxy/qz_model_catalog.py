@@ -337,6 +337,18 @@ def _profiles_v1_to_manifest(data: Dict[str, Any]) -> Dict[str, Any]:
             if k in bundle:
                 overrides[k] = bundle[k]
 
+        # When the profile slug differs from the GGUF stem, add the slug (and
+        # slug+".gguf") as aliases so build_entry can merge them into the
+        # scanned entry's alias set, making match_model("alice") work even
+        # when the physical file is named "some-model.gguf".
+        gguf_stem = Path(gguf).stem
+        if slug != gguf_stem:
+            existing_aliases = list(overrides.get("aliases") or [])
+            for alias_val in [slug, f"{slug}.gguf"]:
+                if alias_val not in existing_aliases:
+                    existing_aliases.append(alias_val)
+            overrides["aliases"] = existing_aliases
+
         manifest["models"][gguf] = overrides
 
     return manifest
@@ -374,8 +386,9 @@ def _load_profiles_layer(layer_dir: Path) -> Optional[Tuple[Dict[str, Any], List
                 combined[k] = data[k]
         for slug, bundle in (data.get("profiles") or {}).items():
             if slug in seen_slugs:
-                warnings.append(
-                    f"duplicate profile slug '{slug}' in same config layer ({source.name})"
+                raise ValueError(
+                    f"duplicate profile slug '{slug}' in same config layer "
+                    f"({source.name}); each slug must be unique within a layer"
                 )
             seen_slugs.add(slug)
             combined["profiles"][slug] = bundle
@@ -541,6 +554,13 @@ def build_entry(path: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
 
     overrides = model_overrides(manifest, entry)
     entry["overrides"] = overrides
+    # Merge aliases declared in overrides (e.g. profile slug when slug ≠ GGUF stem)
+    # into the entry alias set so match_model() can resolve by profile slug.
+    ov_aliases = overrides.get("aliases")
+    if isinstance(ov_aliases, list) and ov_aliases:
+        entry["aliases"] = sorted(
+            set(entry["aliases"]) | {str(a) for a in ov_aliases if isinstance(a, str) and a}
+        )
     entry["label"] = overrides.get("label") or name or stem
     entry["default"] = bool(overrides.get("default"))
     entry["backend_target"] = entry.get("native_backend_id") or stem
@@ -584,6 +604,11 @@ def build_broken_symlink_entry(path: Path, manifest: Dict[str, Any], error: str)
     }
     overrides = model_overrides(manifest, entry)
     entry["overrides"] = overrides
+    ov_aliases = overrides.get("aliases")
+    if isinstance(ov_aliases, list) and ov_aliases:
+        entry["aliases"] = sorted(
+            set(entry["aliases"]) | {str(a) for a in ov_aliases if isinstance(a, str) and a}
+        )
     entry["label"] = overrides.get("label") or stem
     entry["default"] = bool(overrides.get("default"))
     entry["backend_target"] = ""

@@ -762,8 +762,8 @@ class ProfilesV1LoaderTests(unittest.TestCase):
             self.assertIn("myprofile.gguf", manifest["models"])
             self.assertEqual(manifest["models"]["myprofile.gguf"]["label"], "user-label")
 
-    def test_same_layer_duplicate_slug_warns(self):
-        """Duplicate profile slug in the same layer produces a warning."""
+    def test_same_layer_duplicate_slug_raises(self):
+        """Duplicate profile slug in the same layer raises ValueError."""
         with tempfile.TemporaryDirectory() as tmp:
             layer_dir = Path(tmp)
             profiles_dir = layer_dir / "profiles"
@@ -787,11 +787,10 @@ class ProfilesV1LoaderTests(unittest.TestCase):
                 }
             }), encoding="utf-8")
 
-            result = _load_profiles_layer(layer_dir)
-
-            self.assertIsNotNone(result)
-            manifest, warnings = result
-            self.assertTrue(any("duplicate" in w and "duplicate-slug" in w for w in warnings))
+            with self.assertRaises(ValueError) as ctx:
+                _load_profiles_layer(layer_dir)
+            self.assertIn("duplicate-slug", str(ctx.exception))
+            self.assertIn("duplicate", str(ctx.exception).lower())
 
     def test_profile_slug_as_codex_id(self):
         """Profile slug is the identity shown to Codex; backend.gguf is the routing target."""
@@ -814,6 +813,47 @@ class ProfilesV1LoaderTests(unittest.TestCase):
             # The key in models dict is the GGUF filename, not the slug
             self.assertIn("actual-file.gguf", manifest["models"])
             self.assertNotIn("my-slug", manifest["models"])
+
+    def test_slug_resolves_independently_of_backend_gguf(self):
+        """
+        A v1 profile slug that differs from the GGUF stem must be resolvable
+        via match_model() even when the scanned file has a different name.
+
+        Setup:
+          profiles["alice"] with backend.gguf = "some-model.gguf"
+          var/models/some-model.gguf  (real GGUF file, not a symlink)
+
+        Expected: catalog.resolve("alice") returns the some-model entry.
+        """
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"QZ_MODEL_KEY": ""}, clear=False):
+            os.environ.pop("QZ_MODEL_STATE_PATH", None)
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            _write_gguf(model_dir / "some-model.gguf")
+            user_dir = root / "config" / "user"
+            user_dir.mkdir(parents=True)
+            (user_dir / "profiles.json").write_text(json.dumps({
+                "schema": "qz.profiles.v1",
+                "profiles": {
+                    "alice": {
+                        "backend": {"gguf": "some-model.gguf"},
+                        "runtime": {"context_length": 65536},
+                        "metadata": {"label": "alice"}
+                    }
+                }
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+            entry, reason = catalog.resolve("alice")
+
+            self.assertIsNotNone(entry, "resolve('alice') must find the entry")
+            # The entry is the scanned some-model.gguf file
+            self.assertEqual(entry["stem"], "some-model")
+            # Its label comes from the v1 overrides
+            self.assertEqual(entry["label"], "alice")
+            # The slug 'alice' must appear in the entry's aliases
+            self.assertIn("alice", entry["aliases"])
+            self.assertIn("alice.gguf", entry["aliases"])
 
     def test_backend_gguf_used_as_key(self):
         """backend.gguf value becomes the models dict key."""
