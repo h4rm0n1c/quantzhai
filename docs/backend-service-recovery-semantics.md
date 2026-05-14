@@ -453,6 +453,21 @@ Key decisions:
 - Future implementation slices 6–10 defined in the policy doc.
 - Still no automatic crash-looping. No Docker calls. #47 stays open.
 
+### Slice 6 (done): Pure recovery planning helper
+
+Added `proxy/qz_recovery_plan.py` with `build_recovery_plan(service_status, action, ...)`.
+
+Schema: `qz.recovery.plan.v1`. Pure function — no I/O, no backend probe, no mutation,
+no HTTP route. Answers: "Would this action be feasible right now, and why?"
+
+Returns boolean blocking flags: `blocked_by_authority`, `blocked_by_locality`,
+`blocked_by_in_progress`, `blocked_by_backoff`, `blocked_by_state`,
+`blocked_by_active_requests`, `blocked_by_missing_model`. `feasible=True` only
+when all blocking flags are False.
+
+Tests: `tests/test_qz_recovery_plan.py` — 75 assertions across 16 test classes.
+Details in `docs/backend-manual-recovery-endpoint-policy.md` section 12.
+
 ---
 
 ## Open questions

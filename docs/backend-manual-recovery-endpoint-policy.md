@@ -505,13 +505,41 @@ as a convenience shortcut.
 
 Suggested slice order, building on the policy above:
 
-### Slice 6: Pure recovery planning helper + tests
+### Slice 6 (done): Pure recovery planning helper + tests
 
-- Add `proxy/qz_recovery_plan.py` with `build_recovery_plan(service_status, action)`.
-- Pure function. No I/O. No backend probes.
-- Tests: `tests/test_qz_recovery_plan.py` covering feasibility, blocking conditions,
-  action-specific logic.
-- No endpoint yet.
+Added `proxy/qz_recovery_plan.py` with `build_recovery_plan(service_status, action, ...)`.
+
+Key constants:
+- `RECOVERY_PLAN_SCHEMA = "qz.recovery.plan.v1"`
+- `ALLOWED_RECOVERY_ACTIONS` — frozenset of six action names
+
+Signature:
+```python
+build_recovery_plan(
+    service_status, action, *,
+    model="", force=False, authority_enabled=False,
+    local_request=True, active_requests=None,
+    backoff_active=False, recovery_in_progress=False,
+) -> dict
+```
+
+Blocking flags computed per-action:
+- `blocked_by_authority` — action in `_REQUIRES_AUTHORITY` and `authority_enabled=False`
+- `blocked_by_locality` — action requires authority and `local_request=False`
+- `blocked_by_in_progress` — state-changing action and `recovery_in_progress=True`
+  (refresh_catalog and select_model are NOT blocked)
+- `blocked_by_backoff` — backoff-applicable action and `backoff_active=True`
+- `blocked_by_state` — wrong state for action (per-action checks)
+- `blocked_by_active_requests` — interrupting action, `active_requests > 0`, `force=False`
+- `blocked_by_missing_model` — select_model without a model slug
+- `feasible` — `True` only when no blocking flag is `True`
+
+Active request safety when `active_requests is None`:
+- Does not block, but adds note: "active request count unavailable; implementation
+  must require force=true before triggering interrupt actions."
+
+Tests: `tests/test_qz_recovery_plan.py` — 16 test classes, 75 assertions.
+No endpoint, no side effects, no I/O.
 
 ### Slice 7: `POST /qz/recovery/plan` dry-run endpoint
 
