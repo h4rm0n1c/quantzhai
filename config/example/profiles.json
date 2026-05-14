@@ -1,0 +1,77 @@
+{
+  "schema": "qz.profiles.v1",
+  "defaults": {
+    "system_prompt_file": "prompts/codex-core.md"
+  },
+  "profiles": {
+    "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M": {
+      "backend": {"gguf": "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M.gguf"},
+      "metadata": {
+        "label": "Qwen3.6 35B A3B baseline",
+        "notes": "Current QuantZhai baseline model.",
+        "default": true
+      }
+    },
+    "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ4_NL": {
+      "backend": {"gguf": "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ4_NL.gguf"},
+      "prompts": {"system_file": "prompts/models/qwen36-aggressive.md"},
+      "metadata": {
+        "label": "Qwen3.6 35B A3B aggressive iq4",
+        "notes": "Tighter VRAM fit with slightly lower quant pressure."
+      }
+    },
+    "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact": {
+      "backend": {"gguf": "Qwen3.6-35B-A3B-uncensored-heretic-APEX-I-Compact.gguf"},
+      "behavior": {"system_prompt": "Optional inline per-model system prompt override. Prefer system_prompt_file for long prompts."},
+      "metadata": {
+        "label": "Qwen3.6 35B A3B apex compact",
+        "notes": "Reasoning-focused compact variant."
+      }
+    },
+    "qwen-blank": {
+      "backend": {
+        "gguf": "qwen-blank.gguf",
+        "target_policy": "symlink_or_file"
+      },
+      "prompts": {"disable": true},
+      "metadata": {
+        "label": "qwen-blank",
+        "notes": "Example blank interrogation profile. Symlink to a real GGUF when you want no top-level instructions."
+      }
+    },
+    "prompt-compiler": {
+      "backend": {
+        "gguf": "prompt-compiler.gguf",
+        "target_policy": "symlink_or_file"
+      },
+      "runtime": {"context_length": 262144},
+      "prompts": {"system_file": "config/example/prompts/prompt-compiler.md"},
+      "memory": {"domain": "coding"},
+      "metadata": {
+        "label": "prompt-compiler",
+        "notes": "Example v2 compiler profile. Create var/models/prompt-compiler.gguf as a symlink to a real GGUF."
+      }
+    },
+    "roleplay-character": {
+      "backend": {
+        "gguf": "roleplay-character.gguf",
+        "target_policy": "symlink_or_file"
+      },
+      "runtime": {
+        "default_reasoning_level": "low",
+        "allow_client_reasoning_override": false
+      },
+      "prompts": {
+        "system_file": "config/user/prompts/character.md",
+        "append_files": ["config/user/prompts/roleplay-initial-harness.md"],
+        "turn_harnesses": ["roleplay-private-thoughts"]
+      },
+      "behavior": {"reasoning_stream_format": "hidden"},
+      "memory": {"domain": "roleplay"},
+      "metadata": {
+        "label": "roleplay-character",
+        "notes": "Example private-character profile shape. Keep private prompts under config/user or var."
+      }
+    }
+  }
+}
