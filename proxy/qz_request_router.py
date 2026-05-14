@@ -491,6 +491,106 @@ class RequestRouter:
         except Exception:
             return False
 
+    # ---- Recovery preflight helpers -------------------------------------
+
+    @staticmethod
+    def _recovery_authority_enabled() -> bool:
+        """Return True when QZ_RECOVERY_ACTIONS=1."""
+        return os.environ.get("QZ_RECOVERY_ACTIONS", "0").strip() == "1"
+
+    @staticmethod
+    def _recovery_local_only_enabled() -> bool:
+        """Return True when QZ_RECOVERY_BIND_LOCAL_ONLY is not explicitly 0."""
+        return os.environ.get("QZ_RECOVERY_BIND_LOCAL_ONLY", "1").strip() != "0"
+
+    @staticmethod
+    def _confirm_phrase_required(action: str) -> bool:
+        """Return True when a confirmation phrase is required for this action.
+
+        A phrase is required when:
+        - QZ_RECOVERY_CONFIRM_PHRASE is set (non-empty), AND
+        - the action is dangerous (not in SAFE_TRIGGER_ACTIONS).
+
+        Safe actions (refresh_catalog, clear_failure) never require the phrase
+        so that they remain low-friction for the operator.
+        """
+        if not os.environ.get("QZ_RECOVERY_CONFIRM_PHRASE", "").strip():
+            return False
+        return action not in SAFE_TRIGGER_ACTIONS
+
+    @staticmethod
+    def _confirm_phrase_matches(body: dict, action: str) -> tuple[bool, str]:
+        """Validate the confirmation phrase in the request body.
+
+        Returns (ok, error_message).
+        ok=True when confirmation is not required or the phrase matches exactly.
+        ok=False when the phrase is required but missing or wrong.
+
+        Safe actions always return (True, "") regardless of env or body contents.
+        """
+        phrase = os.environ.get("QZ_RECOVERY_CONFIRM_PHRASE", "").strip()
+        if not phrase:
+            return True, ""
+        if action in SAFE_TRIGGER_ACTIONS:
+            return True, ""
+        provided = str(body.get("confirm") or "").strip()
+        if not provided:
+            return False, (
+                f"Action {action!r} requires a confirmation phrase. "
+                "Set 'confirm' in the request body to the value of QZ_RECOVERY_CONFIRM_PHRASE."
+            )
+        if provided == phrase:
+            return True, ""
+        return False, f"Confirmation phrase mismatch for action {action!r}."
+
+    @staticmethod
+    def _validate_recovery_trigger_body(
+        body: dict,
+    ) -> tuple[int, str, str, str] | None:
+        """Validate request body fields for POST /qz/recovery/trigger.
+
+        Returns None on success.
+        Returns (status, error_code, blocked_by, message) on any validation failure.
+
+        Checks in order:
+        1. action present
+        2. reason present
+        3. action in ALLOWED_RECOVERY_ACTIONS
+        4. action not in UNIMPLEMENTED_TRIGGER_ACTIONS
+        5. force=true invalid for safe actions
+        """
+        action = str(body.get("action") or "")
+        reason = str(body.get("reason") or "")
+        force  = bool(body.get("force", False))
+
+        if not action:
+            return 400, "missing_action", "bad_request", \
+                "Request body must include an 'action' field."
+
+        if not reason:
+            return 400, "missing_reason", "bad_request", \
+                "Request body must include a 'reason' field explaining why the action is needed."
+
+        if action not in ALLOWED_RECOVERY_ACTIONS:
+            return 400, "unknown_action", "unknown_action", (
+                f"Unknown action {action!r}. Allowed: {sorted(ALLOWED_RECOVERY_ACTIONS)}."
+            )
+
+        if action in UNIMPLEMENTED_TRIGGER_ACTIONS:
+            return 409, "action_not_implemented", "state", (
+                f"Action {action!r} is not implemented in this trigger slice. "
+                "Implemented: refresh_catalog, clear_failure. "
+                "Restart/reload actions require active-request safety and are deferred."
+            )
+
+        if force and action in SAFE_TRIGGER_ACTIONS:
+            return 400, "force_not_allowed", "bad_request", (
+                f"force=true is not allowed for {action!r}; "
+                "it applies only to interrupt actions (restart_backend, reload_selected_model)."
+            )
+
+        return None  # all fields valid
+
     def _emit_recovery_event(self, event_type: str, payload: dict) -> None:
         """Emit a recovery telemetry event. No-ops safely if telemetry unavailable."""
         try:
@@ -593,95 +693,71 @@ class RequestRouter:
             ))
             return
 
+        action_hint = str(body.get("action") or "")
+
         # --- Authority check (must be first gate) ---
-        authority = os.environ.get("QZ_RECOVERY_ACTIONS", "0").strip() == "1"
-        if not authority:
+        if not self._recovery_authority_enabled():
             self._emit_recovery_event("recovery_trigger_rejected", {
                 "source": "recovery_trigger",
                 "reason": "authority_disabled",
-                "action": body.get("action", ""),
+                "action": action_hint,
             })
             self.handler._send_json(403, self._recovery_error_payload(
                 "authority_disabled",
                 "QZ_RECOVERY_ACTIONS is not set to 1; state-changing recovery is disabled. "
                 "Set QZ_RECOVERY_ACTIONS=1 to enable.",
-                action=str(body.get("action") or ""),
+                action=action_hint,
                 blocked_by="authority",
             ))
             return
 
         # --- Locality check ---
-        bind_local = os.environ.get("QZ_RECOVERY_BIND_LOCAL_ONLY", "1").strip() != "0"
-        if bind_local and not self._is_local_request(self.handler):
+        if self._recovery_local_only_enabled() and not self._is_local_request(self.handler):
             self._emit_recovery_event("recovery_trigger_rejected", {
                 "source": "recovery_trigger",
                 "reason": "non_local_request",
-                "action": body.get("action", ""),
+                "action": action_hint,
             })
             self.handler._send_json(403, self._recovery_error_payload(
                 "non_local_request",
                 "QZ_RECOVERY_BIND_LOCAL_ONLY is enabled; trigger requires a local (loopback) request.",
-                action=str(body.get("action") or ""),
+                action=action_hint,
                 blocked_by="authority",
             ))
             return
 
-        # --- Extract fields ---
+        # --- Body field validation ---
+        val_err = self._validate_recovery_trigger_body(body)
+        if val_err is not None:
+            status, error, blocked_by, message = val_err
+            action_for_err = str(body.get("action") or "")
+            recovery_status = self._get_recovery_status_snapshot() if status == 409 else None
+            self.handler._send_json(status, self._recovery_error_payload(
+                error,
+                message,
+                action=action_for_err,
+                blocked_by=blocked_by,
+                recovery_status=recovery_status,
+            ))
+            return
+
         action = str(body.get("action") or "")
         reason = str(body.get("reason") or "")
-        force  = bool(body.get("force", False))
 
-        if not action:
+        # --- Confirmation phrase check ---
+        confirm_ok, confirm_msg = self._confirm_phrase_matches(body, action)
+        if not confirm_ok:
             self.handler._send_json(400, self._recovery_error_payload(
-                "missing_action",
-                "Request body must include an 'action' field.",
-                blocked_by="bad_request",
-            ))
-            return
-
-        if not reason:
-            self.handler._send_json(400, self._recovery_error_payload(
-                "missing_reason",
-                "Request body must include a 'reason' field explaining why the action is needed.",
+                "bad_confirm",
+                confirm_msg,
                 action=action,
-                blocked_by="bad_request",
+                blocked_by="bad_confirm",
             ))
             return
 
-        # --- Action validation ---
-        if action not in ALLOWED_RECOVERY_ACTIONS:
-            self.handler._send_json(400, self._recovery_error_payload(
-                "unknown_action",
-                f"Unknown action {action!r}. Allowed: {sorted(ALLOWED_RECOVERY_ACTIONS)}.",
-                action=action,
-                blocked_by="unknown_action",
-            ))
-            return
-
-        if action in UNIMPLEMENTED_TRIGGER_ACTIONS:
-            self.handler._send_json(409, self._recovery_error_payload(
-                "action_not_implemented",
-                f"Action {action!r} is not implemented in this trigger slice. "
-                "Implemented actions: refresh_catalog, clear_failure. "
-                "Restart/reload actions require active-request safety and are deferred.",
-                action=action,
-                blocked_by="state",
-            ))
-            return
-
-        # force=true is not valid for safe (non-interrupt) actions
-        if force:
-            self.handler._send_json(400, self._recovery_error_payload(
-                "force_not_allowed",
-                f"force=true is not allowed for {action!r}; "
-                "it applies only to interrupt actions (restart_backend, reload_selected_model).",
-                action=action,
-                blocked_by="bad_request",
-            ))
-            return
-
-        # --- Runtime state checks ---
+        # --- Runtime state checks (with advisory recovery_status) ---
         rs = getattr(self.handler, "recovery_state", RECOVERY_STATE)
+        runtime_rs = self._get_recovery_status_snapshot()
 
         if rs.is_recovery_in_progress():
             self.handler._send_json(423, self._recovery_error_payload(
@@ -689,6 +765,7 @@ class RequestRouter:
                 "Another recovery action is already in progress; wait for it to complete.",
                 action=action,
                 blocked_by="state",
+                recovery_status=runtime_rs,
             ))
             return
 
@@ -699,6 +776,7 @@ class RequestRouter:
                 "retry after the backoff window expires or call clear_failure.",
                 action=action,
                 blocked_by="backoff",
+                recovery_status=runtime_rs,
             ))
             return
 

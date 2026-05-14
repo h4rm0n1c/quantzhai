@@ -527,6 +527,21 @@ Integration:
 `restart_backend` plan now reports `blocked_by_active_requests=True` when count > 0.
 Tests: `tests/test_qz_active_requests.py` — 29 assertions.
 
+### Slice 10b (done): Harden recovery trigger preflight
+
+Factored trigger preflight into tested static helpers: `_recovery_authority_enabled()`,
+`_recovery_local_only_enabled()`, `_confirm_phrase_required(action)`,
+`_confirm_phrase_matches(body, action)`, `_validate_recovery_trigger_body(body)`.
+
+`QZ_RECOVERY_CONFIRM_PHRASE` support: when set, required for dangerous actions only
+(safe actions skip to keep them low-friction). Mismatch → 400 `bad_confirm`.
+
+409/423/429 rejection payloads now include `recovery_status` snapshot.
+Safe actions (refresh_catalog, clear_failure) still work unchanged.
+Dangerous actions (restart_backend etc.) still blocked by 409.
+
+Tests: `tests/test_qz_recovery_trigger.py` now 60 assertions.
+
 ---
 
 ## Open questions

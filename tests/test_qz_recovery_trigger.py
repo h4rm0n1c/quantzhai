@@ -1,5 +1,6 @@
 """Tests for POST /qz/recovery/trigger helpers (proxy/qz_request_router.py)."""
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -292,6 +293,229 @@ class TriggerConstantsConsistencyTests(unittest.TestCase):
             SAFE_TRIGGER_ACTIONS & UNIMPLEMENTED_TRIGGER_ACTIONS,
             frozenset(),
         )
+
+
+# ---------------------------------------------------------------------------
+# 8. _recovery_authority_enabled / _recovery_local_only_enabled
+# ---------------------------------------------------------------------------
+
+class EnvFlagHelpersTests(unittest.TestCase):
+    def test_authority_disabled_by_default(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {}, clear=False):
+            os_env_backup = os.environ.pop("QZ_RECOVERY_ACTIONS", None)
+            try:
+                self.assertFalse(RequestRouter._recovery_authority_enabled())
+            finally:
+                if os_env_backup is not None:
+                    os.environ["QZ_RECOVERY_ACTIONS"] = os_env_backup
+
+    def test_authority_enabled_when_1(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {"QZ_RECOVERY_ACTIONS": "1"}):
+            self.assertTrue(RequestRouter._recovery_authority_enabled())
+
+    def test_authority_disabled_when_0(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {"QZ_RECOVERY_ACTIONS": "0"}):
+            self.assertFalse(RequestRouter._recovery_authority_enabled())
+
+    def test_local_only_enabled_by_default(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {}, clear=False):
+            backup = os.environ.pop("QZ_RECOVERY_BIND_LOCAL_ONLY", None)
+            try:
+                self.assertTrue(RequestRouter._recovery_local_only_enabled())
+            finally:
+                if backup is not None:
+                    os.environ["QZ_RECOVERY_BIND_LOCAL_ONLY"] = backup
+
+    def test_local_only_disabled_when_0(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {"QZ_RECOVERY_BIND_LOCAL_ONLY": "0"}):
+            self.assertFalse(RequestRouter._recovery_local_only_enabled())
+
+    def test_local_only_enabled_when_1(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {"QZ_RECOVERY_BIND_LOCAL_ONLY": "1"}):
+            self.assertTrue(RequestRouter._recovery_local_only_enabled())
+
+
+# ---------------------------------------------------------------------------
+# 9. _confirm_phrase_required
+# ---------------------------------------------------------------------------
+
+class ConfirmPhraseRequiredTests(unittest.TestCase):
+    def test_not_required_when_env_unset(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("QZ_RECOVERY_CONFIRM_PHRASE", None)
+            self.assertFalse(RequestRouter._confirm_phrase_required("restart_backend"))
+            self.assertFalse(RequestRouter._confirm_phrase_required("refresh_catalog"))
+
+    def test_not_required_for_safe_action_even_when_env_set(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {"QZ_RECOVERY_CONFIRM_PHRASE": "secret"}):
+            self.assertFalse(RequestRouter._confirm_phrase_required("refresh_catalog"))
+            self.assertFalse(RequestRouter._confirm_phrase_required("clear_failure"))
+
+    def test_required_for_dangerous_action_when_env_set(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {"QZ_RECOVERY_CONFIRM_PHRASE": "secret"}):
+            self.assertTrue(RequestRouter._confirm_phrase_required("restart_backend"))
+            self.assertTrue(RequestRouter._confirm_phrase_required("start_backend"))
+            self.assertTrue(RequestRouter._confirm_phrase_required("reload_selected_model"))
+
+
+# ---------------------------------------------------------------------------
+# 10. _confirm_phrase_matches
+# ---------------------------------------------------------------------------
+
+class ConfirmPhraseMatchesTests(unittest.TestCase):
+    def test_ok_when_env_unset(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("QZ_RECOVERY_CONFIRM_PHRASE", None)
+            ok, msg = RequestRouter._confirm_phrase_matches({}, "restart_backend")
+            self.assertTrue(ok)
+            self.assertEqual(msg, "")
+
+    def test_ok_for_safe_action_even_with_env(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {"QZ_RECOVERY_CONFIRM_PHRASE": "secret"}):
+            ok, msg = RequestRouter._confirm_phrase_matches({}, "refresh_catalog")
+            self.assertTrue(ok)
+            ok2, _ = RequestRouter._confirm_phrase_matches({}, "clear_failure")
+            self.assertTrue(ok2)
+
+    def test_ok_when_phrase_matches(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {"QZ_RECOVERY_CONFIRM_PHRASE": "let me restart"}):
+            body = {"confirm": "let me restart"}
+            ok, msg = RequestRouter._confirm_phrase_matches(body, "restart_backend")
+            self.assertTrue(ok)
+            self.assertEqual(msg, "")
+
+    def test_fail_when_phrase_missing(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {"QZ_RECOVERY_CONFIRM_PHRASE": "secret"}):
+            ok, msg = RequestRouter._confirm_phrase_matches({}, "restart_backend")
+            self.assertFalse(ok)
+            self.assertIn("confirm", msg.lower())
+
+    def test_fail_when_phrase_wrong(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {"QZ_RECOVERY_CONFIRM_PHRASE": "secret"}):
+            body = {"confirm": "wrong phrase"}
+            ok, msg = RequestRouter._confirm_phrase_matches(body, "restart_backend")
+            self.assertFalse(ok)
+            self.assertIn("mismatch", msg.lower())
+
+    def test_match_is_exact(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {"QZ_RECOVERY_CONFIRM_PHRASE": "secret"}):
+            body = {"confirm": "Secret"}  # different case
+            ok, _ = RequestRouter._confirm_phrase_matches(body, "restart_backend")
+            self.assertFalse(ok)
+
+
+# ---------------------------------------------------------------------------
+# 11. _validate_recovery_trigger_body
+# ---------------------------------------------------------------------------
+
+class ValidateTriggerBodyTests(unittest.TestCase):
+    def _good_body(self):
+        return {"action": "clear_failure", "reason": "test"}
+
+    def test_valid_body_returns_none(self):
+        self.assertIsNone(RequestRouter._validate_recovery_trigger_body(self._good_body()))
+
+    def test_missing_action(self):
+        result = RequestRouter._validate_recovery_trigger_body({"reason": "x"})
+        self.assertIsNotNone(result)
+        status, error, blocked_by, msg = result
+        self.assertEqual(status, 400)
+        self.assertEqual(error, "missing_action")
+        self.assertEqual(blocked_by, "bad_request")
+
+    def test_missing_reason(self):
+        result = RequestRouter._validate_recovery_trigger_body({"action": "clear_failure"})
+        self.assertIsNotNone(result)
+        status, error, blocked_by, msg = result
+        self.assertEqual(status, 400)
+        self.assertEqual(error, "missing_reason")
+
+    def test_unknown_action(self):
+        result = RequestRouter._validate_recovery_trigger_body({"action": "kaboom", "reason": "x"})
+        self.assertIsNotNone(result)
+        status, error, blocked_by, msg = result
+        self.assertEqual(status, 400)
+        self.assertEqual(error, "unknown_action")
+
+    def test_unimplemented_action_restart_backend(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "restart_backend", "reason": "x"}
+        )
+        self.assertIsNotNone(result)
+        status, error, blocked_by, msg = result
+        self.assertEqual(status, 409)
+        self.assertEqual(error, "action_not_implemented")
+        self.assertEqual(blocked_by, "state")
+
+    def test_unimplemented_action_start_backend(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "start_backend", "reason": "x"}
+        )
+        self.assertIsNotNone(result)
+        status, error, _, _ = result
+        self.assertEqual(status, 409)
+        self.assertEqual(error, "action_not_implemented")
+
+    def test_force_true_on_safe_action(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "clear_failure", "reason": "x", "force": True}
+        )
+        self.assertIsNotNone(result)
+        status, error, blocked_by, msg = result
+        self.assertEqual(status, 400)
+        self.assertEqual(error, "force_not_allowed")
+        self.assertEqual(blocked_by, "bad_request")
+
+    def test_force_false_on_safe_action_ok(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "refresh_catalog", "reason": "x", "force": False}
+        )
+        self.assertIsNone(result)
+
+    def test_unimplemented_action_message_mentions_implemented(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "reload_selected_model", "reason": "x"}
+        )
+        _, _, _, msg = result
+        self.assertIn("refresh_catalog", msg)
+        self.assertIn("clear_failure", msg)
+
+
+# ---------------------------------------------------------------------------
+# 12. Rejection payloads include recovery_status for 409
+# ---------------------------------------------------------------------------
+
+class RejectionPayloadWithStatusTests(unittest.TestCase):
+    def test_recovery_error_payload_includes_recovery_status(self):
+        status_snap = {"schema": "qz.recovery.status.v1", "state": "none"}
+        p = RequestRouter._recovery_error_payload(
+            "action_not_implemented",
+            "not available",
+            action="restart_backend",
+            blocked_by="state",
+            recovery_status=status_snap,
+        )
+        self.assertEqual(p["recovery_status"], status_snap)
+        self.assertEqual(p["schema"], "qz.recovery.error.v1")
+
+    def test_recovery_error_payload_recovery_status_none_by_default(self):
+        p = RequestRouter._recovery_error_payload("bad_confirm", "bad phrase")
+        self.assertIsNone(p["recovery_status"])
 
 
 if __name__ == "__main__":

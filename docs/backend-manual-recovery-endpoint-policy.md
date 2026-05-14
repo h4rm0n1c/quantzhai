@@ -680,11 +680,51 @@ when in-flight count > 0 and `force=False`. No "active request count unavailable
 
 Tests: `tests/test_qz_active_requests.py` — 9 test classes, 29 assertions.
 
-### Slice 10: `restart_backend` — only after active request tracking and backoff are stable
+### Slice 10b (done): Harden recovery trigger preflight
 
-- Gated by `QZ_RECOVERY_ACTIONS=1`, `force=true` (since restarts interrupt requests), and real active-request count.
-- Emits full telemetry including `recovery_backoff_started` on failure.
-- All restart preconditions now available from slices 8 + 10a.
+Factored trigger preflight gates into small tested static helpers:
+
+| Helper | Purpose |
+|---|---|
+| `_recovery_authority_enabled()` | reads `QZ_RECOVERY_ACTIONS` |
+| `_recovery_local_only_enabled()` | reads `QZ_RECOVERY_BIND_LOCAL_ONLY` |
+| `_confirm_phrase_required(action)` | True when phrase env set AND action is dangerous |
+| `_confirm_phrase_matches(body, action)` | returns `(ok, msg)` — validates phrase |
+| `_validate_recovery_trigger_body(body)` | validates fields, returns `None` or `(status, error, blocked_by, msg)` |
+
+**Confirmation phrase semantics (`QZ_RECOVERY_CONFIRM_PHRASE`):**
+- Unset: no confirmation required for any action currently.
+- Set + safe action (`refresh_catalog`, `clear_failure`): still no requirement — keeps low-friction.
+- Set + dangerous action (`restart_backend`, etc.): phrase required (but blocked by 409 anyway until slice 11).
+- If `body["confirm"]` present and phrase unset: harmless, ignored.
+
+**Rejection payload improvements:**
+- 409 `action_not_implemented` now includes `recovery_status` snapshot.
+- 423 `recovery_in_progress` and 429 `backoff_active` now include `recovery_status`.
+
+**`_handle_recovery_trigger` flow (refactored, same behaviour):**
+1. Parse JSON body
+2. `_recovery_authority_enabled()` → 403 if false
+3. `_recovery_local_only_enabled()` + `_is_local_request()` → 403 if failed
+4. `_validate_recovery_trigger_body(body)` → 400/409 if failed
+5. `_confirm_phrase_matches(body, action)` → 400 `bad_confirm` if failed
+6. Runtime state checks (in_progress → 423, backoff → 429)
+7. Execute safe action
+
+Tests added to `tests/test_qz_recovery_trigger.py`:
+- `EnvFlagHelpersTests` — authority/locality env flag helpers
+- `ConfirmPhraseRequiredTests` — phrase requirement logic
+- `ConfirmPhraseMatchesTests` — phrase validation (ok/missing/wrong/case-sensitive)
+- `ValidateTriggerBodyTests` — all validation cases
+- `RejectionPayloadWithStatusTests` — recovery_status in payload
+
+Total: 60 tests in `test_qz_recovery_trigger.py`. Dangerous actions still blocked.
+
+### Slice 11: `restart_backend` — only after preflight is stable
+
+- Gated by `QZ_RECOVERY_ACTIONS=1`, `force=true`, real active-request count (slice 10a), and confirmation phrase (slice 10b).
+- Emits `recovery_backoff_started` on failure.
+- All restart preconditions now available from slices 8 + 10a + 10b.
 
 ### Future: durable state (requires #2 SQLite)
 
