@@ -180,11 +180,109 @@ else
 fi
 
 proxy_base="http://$QZ_PROXY_HOST:$QZ_PROXY_PORT"
-if status_json="$(fetch_json "$proxy_base/qz/status")"; then
-  ok "proxy status: $proxy_base/qz/status"
-  if models_json="$(fetch_json "$proxy_base/v1/models")"; then
-    ok "proxy models: $proxy_base/v1/models"
-    if live_contract="$(python3 - "$status_json" "$models_json" <<'PY'
+
+# ---------------------------------------------------------------------------
+# Live proxy/backend/catalog status via /qz/control-plane (primary source).
+# This endpoint is proxy-owned and remote-friendly.
+# Falls back to legacy /qz/status + /v1/models if /qz/control-plane is absent.
+# Set QZ_DOCTOR_LEGACY_LIVE_CONTRACT=1 to also run the deep reconciliation check.
+# ---------------------------------------------------------------------------
+_cp_proxy_selected=""  # live selection from control-plane (may override local)
+
+if cp_json="$(fetch_json "$proxy_base/qz/control-plane")"; then
+  ok "proxy control-plane: $proxy_base/qz/control-plane"
+
+  # Parse all readiness/status fields in one Python call.
+  # Outputs key=value lines; hints are prefixed with HINT:.
+  _cp_parsed="$(printf '%s' "$cp_json" | python3 -c \
+'import json, sys
+try:
+    d = json.load(sys.stdin)
+    r = d.get("readiness", {})
+    m = d.get("models", {})
+    b = d.get("backend", {})
+    hints = d.get("operator_hints", [])
+    tf = lambda v: "true" if v else "false"
+    print("proxy_ready=" + tf(r.get("proxy_ready")))
+    print("catalog_ready=" + tf(r.get("catalog_ready")))
+    print("models_visible=" + tf(r.get("models_visible")))
+    print("models_count=" + str(m.get("count", 0)))
+    print("selected=" + str(m.get("selected") or ""))
+    print("selected_backend_id=" + str(m.get("selected_backend_id") or ""))
+    print("backend_reachable=" + tf(r.get("backend_reachable")))
+    print("backend_ready=" + tf(r.get("backend_ready")))
+    print("loaded_model=" + str(b.get("loaded_model") or ""))
+    print("codex_catalog_ready=" + tf(r.get("codex_catalog_ready")))
+    print("backend_error=" + str(b.get("error") or ""))
+    for hint in hints:
+        print("HINT:" + str(hint))
+except Exception as e:
+    print("parse_error=" + str(e))
+' 2>/dev/null || echo "parse_error=failed")"
+
+  _cpget() { grep "^${1}=" <<< "$_cp_parsed" | cut -d= -f2-; }
+
+  _cp_proxy_ready=$(_cpget proxy_ready)
+  _cp_catalog_ready=$(_cpget catalog_ready)
+  _cp_models_visible=$(_cpget models_visible)
+  _cp_models_count=$(_cpget models_count)
+  _cp_selected=$(_cpget selected)
+  _cp_selected_backend=$(_cpget selected_backend_id)
+  _cp_backend_reachable=$(_cpget backend_reachable)
+  _cp_backend_ready=$(_cpget backend_ready)
+  _cp_loaded_model=$(_cpget loaded_model)
+  _cp_codex_catalog=$(_cpget codex_catalog_ready)
+
+  [[ "$_cp_proxy_ready" == "true" ]]   && ok "proxy ready"         || fail_check "proxy ready"
+  [[ "$_cp_catalog_ready" == "true" ]] && ok "catalog ready"       || fail_check "catalog ready"
+
+  if [[ "$_cp_models_visible" == "true" ]]; then
+    ok "models visible: ${_cp_models_count} model(s)"
+  else
+    fail_check "models visible: no models in catalog"
+  fi
+
+  if [[ -n "$_cp_selected" ]]; then
+    ok "selected model: $_cp_selected"
+    _cp_proxy_selected="$_cp_selected"
+    if [[ -n "$_cp_selected_backend" && "$_cp_selected" != "$_cp_selected_backend" ]]; then
+      ok "selected backend: $_cp_selected_backend"
+    fi
+  else
+    skip "selected model: proxy has no active selection"
+  fi
+
+  if [[ "$_cp_backend_reachable" == "true" ]]; then
+    ok "backend reachable"
+    if [[ "$_cp_backend_ready" == "true" ]]; then
+      ok "backend ready"
+      [[ -n "$_cp_loaded_model" ]] && ok "loaded model: $_cp_loaded_model"
+    else
+      fail_check "backend ready: backend reachable but model not loaded"
+      printf 'hint  a model will load on the first /v1/responses request\n'
+    fi
+  else
+    fail_check "backend reachable: llama.cpp/backend is unreachable"
+    printf 'hint  qz-codex clients only need this proxy URL; local Docker/llama.cpp is not required\n'
+    # Print operator hints from proxy
+    while IFS= read -r _hline; do
+      [[ "$_hline" == "HINT:"* ]] && printf 'hint  %s\n' "${_hline#HINT:}"
+    done <<< "$_cp_parsed"
+  fi
+
+  if [[ "$_cp_codex_catalog" == "true" ]]; then
+    ok "codex catalog artifact: present"
+  else
+    fail_check "codex catalog artifact: missing"
+    printf 'hint  run scripts/qz-codex or POST %s/qz/models/refresh\n' "$proxy_base"
+  fi
+
+  # --- Optional deep live contract check (legacy multi-endpoint reconciliation) ---
+  # Enable with QZ_DOCTOR_LEGACY_LIVE_CONTRACT=1 for in-depth consistency checks.
+  if [[ "${QZ_DOCTOR_LEGACY_LIVE_CONTRACT:-0}" == "1" ]]; then
+    if status_json="$(fetch_json "$proxy_base/qz/status")" && \
+       models_json="$(fetch_json "$proxy_base/v1/models")"; then
+      if live_contract="$(python3 - "$status_json" "$models_json" <<'PY'
 import json
 import sys
 
@@ -201,47 +299,70 @@ backend_selected_backend = backend.get("selected_backend_id") or backend.get("lo
 loaded = backend.get("loaded_model") or ""
 
 if selected_key and backend_selected_key and selected_key != backend_selected_key:
-    problems.append(f"selected key mismatch: status.selected.key={selected_key} backend.selected_key={backend_selected_key}")
+    problems.append("selected key mismatch: status.selected.key={} backend.selected_key={}".format(selected_key, backend_selected_key))
 if selected_backend and backend_selected_backend and selected_backend != backend_selected_backend:
-    problems.append(f"backend target mismatch: selected.backend_id={selected_backend} backend.selected_backend_id={backend_selected_backend}")
+    problems.append("backend target mismatch: selected.backend_id={} backend.selected_backend_id={}".format(selected_backend, backend_selected_backend))
 if loaded and selected_backend and loaded != selected_backend:
-    problems.append(f"loaded model mismatch: loaded_model={loaded} selected.backend_id={selected_backend}")
+    problems.append("loaded model mismatch: loaded_model={} selected.backend_id={}".format(loaded, selected_backend))
 
 selected_context = selected.get("runtime_context_length") or selected.get("context_length")
 backend_context = backend.get("selected_context_length") or backend.get("backend_context_length")
 if selected_context and backend_context and int(selected_context) != int(backend_context):
-    problems.append(f"context mismatch: selected={selected_context} backend={backend_context}")
+    problems.append("context mismatch: selected={} backend={}".format(selected_context, backend_context))
 
 model_entries = models.get("data") if isinstance(models.get("data"), list) else []
-model_entry = next((entry for entry in model_entries if isinstance(entry, dict) and entry.get("id") == selected_key), None)
+model_entry = next((e for e in model_entries if isinstance(e, dict) and e.get("id") == selected_key), None)
 if selected_key and model_entry is None:
-    problems.append(f"selected profile missing from /v1/models: {selected_key}")
+    problems.append("selected profile missing from /v1/models: {}".format(selected_key))
 elif model_entry is not None:
     model_context = model_entry.get("runtime_context_length") or model_entry.get("context_length")
     if selected_context and model_context and int(selected_context) != int(model_context):
-        problems.append(f"/v1/models context mismatch for {selected_key}: models={model_context} status={selected_context}")
+        problems.append("/v1/models context mismatch for {}: models={} status={}".format(selected_key, model_context, selected_context))
     model_backend = model_entry.get("backend_id") or model_entry.get("backend_target") or ""
     if selected_backend and model_backend and selected_backend != model_backend:
-        problems.append(f"/v1/models backend mismatch for {selected_key}: models={model_backend} status={selected_backend}")
+        problems.append("/v1/models backend mismatch for {}: models={} status={}".format(selected_key, model_backend, selected_backend))
 
 if problems:
     print("\n".join(problems))
     sys.exit(1)
 PY
-    )"; then
-      ok "live profile/backend/context contract"
+      )"; then
+        ok "live profile/backend/context contract (deep)"
+      else
+        fail_check "live profile/backend/context contract (deep)"
+        while IFS= read -r line; do
+          [[ -n "$line" ]] && printf 'hint %s\n' "$line"
+        done <<< "$live_contract"
+      fi
     else
-      fail_check "live profile/backend/context contract"
-      while IFS= read -r line; do
-        [[ -n "$line" ]] && printf 'hint %s\n' "$line"
-      done <<<"$live_contract"
+      skip "live contract deep check: /qz/status or /v1/models unavailable"
     fi
-  else
-    fail_check "proxy models endpoint"
   fi
 
-  if telemetry_json="$(fetch_json "$proxy_base/qz/telemetry/recent?limit=80")"; then
-    if prompt_contract_check="$(python3 - "$telemetry_json" <<'PY'
+else
+  # Legacy fallback: /qz/control-plane not available (old proxy or mid-restart).
+  printf 'hint  /qz/control-plane unavailable; upgrade proxy for control-plane status\n'
+  if status_json="$(fetch_json "$proxy_base/qz/status")"; then
+    ok "proxy status (legacy): $proxy_base/qz/status"
+    _cp_proxy_selected="$(python3 -c 'import json,sys; s=json.loads(sys.argv[1]); sel=s.get("selected") or {}; print(sel.get("key") or "")' "$status_json" 2>/dev/null || echo "")"
+    if models_json="$(fetch_json "$proxy_base/v1/models")"; then
+      ok "proxy models (legacy): $proxy_base/v1/models"
+    else
+      fail_check "proxy models endpoint (legacy)"
+    fi
+  else
+    skip "proxy live contract: $proxy_base unavailable"
+  fi
+fi
+
+# Use live proxy selection for smoke test if available
+[[ -n "$_cp_proxy_selected" ]] && selected_key="$_cp_proxy_selected"
+
+# ---------------------------------------------------------------------------
+# Telemetry and optional prompt smoke (not yet replaced by control-plane)
+# ---------------------------------------------------------------------------
+if telemetry_json="$(fetch_json "$proxy_base/qz/telemetry/recent?limit=80")"; then
+  if prompt_contract_check="$(python3 - "$telemetry_json" <<'PY'
 import json
 import sys
 
@@ -256,25 +377,25 @@ if missing:
     print("missing fields: " + ", ".join(missing))
     sys.exit(1)
 PY
-    )"; then
-      ok "recent prompt contract telemetry"
-    else
-      prompt_contract_status=$?
-      if [[ "$prompt_contract_status" -eq 2 ]]; then
-        skip "recent prompt contract telemetry: no recent model request"
-      else
-        fail_check "recent prompt contract telemetry"
-        while IFS= read -r line; do
-          [[ -n "$line" ]] && printf 'hint %s\n' "$line"
-        done <<<"$prompt_contract_check"
-      fi
-    fi
+  )"; then
+    ok "recent prompt contract telemetry"
   else
-    skip "telemetry recent: proxy endpoint unavailable"
+    prompt_contract_status=$?
+    if [[ "$prompt_contract_status" -eq 2 ]]; then
+      skip "recent prompt contract telemetry: no recent model request"
+    else
+      fail_check "recent prompt contract telemetry"
+      while IFS= read -r line; do
+        [[ -n "$line" ]] && printf 'hint %s\n' "$line"
+      done <<< "$prompt_contract_check"
+    fi
   fi
+else
+  skip "telemetry recent: proxy endpoint unavailable"
+fi
 
-  if [[ "${QZ_DOCTOR_PROMPT_SMOKE:-0}" == "1" ]]; then
-    if prompt_smoke="$(python3 - "$proxy_base" "$selected_key" <<'PY'
+if [[ "${QZ_DOCTOR_PROMPT_SMOKE:-0}" == "1" ]]; then
+  if prompt_smoke="$(python3 - "$proxy_base" "$selected_key" <<'PY'
 import json
 import sys
 import urllib.request
@@ -306,19 +427,16 @@ if not any(event.get("type") == "prompt_contract" for event in events):
     print("no prompt_contract event after smoke request")
     raise SystemExit(1)
 PY
-    )"; then
-      ok "prompt contract smoke request"
-    else
-      fail_check "prompt contract smoke request"
-      while IFS= read -r line; do
-        [[ -n "$line" ]] && printf 'hint %s\n' "$line"
-      done <<<"$prompt_smoke"
-    fi
+  )"; then
+    ok "prompt contract smoke request"
   else
-    skip "prompt contract smoke request: set QZ_DOCTOR_PROMPT_SMOKE=1 to run"
+    fail_check "prompt contract smoke request"
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && printf 'hint %s\n' "$line"
+    done <<< "$prompt_smoke"
   fi
 else
-  skip "proxy live contract: $proxy_base/qz/status unavailable"
+  skip "prompt contract smoke request: set QZ_DOCTOR_PROMPT_SMOKE=1 to run"
 fi
 
 exit "$fail"

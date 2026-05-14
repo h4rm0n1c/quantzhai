@@ -327,12 +327,35 @@ used. Marked clearly as legacy.
 `/qz/models/refresh` endpoint. `qz-codex-common` becomes a thin shim that just
 calls the endpoint.
 
-**Step 10 (future, SQLite era):** Merge `var/run/*.json` runtime state into
+**Step 10 (done — slice 8):** Migrated `scripts/qz-doctor` to use
+`GET /qz/control-plane` as the primary live status source.
+
+Before: fetched `/qz/status` then `/v1/models` and manually reconciled 7+
+fields (selected key, backend target, loaded model, context length, /v1/models
+entry) plus a full multi-endpoint contract check.
+
+After: fetches `/qz/control-plane` once and derives all readiness lines from
+it: `proxy_ready`, `catalog_ready`, `models_visible`, `selected model`,
+`backend_reachable`, `backend_ready`, `loaded_model`, `codex_catalog_ready`,
+plus `operator_hints` from the proxy on failure.
+
+Checks that remain local (genuinely local machine concerns):
+- Docker CLI / image check
+- codex CLI / python3 / nvidia-smi
+- local model catalog resolve and profile contract
+- local Codex config stale-limit check
+- search policy / base URL
+
+The old `/qz/status` + `/v1/models` deep reconciliation is now opt-in via
+`QZ_DOCTOR_LEGACY_LIVE_CONTRACT=1`. When `/qz/control-plane` is unavailable
+(old proxy, mid-restart), a warning is printed and the legacy path is used.
+
+**Step 11 (future, SQLite era):** Merge `var/run/*.json` runtime state into
 operational facts stored in the Phase 1 SQLite substrate. `qz-write-runtime-state`
 becomes a thin shim or disappears.
 
 **Remaining under #44 (deferred):**
-- Migrate qz-doctor, qz-top, qz-codex-common, and qz-live-smoke to consume
+- Migrate qz-top, qz-codex-common, and qz-live-smoke to consume
   `/qz/control-plane` where useful.
 - Proxy fully owns Codex catalog file generation; `qz-codex-common` opt-in fallback
   can be removed once proxy is reliable for all cases.
