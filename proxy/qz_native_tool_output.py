@@ -138,3 +138,33 @@ def classify_native_tool_outputs(
                 ))
 
     return results
+
+
+def classify_native_tool_output_signals(
+    input_items: List[Any],
+) -> List[Any]:
+    """Classify native tool outputs as SignalDecision objects.
+
+    A structured alternative to classify_native_tool_outputs() that returns
+    SignalDecision instances instead of raw (event_type, payload) tuples.
+    All current classifiers remain operator-visible / telemetry-only — no
+    model injection is performed by this function.
+
+    classify_native_tool_outputs() is preserved unchanged for compatibility
+    with existing callers in qz_request_router.py.
+    """
+    try:
+        from .qz_feedback import FeedbackChannel, FeedbackVisibility, SignalDecision
+    except ImportError:
+        from qz_feedback import FeedbackChannel, FeedbackVisibility, SignalDecision
+
+    return [
+        SignalDecision(
+            event_type=event_type,
+            payload=payload,
+            visibility=FeedbackVisibility.OPERATOR,
+            channel=FeedbackChannel.TELEMETRY,
+            confidence=payload.get("confidence", ""),
+        )
+        for event_type, payload in classify_native_tool_outputs(input_items)
+    ]

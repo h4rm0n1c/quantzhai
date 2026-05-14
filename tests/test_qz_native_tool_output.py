@@ -333,5 +333,81 @@ class ObserverOrderRegressionTests(unittest.TestCase):
         self.assertEqual(results[0][0], "tool_connection_failed")
 
 
+class SignalWrapperTests(unittest.TestCase):
+    """Tests for classify_native_tool_output_signals() — the SignalDecision wrapper."""
+
+    def test_returns_signal_decision_objects(self):
+        from proxy.qz_feedback import SignalDecision
+        from proxy.qz_native_tool_output import classify_native_tool_output_signals
+        items = [_fco("call_ro", _READONLY_FS_OUTPUT)]
+        results = classify_native_tool_output_signals(items)
+        self.assertEqual(len(results), 1)
+        self.assertIsInstance(results[0], SignalDecision)
+
+    def test_visibility_is_operator(self):
+        from proxy.qz_feedback import FeedbackVisibility, SignalDecision
+        from proxy.qz_native_tool_output import classify_native_tool_output_signals
+        items = [_fco("call_ro", _READONLY_FS_OUTPUT)]
+        results = classify_native_tool_output_signals(items)
+        self.assertEqual(results[0].visibility, FeedbackVisibility.OPERATOR)
+
+    def test_channel_is_telemetry(self):
+        from proxy.qz_feedback import FeedbackChannel, SignalDecision
+        from proxy.qz_native_tool_output import classify_native_tool_output_signals
+        items = [_fco("call_ro", _READONLY_FS_OUTPUT)]
+        results = classify_native_tool_output_signals(items)
+        self.assertEqual(results[0].channel, FeedbackChannel.TELEMETRY)
+
+    def test_event_type_matches_tuple_form(self):
+        from proxy.qz_native_tool_output import (
+            classify_native_tool_output_signals,
+            classify_native_tool_outputs,
+        )
+        items = [_fco("call_ro", _READONLY_FS_OUTPUT)]
+        signals = classify_native_tool_output_signals(items)
+        tuples = classify_native_tool_outputs(items)
+        self.assertEqual(signals[0].event_type, tuples[0][0])
+
+    def test_payload_matches_tuple_form(self):
+        from proxy.qz_native_tool_output import (
+            classify_native_tool_output_signals,
+            classify_native_tool_outputs,
+        )
+        items = [_fco("call_ro", _READONLY_FS_OUTPUT)]
+        signals = classify_native_tool_output_signals(items)
+        tuples = classify_native_tool_outputs(items)
+        self.assertEqual(signals[0].payload, tuples[0][1])
+
+    def test_confidence_carried_from_payload(self):
+        from proxy.qz_native_tool_output import classify_native_tool_output_signals
+        items = [_fco("call_ro", _READONLY_FS_OUTPUT)]
+        results = classify_native_tool_output_signals(items)
+        self.assertEqual(results[0].confidence, "high")
+
+    def test_empty_input_returns_empty(self):
+        from proxy.qz_native_tool_output import classify_native_tool_output_signals
+        self.assertEqual(classify_native_tool_output_signals([]), [])
+
+    def test_both_classifiers_wrapped(self):
+        from proxy.qz_native_tool_output import classify_native_tool_output_signals
+        items = [
+            _fco("call_a", _READONLY_FS_OUTPUT),
+            _fco("call_b", _CONN_REFUSED_OUTPUT),
+        ]
+        results = classify_native_tool_output_signals(items)
+        self.assertEqual(len(results), 2)
+        event_types = {r.event_type for r in results}
+        self.assertIn("tool_sandbox_denied", event_types)
+        self.assertIn("tool_connection_failed", event_types)
+
+    def test_classify_signals_preserves_readonly_check(self):
+        from proxy.qz_native_tool_output import classify_native_tool_output_signals
+        # No mutation of input
+        item = _fco("call_ro", _READONLY_FS_OUTPUT)
+        original_output = item["output"]
+        classify_native_tool_output_signals([item])
+        self.assertEqual(item["output"], original_output)
+
+
 if __name__ == "__main__":
     unittest.main()
