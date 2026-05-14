@@ -2,6 +2,23 @@
 
 Date: 2026-04-29
 
+## Live stack smoke
+
+Run after `qz-up` to validate the full live stack:
+
+```bash
+qz-up
+scripts/qz-live-smoke
+```
+
+Optional flags: `--model MODEL` (default: kuato), `--telemetry-limit N` (default: 2000),
+`--skip-live-codex` (skips the Codex exec paths, checks proxy/config/thoughts/units only).
+
+The smoke test queries `/qz/telemetry/recent?limit=2000` rather than the default window
+to avoid false failures from SSE timing events crowding out `tool_sandbox_denied` events.
+
+---
+
 ## What We Discovered
 
 - **Sandbox escalation (Slice 1 — structured signal):** When an outgoing
