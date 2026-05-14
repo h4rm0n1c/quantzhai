@@ -375,10 +375,27 @@ Fields intentionally left at defaults (not yet in `/qz/control-plane`):
 Telemetry rendering, GPU rows, throughput, and benchmark display are unchanged.
 Backend unavailable still renders — qz-top remains useful when llama.cpp is down.
 
+**Step 12 (done — slice 10):** Migrated `scripts/qz-thoughts` to include
+`/qz/control-plane`-derived rows in the BACKEND section.
+
+Added `control_plane_status()` and `control_plane_rows()`. On initial load
+(`load_telemetry_state()`) and on SSE connect/reconnect (`_iter_sse_events()`),
+control-plane rows are fetched and appended via `_append_backend()`, which
+already de-duplicates adjacent identical rows.
+
+Rows added to BACKEND:
+- `("proxy", "ready  catalog=true  models=N")` — proxy/catalog readiness
+- `("model", "<selected>  backend=<backend_id>")` — live selected model
+- `("backend", "reachable  ready  loaded=<model>")` — backend ready state
+- `("backend", "unavailable")` + `("error"|"hint", ...)` — when backend is down
+
+`_is_monitor_poll()` updated to exclude `/qz/control-plane` from activity rows.
+SSE/telemetry/thought/answer parsing is unchanged. Backend unavailable still
+renders; qz-thoughts remains useful when llama.cpp is down.
+
 **Remaining under #44 (deferred):**
 - Migrate qz-codex-common and qz-live-smoke to consume
   `/qz/control-plane` where useful.
-- qz-thoughts: next migration target.
 - Proxy fully owns Codex catalog file generation; `qz-codex-common` opt-in fallback
   can be removed once proxy is reliable for all cases.
 - Audit runtime-state JSON ownership and identify what should later move behind

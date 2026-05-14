@@ -261,6 +261,69 @@ def load_config_hint_rows() -> List[Tuple[str, str]]:
     return _capture_rows_from_config(data or {})
 
 
+def control_plane_status() -> Optional[dict]:
+    """Fetch /qz/control-plane — the primary proxy-owned status source."""
+    return fetch_json(f"{proxy_base_url()}/qz/control-plane", timeout=min(monitor_http_timeout(), 1.5))
+
+
+def control_plane_rows(cp: Optional[dict]) -> List[Tuple[str, str]]:
+    """Derive compact backend/status rows from a qz.control_plane.status.v1 payload.
+
+    Returns a small list of (kind, message) tuples suitable for _append_backend().
+    Falls back to a single unavailable row if control-plane is unreachable.
+    """
+    if not isinstance(cp, dict) or cp.get("schema") != "qz.control_plane.status.v1":
+        return [("proxy", "control-plane unavailable")]
+    r = cp.get("readiness") or {}
+    m = cp.get("models") or {}
+    b = cp.get("backend") or {}
+    hints = cp.get("operator_hints") or []
+    rows: List[Tuple[str, str]] = []
+
+    # Proxy / catalog
+    proxy_parts = ["ready" if r.get("proxy_ready") else "not-ready"]
+    proxy_parts.append("catalog={}".format("true" if r.get("catalog_ready") else "false"))
+    count = m.get("count", 0)
+    if count:
+        proxy_parts.append("models={}".format(count))
+    rows.append(("proxy", "  ".join(proxy_parts)))
+
+    # Selected model
+    selected = str(m.get("selected") or "")
+    backend_id = str(m.get("selected_backend_id") or "")
+    if selected:
+        model_parts = [selected]
+        if backend_id and backend_id != selected:
+            model_parts.append("backend={}".format(backend_id))
+        rows.append(("model", "  ".join(model_parts)))
+
+    # Backend reachability and readiness
+    if r.get("backend_reachable"):
+        be_parts = ["reachable"]
+        if r.get("backend_ready"):
+            be_parts.append("ready")
+            loaded = str(b.get("loaded_model") or "")
+            if loaded:
+                be_parts.append("loaded={}".format(loaded))
+        else:
+            be_parts.append("not-ready")
+        rows.append(("backend", "  ".join(be_parts)))
+    else:
+        rows.append(("backend", "unavailable"))
+        err = str(b.get("error") or "")
+        if err:
+            rows.append(("error", err[:80]))
+        else:
+            for hint in hints:
+                h = str(hint)
+                low = h.lower()
+                if "backend" in low or "llama" in low or "unreachable" in low:
+                    rows.append(("hint", h[:80]))
+                    break
+
+    return rows
+
+
 def _contract_rows(payload: dict) -> List[Tuple[str, str]]:
     if not isinstance(payload, dict):
         return []
@@ -525,7 +588,7 @@ def _path_without_query(path: str) -> str:
 def _is_monitor_poll(path: str) -> bool:
     path = _path_without_query(path)
     return (
-        path in {"/health", "/ready", "/qz/status"}
+        path in {"/health", "/ready", "/qz/status", "/qz/control-plane", "/qz/control-plane/status"}
         or path.startswith("/qz/telemetry")
     )
 
@@ -627,6 +690,8 @@ def _apply_telemetry_event(state: ThoughtState, event: dict, prefix_rows: List[T
             state.parse_error = ""
             for kind, message in payload.get("config_rows") or []:
                 _append_backend(state, str(kind), str(message))
+            for kind, message in payload.get("control_plane_rows") or []:
+                _append_backend(state, str(kind), str(message))
             message = payload.get("message") or "idle reconnected"
             _append_backend(state, "stream", str(message))
         elif status in ("connected", "reconnected"):
@@ -637,6 +702,8 @@ def _apply_telemetry_event(state: ThoughtState, event: dict, prefix_rows: List[T
                 state.status = "ok"
             state.parse_error = ""
             for kind, message in payload.get("config_rows") or []:
+                _append_backend(state, str(kind), str(message))
+            for kind, message in payload.get("control_plane_rows") or []:
                 _append_backend(state, str(kind), str(message))
             if status == "reconnected" or was_unavailable:
                 _append_backend(state, "proxy", "reconnected")
@@ -928,6 +995,9 @@ def load_telemetry_state(limit: int = 200) -> Optional[ThoughtState]:
     state.status = str(telemetry_state.get("status") or "ok")
     for kind, message in load_config_hint_rows():
         _append_backend(state, kind, message)
+    # Primary live proxy/backend/model status from /qz/control-plane.
+    for kind, message in control_plane_rows(control_plane_status()):
+        _append_backend(state, kind, message)
     prefix_rows: List[Tuple[str, str]] = []
     latest_ts = 0.0
     for event in events:
@@ -1044,6 +1114,7 @@ class TelemetryFeed:
                             "status": connection_status,
                             "url": url,
                             "config_rows": load_config_hint_rows(),
+                            "control_plane_rows": control_plane_rows(control_plane_status()),
                         },
                     }
                     saw_unavailable = False
