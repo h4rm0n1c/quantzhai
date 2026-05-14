@@ -297,6 +297,25 @@ class ResponsesStreamRuntime:
     def _emit(self, event_type: str, payload: dict | None = None):
         self.telemetry_emitter.emit(event_type, payload)
 
+    @staticmethod
+    def _safe_preview(value, limit: int) -> str:
+        """Coerce a model-supplied argument value to a bounded string.
+
+        Model-provided JSON fields may be any type. Convert non-strings
+        to a compact JSON representation before truncating so telemetry
+        payload values are always plain strings.
+        """
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value[:limit]
+        if isinstance(value, (list, dict)):
+            try:
+                return json.dumps(value, ensure_ascii=False, separators=(",", ":"))[:limit]
+            except Exception:
+                return ""
+        return str(value)[:limit]
+
     def _check_sandbox_escalation(self, call: dict) -> dict | None:
         """Return a telemetry payload if this outgoing function_call requests
         sandbox escalation (sandbox_permissions == 'require_escalated').
@@ -318,13 +337,12 @@ class ResponsesStreamRuntime:
             return None
         if args.get("sandbox_permissions") != "require_escalated":
             return None
-        cmd = args.get("cmd") or ""
         return {
-            "tool": call.get("name") or "exec_command",
-            "call_id": call.get("call_id") or call.get("id") or "",
+            "tool": str(call.get("name") or "exec_command"),
+            "call_id": str(call.get("call_id") or call.get("id") or ""),
             "sandbox_permissions": "require_escalated",
-            "justification": (args.get("justification") or "")[:200],
-            "cmd_preview": cmd[:80] if cmd else "",
+            "justification": self._safe_preview(args.get("justification"), 200),
+            "cmd_preview": self._safe_preview(args.get("cmd"), 80),
         }
 
     def _emit_stream_event_timing(

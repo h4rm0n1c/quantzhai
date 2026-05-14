@@ -2989,6 +2989,149 @@ class SandboxEscalationDetectionTests(unittest.TestCase):
         self.assertEqual(result["tool"], "some_other_tool")
 
     # ------------------------------------------------------------------
+    # _safe_preview: non-string model-provided argument coercion
+    # ------------------------------------------------------------------
+
+    def test_safe_preview_string_is_used_directly(self):
+        rt = self._make_runtime()
+        self.assertEqual(rt._safe_preview("hello", 10), "hello")
+
+    def test_safe_preview_string_truncated(self):
+        rt = self._make_runtime()
+        self.assertEqual(rt._safe_preview("abcdef", 4), "abcd")
+
+    def test_safe_preview_none_returns_empty_string(self):
+        rt = self._make_runtime()
+        self.assertEqual(rt._safe_preview(None, 80), "")
+
+    def test_safe_preview_int_returns_string(self):
+        rt = self._make_runtime()
+        result = rt._safe_preview(42, 80)
+        self.assertIsInstance(result, str)
+        self.assertEqual(result, "42")
+
+    def test_safe_preview_bool_returns_string(self):
+        rt = self._make_runtime()
+        self.assertIsInstance(rt._safe_preview(True, 80), str)
+
+    def test_safe_preview_list_returns_compact_json_string(self):
+        rt = self._make_runtime()
+        result = rt._safe_preview(["ls", "-la"], 80)
+        self.assertIsInstance(result, str)
+        self.assertIn("ls", result)
+
+    def test_safe_preview_dict_returns_compact_json_string(self):
+        rt = self._make_runtime()
+        result = rt._safe_preview({"key": "val"}, 80)
+        self.assertIsInstance(result, str)
+        self.assertIn("val", result)
+
+    def test_safe_preview_list_truncated_at_limit(self):
+        rt = self._make_runtime()
+        result = rt._safe_preview(["a"] * 100, 20)
+        self.assertLessEqual(len(result), 20)
+
+    # ------------------------------------------------------------------
+    # _check_sandbox_escalation: non-string cmd and justification
+    # ------------------------------------------------------------------
+
+    def test_cmd_as_list_produces_string_cmd_preview(self):
+        rt = self._make_runtime()
+        call = {
+            "type": "function_call",
+            "name": "exec_command",
+            "call_id": "call_list_cmd",
+            "arguments": json.dumps({
+                "cmd": ["sudo", "systemctl", "restart", "nginx"],
+                "sandbox_permissions": "require_escalated",
+            }),
+        }
+        result = rt._check_sandbox_escalation(call)
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result["cmd_preview"], str)
+        self.assertIn("nginx", result["cmd_preview"])
+
+    def test_cmd_as_dict_produces_string_cmd_preview(self):
+        rt = self._make_runtime()
+        call = {
+            "type": "function_call",
+            "name": "exec_command",
+            "call_id": "call_dict_cmd",
+            "arguments": json.dumps({
+                "cmd": {"program": "sudo", "args": ["id"]},
+                "sandbox_permissions": "require_escalated",
+            }),
+        }
+        result = rt._check_sandbox_escalation(call)
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result["cmd_preview"], str)
+
+    def test_cmd_as_int_produces_string_cmd_preview(self):
+        rt = self._make_runtime()
+        call = {
+            "type": "function_call",
+            "name": "exec_command",
+            "call_id": "call_int_cmd",
+            "arguments": json.dumps({
+                "cmd": 0,
+                "sandbox_permissions": "require_escalated",
+            }),
+        }
+        result = rt._check_sandbox_escalation(call)
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result["cmd_preview"], str)
+
+    def test_justification_as_int_produces_string(self):
+        rt = self._make_runtime()
+        call = {
+            "type": "function_call",
+            "name": "exec_command",
+            "call_id": "call_int_just",
+            "arguments": json.dumps({
+                "sandbox_permissions": "require_escalated",
+                "justification": 42,
+            }),
+        }
+        result = rt._check_sandbox_escalation(call)
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result["justification"], str)
+        self.assertEqual(result["justification"], "42")
+
+    def test_justification_as_list_produces_string(self):
+        rt = self._make_runtime()
+        call = {
+            "type": "function_call",
+            "name": "exec_command",
+            "call_id": "call_list_just",
+            "arguments": json.dumps({
+                "sandbox_permissions": "require_escalated",
+                "justification": ["need", "host", "access"],
+            }),
+        }
+        result = rt._check_sandbox_escalation(call)
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result["justification"], str)
+        self.assertIn("host", result["justification"])
+
+    def test_all_payload_fields_are_strings(self):
+        """Regardless of argument types, every telemetry payload field is a str."""
+        rt = self._make_runtime()
+        call = {
+            "type": "function_call",
+            "name": "exec_command",
+            "call_id": "call_mixed",
+            "arguments": json.dumps({
+                "cmd": ["sudo", "id"],
+                "sandbox_permissions": "require_escalated",
+                "justification": 99,
+            }),
+        }
+        result = rt._check_sandbox_escalation(call)
+        self.assertIsNotNone(result)
+        for key, value in result.items():
+            self.assertIsInstance(value, str, f"field '{key}' is {type(value).__name__}, expected str")
+
+    # ------------------------------------------------------------------
     # Integration test: event emitted through the stream loop
     # ------------------------------------------------------------------
 
