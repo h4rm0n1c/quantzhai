@@ -277,15 +277,37 @@ Scripts no longer need to interpret `/v1/responses` errors to decide backend
 truth; the proxy provides structured, actionable rejection payloads. Remote
 `qz-codex` clients receive useful errors without needing local infrastructure.
 
-**Step 7 (future):** Move Codex catalog regeneration entirely into the proxy
+**Step 7 (done — slice 6):** Added `GET /qz/control-plane` — a single
+proxy-owned client/control-plane summary endpoint.
+
+Schema: `qz.control_plane.status.v1`. Fields:
+- `ok`: proxy + catalog ready (backend optional)
+- `status`: "ready" | "initializing" | "backend_unavailable" | "model_not_loaded"
+- `readiness`: map of `proxy_http`, `proxy_ready`, `catalog_ready`, `models_visible`,
+  `backend_reachable`, `backend_ready`, `codex_catalog_ready`
+- `proxy_initialization`: proxy startup snapshot
+- `models`: `count`, `ids` (sorted), `selected`, `selected_backend_id`
+- `backend`: `reachable`, `ready`, `health_status`, `loaded_model`, `loaded_count`,
+  `restart_required`, `error`
+- `codex_catalog`: `path`, `exists`, `updated_by_proxy`
+- `operator_hints`: actionable list, remote-friendly (no Docker assumptions)
+
+The endpoint is safe when the backend is down and always returns JSON.
+Scripts and remote clients no longer need to stitch together truth from `/health`,
+`/v1/models`, `/qz/status`, and runtime JSON files. Future slices can migrate
+`qz-doctor`, `qz-top`, `qz-wait-ready`, and `qz-codex-common` to consume it.
+
+**Step 8 (future):** Move Codex catalog regeneration entirely into the proxy
 `/qz/models/refresh` endpoint. `qz-codex-common` becomes a thin shim that just
 calls the endpoint.
 
-**Step 8 (future, SQLite era):** Merge `var/run/*.json` runtime state into
+**Step 9 (future, SQLite era):** Merge `var/run/*.json` runtime state into
 operational facts stored in the Phase 1 SQLite substrate. `qz-write-runtime-state`
 becomes a thin shim or disappears.
 
 **Remaining under #44 (deferred):**
+- Migrate qz-doctor, qz-top, qz-wait-ready, and qz-codex-common to consume
+  `/qz/control-plane` where useful.
 - Proxy fully owns Codex catalog file generation; `qz-codex-common` opt-in fallback
   can be removed once proxy is reliable for all cases.
 - Audit runtime-state JSON ownership and identify what should later move behind

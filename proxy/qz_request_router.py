@@ -36,6 +36,7 @@ try:
     from .qz_native_tool_output import classify_native_tool_outputs
     from .qz_file_signal import record_tool_call, seed_repeated_read_state
     from .qz_responses_error import build_responses_error_payload, is_deprecated_alias
+    from .qz_control_plane import build_control_plane_status
     from .qz_search_policy import resolve_search_policy_selection
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import (
@@ -75,6 +76,7 @@ except ImportError:
     from qz_native_tool_output import classify_native_tool_outputs
     from qz_file_signal import record_tool_call, seed_repeated_read_state
     from qz_responses_error import build_responses_error_payload, is_deprecated_alias
+    from qz_control_plane import build_control_plane_status
     from qz_search_policy import resolve_search_policy_selection
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import (
@@ -339,6 +341,22 @@ class RequestRouter:
                 "catalog": catalog.to_payload(),
                 "backend": self.handler._backend_models(),
             })
+            return
+
+        if self.handler.path in ("/qz/control-plane", "/qz/control-plane/status"):
+            # Proxy-owned client/control-plane summary. Safe when backend is down.
+            # Answers: proxy ready? catalog ready? models? backend reachable? loaded?
+            # Remote clients do not need local Docker or llama.cpp access.
+            try:
+                payload = build_control_plane_status(self.handler)
+            except Exception as exc:
+                payload = {
+                    "schema": "qz.control_plane.status.v1",
+                    "ok": False,
+                    "status": "error",
+                    "error": str(exc),
+                }
+            self.handler._send_json(200, payload)
             return
 
         self.proxy_raw("GET")
