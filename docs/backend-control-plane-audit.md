@@ -449,8 +449,25 @@ Safe next removal: `var/run/qz-runtime-state.json` + `qz-write-runtime-state`
 can be removed once Phase 1 SQLite operational substrate is in place and
 startup phase telemetry is emitted via the proxy telemetry bus instead.
 
+**Step 15 (done — slice 13):** Migrated `scripts/qz-live-smoke` model visibility
+check to use `qz-wait-ready --catalog --model MODEL` (which consumes
+`/qz/control-plane`) instead of hand-parsing `/v1/models`.
+
+Before: smoke fetched `/v1/models`, parsed IDs in Python, and printed its own
+`FAIL model not visible` + alias hint block inline in the script.
+
+After: smoke calls `qz-wait-ready --catalog --model MODEL --quiet` for the check.
+On failure it re-runs without `--quiet` so proxy-owned diagnostics (available
+models from `models.ids`, operator hints from `operator_hints`) are printed by
+`_print_cp_diagnostics`. No `/v1/models` fetch or custom diagnostic block remains
+in qz-live-smoke for model visibility.
+
+`qz-smoke-repeated-read` does not exist yet. #43 remains the place to add it.
+When added it should call `qz-wait-ready --catalog --model MODEL` as the readiness
+preflight rather than rolling its own.
+
 **Remaining under #44 (deferred):**
-- Migrate qz-live-smoke to consume `/qz/control-plane` where useful.
+- `qz-smoke-repeated-read` from #43: integrate with qz-wait-ready when created.
 - Proxy fully owns Codex catalog file generation; `qz-codex-common` opt-in fallback
   can be removed once proxy is reliable for all cases.
 - Replace `qz-write-runtime-state` launcher trace with proxy startup event telemetry
