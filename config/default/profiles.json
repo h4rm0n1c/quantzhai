@@ -1,0 +1,11 @@
+{
+  "schema": "qz.profiles.v1",
+  "defaults": {
+    "system_prompt_file": "prompts/codex-core-qwenified.md"
+  },
+  "shared_harnesses": {
+    "roleplay-private-thoughts": "Profile reminder: Continue roleplay. Keep internal reasoning, planning, uncertainty, and self-checks private. Reply only in the established character format.",
+    "caveman-ultra-lock": "Caveman ultra locked. Persist. No drift/filler/repeated drafts. Preserve exact tech terms, paths, commands, code, errors, versions, URLs, quotes. Code/artifacts normal style unless asked. Normal clarity for danger/confusion, then resume."
+  },
+  "profiles": {}
+}

@@ -1,0 +1,23 @@
+{
+  "schema": "qz.profiles.v1",
+  "profiles": {
+    "caveman": {
+      "backend": {
+        "gguf": "caveman.gguf",
+        "target_policy": "symlink_or_file"
+      },
+      "runtime": {
+        "context_length": 262144,
+        "default_reasoning_level": "medium"
+      },
+      "prompts": {
+        "append_files": ["config/default/prompts/caveman-mode.md"],
+        "turn_harnesses": ["caveman-ultra-lock"]
+      },
+      "metadata": {
+        "label": "caveman",
+        "notes": "Compact Codex profile. Create var/models/caveman.gguf as a symlink to a real GGUF; routing uses the symlink target while Codex sees caveman."
+      }
+    }
+  }
+}

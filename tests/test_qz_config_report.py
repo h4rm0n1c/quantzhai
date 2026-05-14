@@ -261,5 +261,152 @@ class MemoryDomainReportTests(unittest.TestCase):
                     os.environ[k] = v
 
 
+class ProfilesV1ConfigReportTests(unittest.TestCase):
+    """Tests for qz.profiles.v1 paths and memory domain reporting in effective config."""
+
+    def _setup_env(self, root, var_dir):
+        os.environ["QZ_ROOT"] = str(root)
+        os.environ["QZ_VAR_DIR"] = str(var_dir)
+        os.environ.pop("QZ_MODEL_OVERRIDES", None)
+        os.environ.pop("SEARXNG_POLICY", None)
+        os.environ.pop("SEARXNG_CAPABILITIES", None)
+
+    def test_effective_config_includes_profiles_v1_paths(self):
+        """profiles_default and profiles_user path records are present in the payload."""
+        old_env = {k: os.environ.get(k) for k in ("QZ_ROOT", "QZ_VAR_DIR", "QZ_MODEL_OVERRIDES", "SEARXNG_POLICY", "SEARXNG_CAPABILITIES")}
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                var_dir = root / "var"
+                (root / "config" / "default").mkdir(parents=True)
+                (root / "proxy").mkdir()
+                self._setup_env(root, var_dir)
+
+                payload = effective_config_payload()
+
+                paths = {item["name"]: item for item in payload["paths"]}
+                self.assertIn("profiles_default", paths)
+                self.assertIn("profiles_user", paths)
+                self.assertIn("profiles_default_dir", paths)
+                self.assertIn("profiles_user_dir", paths)
+                self.assertEqual(paths["profiles_default"]["source_layer"], "tracked_default")
+                self.assertEqual(paths["profiles_user"]["source_layer"], "user_override")
+                self.assertEqual(paths["profiles_default"]["classification"], "source_config")
+                self.assertEqual(paths["profiles_user"]["classification"], "local_config")
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_memory_domain_report_reads_v1_profiles(self):
+        """User profiles.json with memory.domain entries appear in the memory_domains report."""
+        old_env = {k: os.environ.get(k) for k in ("QZ_ROOT", "QZ_VAR_DIR", "QZ_MODEL_OVERRIDES", "SEARXNG_POLICY", "SEARXNG_CAPABILITIES")}
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                var_dir = root / "var"
+                (root / "config" / "default").mkdir(parents=True)
+                (root / "proxy").mkdir()
+                user_dir = root / "config" / "user"
+                user_dir.mkdir(parents=True)
+                (user_dir / "profiles.json").write_text(json.dumps({
+                    "schema": "qz.profiles.v1",
+                    "profiles": {
+                        "coder": {
+                            "backend": {"gguf": "coder.gguf"},
+                            "memory": {"domain": "coding"},
+                            "metadata": {"label": "coder"}
+                        },
+                        "writer": {
+                            "backend": {"gguf": "writer.gguf"},
+                            "metadata": {"label": "writer"}
+                        }
+                    }
+                }), encoding="utf-8")
+                self._setup_env(root, var_dir)
+
+                payload = effective_config_payload()
+
+                md = payload["memory_domains"]
+                self.assertEqual(md["profiles"].get("coder.gguf"), "coding")
+                self.assertNotIn("writer.gguf", md["profiles"])
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_memory_domain_report_handles_v1_dir_profiles(self):
+        """User profiles/*.json with memory.domain entries appear in the memory_domains report."""
+        old_env = {k: os.environ.get(k) for k in ("QZ_ROOT", "QZ_VAR_DIR", "QZ_MODEL_OVERRIDES", "SEARXNG_POLICY", "SEARXNG_CAPABILITIES")}
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                var_dir = root / "var"
+                (root / "config" / "default").mkdir(parents=True)
+                (root / "proxy").mkdir()
+                profiles_dir = root / "config" / "user" / "profiles"
+                profiles_dir.mkdir(parents=True)
+                (profiles_dir / "roleplay.json").write_text(json.dumps({
+                    "schema": "qz.profiles.v1",
+                    "profiles": {
+                        "amber": {
+                            "backend": {"gguf": "amber.gguf"},
+                            "memory": {"domain": "roleplay"},
+                            "metadata": {"label": "amber"}
+                        }
+                    }
+                }), encoding="utf-8")
+                (profiles_dir / "coder.json").write_text(json.dumps({
+                    "schema": "qz.profiles.v1",
+                    "profiles": {
+                        "coder": {
+                            "backend": {"gguf": "coder.gguf"},
+                            "memory": {"domain": "coding"},
+                            "metadata": {"label": "coder"}
+                        }
+                    }
+                }), encoding="utf-8")
+                self._setup_env(root, var_dir)
+
+                payload = effective_config_payload()
+
+                md = payload["memory_domains"]
+                self.assertEqual(md["profiles"].get("amber.gguf"), "roleplay")
+                self.assertEqual(md["profiles"].get("coder.gguf"), "coding")
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_profiles_example_path_active_only_with_env_flag(self):
+        """profiles_example path record is active only when QZ_LOAD_EXAMPLE_MODEL_OVERRIDES is set."""
+        old_env = {k: os.environ.get(k) for k in ("QZ_ROOT", "QZ_VAR_DIR", "QZ_MODEL_OVERRIDES", "QZ_LOAD_EXAMPLE_MODEL_OVERRIDES", "SEARXNG_POLICY", "SEARXNG_CAPABILITIES")}
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                var_dir = root / "var"
+                (root / "config" / "default").mkdir(parents=True)
+                (root / "proxy").mkdir()
+                self._setup_env(root, var_dir)
+                os.environ.pop("QZ_LOAD_EXAMPLE_MODEL_OVERRIDES", None)
+
+                payload = effective_config_payload()
+
+                paths = {item["name"]: item for item in payload["paths"]}
+                self.assertFalse(paths["profiles_example"]["active"])
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+
 if __name__ == "__main__":
     unittest.main()

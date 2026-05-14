@@ -241,43 +241,215 @@ def _first_existing_path(*paths: Path) -> Path:
     return paths[0]
 
 
-def _user_override_paths(root: Path, overrides_path: Optional[Path] = None) -> list[Path]:
-    if overrides_path is not None:
-        return [overrides_path]
-    env_path = os.environ.get("QZ_MODEL_OVERRIDES")
-    if isinstance(env_path, str) and env_path.strip():
-        return [Path(env_path).expanduser()]
-    return [root / "config" / "user" / "model-overrides.json"]
+def _profiles_v1_to_manifest(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert a qz.profiles.v1 document to internal manifest format."""
+    manifest: Dict[str, Any] = {"default_key": None, "models": {}}
+
+    defaults = data.get("defaults") or {}
+    shared_harnesses = data.get("shared_harnesses") or {}
+
+    sf = defaults.get("system_prompt_file")
+    if sf:
+        manifest["system_prompt_file"] = sf
+    if shared_harnesses:
+        manifest["turn_harness_definitions"] = dict(shared_harnesses)
+    for src in (data, defaults):
+        pp = src.get("prompt_policy")
+        if isinstance(pp, dict):
+            manifest["prompt_policy"] = pp
+            break
+
+    for slug, bundle in (data.get("profiles") or {}).items():
+        if not isinstance(bundle, dict):
+            continue
+        backend = bundle.get("backend") or {}
+        gguf = backend.get("gguf") or f"{slug}.gguf"
+        runtime = bundle.get("runtime") or {}
+        prompts = bundle.get("prompts") or {}
+        behavior = bundle.get("behavior") or {}
+        memory_conf = bundle.get("memory") or {}
+        meta = bundle.get("metadata") or {}
+
+        overrides: Dict[str, Any] = {}
+
+        label = meta.get("label")
+        if label:
+            overrides["label"] = label
+        if meta.get("notes"):
+            overrides["notes"] = meta["notes"]
+        if meta.get("default"):
+            overrides["default"] = True
+            manifest["default_key"] = gguf
+        if meta.get("priority") is not None:
+            overrides["priority"] = meta["priority"]
+        if meta.get("aliases"):
+            overrides["aliases"] = meta["aliases"]
+
+        ctx = runtime.get("context_length")
+        if ctx is not None:
+            overrides["runtime_context_length"] = ctx
+        rl = runtime.get("default_reasoning_level")
+        if rl:
+            overrides["default_reasoning_level"] = rl
+        acro = runtime.get("allow_client_reasoning_override")
+        if acro is not None:
+            overrides["allow_client_reasoning_override"] = acro
+        fdrl = runtime.get("force_default_reasoning_level")
+        if fdrl is not None:
+            overrides["force_default_reasoning_level"] = fdrl
+        la = runtime.get("launch_args")
+        if la:
+            overrides["launch_args"] = la
+
+        sys_file = prompts.get("system_file")
+        if sys_file:
+            overrides["system_prompt_file"] = sys_file
+        aff = prompts.get("append_files")
+        if aff:
+            overrides["prompt_append_files"] = aff
+        pff = prompts.get("prepend_files")
+        if pff:
+            overrides["prompt_prepend_files"] = pff
+        th = prompts.get("turn_harnesses")
+        if th:
+            overrides["turn_harnesses"] = th
+        if prompts.get("disable") or behavior.get("disable_system_prompt"):
+            overrides["disable_system_prompt"] = True
+        lh = prompts.get("local_harnesses")
+        if isinstance(lh, dict) and lh:
+            existing = manifest.setdefault("turn_harness_definitions", {})
+            existing.update(lh)
+
+        rsf = behavior.get("reasoning_stream_format")
+        if rsf:
+            overrides["reasoning_stream_format"] = rsf
+        hrs = behavior.get("hide_reasoning_stream")
+        if hrs is not None:
+            overrides["hide_reasoning_stream"] = hrs
+
+        domain = memory_conf.get("domain") if isinstance(memory_conf, dict) else None
+        flat_domain = bundle.get("memory_domain")
+        final_domain = domain or flat_domain
+        if isinstance(final_domain, str) and final_domain.strip():
+            overrides["memory_domain"] = final_domain.strip()
+
+        for k in ("system_prompt", "prompt_append", "codex_model_messages"):
+            if k in bundle:
+                overrides[k] = bundle[k]
+
+        manifest["models"][gguf] = overrides
+
+    return manifest
+
+
+def _load_profiles_layer(layer_dir: Path) -> Optional[Tuple[Dict[str, Any], List[str]]]:
+    """
+    Load profiles.json + profiles/*.json from one config layer directory.
+    Returns (manifest_dict, warnings) or None when no profiles files exist.
+    Profiles.json loads before profiles/*.json; duplicates within a layer warn.
+    """
+    profiles_json = layer_dir / "profiles.json"
+    profiles_dir = layer_dir / "profiles"
+
+    has_top = profiles_json.is_file()
+    has_dir = profiles_dir.is_dir() and bool(list(profiles_dir.glob("*.json")))
+
+    if not has_top and not has_dir:
+        return None
+
+    warnings: List[str] = []
+    combined: Dict[str, Any] = {
+        "schema": "qz.profiles.v1",
+        "defaults": {},
+        "shared_harnesses": {},
+        "profiles": {},
+    }
+    seen_slugs: set = set()
+
+    def _merge(data: dict, source: Path) -> None:
+        combined["defaults"].update(data.get("defaults") or {})
+        combined["shared_harnesses"].update(data.get("shared_harnesses") or {})
+        for k in ("prompt_policy",):
+            if k in data:
+                combined[k] = data[k]
+        for slug, bundle in (data.get("profiles") or {}).items():
+            if slug in seen_slugs:
+                warnings.append(
+                    f"duplicate profile slug '{slug}' in same config layer ({source.name})"
+                )
+            seen_slugs.add(slug)
+            combined["profiles"][slug] = bundle
+
+    if has_top:
+        data = load_json(profiles_json)
+        if data:
+            _merge(data, profiles_json)
+
+    if has_dir:
+        for path in sorted(profiles_dir.glob("*.json")):
+            data = load_json(path)
+            if data:
+                _merge(data, path)
+
+    return _profiles_v1_to_manifest(combined), warnings
 
 
 def load_manifest(root: Path, overrides_path: Optional[Path] = None) -> Dict[str, Any]:
-    manifest = {
-        "default_key": None,
-        "models": {},
-    }
-    default_path = _first_existing_path(
-        root / "config" / "default" / "model-overrides.json",
-        root / "config" / "qz-model-overrides.default.json",
-    )
-    loaded = load_json(default_path)
-    if loaded:
-        manifest = deep_merge(manifest, loaded)
+    manifest: Dict[str, Any] = {"default_key": None, "models": {}}
 
+    # Default layer: try profiles.v1 first, fall back to model-overrides.json
+    default_layer = _load_profiles_layer(root / "config" / "default")
+    if default_layer is not None:
+        manifest = deep_merge(manifest, default_layer[0])
+    else:
+        default_path = _first_existing_path(
+            root / "config" / "default" / "model-overrides.json",
+            root / "config" / "qz-model-overrides.default.json",
+        )
+        loaded = load_json(default_path)
+        if loaded:
+            manifest = deep_merge(manifest, loaded)
+
+    # User layer
     runtime_loaded = False
-    for runtime_path in _user_override_paths(root, overrides_path):
-        loaded = load_json(runtime_path)
+    if overrides_path is not None:
+        loaded = load_json(overrides_path)
         if loaded:
             manifest = deep_merge(manifest, loaded)
             runtime_loaded = True
-            break
+    else:
+        env_path = os.environ.get("QZ_MODEL_OVERRIDES")
+        if isinstance(env_path, str) and env_path.strip():
+            loaded = load_json(Path(env_path).expanduser())
+            if loaded:
+                manifest = deep_merge(manifest, loaded)
+                runtime_loaded = True
+        else:
+            user_layer = _load_profiles_layer(root / "config" / "user")
+            if user_layer is not None:
+                manifest = deep_merge(manifest, user_layer[0])
+                runtime_loaded = True
+            else:
+                user_path = root / "config" / "user" / "model-overrides.json"
+                loaded = load_json(user_path)
+                if loaded:
+                    manifest = deep_merge(manifest, loaded)
+                    runtime_loaded = True
+
+    # Example layer (only when env-enabled and no user layer)
     if not runtime_loaded and _truthy_env("QZ_LOAD_EXAMPLE_MODEL_OVERRIDES"):
-        base_path = _first_existing_path(
-            root / "config" / "example" / "model-overrides.json",
-            root / "config" / "qz-model-overrides.example.json",
-        )
-        loaded = load_json(base_path)
-        if loaded:
-            manifest = deep_merge(manifest, loaded)
+        example_layer = _load_profiles_layer(root / "config" / "example")
+        if example_layer is not None:
+            manifest = deep_merge(manifest, example_layer[0])
+        else:
+            base_path = _first_existing_path(
+                root / "config" / "example" / "model-overrides.json",
+                root / "config" / "qz-model-overrides.example.json",
+            )
+            loaded = load_json(base_path)
+            if loaded:
+                manifest = deep_merge(manifest, loaded)
+
     if not isinstance(manifest.get("models"), dict):
         manifest["models"] = {}
     return manifest

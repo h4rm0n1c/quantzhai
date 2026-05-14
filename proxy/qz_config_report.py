@@ -110,6 +110,7 @@ def _resolve_repo_path(root: Path, value: Any) -> Optional[Path]:
 def _iter_prompt_refs(manifest: Dict[str, Any]):
     keys = {
         "system_prompt_file",
+        "system_file",              # qz.profiles.v1
         "codex_base_instructions_file",
         "base_instructions_file",
         "prompt_files",
@@ -118,6 +119,8 @@ def _iter_prompt_refs(manifest: Dict[str, Any]):
         "prompt_prepend_files",
         "prompt_append_files",
         "prompt_replace_files",
+        "append_files",             # qz.profiles.v1
+        "prepend_files",            # qz.profiles.v1
     }
     stack = [manifest]
     while stack:
@@ -182,19 +185,37 @@ def _prompt_file_records(root: Path, paths: List[Path]) -> List[Dict[str, Any]]:
     return records, summary
 
 
-def _memory_domain_report(manifest_paths: List[Path]) -> Dict[str, Any]:
+def _memory_domain_report(config_paths: List[Path]) -> Dict[str, Any]:
     profiles: Dict[str, Any] = {}
-    for path in manifest_paths:
-        manifest = _load_json(path)
-        models = manifest.get("models")
-        if not isinstance(models, dict):
-            continue
-        for key, overrides in models.items():
-            if not isinstance(overrides, dict):
-                continue
-            raw = overrides.get("memory_domain")
-            if isinstance(raw, str) and raw.strip():
-                profiles[key] = raw.strip()
+
+    def _extract(data: dict) -> None:
+        if data.get("schema") == "qz.profiles.v1" or "profiles" in data:
+            for slug, bundle in (data.get("profiles") or {}).items():
+                if not isinstance(bundle, dict):
+                    continue
+                memory = bundle.get("memory") or {}
+                domain = (memory.get("domain") if isinstance(memory, dict) else None) or bundle.get("memory_domain")
+                if isinstance(domain, str) and domain.strip():
+                    backend = bundle.get("backend") or {}
+                    gguf = backend.get("gguf") or f"{slug}.gguf"
+                    profiles[gguf] = domain.strip()
+        else:
+            for key, overrides in (data.get("models") or {}).items():
+                if not isinstance(overrides, dict):
+                    continue
+                raw = overrides.get("memory_domain")
+                if isinstance(raw, str) and raw.strip():
+                    profiles[key] = raw.strip()
+
+    for path in config_paths:
+        if not isinstance(path, Path):
+            path = Path(path)
+        if path.is_dir():
+            for child in sorted(path.glob("*.json")):
+                _extract(_load_json(child))
+        elif path.is_file():
+            _extract(_load_json(path))
+
     return {
         "schema": "qz.memory.domains.v1",
         "profiles": profiles,
@@ -277,6 +298,11 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
         _record("model_overrides_default", default_overrides, source_layer="tracked_default", classification="source_config", active=True),
         _record("model_overrides_user", model_overrides, source_layer="user_override", classification="local_config", env_var="QZ_MODEL_OVERRIDES", default=str(root / "config" / "user" / "model-overrides.json")),
         _record("model_overrides_example", example_overrides, source_layer="tracked_example", classification="example_config", active=os.environ.get("QZ_LOAD_EXAMPLE_MODEL_OVERRIDES", "").strip().lower() in {"1", "true", "yes", "on"}),
+        _record("profiles_default", root / "config" / "default" / "profiles.json", source_layer="tracked_default", classification="source_config"),
+        _record("profiles_default_dir", root / "config" / "default" / "profiles", source_layer="tracked_default", classification="source_config"),
+        _record("profiles_example", root / "config" / "example" / "profiles.json", source_layer="tracked_example", classification="example_config", active=os.environ.get("QZ_LOAD_EXAMPLE_MODEL_OVERRIDES", "").strip().lower() in {"1", "true", "yes", "on"}),
+        _record("profiles_user", root / "config" / "user" / "profiles.json", source_layer="user_override", classification="local_config"),
+        _record("profiles_user_dir", root / "config" / "user" / "profiles", source_layer="user_override", classification="local_config"),
         _record("model_inventory_cache", inventory, source_layer="generated", classification="generated_inventory", env_var="QZ_MODEL_INVENTORY_CACHE", default=str(var_dir / "model-inventory.json")),
         _record("codex_config_template", root / "config" / "example" / "codex-config.toml", source_layer="tracked_example", classification="example_codex_config"),
         _record("codex_catalog_example", root / "config" / "example" / "qwenzhai-models.json", source_layer="tracked_example", classification="example_codex_catalog"),
@@ -304,9 +330,21 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
             note=capture["note"],
         )
     ]
-    prompt_records, prompt_file_summary = _prompt_file_records(root, [default_overrides, model_overrides])
+    prompt_records, prompt_file_summary = _prompt_file_records(root, [
+        default_overrides,
+        model_overrides,
+        root / "config" / "default" / "profiles.json",
+        root / "config" / "user" / "profiles.json",
+    ])
     records.extend(prompt_records)
-    memory_domain_report = _memory_domain_report([default_overrides, model_overrides])
+    memory_domain_report = _memory_domain_report([
+        default_overrides,
+        model_overrides,
+        root / "config" / "default" / "profiles.json",
+        root / "config" / "default" / "profiles",
+        root / "config" / "user" / "profiles.json",
+        root / "config" / "user" / "profiles",
+    ])
 
     warnings = []
     if not capture["enabled"]:

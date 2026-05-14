@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from proxy.qz_model_catalog import ModelCatalog, load_manifest
+from proxy.qz_model_catalog import ModelCatalog, load_manifest, _profiles_v1_to_manifest, _load_profiles_layer
 from proxy.qz_model_router import ModelRouter, profile_backend_error_payload
 from proxy.qz_backend import BackendResponse
 
@@ -646,6 +646,364 @@ class MemoryDomainCatalogTests(unittest.TestCase):
             self.assertIsNotNone(broken)
             self.assertFalse(broken["profile_valid"])
             self.assertEqual(broken["memory_domain"], "coding")
+
+
+class ProfilesV1LoaderTests(unittest.TestCase):
+    """Tests for the qz.profiles.v1 loader in qz_model_catalog."""
+
+    def test_profiles_json_loads_profiles(self):
+        """Basic profiles.json with one profile is converted to internal manifest."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            user_dir = root / "config" / "user"
+            user_dir.mkdir(parents=True)
+            (user_dir / "profiles.json").write_text(json.dumps({
+                "schema": "qz.profiles.v1",
+                "profiles": {
+                    "my-model": {
+                        "backend": {"gguf": "my-model.gguf"},
+                        "runtime": {"context_length": 131072},
+                        "metadata": {"label": "My Model"}
+                    }
+                }
+            }), encoding="utf-8")
+
+            manifest = load_manifest(root)
+
+            self.assertIn("my-model.gguf", manifest["models"])
+            self.assertEqual(manifest["models"]["my-model.gguf"]["label"], "My Model")
+            self.assertEqual(manifest["models"]["my-model.gguf"]["runtime_context_length"], 131072)
+
+    def test_profiles_dir_loads_alphabetically(self):
+        """Files in profiles/ directory are loaded in sorted order."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            profiles_dir = root / "config" / "user" / "profiles"
+            profiles_dir.mkdir(parents=True)
+            (profiles_dir / "zzz.json").write_text(json.dumps({
+                "schema": "qz.profiles.v1",
+                "profiles": {
+                    "zzz-model": {
+                        "backend": {"gguf": "zzz-model.gguf"},
+                        "metadata": {"label": "zzz"}
+                    }
+                }
+            }), encoding="utf-8")
+            (profiles_dir / "aaa.json").write_text(json.dumps({
+                "schema": "qz.profiles.v1",
+                "profiles": {
+                    "aaa-model": {
+                        "backend": {"gguf": "aaa-model.gguf"},
+                        "metadata": {"label": "aaa"}
+                    }
+                }
+            }), encoding="utf-8")
+
+            manifest = load_manifest(root)
+
+            self.assertIn("aaa-model.gguf", manifest["models"])
+            self.assertIn("zzz-model.gguf", manifest["models"])
+            self.assertEqual(manifest["models"]["aaa-model.gguf"]["label"], "aaa")
+            self.assertEqual(manifest["models"]["zzz-model.gguf"]["label"], "zzz")
+
+    def test_default_caveman_split_file_loads(self):
+        """config/default/profiles/caveman.json is loaded as part of the default layer."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            default_profiles_dir = root / "config" / "default" / "profiles"
+            default_profiles_dir.mkdir(parents=True)
+            (default_profiles_dir / "caveman.json").write_text(json.dumps({
+                "schema": "qz.profiles.v1",
+                "profiles": {
+                    "caveman": {
+                        "backend": {"gguf": "caveman.gguf"},
+                        "runtime": {"context_length": 262144, "default_reasoning_level": "medium"},
+                        "metadata": {"label": "caveman"}
+                    }
+                }
+            }), encoding="utf-8")
+
+            manifest = load_manifest(root)
+
+            self.assertIn("caveman.gguf", manifest["models"])
+            self.assertEqual(manifest["models"]["caveman.gguf"]["label"], "caveman")
+            self.assertEqual(manifest["models"]["caveman.gguf"]["runtime_context_length"], 262144)
+            self.assertEqual(manifest["models"]["caveman.gguf"]["default_reasoning_level"], "medium")
+
+    def test_user_split_profile_overrides_default_profile(self):
+        """User profiles/ entry with same slug overrides the default layer entry."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            default_dir = root / "config" / "default" / "profiles"
+            default_dir.mkdir(parents=True)
+            (default_dir / "myprofile.json").write_text(json.dumps({
+                "schema": "qz.profiles.v1",
+                "profiles": {
+                    "myprofile": {
+                        "backend": {"gguf": "myprofile.gguf"},
+                        "metadata": {"label": "default-label"}
+                    }
+                }
+            }), encoding="utf-8")
+            user_dir = root / "config" / "user" / "profiles"
+            user_dir.mkdir(parents=True)
+            (user_dir / "myprofile.json").write_text(json.dumps({
+                "schema": "qz.profiles.v1",
+                "profiles": {
+                    "myprofile": {
+                        "backend": {"gguf": "myprofile.gguf"},
+                        "metadata": {"label": "user-label"}
+                    }
+                }
+            }), encoding="utf-8")
+
+            manifest = load_manifest(root)
+
+            self.assertIn("myprofile.gguf", manifest["models"])
+            self.assertEqual(manifest["models"]["myprofile.gguf"]["label"], "user-label")
+
+    def test_same_layer_duplicate_slug_warns(self):
+        """Duplicate profile slug in the same layer produces a warning."""
+        with tempfile.TemporaryDirectory() as tmp:
+            layer_dir = Path(tmp)
+            profiles_dir = layer_dir / "profiles"
+            profiles_dir.mkdir()
+            (profiles_dir / "a.json").write_text(json.dumps({
+                "schema": "qz.profiles.v1",
+                "profiles": {
+                    "duplicate-slug": {
+                        "backend": {"gguf": "duplicate-slug.gguf"},
+                        "metadata": {"label": "from-a"}
+                    }
+                }
+            }), encoding="utf-8")
+            (profiles_dir / "b.json").write_text(json.dumps({
+                "schema": "qz.profiles.v1",
+                "profiles": {
+                    "duplicate-slug": {
+                        "backend": {"gguf": "duplicate-slug.gguf"},
+                        "metadata": {"label": "from-b"}
+                    }
+                }
+            }), encoding="utf-8")
+
+            result = _load_profiles_layer(layer_dir)
+
+            self.assertIsNotNone(result)
+            manifest, warnings = result
+            self.assertTrue(any("duplicate" in w and "duplicate-slug" in w for w in warnings))
+
+    def test_profile_slug_as_codex_id(self):
+        """Profile slug is the identity shown to Codex; backend.gguf is the routing target."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            user_dir = root / "config" / "user"
+            user_dir.mkdir(parents=True)
+            (user_dir / "profiles.json").write_text(json.dumps({
+                "schema": "qz.profiles.v1",
+                "profiles": {
+                    "my-slug": {
+                        "backend": {"gguf": "actual-file.gguf"},
+                        "metadata": {"label": "my-slug"}
+                    }
+                }
+            }), encoding="utf-8")
+
+            manifest = load_manifest(root)
+
+            # The key in models dict is the GGUF filename, not the slug
+            self.assertIn("actual-file.gguf", manifest["models"])
+            self.assertNotIn("my-slug", manifest["models"])
+
+    def test_backend_gguf_used_as_key(self):
+        """backend.gguf value becomes the models dict key."""
+        data = {
+            "schema": "qz.profiles.v1",
+            "profiles": {
+                "my-profile": {
+                    "backend": {"gguf": "custom-name.gguf"},
+                    "metadata": {"label": "custom"}
+                }
+            }
+        }
+        manifest = _profiles_v1_to_manifest(data)
+        self.assertIn("custom-name.gguf", manifest["models"])
+
+    def test_memory_domain_from_memory_dot_domain(self):
+        """memory.domain in a v1 bundle maps to memory_domain in overrides."""
+        data = {
+            "schema": "qz.profiles.v1",
+            "profiles": {
+                "coder": {
+                    "backend": {"gguf": "coder.gguf"},
+                    "memory": {"domain": "coding"},
+                    "metadata": {"label": "coder"}
+                }
+            }
+        }
+        manifest = _profiles_v1_to_manifest(data)
+        self.assertEqual(manifest["models"]["coder.gguf"]["memory_domain"], "coding")
+
+    def test_missing_memory_domain_resolves_isolated(self):
+        """A profile without memory.domain has no memory_domain key in overrides."""
+        data = {
+            "schema": "qz.profiles.v1",
+            "profiles": {
+                "plain": {
+                    "backend": {"gguf": "plain.gguf"},
+                    "metadata": {"label": "plain"}
+                }
+            }
+        }
+        manifest = _profiles_v1_to_manifest(data)
+        self.assertNotIn("memory_domain", manifest["models"]["plain.gguf"])
+
+    def test_domains_list_not_accepted_in_v1(self):
+        """memory.domain as a list is not accepted; results in no memory_domain key."""
+        data = {
+            "schema": "qz.profiles.v1",
+            "profiles": {
+                "multi": {
+                    "backend": {"gguf": "multi.gguf"},
+                    "memory": {"domain": ["coding", "research"]},
+                    "metadata": {"label": "multi"}
+                }
+            }
+        }
+        manifest = _profiles_v1_to_manifest(data)
+        self.assertNotIn("memory_domain", manifest["models"]["multi.gguf"])
+
+    def test_profiles_v1_fallback_to_old_format(self):
+        """When no profiles files exist, old model-overrides.json still works."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            user_path = root / "config" / "user" / "model-overrides.json"
+            user_path.parent.mkdir(parents=True)
+            user_path.write_text(json.dumps({
+                "models": {
+                    "legacy.gguf": {"label": "legacy-label", "memory_domain": "coding"}
+                }
+            }), encoding="utf-8")
+
+            manifest = load_manifest(root)
+
+            self.assertIn("legacy.gguf", manifest["models"])
+            self.assertEqual(manifest["models"]["legacy.gguf"]["label"], "legacy-label")
+            self.assertEqual(manifest["models"]["legacy.gguf"]["memory_domain"], "coding")
+
+    def test_shared_harnesses_in_profiles_json(self):
+        """shared_harnesses at top level go to turn_harness_definitions in manifest."""
+        data = {
+            "schema": "qz.profiles.v1",
+            "shared_harnesses": {
+                "my-harness": "Remember to stay in character.",
+                "another-harness": "Always be concise."
+            },
+            "profiles": {}
+        }
+        manifest = _profiles_v1_to_manifest(data)
+        self.assertIn("turn_harness_definitions", manifest)
+        self.assertEqual(manifest["turn_harness_definitions"]["my-harness"], "Remember to stay in character.")
+        self.assertEqual(manifest["turn_harness_definitions"]["another-harness"], "Always be concise.")
+
+    def test_no_profiles_files_returns_none(self):
+        """_load_profiles_layer returns None when no profiles files exist in the layer."""
+        with tempfile.TemporaryDirectory() as tmp:
+            layer_dir = Path(tmp)
+            result = _load_profiles_layer(layer_dir)
+            self.assertIsNone(result)
+
+    def test_profiles_json_without_profiles_dir_loads(self):
+        """profiles.json at the top of a layer with no profiles/ subdir loads correctly."""
+        with tempfile.TemporaryDirectory() as tmp:
+            layer_dir = Path(tmp)
+            (layer_dir / "profiles.json").write_text(json.dumps({
+                "schema": "qz.profiles.v1",
+                "profiles": {
+                    "solo": {
+                        "backend": {"gguf": "solo.gguf"},
+                        "metadata": {"label": "solo"}
+                    }
+                }
+            }), encoding="utf-8")
+
+            result = _load_profiles_layer(layer_dir)
+
+            self.assertIsNotNone(result)
+            manifest, warnings = result
+            self.assertIn("solo.gguf", manifest["models"])
+            self.assertEqual(warnings, [])
+
+    def test_default_flag_sets_default_key(self):
+        """metadata.default: true on a profile sets manifest default_key to its gguf."""
+        data = {
+            "schema": "qz.profiles.v1",
+            "profiles": {
+                "my-default": {
+                    "backend": {"gguf": "my-default.gguf"},
+                    "metadata": {"label": "default", "default": True}
+                }
+            }
+        }
+        manifest = _profiles_v1_to_manifest(data)
+        self.assertEqual(manifest["default_key"], "my-default.gguf")
+        self.assertTrue(manifest["models"]["my-default.gguf"]["default"])
+
+    def test_disable_system_prompt_from_prompts_disable(self):
+        """prompts.disable: true maps to disable_system_prompt in overrides."""
+        data = {
+            "schema": "qz.profiles.v1",
+            "profiles": {
+                "blank": {
+                    "backend": {"gguf": "blank.gguf"},
+                    "prompts": {"disable": True}
+                }
+            }
+        }
+        manifest = _profiles_v1_to_manifest(data)
+        self.assertTrue(manifest["models"]["blank.gguf"]["disable_system_prompt"])
+
+    def test_slug_without_backend_gguf_defaults_to_slug_dot_gguf(self):
+        """When backend.gguf is missing, slug + .gguf is used as the key."""
+        data = {
+            "schema": "qz.profiles.v1",
+            "profiles": {
+                "auto-name": {
+                    "metadata": {"label": "auto"}
+                }
+            }
+        }
+        manifest = _profiles_v1_to_manifest(data)
+        self.assertIn("auto-name.gguf", manifest["models"])
+
+    def test_v1_load_and_scan_full_roundtrip(self):
+        """Full roundtrip: profiles.json -> manifest -> scan -> entry with label and memory_domain."""
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"QZ_MODEL_KEY": ""}, clear=False):
+            os.environ.pop("QZ_MODEL_STATE_PATH", None)
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            _write_gguf(model_dir / "mymodel.gguf")
+            user_dir = root / "config" / "user"
+            user_dir.mkdir(parents=True)
+            (user_dir / "profiles.json").write_text(json.dumps({
+                "schema": "qz.profiles.v1",
+                "profiles": {
+                    "mymodel": {
+                        "backend": {"gguf": "mymodel.gguf"},
+                        "runtime": {"context_length": 65536},
+                        "memory": {"domain": "research"},
+                        "metadata": {"label": "My Model", "default": True}
+                    }
+                }
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+            entry, reason = catalog.resolve("mymodel")
+
+            self.assertIsNotNone(entry)
+            self.assertEqual(entry["label"], "My Model")
+            self.assertEqual(entry["memory_domain"], "research")
+            self.assertEqual(entry["runtime_context_length"], 65536)
 
 
 if __name__ == "__main__":
