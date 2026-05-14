@@ -264,5 +264,81 @@ class WorkspaceResolutionTests(unittest.TestCase):
         self.assertIsNone(warning)
 
 
+class CatalogMemoryDomainWiringTests(unittest.TestCase):
+    """
+    Documents the catalog-entry → router → extract_codex_request_context wiring.
+
+    The router does:
+        explicit_domain = selected_model.get("memory_domain")
+        ctx = extract_codex_request_context(headers, body, explicit_memory_domain=explicit_domain)
+
+    These tests verify that contract and the isolation guarantee.
+    """
+
+    def test_catalog_entry_with_memory_domain_flows_through(self):
+        """selected_model.get("memory_domain") == "coding" → ctx.memory_domain == "coding"."""
+        catalog_entry = {"label": "prompt-compiler", "memory_domain": "coding"}
+        explicit_domain = catalog_entry.get("memory_domain")
+        ctx = extract_codex_request_context({}, {}, explicit_memory_domain=explicit_domain)
+        self.assertEqual(ctx.memory_domain, "coding")
+        self.assertIsNone(ctx.memory_domain_warning)
+
+    def test_catalog_entry_without_memory_domain_resolves_isolated(self):
+        """selected_model.get("memory_domain") == None → ctx.memory_domain == "isolated"."""
+        catalog_entry = {"label": "plain-model"}
+        explicit_domain = catalog_entry.get("memory_domain")  # None
+        ctx = extract_codex_request_context({}, {}, explicit_memory_domain=explicit_domain)
+        self.assertEqual(ctx.memory_domain, "isolated")
+        self.assertIsNone(ctx.memory_domain_warning)
+
+    def test_two_catalog_entries_sharing_domain_both_resolve_correctly(self):
+        """Multiple profiles can share the same memory_domain value."""
+        for label in ("prompt-compiler", "caveman"):
+            entry = {"label": label, "memory_domain": "coding"}
+            explicit_domain = entry.get("memory_domain")
+            ctx = extract_codex_request_context({}, {}, explicit_memory_domain=explicit_domain)
+            self.assertEqual(ctx.memory_domain, "coding", f"failed for {label}")
+
+    def test_model_name_like_coding_without_explicit_domain_stays_isolated(self):
+        """A model GGUF named 'coding.gguf' must not grant the coding memory domain."""
+        catalog_entry = {"label": "coding", "memory_domain": None}
+        explicit_domain = catalog_entry.get("memory_domain")  # None
+        body = {"model": "coding.gguf"}
+        ctx = extract_codex_request_context({}, body, explicit_memory_domain=explicit_domain)
+        self.assertEqual(ctx.memory_domain, "isolated")
+
+    def test_tool_names_do_not_grant_memory_domain(self):
+        """Capability set (tools) must not influence memory_domain resolution."""
+        catalog_entry = {"label": "agent", "memory_domain": None}
+        explicit_domain = catalog_entry.get("memory_domain")
+        body = {
+            "model": "agent",
+            "tools": [
+                {"type": "function", "name": "exec_command"},
+                {"type": "function", "name": "write_stdin"},
+                {"type": "web_search"},
+            ],
+        }
+        ctx = extract_codex_request_context({}, body, explicit_memory_domain=explicit_domain)
+        self.assertEqual(ctx.memory_domain, "isolated")
+
+    def test_domains_list_not_accepted_as_explicit_domain(self):
+        """domains:[] must not be accepted; only singular string is valid."""
+        # Our catalog patch already rejects list values by storing None.
+        # Passing a list directly to extract_codex_request_context also falls back to isolated.
+        ctx = extract_codex_request_context({}, {}, explicit_memory_domain=["coding"])
+        self.assertEqual(ctx.memory_domain, "isolated")
+        self.assertIn("Non-string memory_domain type 'list'", ctx.memory_domain_warning)
+
+    def test_catalog_list_value_stored_as_none_resolves_isolated(self):
+        """A list value in overrides is stored as None by the catalog, so isolated at context time."""
+        # build_entry stores None for list values — simulate what the catalog produces:
+        catalog_entry = {"label": "bad-config", "memory_domain": None}
+        explicit_domain = catalog_entry.get("memory_domain")  # None (catalog already rejected list)
+        ctx = extract_codex_request_context({}, {}, explicit_memory_domain=explicit_domain)
+        self.assertEqual(ctx.memory_domain, "isolated")
+        self.assertIsNone(ctx.memory_domain_warning)
+
+
 if __name__ == "__main__":
     unittest.main()

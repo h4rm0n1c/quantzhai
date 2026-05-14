@@ -182,6 +182,29 @@ def _prompt_file_records(root: Path, paths: List[Path]) -> List[Dict[str, Any]]:
     return records, summary
 
 
+def _memory_domain_report(manifest_paths: List[Path]) -> Dict[str, Any]:
+    profiles: Dict[str, Any] = {}
+    for path in manifest_paths:
+        manifest = _load_json(path)
+        models = manifest.get("models")
+        if not isinstance(models, dict):
+            continue
+        for key, overrides in models.items():
+            if not isinstance(overrides, dict):
+                continue
+            raw = overrides.get("memory_domain")
+            if isinstance(raw, str) and raw.strip():
+                profiles[key] = raw.strip()
+    return {
+        "schema": "qz.memory.domains.v1",
+        "profiles": profiles,
+        "note": (
+            "memory_domain is explicit config only. "
+            "Profiles not listed here resolve to isolated (no cross-session or workspace memory)."
+        ),
+    }
+
+
 def _default_search_policy_path(root: Path, script_dir: Path) -> Path:
     for path in (
         root / "config" / "default" / "search-policy.json",
@@ -283,6 +306,7 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
     ]
     prompt_records, prompt_file_summary = _prompt_file_records(root, [default_overrides, model_overrides])
     records.extend(prompt_records)
+    memory_domain_report = _memory_domain_report([default_overrides, model_overrides])
 
     warnings = []
     if not capture["enabled"]:
@@ -324,6 +348,7 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
         "settings": settings,
         "capture": capture,
         "prompt_files": prompt_file_summary,
+        "memory_domains": memory_domain_report,
         "warnings": warnings,
         "proxy_initialization": proxy_initialization,
     }

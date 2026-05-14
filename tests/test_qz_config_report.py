@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import tempfile
@@ -111,6 +112,153 @@ class EffectiveConfigReportTests(unittest.TestCase):
                     os.environ.pop(name, None)
                 else:
                     os.environ[name] = value
+
+
+class MemoryDomainReportTests(unittest.TestCase):
+    """Tests for memory_domains section in the effective config report."""
+
+    def _setup_env(self, root, var_dir):
+        os.environ["QZ_ROOT"] = str(root)
+        os.environ["QZ_VAR_DIR"] = str(var_dir)
+        os.environ.pop("QZ_MODEL_OVERRIDES", None)
+        os.environ.pop("SEARXNG_POLICY", None)
+        os.environ.pop("SEARXNG_CAPABILITIES", None)
+
+    def test_memory_domains_section_present_in_payload(self):
+        old_env = {k: os.environ.get(k) for k in ("QZ_ROOT", "QZ_VAR_DIR", "QZ_MODEL_OVERRIDES", "SEARXNG_POLICY", "SEARXNG_CAPABILITIES")}
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                var_dir = root / "var"
+                (root / "config" / "default").mkdir(parents=True)
+                (root / "proxy").mkdir()
+                self._setup_env(root, var_dir)
+
+                payload = effective_config_payload()
+
+                self.assertIn("memory_domains", payload)
+                md = payload["memory_domains"]
+                self.assertEqual(md["schema"], "qz.memory.domains.v1")
+                self.assertIn("profiles", md)
+                self.assertIn("note", md)
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_explicit_memory_domain_appears_in_report(self):
+        old_env = {k: os.environ.get(k) for k in ("QZ_ROOT", "QZ_VAR_DIR", "QZ_MODEL_OVERRIDES", "SEARXNG_POLICY", "SEARXNG_CAPABILITIES")}
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                var_dir = root / "var"
+                (root / "config" / "default").mkdir(parents=True)
+                (root / "proxy").mkdir()
+                user_dir = root / "config" / "user"
+                user_dir.mkdir(parents=True)
+                (user_dir / "model-overrides.json").write_text(json.dumps({
+                    "models": {
+                        "prompt-compiler.gguf": {"memory_domain": "coding"},
+                        "roleplay-character.gguf": {"memory_domain": "roleplay"},
+                    }
+                }), encoding="utf-8")
+                self._setup_env(root, var_dir)
+
+                payload = effective_config_payload()
+
+                md = payload["memory_domains"]
+                self.assertEqual(md["profiles"].get("prompt-compiler.gguf"), "coding")
+                self.assertEqual(md["profiles"].get("roleplay-character.gguf"), "roleplay")
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_profile_without_memory_domain_absent_from_report(self):
+        old_env = {k: os.environ.get(k) for k in ("QZ_ROOT", "QZ_VAR_DIR", "QZ_MODEL_OVERRIDES", "SEARXNG_POLICY", "SEARXNG_CAPABILITIES")}
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                var_dir = root / "var"
+                (root / "config" / "default").mkdir(parents=True)
+                (root / "proxy").mkdir()
+                user_dir = root / "config" / "user"
+                user_dir.mkdir(parents=True)
+                (user_dir / "model-overrides.json").write_text(json.dumps({
+                    "models": {
+                        "plain.gguf": {"label": "plain"},
+                    }
+                }), encoding="utf-8")
+                self._setup_env(root, var_dir)
+
+                payload = effective_config_payload()
+
+                md = payload["memory_domains"]
+                self.assertNotIn("plain.gguf", md["profiles"])
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_two_profiles_sharing_domain_both_appear_in_report(self):
+        old_env = {k: os.environ.get(k) for k in ("QZ_ROOT", "QZ_VAR_DIR", "QZ_MODEL_OVERRIDES", "SEARXNG_POLICY", "SEARXNG_CAPABILITIES")}
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                var_dir = root / "var"
+                (root / "config" / "default").mkdir(parents=True)
+                (root / "proxy").mkdir()
+                user_dir = root / "config" / "user"
+                user_dir.mkdir(parents=True)
+                (user_dir / "model-overrides.json").write_text(json.dumps({
+                    "models": {
+                        "alpha.gguf": {"memory_domain": "coding"},
+                        "beta.gguf":  {"memory_domain": "coding"},
+                    }
+                }), encoding="utf-8")
+                self._setup_env(root, var_dir)
+
+                payload = effective_config_payload()
+
+                md = payload["memory_domains"]
+                self.assertEqual(md["profiles"].get("alpha.gguf"), "coding")
+                self.assertEqual(md["profiles"].get("beta.gguf"), "coding")
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_memory_domains_report_contains_no_memory_contents(self):
+        """The report is config/policy only — no state, no memory contents."""
+        old_env = {k: os.environ.get(k) for k in ("QZ_ROOT", "QZ_VAR_DIR", "QZ_MODEL_OVERRIDES", "SEARXNG_POLICY", "SEARXNG_CAPABILITIES")}
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                var_dir = root / "var"
+                (root / "config" / "default").mkdir(parents=True)
+                (root / "proxy").mkdir()
+                self._setup_env(root, var_dir)
+
+                payload = effective_config_payload()
+
+                md = payload["memory_domains"]
+                forbidden_keys = {"contents", "memories", "facts", "state", "store", "db"}
+                self.assertTrue(forbidden_keys.isdisjoint(md.keys()),
+                                f"memory_domains report must not expose state: {md.keys()}")
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
 
 
 if __name__ == "__main__":
