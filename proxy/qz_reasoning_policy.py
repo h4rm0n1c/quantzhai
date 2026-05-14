@@ -26,49 +26,42 @@ _SHARED_SAMPLING = {
 REASONING_POLICIES: Dict[str, Dict[str, Any]] = {
     "low": {
         "effort": "low",
-        "description": "One tool call maximum. Direct answer, two sentences max.",
+        "description": "Minimal reasoning. Answer from obvious evidence.",
         "prompt": (
-            "Use at most one tool call to answer. "
-            "Do not follow imports, explore subdirectories, or run a second command unless the first fails. "
-            "Answer directly in two sentences or fewer."
+            "Think briefly. "
+            "Answer from obvious evidence. "
+            "Do not over-investigate."
         ),
         "sampling": dict(_SHARED_SAMPLING),
     },
     "medium": {
         "effort": "medium",
-        "description": "Default coding-agent balance. 3 tool calls max, concise answer.",
+        "description": "Default balance. Reason to correctness, stop when clear.",
         "prompt": (
-            "Use at most 3 tool calls. "
-            "Stop after 3 regardless of task complexity — work with what you have. "
-            "Give a concise answer with brief supporting detail."
+            "Reason enough to be correct. "
+            "Use tools when useful. "
+            "Stop when the answer is clear."
         ),
         "sampling": dict(_SHARED_SAMPLING),
     },
     "high": {
         "effort": "high",
-        "description": "Bounded multi-file investigation. Cross-reference before answering.",
+        "description": "Careful reasoning. Stop on diminishing returns.",
         "prompt": (
-            "Use up to 8 tool calls. "
-            "Read the most relevant files first. "
-            "Cross-reference at least two sources when the answer depends on code behaviour. "
-            "Stop early if the answer is clear. "
-            "Do not chase every possible dependency. "
-            "If uncertainty remains after the budget, state the uncertainty and answer from the evidence gathered. "
-            "Give a concise answer with the key evidence."
+            "Think carefully. "
+            "Check important assumptions. "
+            "Stop on diminishing returns. "
+            "Produce a final answer."
         ),
         "sampling": dict(_SHARED_SAMPLING),
     },
     "xhigh": {
         "effort": "xhigh",
-        "description": "Bounded architecture investigation. Trace dependencies that matter.",
+        "description": "Deeper reasoning for difficult problems. Bounded exploration.",
         "prompt": (
-            "Use up to 16 tool calls. "
-            "Map the relevant area before editing or judging architecture. "
-            "Trace only dependencies that can change the answer. "
-            "Avoid rereading the same file unless it changed or you need a specific line range. "
-            "Stop when further reads are unlikely to change the answer, not when all uncertainty is gone. "
-            "If uncertainty remains after the budget, list the remaining checks instead of continuing. "
-            "Document the important findings and the decision."
+            "Use deeper reasoning for difficult problems. "
+            "Explore alternatives, but remain bounded. "
+            "Produce a final answer."
         ),
         "sampling": dict(_SHARED_SAMPLING),
     },
