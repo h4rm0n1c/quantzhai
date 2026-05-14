@@ -276,27 +276,11 @@ files are loaded alphabetically after the top-level `profiles.json`.
 `qz.profiles.v1`. Do not commit `config/user/` files — they contain private
 local data.
 
-**Profiles with search policy** (`config/user/profiles/research-agent.json`):
-
-```json
-{
-  "schema": "qz.profiles.v1",
-  "profiles": {
-    "research-agent": {
-      "backend": { "gguf": "research-agent.gguf" },
-      "prompts": { "system_file": "prompts/research-agent.md" },
-      "metadata": {
-        "label": "research-agent",
-        "search": { "policy_file": "research-search-policy.json", "default_profile": "deep_research" }
-      }
-    }
-  }
-}
-```
-
-Relative `search.policy_file` paths are resolved from `config/user/`, then the
-repo root, then `config/default/`. The selected policy must still use the same
-`web_search_profiles` shape as `config/default/search-policy.json`.
+**Search routing** is not part of `qz.profiles.v1` yet. Per-profile search policy
+selection remains in the legacy model-overrides config path for now. Current
+global search config lives in `config/default/search-policy.json`; see the Local
+Search section below for setup. Dedicated profile-level search config is tracked
+in issue #39.
 
 **Profiles with turn harnesses** (`config/user/profiles.json`):
 
