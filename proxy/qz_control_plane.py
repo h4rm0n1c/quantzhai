@@ -18,6 +18,11 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+
+try:
+    from .qz_service_status import build_service_status
+except ImportError:
+    from qz_service_status import build_service_status
 from typing import Any
 
 QZ_CONTROL_PLANE_SCHEMA = "qz.control_plane.status.v1"
@@ -171,7 +176,7 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
     overall = _overall_status(readiness)
     ok = proxy_ready and catalog_ready  # backend is optional; ok = proxy+catalog
 
-    return {
+    payload: dict[str, Any] = {
         "schema": QZ_CONTROL_PLANE_SCHEMA,
         "ok": ok,
         "status": overall,
@@ -195,3 +200,7 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
         "codex_catalog": codex_catalog,
         "operator_hints": _operator_hints(readiness, len(model_ids), backend_error),
     }
+    # Additive: canonical service/recovery status derived from this payload.
+    # Does not change existing fields; safe when backend is down.
+    payload["service_status"] = build_service_status(payload)
+    return payload

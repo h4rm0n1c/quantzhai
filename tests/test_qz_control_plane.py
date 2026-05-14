@@ -332,5 +332,34 @@ class CodexCatalogInfoTests(unittest.TestCase):
                     os.environ["CODEX_HOME"] = old
 
 
+class ServiceStatusInControlPlaneTests(unittest.TestCase):
+    """Verify service_status is present in build_control_plane_status output."""
+
+    def test_service_status_field_present_in_cp_payload(self):
+        from proxy.qz_service_status import SERVICE_STATUS_SCHEMA
+        h = _make_handler()
+        p = build_control_plane_status(h)
+        self.assertIn("service_status", p)
+        ss = p["service_status"]
+        self.assertEqual(ss.get("schema"), SERVICE_STATUS_SCHEMA)
+
+    def test_service_status_has_required_fields(self):
+        h = _make_handler()
+        p = build_control_plane_status(h)
+        ss = p["service_status"]
+        for field in ("proxy_state", "catalog_state", "backend_state", "model_state",
+                      "request_admission", "recovery_state", "recoverable", "retryable",
+                      "fatal", "last_error", "operator_action", "operator_hints"):
+            self.assertIn(field, ss, f"missing: {field}")
+
+    def test_existing_cp_fields_unchanged(self):
+        """Adding service_status must not remove any existing top-level fields."""
+        h = _make_handler()
+        p = build_control_plane_status(h)
+        for field in ("schema", "ok", "status", "readiness", "proxy_initialization",
+                      "models", "backend", "codex_catalog", "operator_hints"):
+            self.assertIn(field, p, f"existing field removed: {field}")
+
+
 if __name__ == "__main__":
     unittest.main()

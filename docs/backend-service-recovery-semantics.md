@@ -378,13 +378,15 @@ Current behaviour sourced from code. Canonical state and future action are propo
 
 ## Suggested next slices for #47
 
-### Slice 2: Add `qz.service.status.v1` to `/qz/control-plane`
+### Slice 2 (done): Add `qz.service.status.v1` to `/qz/control-plane`
 
-- Add `proxy/qz_service_status.py` with a `build_service_status(handler)` function.
-- Returns a `qz.service.status.v1` dict using the canonical strings above.
-- Include it inside `/qz/control-plane` response as `"service_status": {...}`.
-- Existing control-plane fields remain unchanged.
-- Add tests: `tests/test_qz_service_status.py`.
+- Added `proxy/qz_service_status.py` with `build_service_status(cp: dict)`.
+- Returns a `qz.service.status.v1` dict using the canonical enum strings defined above.
+- Included inside `/qz/control-plane` response as `"service_status": {...}`.
+- All existing control-plane fields remain unchanged (additive only).
+- Tests: `tests/test_qz_service_status.py` (6 scenario classes, 35+ assertions) and
+  `tests/test_qz_control_plane.py::ServiceStatusInControlPlaneTests`.
+- `build_service_status()` takes the assembled control-plane payload (no double probe).
 
 ### Slice 3: Extend `qz.responses.error.v1`
 
