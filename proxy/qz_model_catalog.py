@@ -383,7 +383,7 @@ def build_entry(path: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
     entry["supported_reasoning_levels"] = supported_reasoning_levels(entry["default_reasoning_level"])
     entry["selected"] = False
     raw_domain = overrides.get("memory_domain")
-    entry["memory_domain"] = raw_domain if isinstance(raw_domain, str) and raw_domain.strip() else None
+    entry["memory_domain"] = raw_domain.strip() if isinstance(raw_domain, str) and raw_domain.strip() else None
     return entry
 
 
@@ -426,7 +426,7 @@ def build_broken_symlink_entry(path: Path, manifest: Dict[str, Any], error: str)
     entry["supported_reasoning_levels"] = supported_reasoning_levels(entry["default_reasoning_level"])
     entry["selected"] = False
     raw_domain = overrides.get("memory_domain")
-    entry["memory_domain"] = raw_domain if isinstance(raw_domain, str) and raw_domain.strip() else None
+    entry["memory_domain"] = raw_domain.strip() if isinstance(raw_domain, str) and raw_domain.strip() else None
     return entry
 
 
