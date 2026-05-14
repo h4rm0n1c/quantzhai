@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""Write QuantZhai runtime truth for status/monitor consumers.
+"""Write a QuantZhai launcher trace snapshot to var/run/qz-runtime-state.json.
 
-This is intentionally usable from shell startup scripts before the proxy has seen
-any model request. It records requested/intended values first, then can merge
-proxy/backend facts as they become available.
+This is a startup breadcrumb written by scripts/qz-up to track launch phases
+(requested, backend-started, proxy-started, backend-healthy, etc.).
+
+IMPORTANT: This file is NOT the live status authority.
+- Live proxy/backend/model status: GET /qz/control-plane
+- Live proxy telemetry: GET /qz/telemetry/recent
+- This file is a transitional launcher trace kept for compatibility while the
+  #44 control-plane migration completes.
+
+Consumers of runtime truth should use /qz/control-plane, not this file.
 """
 
 import argparse
@@ -200,7 +207,13 @@ def merge_proxy_status(state: dict[str, Any]) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="write QuantZhai runtime-state snapshot")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Write a QuantZhai launcher trace snapshot to var/run/qz-runtime-state.json. "
+            "This is NOT the live status authority. "
+            "Use GET /qz/control-plane for live proxy/backend/model status."
+        )
+    )
     parser.add_argument("--phase", default="manual", help="startup phase label")
     parser.add_argument("--source", default="env", help="source label for requested values")
     parser.add_argument("--merge-proxy", action="store_true", help="merge live proxy status when reachable")

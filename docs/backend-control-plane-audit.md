@@ -127,15 +127,27 @@ Identity confusion:
 
 ## Runtime state file ownership
 
-| File | Writer | Reader | Purpose |
-|---|---|---|---|
-| `var/run/qz-runtime-state.json` | `scripts/qz-write-runtime-state` | proxy, monitors | Startup/phase truth |
-| `var/model-inventory.json` | proxy (background init + /qz/models/refresh) | proxy, qz-codex fallback | Scanned model list |
-| `var/model-state.json` | proxy model router | proxy startup, /qz/status | Last selected model |
-| `var/backend-state.json` | proxy model router | proxy startup, /qz/status | Backend health cache |
-| `var/codex-home/model-catalogs/*.json` | qz_codex_catalog.py (via proxy or Python fallback) | Codex CLI | Codex model picker |
-| `var/codex-home/config.toml` | qz-codex-common (copied from example once) | Codex CLI | Codex config |
-| `var/captures/*` | proxy (when QZ_CAPTURE_MODE != off) | debug / replay | Request captures |
+Slice 12 audit (2026-05-15): updated to reflect control-plane migration.
+
+| File | Writer | Reader | Live authority? | Fate |
+|---|---|---|---|---|
+| `var/run/qz-runtime-state.json` | `scripts/qz-write-runtime-state` (called by `qz-up`) | `qz_config_report.py` (path record only) | **NO** — launcher trace | Legacy breadcrumb; no live consumer reads it for decisions. Remove after #44 finishes. |
+| `scripts/qz-write-runtime-state` | `qz-up` | — | **NO** | Launcher trace writer. Docstring downgraded. Remove or convert to startup event telemetry later. |
+| `var/model-inventory.json` | proxy (background init + /qz/models/refresh) | proxy, qz-codex fallback | proxy-internal | Keep: active catalog cache |
+| `var/model-state.json` | proxy model router | proxy startup (`load_last_selected_model`), `/qz/status` | proxy-internal fallback | Keep: restart persistence |
+| `var/backend-state.json` | proxy model router | proxy startup, `/qz/status` | proxy-internal fallback | Keep: restart persistence |
+| `var/codex-home/model-catalogs/*.json` | qz_codex_catalog.py (via proxy or Python fallback) | Codex CLI | Codex-facing | Keep |
+| `var/codex-home/config.toml` | qz-codex-common (copied from example once) | Codex CLI | Codex-facing | Keep |
+| `var/captures/*` | proxy (when QZ_CAPTURE_MODE != off) | debug / replay | debug only | Keep |
+
+Key finding: `var/run/qz-runtime-state.json` has **no live consumer** that makes routing or status decisions from it. `qz_config_report.py` lists it as a path record for human inspection via `/qz/config/effective`, but no proxy code reads it for routing. It is already effectively just a trace file.
+
+`var/model-state.json` and `var/backend-state.json` are different: the proxy actively reads them at startup for restart persistence. They are proxy-internal and are NOT deprecated.
+
+Live status authority:
+- **GET /qz/control-plane** — proxy-owned, schema `qz.control_plane.status.v1`
+- **GET /qz/status** — proxy-owned, legacy consumers still supported
+- `var/run/qz-runtime-state.json` — NOT an authority; launcher trace only
 
 ---
 
@@ -412,12 +424,37 @@ vs. the proxy being unreachable entirely.
 The catalog_updated == true requirement and `QZ_CODEX_ALLOW_LOCAL_CATALOG_FALLBACK`
 opt-in are unchanged.
 
+**Step 14 (done — slice 12):** Audited and downgraded runtime-state JSON.
+
+Audit finding: `var/run/qz-runtime-state.json` has no live consumer making
+routing or status decisions from it. It is a launcher trace only. `qz_config_report.py`
+lists it as a path record for human inspection; no proxy routing code reads it.
+
+Changes:
+- `scripts/qz-write-runtime-state` docstring updated from "runtime truth for
+  status/monitor consumers" to "launcher trace snapshot; NOT the live status
+  authority; use GET /qz/control-plane."
+- argparse description updated with the same clarification.
+- `scripts/qz-up`: comment added above `write_runtime_state()` shell function
+  clarifying it is a launcher trace, not status authority.
+- `docs/backend-control-plane-audit.md`: runtime state file ownership table
+  updated with `Live authority?` column and fate notes.
+
+NOT deprecated/removed (still active proxy-internal files):
+- `var/model-state.json` — proxy reads at startup for last-selected-model restart
+- `var/backend-state.json` — proxy reads at startup for backend state restart
+- `QZ_MODEL_STATE_PATH` / `QZ_BACKEND_STATE_PATH` — active proxy env vars
+
+Safe next removal: `var/run/qz-runtime-state.json` + `qz-write-runtime-state`
+can be removed once Phase 1 SQLite operational substrate is in place and
+startup phase telemetry is emitted via the proxy telemetry bus instead.
+
 **Remaining under #44 (deferred):**
 - Migrate qz-live-smoke to consume `/qz/control-plane` where useful.
 - Proxy fully owns Codex catalog file generation; `qz-codex-common` opt-in fallback
   can be removed once proxy is reliable for all cases.
-- Audit runtime-state JSON ownership and identify what should later move behind
-  /qz/* or Phase 1 SQLite.
+- Replace `qz-write-runtime-state` launcher trace with proxy startup event telemetry
+  once Phase 1 SQLite is in place.
 - Bring scripts/qz-smoke-repeated-read from #43 onto qz-wait-ready once that
   script exists.
 - Continue identifying script/proxy data-flow duplication and convert only tiny,

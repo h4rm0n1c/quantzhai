@@ -21,6 +21,9 @@ Environment:
 EOF
 }
 
+# write_launcher_trace writes a startup phase breadcrumb to
+# var/run/qz-runtime-state.json. This is NOT live status authority;
+# use /qz/control-plane for live proxy/backend/model state.
 write_runtime_state() {
   python3 "$QZ_ROOT/scripts/qz-write-runtime-state" "$@" >/dev/null || true
 }
