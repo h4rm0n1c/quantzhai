@@ -2,6 +2,7 @@
 import json
 import os
 import time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -98,6 +99,16 @@ except ImportError:
         write_dual_capture,
         write_request_capture,
     )
+
+
+SAFE_TRIGGER_ACTIONS: frozenset = frozenset({"refresh_catalog", "clear_failure"})
+UNIMPLEMENTED_TRIGGER_ACTIONS: frozenset = ALLOWED_RECOVERY_ACTIONS - SAFE_TRIGGER_ACTIONS
+RECOVERY_TRIGGER_SCHEMA = "qz.recovery.trigger.v1"
+
+_TRIGGER_WARNINGS: dict = {
+    "refresh_catalog": "Refreshing the catalog does not restart the backend.",
+    "clear_failure":   "Clearing failure state does not start or restart the backend.",
+}
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -472,6 +483,274 @@ class RequestRouter:
         except Exception:
             return False
 
+    def _emit_recovery_event(self, event_type: str, payload: dict) -> None:
+        """Emit a recovery telemetry event. No-ops safely if telemetry unavailable."""
+        try:
+            self.handler.telemetry.emit(event_type, payload)
+        except Exception:
+            pass
+
+    def _get_recovery_status_snapshot(self) -> dict | None:
+        """Build a current qz.recovery.status.v1 snapshot for pre/post_status fields."""
+        try:
+            cp = build_control_plane_status(self.handler)
+            ss = cp.get("service_status") or {}
+            rs = getattr(self.handler, "recovery_state", RECOVERY_STATE)
+            runtime_snap = rs.snapshot() if rs is not None else None
+            return build_recovery_status(ss, runtime_state=runtime_snap)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _build_trigger_response(
+        action: str,
+        request_id: str,
+        accepted: bool,
+        pre_status: dict | None,
+        post_status: dict | None,
+        operator_warning: str = "",
+        telemetry_event: str = "",
+    ) -> dict:
+        """Build a qz.recovery.trigger.v1 response payload."""
+        return {
+            "schema": RECOVERY_TRIGGER_SCHEMA,
+            "accepted": accepted,
+            "action": action,
+            "dry_run": False,
+            "request_id": request_id,
+            "pre_status": pre_status,
+            "post_status": post_status,
+            "operator_warning": operator_warning,
+            "telemetry_event": telemetry_event,
+        }
+
+    def _do_refresh_catalog(self) -> tuple[bool, str]:
+        """Execute catalog refresh: rescan + regenerate Codex catalog.
+
+        Does not call Docker. Does not modify backend or model process state.
+        Returns (success, error_message).
+        """
+        try:
+            if not self._proxy_startup_ready():
+                return False, "proxy not ready for catalog refresh"
+            catalog = self.handler._model_catalog()
+            catalog.refresh()
+            self._refresh_codex_catalog(catalog)
+            return True, ""
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def _do_clear_failure(rs) -> tuple[bool, str]:
+        """Clear in-memory recovery failure state.
+
+        Clears RECOVERY_STATE only (slice 9 scope). Does not modify model_load_state,
+        backend state files, var/model-state.json, or any process state.
+        Returns (success, error_message).
+        """
+        try:
+            rs.clear()
+            return True, ""
+        except Exception as exc:
+            return False, str(exc)
+
+    def _handle_recovery_trigger(self) -> None:
+        """Handle POST /qz/recovery/trigger — state-changing recovery actions.
+
+        Only refresh_catalog and clear_failure are implemented in slice 9.
+        Requires QZ_RECOVERY_ACTIONS=1 and a local (loopback) request when
+        QZ_RECOVERY_BIND_LOCAL_ONLY=1 (the default).
+
+        No Docker calls. No backend/model restart. No automatic recovery loops.
+        """
+        length = int(self.handler.headers.get("Content-Length", "0") or "0")
+        raw = self.handler.rfile.read(length) if length else b""
+
+        # --- Parse body ---
+        try:
+            body = json.loads(raw.decode("utf-8")) if raw.strip() else {}
+        except Exception as exc:
+            self.handler._send_json(400, self._recovery_error_payload(
+                "invalid_json",
+                f"Request body is not valid JSON: {exc}",
+                blocked_by="bad_request",
+            ))
+            return
+
+        if not isinstance(body, dict):
+            self.handler._send_json(400, self._recovery_error_payload(
+                "invalid_json",
+                "Request body must be a JSON object.",
+                blocked_by="bad_request",
+            ))
+            return
+
+        # --- Authority check (must be first gate) ---
+        authority = os.environ.get("QZ_RECOVERY_ACTIONS", "0").strip() == "1"
+        if not authority:
+            self._emit_recovery_event("recovery_trigger_rejected", {
+                "source": "recovery_trigger",
+                "reason": "authority_disabled",
+                "action": body.get("action", ""),
+            })
+            self.handler._send_json(403, self._recovery_error_payload(
+                "authority_disabled",
+                "QZ_RECOVERY_ACTIONS is not set to 1; state-changing recovery is disabled. "
+                "Set QZ_RECOVERY_ACTIONS=1 to enable.",
+                action=str(body.get("action") or ""),
+                blocked_by="authority",
+            ))
+            return
+
+        # --- Locality check ---
+        bind_local = os.environ.get("QZ_RECOVERY_BIND_LOCAL_ONLY", "1").strip() != "0"
+        if bind_local and not self._is_local_request(self.handler):
+            self._emit_recovery_event("recovery_trigger_rejected", {
+                "source": "recovery_trigger",
+                "reason": "non_local_request",
+                "action": body.get("action", ""),
+            })
+            self.handler._send_json(403, self._recovery_error_payload(
+                "non_local_request",
+                "QZ_RECOVERY_BIND_LOCAL_ONLY is enabled; trigger requires a local (loopback) request.",
+                action=str(body.get("action") or ""),
+                blocked_by="authority",
+            ))
+            return
+
+        # --- Extract fields ---
+        action = str(body.get("action") or "")
+        reason = str(body.get("reason") or "")
+        force  = bool(body.get("force", False))
+
+        if not action:
+            self.handler._send_json(400, self._recovery_error_payload(
+                "missing_action",
+                "Request body must include an 'action' field.",
+                blocked_by="bad_request",
+            ))
+            return
+
+        if not reason:
+            self.handler._send_json(400, self._recovery_error_payload(
+                "missing_reason",
+                "Request body must include a 'reason' field explaining why the action is needed.",
+                action=action,
+                blocked_by="bad_request",
+            ))
+            return
+
+        # --- Action validation ---
+        if action not in ALLOWED_RECOVERY_ACTIONS:
+            self.handler._send_json(400, self._recovery_error_payload(
+                "unknown_action",
+                f"Unknown action {action!r}. Allowed: {sorted(ALLOWED_RECOVERY_ACTIONS)}.",
+                action=action,
+                blocked_by="unknown_action",
+            ))
+            return
+
+        if action in UNIMPLEMENTED_TRIGGER_ACTIONS:
+            self.handler._send_json(409, self._recovery_error_payload(
+                "action_not_implemented",
+                f"Action {action!r} is not implemented in this trigger slice. "
+                "Implemented actions: refresh_catalog, clear_failure. "
+                "Restart/reload actions require active-request safety and are deferred.",
+                action=action,
+                blocked_by="state",
+            ))
+            return
+
+        # force=true is not valid for safe (non-interrupt) actions
+        if force:
+            self.handler._send_json(400, self._recovery_error_payload(
+                "force_not_allowed",
+                f"force=true is not allowed for {action!r}; "
+                "it applies only to interrupt actions (restart_backend, reload_selected_model).",
+                action=action,
+                blocked_by="bad_request",
+            ))
+            return
+
+        # --- Runtime state checks ---
+        rs = getattr(self.handler, "recovery_state", RECOVERY_STATE)
+
+        if rs.is_recovery_in_progress():
+            self.handler._send_json(423, self._recovery_error_payload(
+                "recovery_in_progress",
+                "Another recovery action is already in progress; wait for it to complete.",
+                action=action,
+                blocked_by="state",
+            ))
+            return
+
+        if rs.is_backoff_active(action):
+            self.handler._send_json(429, self._recovery_error_payload(
+                "backoff_active",
+                f"Backoff or manual_required is active for {action!r}; "
+                "retry after the backoff window expires or call clear_failure.",
+                action=action,
+                blocked_by="backoff",
+            ))
+            return
+
+        # --- Execute ---
+        request_id = f"rec-{uuid.uuid4().hex[:12]}"
+        pre_status = self._get_recovery_status_snapshot()
+
+        base_event: dict = {
+            "source": "recovery_trigger",
+            "request_id": request_id,
+            "action": action,
+            "reason": reason,
+            "pre_recovery_status": pre_status,
+            "operator_action": action,
+            "local_operator_required": True,
+            "error": None,
+        }
+        self._emit_recovery_event("recovery_trigger_requested", base_event)
+
+        rs.mark_started(action, request_id=request_id)
+        self._emit_recovery_event("recovery_action_started", base_event)
+
+        try:
+            if action == "refresh_catalog":
+                ok, error = self._do_refresh_catalog()
+            elif action == "clear_failure":
+                ok, error = self._do_clear_failure(rs)
+            else:
+                ok, error = False, f"Unhandled action: {action!r}"
+        except Exception as exc:
+            ok, error = False, str(exc)
+
+        if ok:
+            rs.mark_completed(action)
+            post_status = self._get_recovery_status_snapshot()
+            self._emit_recovery_event("recovery_action_completed", {
+                **base_event,
+                "post_recovery_status": post_status,
+            })
+            self.handler._send_json(200, self._build_trigger_response(
+                action=action,
+                request_id=request_id,
+                accepted=True,
+                pre_status=pre_status,
+                post_status=post_status,
+                operator_warning=_TRIGGER_WARNINGS.get(action, ""),
+                telemetry_event="recovery_action_completed",
+            ))
+        else:
+            rs.mark_failed(action, error)
+            self._emit_recovery_event("recovery_action_failed", {
+                **base_event, "error": error,
+            })
+            self.handler._send_json(500, self._recovery_error_payload(
+                "action_failed",
+                f"Action {action!r} failed unexpectedly: {error}",
+                action=action,
+                blocked_by="state",
+            ))
+
     def _handle_recovery_plan(self) -> None:
         """Handle POST /qz/recovery/plan — dry-run feasibility planner.
 
@@ -568,6 +847,10 @@ class RequestRouter:
 
         if self.handler.path == "/qz/recovery/plan":
             self._handle_recovery_plan()
+            return
+
+        if self.handler.path == "/qz/recovery/trigger":
+            self._handle_recovery_trigger()
             return
 
         if self.handler.path == "/qz/models/refresh":

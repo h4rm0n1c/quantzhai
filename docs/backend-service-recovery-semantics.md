@@ -495,6 +495,20 @@ Integration:
 
 Tests: `tests/test_qz_recovery_state.py` — 69 assertions.
 
+### Slice 9 (done): First safe trigger actions
+
+Added `POST /qz/recovery/trigger` (state-changing, gated).
+
+Implemented: `refresh_catalog` (rescan + Codex catalog), `clear_failure` (clear RECOVERY_STATE).
+Blocked with 409: `restart_backend`, `start_backend`, `reload_selected_model`, `select_model`.
+Gates: `QZ_RECOVERY_ACTIONS=1` (403), `QZ_RECOVERY_BIND_LOCAL_ONLY=1` default (403),
+`reason` required (400), `force=true` rejected (400), backoff/in_progress checked (429/423).
+Response: `qz.recovery.trigger.v1` with `accepted`, `pre_status`, `post_status`.
+Telemetry: `recovery_trigger_requested`, `recovery_action_started`, `recovery_action_completed`,
+`recovery_action_failed`, `recovery_trigger_rejected`.
+
+Still missing: active request tracking, restart actions, durable state (#2 SQLite). #47 open.
+
 ---
 
 ## Open questions

@@ -606,14 +606,56 @@ Integration points:
 
 Tests: `tests/test_qz_recovery_state.py` — 14 test classes, 69 assertions.
 
-### Slice 9: First safe state-changing action
+### Slice 9 (done): First safe state-changing actions
 
-- Implement `POST /qz/recovery/trigger` with `refresh_catalog` and `clear_failure` only.
-- Apply `QZ_RECOVERY_ACTIONS` gate and `QZ_RECOVERY_BIND_LOCAL_ONLY` check.
-- Emit `recovery_trigger_requested`, `recovery_action_started`, `recovery_action_completed`
-  telemetry events.
-- Do not implement `restart_backend` or `start_backend` yet.
-- Tests: HTTP-level assertions for 403, 200/202, 400.
+Added `POST /qz/recovery/trigger` in `proxy/qz_request_router.py`.
+
+**Implemented actions:** `refresh_catalog`, `clear_failure` only.
+
+**Blocked (409):** `restart_backend`, `start_backend`, `reload_selected_model`, `select_model`
+— message: "action_not_implemented_in_this_slice; restart/reload deferred to future slices."
+
+HTTP gates (in order):
+1. **403** `authority_disabled` — `QZ_RECOVERY_ACTIONS != "1"` (checked before action validation)
+2. **403** `non_local_request` — `QZ_RECOVERY_BIND_LOCAL_ONLY=1` (default) and non-loopback client
+3. **400** `missing_action` / `missing_reason` / `unknown_action` / `force_not_allowed`
+4. **409** `action_not_implemented` — known but not-yet-implemented actions
+5. **423** `recovery_in_progress` — another action is already running
+6. **429** `backoff_active` — per-action backoff or `manual_required` is active
+7. **200** success → `qz.recovery.trigger.v1` with `accepted=true`, `pre_status`, `post_status`
+8. **500** `action_failed` — action raised unexpected exception
+
+Request body: `action` (required), `reason` (required), `force` (must be absent/false for safe actions), `confirm` (skipped in this slice).
+
+`force=true` is rejected with 400 on `refresh_catalog` and `clear_failure` — those actions
+don't interrupt requests and don't need it.
+
+Telemetry events emitted:
+- `recovery_trigger_requested` — request accepted for processing
+- `recovery_action_started` — action begins (after all checks pass)
+- `recovery_action_completed` — action succeeded
+- `recovery_action_failed` — action raised exception
+- `recovery_trigger_rejected` — authority/locality checks failed
+
+New constants in `qz_request_router.py`:
+- `SAFE_TRIGGER_ACTIONS = frozenset({"refresh_catalog", "clear_failure"})`
+- `UNIMPLEMENTED_TRIGGER_ACTIONS = ALLOWED_RECOVERY_ACTIONS - SAFE_TRIGGER_ACTIONS`
+- `RECOVERY_TRIGGER_SCHEMA = "qz.recovery.trigger.v1"`
+
+New helpers in `RequestRouter`:
+- `_emit_recovery_event(event_type, payload)` — no-ops safely if telemetry unavailable
+- `_get_recovery_status_snapshot()` — builds `qz.recovery.status.v1` for pre/post_status
+- `_build_trigger_response(action, request_id, ...)` — static, builds trigger.v1 payload
+- `_do_refresh_catalog()` — calls existing `catalog.refresh()` + `_refresh_codex_catalog(catalog)`
+- `_do_clear_failure(rs)` — calls `rs.clear()` (in-memory only; no file mutation)
+
+**Gaps / not yet done:**
+- `active_requests` tracking: still `None` — restart actions cannot safely gate on this
+- Restart actions: deferred to slice 10 or later
+- Durable attempt history: requires #2 SQLite
+- `QZ_RECOVERY_CONFIRM_PHRASE`: skipped for safe actions in slice 9
+
+Tests: `tests/test_qz_recovery_trigger.py` — 7 test classes, 34 assertions (helpers and constants only; HTTP route tested via manual curl).
 
 ### Slice 10: `restart_backend` — only after slices 8 and 9 are stable
 
