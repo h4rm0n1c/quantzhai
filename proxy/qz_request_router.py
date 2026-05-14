@@ -1071,6 +1071,18 @@ class RequestRouter:
             body["metadata"] = metadata
 
             if upstream_path == "/v1/responses":
+                # Observe raw incoming native tool output BEFORE any normalization.
+                # Normalization (microcompact, normalize_responses_input_for_qwen) may
+                # rewrite or replace function_call_output items, losing the original
+                # output text that classifiers need. Read-only: no mutation.
+                _raw_input = body.get("input")
+                if isinstance(_raw_input, list):
+                    for _obs_event, _obs_payload in classify_native_tool_outputs(_raw_input):
+                        try:
+                            self.handler.telemetry.emit(_obs_event, {**_obs_payload, "request_id": request_id})
+                        except Exception:
+                            pass
+
                 body = self.handler._model_router().inject_runtime_state(body, client_model)
                 ensure_apply_patch_tool_policy(body, overwrite=True)
                 apply_patch_output_style = _apply_patch_output_style(body)
@@ -1100,14 +1112,6 @@ class RequestRouter:
                             return
                 body = normalize_responses_input_for_qwen(body, selected_model=selected_model)
                 body = normalize_tools_for_llamacpp(body)
-
-                # Observe incoming native tool output for classifiable failure patterns.
-                # Read-only: body and input items are not mutated by classification.
-                for _obs_event, _obs_payload in classify_native_tool_outputs(body.get("input") or []):
-                    try:
-                        self.handler.telemetry.emit(_obs_event, {**_obs_payload, "request_id": request_id})
-                    except Exception:
-                        pass
 
                 prompt_contract = self._prompt_contract(
                     body,

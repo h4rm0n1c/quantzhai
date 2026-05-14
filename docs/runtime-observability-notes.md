@@ -11,9 +11,20 @@ Date: 2026-04-29
   (≤80 chars), and `justification` (≤200 chars). `qz-thoughts` renders this as
   an `escalation` activity row.
 
+- **Sandbox escalation signal visibility:** `tool_escalation_requested` is emitted
+  inside `ResponsesStreamRuntime` when the MODEL's outgoing SSE stream contains a
+  function_call with `sandbox_permissions: "require_escalated"`. This requires
+  `stream: true` from the client. For non-streaming requests, the outgoing
+  function_call is part of the buffered JSON response and the streaming hook does
+  not run — `tool_escalation_requested` will not fire for that hop.
+
 - **Incoming native tool output observation (Slice 2 — textual classifier):**
-  The proxy scans `function_call_output` items in the incoming request body
-  before forwarding to the model. This is read-only — the request is not mutated.
+  The proxy scans `function_call_output` items in the **raw incoming request body**
+  before forwarding to the model. The observer must run before normalization
+  (`normalize_responses_input_for_qwen`, `_microcompact_old_tool_results`) because
+  those transforms may rewrite or drop `function_call_output` items (e.g. microcompaction
+  converts old tool results to assistant message placeholders). Classification runs
+  read-only — the request is not mutated.
   Conservative classifiers match specific high-signal strings and emit telemetry:
 
   | Classifier | Trigger string | Event | Confidence |
