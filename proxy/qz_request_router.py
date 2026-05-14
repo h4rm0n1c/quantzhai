@@ -104,12 +104,17 @@ except ImportError:
 
 
 SAFE_TRIGGER_ACTIONS: frozenset = frozenset({"refresh_catalog", "clear_failure"})
-UNIMPLEMENTED_TRIGGER_ACTIONS: frozenset = ALLOWED_RECOVERY_ACTIONS - SAFE_TRIGGER_ACTIONS
+DANGEROUS_TRIGGER_ACTIONS: frozenset = frozenset({"restart_backend"})
+IMPLEMENTED_TRIGGER_ACTIONS: frozenset = SAFE_TRIGGER_ACTIONS | DANGEROUS_TRIGGER_ACTIONS
+UNIMPLEMENTED_TRIGGER_ACTIONS: frozenset = ALLOWED_RECOVERY_ACTIONS - IMPLEMENTED_TRIGGER_ACTIONS
 RECOVERY_TRIGGER_SCHEMA = "qz.recovery.trigger.v1"
 
 _TRIGGER_WARNINGS: dict = {
     "refresh_catalog": "Refreshing the catalog does not restart the backend.",
     "clear_failure":   "Clearing failure state does not start or restart the backend.",
+    "restart_backend": (
+        "Restarting the backend will interrupt active requests and requires a model reload afterward."
+    ),
 }
 
 
@@ -507,38 +512,55 @@ class RequestRouter:
     def _confirm_phrase_required(action: str) -> bool:
         """Return True when a confirmation phrase is required for this action.
 
-        A phrase is required when:
-        - QZ_RECOVERY_CONFIRM_PHRASE is set (non-empty), AND
-        - the action is dangerous (not in SAFE_TRIGGER_ACTIONS).
-
-        Safe actions (refresh_catalog, clear_failure) never require the phrase
-        so that they remain low-friction for the operator.
+        - Safe actions (refresh_catalog, clear_failure): never require phrase.
+        - Dangerous actions (restart_backend): always require phrase, regardless of env.
+          The env var QZ_RECOVERY_CONFIRM_PHRASE must also be set before they proceed.
+        - Other actions: required only when env phrase is set.
         """
-        if not os.environ.get("QZ_RECOVERY_CONFIRM_PHRASE", "").strip():
+        if action in SAFE_TRIGGER_ACTIONS:
             return False
-        return action not in SAFE_TRIGGER_ACTIONS
+        if action in DANGEROUS_TRIGGER_ACTIONS:
+            return True
+        return bool(os.environ.get("QZ_RECOVERY_CONFIRM_PHRASE", "").strip())
 
     @staticmethod
     def _confirm_phrase_matches(body: dict, action: str) -> tuple[bool, str]:
-        """Validate the confirmation phrase in the request body.
+        """Validate the confirmation phrase for the requested action.
 
         Returns (ok, error_message).
-        ok=True when confirmation is not required or the phrase matches exactly.
-        ok=False when the phrase is required but missing or wrong.
+        ok=True when phrase validation passes. ok=False with a message when it fails.
 
-        Safe actions always return (True, "") regardless of env or body contents.
+        Safe actions: always (True, "") — low-friction path.
+        Dangerous actions: QZ_RECOVERY_CONFIRM_PHRASE must be set AND body.confirm
+            must exactly match it. If env var is unset, rejected even if confirm is given.
         """
-        phrase = os.environ.get("QZ_RECOVERY_CONFIRM_PHRASE", "").strip()
-        if not phrase:
-            return True, ""
         if action in SAFE_TRIGGER_ACTIONS:
+            return True, ""
+
+        phrase = os.environ.get("QZ_RECOVERY_CONFIRM_PHRASE", "").strip()
+
+        if action in DANGEROUS_TRIGGER_ACTIONS:
+            if not phrase:
+                return False, (
+                    f"Action {action!r} requires QZ_RECOVERY_CONFIRM_PHRASE to be set "
+                    "before restart actions are permitted. Set the env var to a non-empty phrase."
+                )
+            provided = str(body.get("confirm") or "").strip()
+            if not provided:
+                return False, (
+                    f"Action {action!r} requires a 'confirm' field in the request body "
+                    "that exactly matches QZ_RECOVERY_CONFIRM_PHRASE."
+                )
+            if provided == phrase:
+                return True, ""
+            return False, f"Confirmation phrase mismatch for action {action!r}."
+
+        # Other (future) actions: apply phrase check only when env is set
+        if not phrase:
             return True, ""
         provided = str(body.get("confirm") or "").strip()
         if not provided:
-            return False, (
-                f"Action {action!r} requires a confirmation phrase. "
-                "Set 'confirm' in the request body to the value of QZ_RECOVERY_CONFIRM_PHRASE."
-            )
+            return False, f"Action {action!r} requires a confirmation phrase."
         if provided == phrase:
             return True, ""
         return False, f"Confirmation phrase mismatch for action {action!r}."
@@ -578,15 +600,16 @@ class RequestRouter:
 
         if action in UNIMPLEMENTED_TRIGGER_ACTIONS:
             return 409, "action_not_implemented", "state", (
-                f"Action {action!r} is not implemented in this trigger slice. "
-                "Implemented: refresh_catalog, clear_failure. "
-                "Restart/reload actions require active-request safety and are deferred."
+                f"Action {action!r} is not yet implemented. "
+                "Implemented: refresh_catalog, clear_failure, restart_backend. "
+                "start_backend/reload_selected_model/select_model remain deferred."
             )
 
+        # force=true is only valid for dangerous (interrupt) actions, not safe ones
         if force and action in SAFE_TRIGGER_ACTIONS:
             return 400, "force_not_allowed", "bad_request", (
                 f"force=true is not allowed for {action!r}; "
-                "it applies only to interrupt actions (restart_backend, reload_selected_model)."
+                "it applies only to interrupt actions (restart_backend)."
             )
 
         return None  # all fields valid
@@ -647,6 +670,42 @@ class RequestRouter:
             return True, ""
         except Exception as exc:
             return False, str(exc)
+
+    def _do_restart_backend(self) -> tuple[bool, str]:
+        """Execute backend restart via BackendClient.restart_container().
+
+        Gets the configured context length from the model router (prefers confirmed
+        backend inventory, then cached state, then QZ_CONTEXT env default).
+        Calls backend.restart_container(context_size) — all Docker/process details
+        stay inside qz_backend.py. Updates handler model_load_state on completion.
+
+        Returns (success, error_message). Never raises.
+        """
+        try:
+            router = self.handler._model_router()
+            context_length = router.backend_context_length()
+            if not isinstance(context_length, int) or context_length <= 0:
+                context_length = int(os.environ.get("QZ_CONTEXT", 131072))
+
+            backend = self.handler._backend()
+            backend.restart_container(context_length)
+
+            # Backend is up but empty — model needs to be reloaded on next request
+            cls = self.handler.__class__
+            cls.model_load_state = "idle"
+            cls.model_load_error = None
+            cls.model_load_finished_at = time.time()
+            return True, ""
+        except Exception as exc:
+            error = str(exc)
+            try:
+                cls = self.handler.__class__
+                cls.model_load_state = "failed"
+                cls.model_load_error = error
+                cls.model_load_finished_at = time.time()
+            except Exception:
+                pass
+            return False, error
 
     @staticmethod
     def _do_clear_failure(rs) -> tuple[bool, str]:
@@ -743,6 +802,7 @@ class RequestRouter:
 
         action = str(body.get("action") or "")
         reason = str(body.get("reason") or "")
+        force  = bool(body.get("force", False))
 
         # --- Confirmation phrase check ---
         confirm_ok, confirm_msg = self._confirm_phrase_matches(body, action)
@@ -780,15 +840,61 @@ class RequestRouter:
             ))
             return
 
+        # --- For dangerous actions: run the planner for additional preflight ---
+        if action in DANGEROUS_TRIGGER_ACTIONS:
+            try:
+                cp = build_control_plane_status(self.handler)
+                ss_for_plan = cp.get("service_status") or {}
+            except Exception:
+                ss_for_plan = {}
+            ar = getattr(self.handler, "active_requests", ACTIVE_REQUESTS)
+            active_count = ar.count() if ar is not None else None
+            plan = build_recovery_plan(
+                ss_for_plan,
+                action,
+                force=force,
+                authority_enabled=True,
+                local_request=True,
+                active_requests=active_count,
+                backoff_active=rs.is_backoff_active(action),
+                recovery_in_progress=rs.is_recovery_in_progress(),
+            )
+            if not plan["feasible"]:
+                _flag_to_blocked = [
+                    ("blocked_by_active_requests", "active_requests"),
+                    ("blocked_by_in_progress",     "in_progress"),
+                    ("blocked_by_backoff",          "backoff"),
+                    ("blocked_by_state",            "state"),
+                    ("blocked_by_authority",        "authority"),
+                ]
+                blocked_by_name = "state"
+                for flag, name in _flag_to_blocked:
+                    if plan.get(flag):
+                        blocked_by_name = name
+                        break
+                self.handler._send_json(409, self._recovery_error_payload(
+                    "plan_not_feasible",
+                    f"Recovery plan for {action!r} is not feasible. "
+                    + (plan.get("notes") or [""])[0],
+                    action=action,
+                    blocked_by=blocked_by_name,
+                    recovery_status=runtime_rs,
+                ))
+                return
+
         # --- Execute ---
         request_id = f"rec-{uuid.uuid4().hex[:12]}"
         pre_status = self._get_recovery_status_snapshot()
+        ar = getattr(self.handler, "active_requests", ACTIVE_REQUESTS)
+        active_count_at_start = ar.count() if ar is not None else None
 
         base_event: dict = {
             "source": "recovery_trigger",
             "request_id": request_id,
             "action": action,
             "reason": reason,
+            "force": force,
+            "active_request_count": active_count_at_start,
             "pre_recovery_status": pre_status,
             "operator_action": action,
             "local_operator_required": True,
@@ -804,6 +910,8 @@ class RequestRouter:
                 ok, error = self._do_refresh_catalog()
             elif action == "clear_failure":
                 ok, error = self._do_clear_failure(rs)
+            elif action == "restart_backend":
+                ok, error = self._do_restart_backend()
             else:
                 ok, error = False, f"Unhandled action: {action!r}"
         except Exception as exc:
@@ -830,6 +938,10 @@ class RequestRouter:
             self._emit_recovery_event("recovery_action_failed", {
                 **base_event, "error": error,
             })
+            if rs.is_backoff_active(action):
+                self._emit_recovery_event("recovery_backoff_started", {
+                    **base_event, "error": error,
+                })
             self.handler._send_json(500, self._recovery_error_payload(
                 "action_failed",
                 f"Action {action!r} failed unexpectedly: {error}",

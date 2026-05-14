@@ -542,6 +542,21 @@ Dangerous actions (restart_backend etc.) still blocked by 409.
 
 Tests: `tests/test_qz_recovery_trigger.py` now 60 assertions.
 
+### Slice 11 (done): `restart_backend` trigger action
+
+Added `restart_backend` to `POST /qz/recovery/trigger` — first dangerous recovery action.
+
+Gates: `QZ_RECOVERY_ACTIONS=1`, local request, `reason` required, `QZ_RECOVERY_CONFIRM_PHRASE`
+must be set AND matched exactly, not in progress (423), backoff not active (429), planner
+feasibility check (409 if blocked; force=true overrides active-request and state blocks only).
+
+Execution via `_do_restart_backend()` → `BackendClient.restart_container(ctx)`.
+Synchronous; waits for backend health. Resets `model_load_state=idle` on success.
+Failure triggers `mark_failed()` + backoff + `recovery_backoff_started` telemetry.
+
+Remaining blocked: `start_backend`, `reload_selected_model`, `select_model`.
+Durable state still needs #2 SQLite. `#47` stays open.
+
 ---
 
 ## Open questions

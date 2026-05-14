@@ -9,6 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from proxy.qz_request_router import (
     ALLOWED_RECOVERY_ACTIONS,
+    DANGEROUS_TRIGGER_ACTIONS,
+    IMPLEMENTED_TRIGGER_ACTIONS,
     RECOVERY_TRIGGER_SCHEMA,
     SAFE_TRIGGER_ACTIONS,
     UNIMPLEMENTED_TRIGGER_ACTIONS,
@@ -26,11 +28,15 @@ class TriggerConstantsTests(unittest.TestCase):
         self.assertEqual(SAFE_TRIGGER_ACTIONS, frozenset({"refresh_catalog", "clear_failure"}))
 
     def test_unimplemented_actions(self):
-        expected = ALLOWED_RECOVERY_ACTIONS - SAFE_TRIGGER_ACTIONS
+        from proxy.qz_request_router import IMPLEMENTED_TRIGGER_ACTIONS
+        expected = ALLOWED_RECOVERY_ACTIONS - IMPLEMENTED_TRIGGER_ACTIONS
         self.assertEqual(UNIMPLEMENTED_TRIGGER_ACTIONS, expected)
 
-    def test_restart_backend_unimplemented(self):
-        self.assertIn("restart_backend", UNIMPLEMENTED_TRIGGER_ACTIONS)
+    def test_restart_backend_now_implemented(self):
+        self.assertNotIn("restart_backend", UNIMPLEMENTED_TRIGGER_ACTIONS)
+
+    def test_restart_backend_dangerous(self):
+        self.assertIn("restart_backend", DANGEROUS_TRIGGER_ACTIONS)
 
     def test_start_backend_unimplemented(self):
         self.assertIn("start_backend", UNIMPLEMENTED_TRIGGER_ACTIONS)
@@ -282,15 +288,21 @@ class RequestIdTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TriggerConstantsConsistencyTests(unittest.TestCase):
-    def test_safe_plus_unimplemented_equals_all(self):
+    def test_implemented_plus_unimplemented_equals_all(self):
         self.assertEqual(
-            SAFE_TRIGGER_ACTIONS | UNIMPLEMENTED_TRIGGER_ACTIONS,
+            IMPLEMENTED_TRIGGER_ACTIONS | UNIMPLEMENTED_TRIGGER_ACTIONS,
             ALLOWED_RECOVERY_ACTIONS,
         )
 
-    def test_no_overlap(self):
+    def test_no_overlap_safe_dangerous(self):
         self.assertEqual(
-            SAFE_TRIGGER_ACTIONS & UNIMPLEMENTED_TRIGGER_ACTIONS,
+            SAFE_TRIGGER_ACTIONS & DANGEROUS_TRIGGER_ACTIONS,
+            frozenset(),
+        )
+
+    def test_no_overlap_implemented_unimplemented(self):
+        self.assertEqual(
+            IMPLEMENTED_TRIGGER_ACTIONS & UNIMPLEMENTED_TRIGGER_ACTIONS,
             frozenset(),
         )
 
@@ -346,12 +358,17 @@ class EnvFlagHelpersTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class ConfirmPhraseRequiredTests(unittest.TestCase):
-    def test_not_required_when_env_unset(self):
+    def test_not_required_when_env_unset_for_safe_action(self):
         import unittest.mock as mock
         with mock.patch.dict("os.environ", {}, clear=False):
             os.environ.pop("QZ_RECOVERY_CONFIRM_PHRASE", None)
-            self.assertFalse(RequestRouter._confirm_phrase_required("restart_backend"))
             self.assertFalse(RequestRouter._confirm_phrase_required("refresh_catalog"))
+
+    def test_always_required_for_dangerous_action_even_env_unset(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("QZ_RECOVERY_CONFIRM_PHRASE", None)
+            self.assertTrue(RequestRouter._confirm_phrase_required("restart_backend"))
 
     def test_not_required_for_safe_action_even_when_env_set(self):
         import unittest.mock as mock
@@ -372,13 +389,21 @@ class ConfirmPhraseRequiredTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class ConfirmPhraseMatchesTests(unittest.TestCase):
-    def test_ok_when_env_unset(self):
+    def test_ok_when_env_unset_for_safe_action(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("QZ_RECOVERY_CONFIRM_PHRASE", None)
+            ok, msg = RequestRouter._confirm_phrase_matches({}, "refresh_catalog")
+            self.assertTrue(ok)
+            self.assertEqual(msg, "")
+
+    def test_rejected_for_restart_backend_when_env_unset(self):
         import unittest.mock as mock
         with mock.patch.dict("os.environ", {}, clear=False):
             os.environ.pop("QZ_RECOVERY_CONFIRM_PHRASE", None)
             ok, msg = RequestRouter._confirm_phrase_matches({}, "restart_backend")
-            self.assertTrue(ok)
-            self.assertEqual(msg, "")
+            self.assertFalse(ok)
+            self.assertIn("QZ_RECOVERY_CONFIRM_PHRASE", msg)
 
     def test_ok_for_safe_action_even_with_env(self):
         import unittest.mock as mock
@@ -452,15 +477,12 @@ class ValidateTriggerBodyTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(error, "unknown_action")
 
-    def test_unimplemented_action_restart_backend(self):
+    def test_restart_backend_now_valid(self):
         result = RequestRouter._validate_recovery_trigger_body(
             {"action": "restart_backend", "reason": "x"}
         )
-        self.assertIsNotNone(result)
-        status, error, blocked_by, msg = result
-        self.assertEqual(status, 409)
-        self.assertEqual(error, "action_not_implemented")
-        self.assertEqual(blocked_by, "state")
+        # restart_backend is now implemented — body validation passes
+        self.assertIsNone(result)
 
     def test_unimplemented_action_start_backend(self):
         result = RequestRouter._validate_recovery_trigger_body(
@@ -516,6 +538,262 @@ class RejectionPayloadWithStatusTests(unittest.TestCase):
     def test_recovery_error_payload_recovery_status_none_by_default(self):
         p = RequestRouter._recovery_error_payload("bad_confirm", "bad phrase")
         self.assertIsNone(p["recovery_status"])
+
+
+# ---------------------------------------------------------------------------
+# 13. Updated constants — restart_backend now implemented
+# ---------------------------------------------------------------------------
+
+class UpdatedConstantsTests(unittest.TestCase):
+    def test_restart_backend_in_dangerous(self):
+        self.assertIn("restart_backend", DANGEROUS_TRIGGER_ACTIONS)
+
+    def test_restart_backend_in_implemented(self):
+        self.assertIn("restart_backend", IMPLEMENTED_TRIGGER_ACTIONS)
+
+    def test_restart_backend_not_in_unimplemented(self):
+        self.assertNotIn("restart_backend", UNIMPLEMENTED_TRIGGER_ACTIONS)
+
+    def test_start_backend_still_unimplemented(self):
+        self.assertIn("start_backend", UNIMPLEMENTED_TRIGGER_ACTIONS)
+
+    def test_reload_selected_model_still_unimplemented(self):
+        self.assertIn("reload_selected_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
+
+    def test_select_model_still_unimplemented(self):
+        self.assertIn("select_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
+
+    def test_implemented_subset_of_all(self):
+        self.assertTrue(IMPLEMENTED_TRIGGER_ACTIONS <= ALLOWED_RECOVERY_ACTIONS)
+
+    def test_dangerous_subset_of_implemented(self):
+        self.assertTrue(DANGEROUS_TRIGGER_ACTIONS <= IMPLEMENTED_TRIGGER_ACTIONS)
+
+    def test_safe_and_dangerous_disjoint(self):
+        self.assertEqual(SAFE_TRIGGER_ACTIONS & DANGEROUS_TRIGGER_ACTIONS, frozenset())
+
+
+# ---------------------------------------------------------------------------
+# 14. force=true handling for restart_backend vs safe actions
+# ---------------------------------------------------------------------------
+
+class ForceValidationTests(unittest.TestCase):
+    def test_force_allowed_for_restart_backend(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "restart_backend", "reason": "x", "force": True}
+        )
+        self.assertIsNone(result)
+
+    def test_force_still_rejected_for_refresh_catalog(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "refresh_catalog", "reason": "x", "force": True}
+        )
+        self.assertIsNotNone(result)
+        status, error, _, _ = result
+        self.assertEqual(status, 400)
+        self.assertEqual(error, "force_not_allowed")
+
+    def test_force_still_rejected_for_clear_failure(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "clear_failure", "reason": "x", "force": True}
+        )
+        self.assertIsNotNone(result)
+        _, error, _, _ = result
+        self.assertEqual(error, "force_not_allowed")
+
+
+# ---------------------------------------------------------------------------
+# 15. _confirm_phrase_required for dangerous actions
+# ---------------------------------------------------------------------------
+
+class DangerousConfirmPhraseRequiredTests(unittest.TestCase):
+    def test_always_required_for_restart_backend(self):
+        import unittest.mock as mock
+        # Even when env unset, dangerous action requires phrase
+        with mock.patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("QZ_RECOVERY_CONFIRM_PHRASE", None)
+            self.assertTrue(RequestRouter._confirm_phrase_required("restart_backend"))
+
+    def test_always_required_even_with_phrase_set(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {"QZ_RECOVERY_CONFIRM_PHRASE": "secret"}):
+            self.assertTrue(RequestRouter._confirm_phrase_required("restart_backend"))
+
+
+# ---------------------------------------------------------------------------
+# 16. _confirm_phrase_matches for restart_backend (dangerous action)
+# ---------------------------------------------------------------------------
+
+class DangerousConfirmPhraseMatchesTests(unittest.TestCase):
+    def test_rejected_when_env_unset(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("QZ_RECOVERY_CONFIRM_PHRASE", None)
+            ok, msg = RequestRouter._confirm_phrase_matches({}, "restart_backend")
+            self.assertFalse(ok)
+            self.assertIn("QZ_RECOVERY_CONFIRM_PHRASE", msg)
+
+    def test_rejected_when_confirm_missing(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {"QZ_RECOVERY_CONFIRM_PHRASE": "go go go"}):
+            ok, msg = RequestRouter._confirm_phrase_matches({"reason": "x"}, "restart_backend")
+            self.assertFalse(ok)
+            self.assertIn("confirm", msg.lower())
+
+    def test_rejected_when_phrase_wrong(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {"QZ_RECOVERY_CONFIRM_PHRASE": "go go go"}):
+            ok, msg = RequestRouter._confirm_phrase_matches(
+                {"confirm": "stop stop stop"}, "restart_backend"
+            )
+            self.assertFalse(ok)
+            self.assertIn("mismatch", msg.lower())
+
+    def test_accepted_when_exact_match(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {"QZ_RECOVERY_CONFIRM_PHRASE": "go go go"}):
+            ok, msg = RequestRouter._confirm_phrase_matches(
+                {"confirm": "go go go"}, "restart_backend"
+            )
+            self.assertTrue(ok)
+            self.assertEqual(msg, "")
+
+    def test_case_sensitive_rejection(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {"QZ_RECOVERY_CONFIRM_PHRASE": "go go go"}):
+            ok, _ = RequestRouter._confirm_phrase_matches(
+                {"confirm": "Go Go Go"}, "restart_backend"
+            )
+            self.assertFalse(ok)
+
+
+# ---------------------------------------------------------------------------
+# 17. _validate_recovery_trigger_body for restart_backend
+# ---------------------------------------------------------------------------
+
+class RestartBackendBodyValidationTests(unittest.TestCase):
+    def test_restart_backend_valid_no_force(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "restart_backend", "reason": "test"}
+        )
+        self.assertIsNone(result)
+
+    def test_restart_backend_valid_with_force(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "restart_backend", "reason": "test", "force": True}
+        )
+        self.assertIsNone(result)
+
+    def test_restart_backend_missing_reason_rejected(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "restart_backend"}
+        )
+        self.assertIsNotNone(result)
+        status, error, _, _ = result
+        self.assertEqual(status, 400)
+        self.assertEqual(error, "missing_reason")
+
+    def test_start_backend_still_409(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "start_backend", "reason": "x"}
+        )
+        self.assertIsNotNone(result)
+        status, error, _, _ = result
+        self.assertEqual(status, 409)
+        self.assertEqual(error, "action_not_implemented")
+
+    def test_unimplemented_message_updated(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "select_model", "reason": "x"}
+        )
+        _, _, _, msg = result
+        self.assertIn("restart_backend", msg)
+
+
+# ---------------------------------------------------------------------------
+# 18. _do_restart_backend with fake handler
+# ---------------------------------------------------------------------------
+
+class DoRestartBackendTests(unittest.TestCase):
+    def _make_router(self, backend_ok=True, context_length=131072):
+        class _FakeBackend:
+            def __init__(self, ok):
+                self._ok = ok
+                self.called_with = None
+
+            def restart_container(self, ctx):
+                self.called_with = ctx
+                if not self._ok:
+                    raise RuntimeError("Docker failed")
+                return {"health_status": 200}
+
+        class _FakeRouter:
+            def __init__(self, ctx):
+                self._ctx = ctx
+
+            def backend_context_length(self):
+                return self._ctx
+
+        class _FakeHandlerClass:
+            model_load_state = "failed"
+            model_load_error = "prev error"
+            model_load_finished_at = None
+
+        class _FakeHandler:
+            __class__ = _FakeHandlerClass
+
+            def __init__(self, ok, ctx):
+                self._backend_obj = _FakeBackend(ok)
+                self._router_obj = _FakeRouter(ctx)
+
+            def _backend(self, *a, **kw):
+                return self._backend_obj
+
+            def _model_router(self):
+                return self._router_obj
+
+        router = RequestRouter.__new__(RequestRouter)
+        router.handler = _FakeHandler(backend_ok, context_length)
+        return router, router.handler._backend_obj
+
+    def test_success_returns_true(self):
+        router, _ = self._make_router(backend_ok=True)
+        ok, error = router._do_restart_backend()
+        self.assertTrue(ok)
+        self.assertEqual(error, "")
+
+    def test_success_calls_restart_container(self):
+        router, backend = self._make_router(backend_ok=True, context_length=65536)
+        router._do_restart_backend()
+        self.assertEqual(backend.called_with, 65536)
+
+    def test_failure_returns_false_with_message(self):
+        router, _ = self._make_router(backend_ok=False)
+        ok, error = router._do_restart_backend()
+        self.assertFalse(ok)
+        self.assertIn("Docker failed", error)
+
+    def test_no_restart_method_safe(self):
+        class _NoBackendHandler:
+            class __class__:
+                model_load_state = "idle"
+                model_load_error = None
+                model_load_finished_at = None
+
+            def _model_router(self):
+                class _R:
+                    def backend_context_length(self):
+                        return 0
+                return _R()
+
+            def _backend(self, *a, **kw):
+                raise AttributeError("no backend")
+
+        router = RequestRouter.__new__(RequestRouter)
+        router.handler = _NoBackendHandler()
+        ok, error = router._do_restart_backend()
+        self.assertFalse(ok)
+        self.assertGreater(len(error), 0)
 
 
 if __name__ == "__main__":

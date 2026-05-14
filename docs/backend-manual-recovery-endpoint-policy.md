@@ -726,6 +726,45 @@ Total: 60 tests in `test_qz_recovery_trigger.py`. Dangerous actions still blocke
 - Emits `recovery_backoff_started` on failure.
 - All restart preconditions now available from slices 8 + 10a + 10b.
 
+### Slice 11 (done): `restart_backend` trigger action
+
+`restart_backend` added to `POST /qz/recovery/trigger`. First dangerous recovery action.
+
+**Constants updated:**
+- `DANGEROUS_TRIGGER_ACTIONS = frozenset({"restart_backend"})`
+- `IMPLEMENTED_TRIGGER_ACTIONS = SAFE_TRIGGER_ACTIONS | DANGEROUS_TRIGGER_ACTIONS`
+- `UNIMPLEMENTED_TRIGGER_ACTIONS = ALLOWED_RECOVERY_ACTIONS - IMPLEMENTED_TRIGGER_ACTIONS`
+  (start_backend, reload_selected_model, select_model remain 409)
+
+**Gates for restart_backend (in order):**
+1. `QZ_RECOVERY_ACTIONS=1` → 403 `authority_disabled` if not
+2. Local/loopback request when `QZ_RECOVERY_BIND_LOCAL_ONLY=1` → 403 `non_local_request`
+3. `reason` required → 400 `missing_reason`
+4. `QZ_RECOVERY_CONFIRM_PHRASE` must be set → 400 `bad_confirm` if env unset
+5. `body.confirm` must exactly match phrase → 400 `bad_confirm` if missing/wrong
+6. Not already in progress → 423 `recovery_in_progress`
+7. Backoff not active → 429 `backoff_active`
+8. Planner feasibility check → 409 `plan_not_feasible` if blocked
+   (active_requests > 0 and force=false → blocked; force=true overrides)
+9. Execute via `BackendClient.restart_container(context_size)` — Docker details stay in qz_backend.py
+10. Success → HTTP 200 `qz.recovery.trigger.v1` with `accepted=true`, `pre_status`, `post_status`
+11. Failure → HTTP 500 + `rs.mark_failed()` + backoff set + `recovery_backoff_started` emitted
+
+**`_do_restart_backend()` helper:**
+- Gets context from `model_router.backend_context_length()` (with env fallback)
+- Calls `backend.restart_container(context_length)` — synchronous, waits for health
+- Resets `handler.model_load_state = "idle"` on success
+- Returns `(False, error)` on any exception — never raises
+
+**`_confirm_phrase_matches` for dangerous actions:**
+- `QZ_RECOVERY_CONFIRM_PHRASE` must be set (rejecting even if confirm provided but env unset)
+- `body["confirm"]` must exactly match (case-sensitive)
+- Safe actions always bypass phrase check (unchanged)
+
+**Telemetry events:** same as safe actions plus `recovery_backoff_started` on failure.
+
+**Tests:** `tests/test_qz_recovery_trigger.py` — 92 assertions across 18 test classes.
+
 ### Future: durable state (requires #2 SQLite)
 
 - Move attempt history and backoff tracking from in-memory to SQLite.
