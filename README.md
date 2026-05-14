@@ -276,18 +276,18 @@ files are loaded alphabetically after the top-level `profiles.json`.
 `qz.profiles.v1`. Do not commit `config/user/` files — they contain private
 local data.
 
-Optional profile metadata (in `config/user/profiles/*.json`):
-
-Profiles may also select a search policy and default search profile:
+**Profiles with search policy** (`config/user/profiles/research-agent.json`):
 
 ```json
 {
-  "models": {
-    "research-agent.gguf": {
-      "system_prompt_file": "prompts/research-agent.md",
-      "search": {
-        "policy_file": "research-search-policy.json",
-        "default_profile": "deep_research"
+  "schema": "qz.profiles.v1",
+  "profiles": {
+    "research-agent": {
+      "backend": { "gguf": "research-agent.gguf" },
+      "prompts": { "system_file": "prompts/research-agent.md" },
+      "metadata": {
+        "label": "research-agent",
+        "search": { "policy_file": "research-search-policy.json", "default_profile": "deep_research" }
       }
     }
   }
@@ -298,43 +298,53 @@ Relative `search.policy_file` paths are resolved from `config/user/`, then the
 repo root, then `config/default/`. The selected policy must still use the same
 `web_search_profiles` shape as `config/default/search-policy.json`.
 
-Profiles may also enable static turn harnesses. These are short profile-local
-reminders injected into the newest user turn after the first user turn in a
-session. They are not QZ STATE, not memory, and not tool instructions.
+**Profiles with turn harnesses** (`config/user/profiles.json`):
+
+Static turn harnesses are short profile-local reminders injected into the newest
+user turn after the first turn. They are not QZ STATE, not memory, and not tool
+instructions.
 
 ```json
 {
-  "turn_harness_definitions": {
+  "schema": "qz.profiles.v1",
+  "shared_harnesses": {
     "roleplay-private-thoughts": "Profile reminder: Continue roleplay. Keep internal reasoning, planning, uncertainty, and self-checks private. Reply only in the established character format.",
     "caveman-ultra-lock": "Profile reminder: Caveman ultra is ON and locked. Keep visible reasoning compact: no repeated drafts, no style analysis for simple chat, decide once then answer. Use ultra-terse fragments, abbreviations, and arrows where clear; preserve exact technical facts, code, paths, commands, errors, and quoted text; keep produced artifacts in normal project style unless the user explicitly asks otherwise."
   },
-  "models": {
-    "roleplay-character.gguf": {
-      "system_prompt_file": "config/user/prompts/character.md",
-      "prompt_append_files": ["config/user/prompts/roleplay-initial-harness.md"],
-      "turn_harnesses": ["roleplay-private-thoughts"],
-      "default_reasoning_level": "low",
-      "allow_client_reasoning_override": false,
-      "reasoning_stream_format": "hidden"
+  "profiles": {
+    "roleplay-character": {
+      "backend": { "gguf": "roleplay-character.gguf" },
+      "prompts": {
+        "system_file": "config/user/prompts/character.md",
+        "append_files": ["config/user/prompts/roleplay-initial-harness.md"],
+        "turn_harnesses": ["roleplay-private-thoughts"]
+      },
+      "runtime": { "default_reasoning_level": "low", "allow_client_reasoning_override": false },
+      "behavior": { "reasoning_stream_format": "hidden" },
+      "metadata": { "label": "roleplay-character" }
     },
-    "caveman.gguf": {
-      "prompt_append_files": ["config/default/prompts/caveman-mode.md"],
-      "turn_harnesses": ["caveman-ultra-lock"]
+    "caveman": {
+      "backend": { "gguf": "caveman.gguf" },
+      "prompts": {
+        "append_files": ["config/default/prompts/caveman-mode.md"],
+        "turn_harnesses": ["caveman-ultra-lock"]
+      },
+      "metadata": { "label": "caveman" }
     }
   }
 }
 ```
 
-Default static harness definitions include `roleplay-private-thoughts` and
-`caveman-ultra-lock`; user config can override or add names through
-`turn_harness_definitions`. Harness text is emitted directly, followed by a
-plain `User message:` separator. Old guidance blocks are stripped from replayed
-history before the newest eligible user turn is reinjected, so reminders do not
-accumulate across turns.
+Default shipped harness definitions include `roleplay-private-thoughts` and
+`caveman-ultra-lock` (in `config/default/profiles.json`); user config can add or
+override names via `shared_harnesses`. Harness text is emitted directly, followed
+by a plain `User message:` separator. Old guidance blocks are stripped from
+replayed history before the newest eligible user turn is reinjected, so reminders
+do not accumulate across turns.
 
-Changing a profile symlink or override file updates the generated catalog on
+Changing a profile config file or profile symlink updates the generated catalog on
 proxy refresh. Restarting `scripts/qz-proxy` or hitting
-`/qz/models/refresh` picks up the latest symlink and override manifest without
+`/qz/models/refresh` picks up the latest symlink and profile config without
 changing the Codex-visible profile name.
 
 Roleplay and other private-thought profiles can also hide client-visible
@@ -362,8 +372,9 @@ QZ_DOCTOR_PROMPT_SMOKE=1 scripts/qz-doctor
 
 `caveman` is an experimental compact-instructions profile. It should be exposed
 as `var/models/caveman.gguf`, usually a symlink to the real backend GGUF, and
-configured through `config/user/model-overrides.json`. Select it from the Codex
-model picker or use `scripts/qz-codex exec -m caveman ...`. Reasoning effort,
+configured through `config/user/profiles/caveman.json` (or grouped in
+`config/user/profiles.json`). Select it from the Codex model picker or use
+`scripts/qz-codex exec -m caveman ...`. Reasoning effort,
 prompt append files, and static turn harnesses are the supported tuning knobs,
 not hard output-token caps. Caveman is a coding profile, so client-visible
 reasoning summaries stay visible unless a local profile explicitly changes that.

@@ -15,9 +15,10 @@ with harness guidance, and a maintained live stack smoke script. The stack is
 more testable and observable than before, and the agent guidance is tighter.
 
 The current risk is no longer configuration or profile correctness — it is the
-state substrate: SQLite Phase 1 has not been implemented, so memory_domain
-resolves to isolated for every request and no durable operational facts are
-stored. Everything else now depends on getting that substrate in cleanly.
+state substrate: SQLite Phase 1 has not been implemented, so no durable
+operational facts are stored yet. memory_domain is now wired from explicit profile
+config and falls back to isolated only when missing or invalid. Everything else
+now depends on getting the SQLite substrate in cleanly.
 
 Control sheet:
 
