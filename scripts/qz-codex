@@ -62,4 +62,23 @@ if [[ -n "${QZ_CODEX_MODEL_PROVIDER:-}" ]]; then
   QZ_CODEX_EXTRA_ARGS+=(-c "model_provider=\"$QZ_CODEX_MODEL_PROVIDER\"")
 fi
 
+# Exec preflight: for exec subcommand with an explicit model, verify that the
+# proxy is catalog-ready and that the requested model is visible in /v1/models.
+# Timeout is configurable via QZ_CODEX_READY_TIMEOUT (default: 60s).
+if [[ "${QZ_CODEX_ARGS[0]:-}" == "exec" ]]; then
+  _preflight_model="$(qz_exec_model_from_args "${QZ_CODEX_ARGS[@]}")"
+  if [[ -z "$_preflight_model" ]] && [[ -n "${QZ_CODEX_EXEC_DEFAULT_MODEL:-}" ]]; then
+    _preflight_model="$QZ_CODEX_EXEC_DEFAULT_MODEL"
+  fi
+  if [[ -n "$_preflight_model" ]]; then
+    _ready_timeout="${QZ_CODEX_READY_TIMEOUT:-60}"
+    if ! "${QZ_ROOT}/scripts/qz-wait-ready" \
+         --catalog \
+         --model "$_preflight_model" \
+         --wait-secs "$_ready_timeout" 2>&1; then
+      exit 1
+    fi
+  fi
+fi
+
 exec codex "${QZ_CODEX_EXTRA_ARGS[@]}" "${QZ_CODEX_ARGS[@]}"

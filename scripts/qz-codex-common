@@ -75,6 +75,25 @@ qz_resolve_codex_profile() {
   export QZ_CODEX_MODEL
 }
 
+qz_exec_model_from_args() {
+  # Extract the model value from exec subcommand arguments.
+  # Handles: -m MODEL, --model MODEL, --model=MODEL, -p PROFILE, --profile=PROFILE
+  local pending=0
+  for arg in "$@"; do
+    if [[ "$pending" -eq 1 ]]; then
+      printf '%s' "$arg"
+      return 0
+    fi
+    case "$arg" in
+      -m|--model|-p|--profile) pending=1 ;;
+      --model=*)               printf '%s' "${arg#--model=}"; return 0 ;;
+      --profile=*)             printf '%s' "${arg#--profile=}"; return 0 ;;
+      --)                      return 0 ;;
+    esac
+  done
+  return 0
+}
+
 qz_proxy_loaded_model() {
   python3 - "$QZ_PROXY_HOST" "$QZ_PROXY_PORT" <<'PY'
 import json

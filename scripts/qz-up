@@ -10,9 +10,14 @@ Usage: scripts/qz-up [options]
 Start the QuantZhai backend container and proxy.
 
 Options:
-  --hold             Keep the terminal open by attaching qz-top after startup.
-  --codex PROFILE    Start the stack, then exec scripts/qz-codex PROFILE.
-  -h, --help         Show this help.
+  --hold                Keep the terminal open by attaching qz-top after startup.
+  --codex-model MODEL   Start the stack, then exec scripts/qz-codex exec -m MODEL.
+  --codex MODEL         Alias for --codex-model MODEL.
+  -h, --help            Show this help.
+
+Environment:
+  QZ_PROXY_READY_TIMEOUT   Seconds to wait for proxy catalog readiness (default: 60).
+  QZ_MODEL_LOAD_TIMEOUT    Seconds to wait for llama.cpp backend /health (default: 120).
 EOF
 }
 
@@ -21,7 +26,7 @@ write_runtime_state() {
 }
 
 hold=0
-codex_profile=""
+codex_model=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -29,10 +34,19 @@ while [[ $# -gt 0 ]]; do
       hold=1
       shift
       ;;
+    --codex-model)
+      codex_model="${2:-}"
+      if [[ -z "$codex_model" ]]; then
+        printf 'qz-up: --codex-model requires a MODEL argument\n' >&2
+        exit 2
+      fi
+      shift 2
+      ;;
     --codex)
-      codex_profile="${2:-}"
-      if [[ -z "$codex_profile" ]]; then
-        echo "--codex requires a profile" >&2
+      # Alias for --codex-model; help text was updated to say MODEL not PROFILE.
+      codex_model="${2:-}"
+      if [[ -z "$codex_model" ]]; then
+        printf 'qz-up: --codex requires a MODEL argument\n' >&2
         exit 2
       fi
       shift 2
@@ -48,6 +62,16 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Reject old positional aliases that qz-codex also rejects.
+case "${codex_model,,}" in
+  low|medium|high|max|caveman)
+    printf 'qz-up: "%s" is a deprecated profile alias and is no longer accepted.\n' "$codex_model" >&2
+    printf '  Use a real model ID from /v1/models, for example:\n' >&2
+    printf '    scripts/qz-codex exec -m kuato\n' >&2
+    exit 64
+    ;;
+esac
 
 mkdir -p "$QZ_VAR_DIR/logs" "$QZ_VAR_DIR/run" "$QZ_VAR_DIR/captures"
 mkdir -p "$QZ_MODEL_DIR"
@@ -104,14 +128,41 @@ qz_docker run -d \
 
 write_runtime_state --phase backend-started --source env
 
+# -------------------------------------------------------------------------
+# Start proxy (waits for HTTP /health only).
+# -------------------------------------------------------------------------
 "$QZ_ROOT/scripts/qz-proxy"
 write_runtime_state --phase proxy-started --source env --proxy-healthy --merge-proxy
 
-if [[ "$hold" == "1" ]]; then
-  printf 'QuantZhai proxy is up. Attaching qz-top while backend readiness settles; Ctrl-C closes the monitor only. Stop the stack with scripts/qz-down.\n'
-  exec "$QZ_ROOT/scripts/qz-top"
+# -------------------------------------------------------------------------
+# Wait for proxy catalog readiness (levels 2-3: proxy ready + catalog ready).
+# qz-proxy only verifies HTTP responsiveness; background catalog init may
+# still be running. Use qz-wait-ready to gate on catalog_ready before
+# announcing a usable stack.
+# -------------------------------------------------------------------------
+proxy_ready_timeout="${QZ_PROXY_READY_TIMEOUT:-60}"
+if ! [[ "$proxy_ready_timeout" =~ ^[0-9]+$ ]] || [[ "$proxy_ready_timeout" -lt 1 ]]; then
+  proxy_ready_timeout=60
 fi
+printf 'waiting for proxy catalog readiness (timeout %ss)...\n' "$proxy_ready_timeout"
 
+if ! "$QZ_ROOT/scripts/qz-wait-ready" \
+     --catalog \
+     --wait-secs "$proxy_ready_timeout" 2>&1; then
+  write_runtime_state --phase proxy-catalog-timeout --source env --proxy-healthy --merge-proxy
+  printf 'proxy remains available at http://%s:%s for diagnostics.\n' \
+    "$QZ_PROXY_HOST" "$QZ_PROXY_PORT" >&2
+  exit 1
+fi
+write_runtime_state --phase proxy-ready --source env --proxy-healthy --merge-proxy
+printf 'proxy catalog ready: http://%s:%s\n' "$QZ_PROXY_HOST" "$QZ_PROXY_PORT"
+
+# -------------------------------------------------------------------------
+# Wait for llama.cpp backend /health.
+# This is the backend process, not the loaded model. Do not require model
+# loading here; that happens on the first /v1/responses request or via
+# /qz/models/refresh.
+# -------------------------------------------------------------------------
 printf 'waiting for backend: http://%s:%s/health\n' "$QZ_SERVER_HOST" "$QZ_SERVER_PORT"
 
 backend_ok=0
@@ -154,8 +205,19 @@ fi
 printf 'backend healthy: http://%s:%s\n' "$QZ_SERVER_HOST" "$QZ_SERVER_PORT"
 write_runtime_state --phase backend-healthy --source env --backend-healthy --proxy-healthy --merge-proxy
 
-if [[ -n "$codex_profile" ]]; then
-  export QZ_PROFILE="$codex_profile"
-  write_runtime_state --phase codex-start --source profile --backend-healthy --proxy-healthy --merge-proxy
-  exec "$QZ_ROOT/scripts/qz-codex" "$codex_profile"
+# -------------------------------------------------------------------------
+# --hold: attach qz-top now that proxy catalog and backend are both confirmed.
+# -------------------------------------------------------------------------
+if [[ "$hold" == "1" ]]; then
+  printf 'QuantZhai stack is up. Attaching qz-top; Ctrl-C closes the monitor only.\n'
+  printf 'Stop the stack with scripts/qz-down.\n'
+  exec "$QZ_ROOT/scripts/qz-top"
+fi
+
+# -------------------------------------------------------------------------
+# --codex-model: launch Codex exec against the named model.
+# -------------------------------------------------------------------------
+if [[ -n "$codex_model" ]]; then
+  write_runtime_state --phase codex-start --source model --backend-healthy --proxy-healthy --merge-proxy
+  exec "$QZ_ROOT/scripts/qz-codex" exec -m "$codex_model"
 fi

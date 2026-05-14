@@ -94,9 +94,11 @@ Codex requests arriving between steps 4 and 7 receive:
 | backend process up | llama.cpp `/health` responds | `qz-up` curl loop | `qz-up` stdout |
 | backend model loaded | `/qz/status ready == true` | proxy router | `/qz/status` |
 
-**Gap:** `qz-proxy` only verifies level 1 (HTTP up). `qz-up` verifies level 5
-(backend process up). Levels 2-4 are not checked by any script before Codex is
-allowed to connect.
+**Slice 1 gap (now fixed in slice 2):** `qz-proxy` only verifies level 1 (HTTP
+up). `qz-up` now calls `qz-wait-ready --catalog` after `qz-proxy` starts,
+gating levels 2-3 before proceeding. Level 4 (model visible) is checked by
+`qz-codex exec` via `qz-wait-ready --catalog --model MODEL`. Level 5 (backend
+model loaded) is not explicitly gated; it happens on demand via the proxy.
 
 ---
 
@@ -195,16 +197,29 @@ Identity confusion:
 
 ## Safe next refactor steps
 
-**Step 1 (done in this pass):** Add `scripts/qz-wait-ready` — a shared readiness
+**Step 1 (done — slice 1):** Add `scripts/qz-wait-ready` — a shared readiness
 helper that checks proxy/catalog/model readiness with explicit timeout and
 actionable diagnostics.
 
-**Step 2 (done in this pass):** Update `scripts/qz-live-smoke` to call
+**Step 2 (done — slice 1):** Update `scripts/qz-live-smoke` to call
 `qz-wait-ready` before running Codex paths, so it fails fast with a clear
 readiness error instead of a 503 or model-not-found confusion.
 
-**Step 3 (next):** Improve `scripts/qz-up` to wait for `catalog_ready == true`
-before printing "ready". Use `qz-wait-ready --catalog` as the gate.
+**Step 3 (done — slice 2):** Update `scripts/qz-up` to gate on `catalog_ready`
+after `qz-proxy` starts. `qz-wait-ready --catalog` is called with
+`QZ_PROXY_READY_TIMEOUT` (default 60s). On failure: write
+`proxy-catalog-timeout` phase and leave diagnostics.
+
+Slice 2 also:
+- Fixed `--hold` to attach `qz-top` AFTER both catalog readiness and backend
+  /health, not before backend wait.
+- Fixed `--codex PROFILE` → `--codex-model MODEL`. Now runs
+  `scripts/qz-codex exec -m MODEL`. Deprecated aliases (high/medium/low/max/
+  caveman) are rejected at the `qz-up` level with a clear error.
+- Added `qz_exec_model_from_args()` helper in `qz-codex-common`.
+- Added exec preflight in `scripts/qz-codex`: calls `qz-wait-ready --catalog
+  --model MODEL` before `exec codex`. Timeout via `QZ_CODEX_READY_TIMEOUT`
+  (default 60s).
 
 **Step 4 (future):** Move Codex catalog regeneration entirely into the proxy
 `/qz/models/refresh` endpoint. `qz-codex-common` becomes a thin shim that just
@@ -213,6 +228,17 @@ calls the endpoint.
 **Step 5 (future, SQLite era):** Merge `var/run/*.json` runtime state into
 operational facts stored in the Phase 1 SQLite substrate. `qz-write-runtime-state`
 becomes a thin shim or disappears.
+
+**Remaining under #44 (deferred):**
+- `/v1/responses` early-failure messaging when catalog/model routing is not ready.
+- Audit and reduce hybrid Codex catalog generation flow in qz-codex-common vs
+  /qz/models/refresh.
+- Audit runtime-state JSON ownership and identify what should later move behind
+  /qz/* or Phase 1 SQLite.
+- Bring scripts/qz-smoke-repeated-read from #43 onto qz-wait-ready once that
+  script exists.
+- Continue identifying script/proxy data-flow duplication and convert only tiny,
+  testable pieces.
 
 ---
 
