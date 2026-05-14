@@ -393,9 +393,27 @@ Rows added to BACKEND:
 SSE/telemetry/thought/answer parsing is unchanged. Backend unavailable still
 renders; qz-thoughts remains useful when llama.cpp is down.
 
+**Step 13 (done — slice 11):** Migrated `scripts/qz-codex-common` to use
+`/qz/control-plane` for selected/loaded model identity.
+
+`qz_proxy_loaded_model()` now tries `/qz/control-plane` first (schema
+`qz.control_plane.status.v1`). Selection order: `models.selected` (Codex-visible
+profile ID) → `models.selected_backend_id` → `backend.loaded_model`. Falls back
+to the old `/qz/status` parser only if control-plane is unavailable or returns
+wrong schema.
+
+`qz_prepare_codex_home()` failure diagnostics improved: when POST
+`/qz/models/refresh` fails without fallback enabled, it now also fetches
+`/qz/control-plane` and prints a compact diagnostic line (proxy_ready,
+catalog_ready, models count, backend_reachable, first operator hint). This helps
+remote users understand whether the proxy is up but catalog generation failed,
+vs. the proxy being unreachable entirely.
+
+The catalog_updated == true requirement and `QZ_CODEX_ALLOW_LOCAL_CATALOG_FALLBACK`
+opt-in are unchanged.
+
 **Remaining under #44 (deferred):**
-- Migrate qz-codex-common and qz-live-smoke to consume
-  `/qz/control-plane` where useful.
+- Migrate qz-live-smoke to consume `/qz/control-plane` where useful.
 - Proxy fully owns Codex catalog file generation; `qz-codex-common` opt-in fallback
   can be removed once proxy is reliable for all cases.
 - Audit runtime-state JSON ownership and identify what should later move behind
