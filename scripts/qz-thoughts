@@ -789,6 +789,27 @@ def _apply_telemetry_event(state: ThoughtState, event: dict, prefix_rows: List[T
             state.backend_error = str(payload.get("error"))
         return latest_ts
 
+    if ev_type == "tool_sandbox_denied":
+        tool = payload.get("tool") or "tool"
+        matched = payload.get("matched_string") or ""
+        exit_code = payload.get("exit_code")
+        parts = [str(tool)]
+        if matched:
+            parts.append(clip(matched, 48))
+        if exit_code is not None:
+            parts.append(f"exit={exit_code}")
+        _append_backend(state, "denied", " ".join(parts))
+        return latest_ts
+
+    if ev_type == "tool_connection_failed":
+        tool = payload.get("tool") or "tool"
+        matched = payload.get("matched_string") or ""
+        parts = [str(tool)]
+        if matched:
+            parts.append(clip(matched, 48))
+        _append_backend(state, "conn-fail", " ".join(parts))
+        return latest_ts
+
     if ev_type == "tool_escalation_requested":
         tool = payload.get("tool") or "tool"
         parts = [str(tool)]

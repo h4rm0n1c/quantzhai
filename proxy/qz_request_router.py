@@ -33,6 +33,7 @@ try:
     from .qz_sse import _normalize_response_usage, make_sse_block
     from .qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
     from .qz_codex_metadata import extract_codex_request_context
+    from .qz_native_tool_output import classify_native_tool_outputs
     from .qz_search_policy import resolve_search_policy_selection
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import (
@@ -69,6 +70,7 @@ except ImportError:
     from qz_sse import _normalize_response_usage, make_sse_block
     from qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
     from qz_codex_metadata import extract_codex_request_context
+    from qz_native_tool_output import classify_native_tool_outputs
     from qz_search_policy import resolve_search_policy_selection
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import (
@@ -1098,6 +1100,15 @@ class RequestRouter:
                             return
                 body = normalize_responses_input_for_qwen(body, selected_model=selected_model)
                 body = normalize_tools_for_llamacpp(body)
+
+                # Observe incoming native tool output for classifiable failure patterns.
+                # Read-only: body and input items are not mutated by classification.
+                for _obs_event, _obs_payload in classify_native_tool_outputs(body.get("input") or []):
+                    try:
+                        self.handler.telemetry.emit(_obs_event, {**_obs_payload, "request_id": request_id})
+                    except Exception:
+                        pass
+
                 prompt_contract = self._prompt_contract(
                     body,
                     selected_model,
