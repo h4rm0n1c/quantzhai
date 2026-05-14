@@ -38,6 +38,7 @@ try:
     from .qz_responses_error import build_responses_error_payload, is_deprecated_alias
     from .qz_control_plane import build_control_plane_status
     from .qz_service_status import build_service_status
+    from .qz_recovery_status import build_recovery_status
     from .qz_search_policy import resolve_search_policy_selection
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import (
@@ -79,6 +80,7 @@ except ImportError:
     from qz_responses_error import build_responses_error_payload, is_deprecated_alias
     from qz_control_plane import build_control_plane_status
     from qz_service_status import build_service_status
+    from qz_recovery_status import build_recovery_status
     from qz_search_policy import resolve_search_policy_selection
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import (
@@ -399,6 +401,33 @@ class RequestRouter:
                     "error": str(exc),
                 }
             self.handler._send_json(200, payload)
+            return
+
+        if self.handler.path in ("/qz/recovery/status", "/qz/recovery"):
+            # Read-only recovery summary. Safe when backend is down.
+            # No actions are taken — this is diagnostic and advisory only.
+            # Remote clients do not need local Docker or llama.cpp access.
+            try:
+                cp = build_control_plane_status(self.handler)
+                ss = cp.get("service_status") or {}
+                recovery_payload = build_recovery_status(ss)
+            except Exception as exc:
+                recovery_payload = {
+                    "schema": "qz.recovery.status.v1",
+                    "ok": False,
+                    "state": "unknown",
+                    "recoverable": False,
+                    "retryable": False,
+                    "fatal": False,
+                    "operator_action": "",
+                    "last_error": str(exc),
+                    "remote_client_action": "contact_operator",
+                    "local_operator_action": "inspect_logs",
+                    "summary": "Recovery status unavailable; error building control-plane payload.",
+                    "service_status": None,
+                    "operator_hints": [],
+                }
+            self.handler._send_json(200, recovery_payload)
             return
 
         self.proxy_raw("GET")

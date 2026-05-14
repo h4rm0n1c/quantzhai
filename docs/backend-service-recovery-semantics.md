@@ -411,11 +411,27 @@ Three `/v1/responses` rejection paths updated in `qz_request_router.py`:
 All existing fields unchanged (`error`, `reason`, `requested_model`, `available_models`,
 `alias_hint`, `readiness`, `proxy_initialization`, `operator_hint`, `fix`).
 
-### Slice 4: Add `/qz/recovery/status` (read-only)
+### Slice 4 (done): Add `/qz/recovery/status` (read-only)
 
-- Returns current `recovery_state`, `recoverable`, `last_error`, `operator_action`.
-- No state-changing endpoints yet.
-- Feeds into qz-doctor, qz-top, qz-thoughts for recovery rows.
+Added `proxy/qz_recovery_status.py` with `build_recovery_status(service_status)`.
+
+New endpoint: `GET /qz/recovery/status` — always returns HTTP 200 JSON,
+even when backend is down. No actions taken; purely diagnostic/advisory.
+
+Schema: `qz.recovery.status.v1`. Key fields:
+- `state` — mirrors `service_status.recovery_state`
+- `ok` — true when no problem or recovery is in progress (false when action needed)
+- `remote_client_action` — what a remote qz-codex client should do:
+  `wait`, `choose_valid_model`, `retry_after_refresh`, `contact_operator`, `""`
+- `local_operator_action` — what a local operator should do:
+  `monitor`, `start_backend`, `restart_backend`, `select_model`,
+  `refresh_catalog`, `inspect_logs`, `""`
+- `summary` — one-sentence human-readable status
+
+Also embedded additively inside `/qz/control-plane` as `"recovery": {...}`.
+Existing control-plane fields unchanged.
+
+Tests: `tests/test_qz_recovery_status.py`.
 
 ### Slice 5: Manual recovery endpoint design
 
