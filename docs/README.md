@@ -63,6 +63,7 @@ No clever memory, active memory tools, learned preferences, roleplay memory, HSM
 | Signal surface map | [Codex/QuantZhai bidirectional signal map](codex-quantzhai-bidirectional-signal-map.md) | Source-grounded map of all signals: Codex→QZ, QZ→model, backend→QZ, QZ→monitor, safety matrix, gaps, and next targets. |
 | Feedback subsystem plan | [Signal/feedback subsystem plan](signal-feedback-subsystem-plan.md) | Phased plan for unifying tool coercion, native tool-output classifiers, and runtime signals into qz_feedback.py. |
 | Backend control plane | [Backend control plane audit](backend-control-plane-audit.md) | Audit of llama.cpp/script/proxy data flow, readiness gap, ownership table, and safe next steps. |
+| Backend service recovery | [Backend service recovery semantics](backend-service-recovery-semantics.md) | Status taxonomy, recovery classification matrix, HTTP behaviour map, canonical enum proposals, and next slices for #47. |
 | Repeated-read signal | [Repeated-read signal plan](repeated-read-dedup-plan.md) | Advisory repeated-read v1 plan and v2 scope blockers. |
 | LLM signal system | [LLM signal system](llm-signal-system.md) | Hop budget, context pressure, compaction, and signal design notes. |
 | Benchmarking | [Benchmark findings: effort tuning](benchmark-findings-effort-tuning.md) | Measured profile/tool-use behaviour and open questions around open-ended repo exploration. |
@@ -289,6 +290,7 @@ docs/current-task-hierarchy.md
 docs/codex-quantzhai-bidirectional-signal-map.md
 docs/signal-feedback-subsystem-plan.md
 docs/backend-control-plane-audit.md
+docs/backend-service-recovery-semantics.md
 docs/model-state-signal-contract.md
 docs/qz-codex-control-plane-future.md
 docs/bugs/responses-streaming-and-qz-thoughts.md
