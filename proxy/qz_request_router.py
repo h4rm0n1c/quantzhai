@@ -361,13 +361,49 @@ class RequestRouter:
             return
 
         if self.handler.path == "/qz/models/refresh":
+            initialization = self.handler._initialization_payload()
             if not self._proxy_startup_ready():
-                self.handler._send_json(503, self._proxy_initializing_error_payload())
+                self.handler._send_json(503, {
+                    "schema": "qz.codex.catalog.refresh.v1",
+                    "ok": False,
+                    "error": "proxy not ready",
+                    "reason": initialization.get("state") or "model catalog and startup policy are still loading",
+                    "proxy_initialization": initialization,
+                    "catalog_updated": False,
+                    "catalog_path": None,
+                    "model_ids": [],
+                    "model_count": 0,
+                    # backwards-compatible field
+                    "codex_catalog_updated": False,
+                })
                 return
             catalog = self.handler._model_catalog()
             catalog.refresh()
             codex_catalog_written = self._refresh_codex_catalog(catalog)
+
+            # Build model_ids from valid catalog entries
+            _model_ids = [
+                e.get("key") or e.get("stem") or e.get("backend_id") or ""
+                for e in catalog.entries
+                if isinstance(e, dict) and e.get("profile_valid", True) is not False
+            ]
+            _model_ids = [mid for mid in _model_ids if mid]
+
+            # Catalog path from env / convention
+            _root = Path(os.environ.get("QZ_ROOT", Path(__file__).resolve().parents[1])).resolve()
+            _codex_home = Path(os.environ.get("CODEX_HOME", _root / "var" / "codex-home"))
+            _catalog_path = str(_codex_home / "model-catalogs" / "qwenzhai-models.json")
+
             self.handler._send_json(200, {
+                "schema": "qz.codex.catalog.refresh.v1",
+                "ok": True,
+                "catalog_updated": codex_catalog_written,
+                "catalog_path": _catalog_path if codex_catalog_written else None,
+                "model_count": len(_model_ids),
+                "model_ids": _model_ids,
+                "proxy_initialization": initialization,
+                "error": None,
+                # backwards-compatible existing fields
                 "catalog": catalog.to_payload(),
                 "backend": self.handler._backend_models(),
                 "codex_catalog_updated": codex_catalog_written,

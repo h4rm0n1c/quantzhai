@@ -27,7 +27,37 @@ qz_prepare_codex_home() {
   # Without the fallback flag, a proxy failure is a clear operational error:
   # qz-codex should not silently own catalog generation when a proxy is expected.
   local proxy_url="http://$QZ_PROXY_HOST:$QZ_PROXY_PORT"
-  if curl -fsS -X POST "$proxy_url/qz/models/refresh" >/dev/null 2>&1; then
+  local _refresh_body
+  if _refresh_body=$(curl -fsS -X POST "$proxy_url/qz/models/refresh" 2>/dev/null); then
+    # Parse proxy-owned response to confirm catalog was updated.
+    # New schema (qz.codex.catalog.refresh.v1) has ok/model_ids/catalog_path.
+    # Old format (pre-slice-4) treated HTTP 200 as success; remain compatible.
+    local _catalog_ok
+    _catalog_ok=$(printf '%s' "$_refresh_body" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    if 'ok' in d:
+        print('true' if d['ok'] else 'false')
+    else:
+        print('true')  # old format: HTTP 200 = success
+except Exception:
+    print('true')
+" 2>/dev/null || echo true)
+    if [[ "$_catalog_ok" != "true" ]]; then
+      local _err
+      _err=$(printf '%s' "$_refresh_body" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    parts = [p for p in [d.get('error'), d.get('reason')] if p]
+    print(', '.join(parts) if parts else 'catalog refresh failed')
+except Exception:
+    print('catalog refresh failed')
+" 2>/dev/null || echo "catalog refresh failed")
+      printf 'qz-codex: proxy catalog refresh returned ok=false: %s\n' "$_err" >&2
+      return 1
+    fi
     : # proxy owns catalog; continue
   else
     local _fallback="${QZ_CODEX_ALLOW_LOCAL_CATALOG_FALLBACK:-0}"

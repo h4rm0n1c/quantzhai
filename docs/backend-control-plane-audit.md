@@ -234,18 +234,38 @@ an explicit opt-in flag. `qz_prepare_codex_home()` now:
 Remote `qz-codex` users without a local backend now get a clear error rather than
 a silent partial failure.
 
-**Step 5 (future):** Move Codex catalog regeneration entirely into the proxy
+**Step 5 (done — slice 4):** Enrich `POST /qz/models/refresh` response with
+structured catalog/status metadata under schema `qz.codex.catalog.refresh.v1`.
+
+New response fields alongside backwards-compatible existing fields:
+- `schema`: "qz.codex.catalog.refresh.v1"
+- `ok`: bool — top-level success/failure indicator
+- `catalog_updated`: bool — whether Codex catalog file was regenerated
+- `catalog_path`: path to generated catalog file, or null
+- `model_count`: int — number of valid model IDs
+- `model_ids`: list of model ID strings
+- `proxy_initialization`: proxy readiness snapshot
+- `error`/`reason`: structured error fields on failure
+
+The 503 "not ready" response is also structured with the same schema.
+
+`qz-codex-common` now parses the response body and validates `ok == true`
+before proceeding. The proxy is now the authority for catalog artifact status;
+scripts no longer need to interpret catalog internals. Backwards-compatible
+fields (`catalog`, `backend`, `codex_catalog_updated`) remain.
+
+**Step 6 (future):** Move Codex catalog regeneration entirely into the proxy
 `/qz/models/refresh` endpoint. `qz-codex-common` becomes a thin shim that just
 calls the endpoint.
 
-**Step 6 (future, SQLite era):** Merge `var/run/*.json` runtime state into
+**Step 7 (future, SQLite era):** Merge `var/run/*.json` runtime state into
 operational facts stored in the Phase 1 SQLite substrate. `qz-write-runtime-state`
 becomes a thin shim or disappears.
 
 **Remaining under #44 (deferred):**
 - `/v1/responses` early-failure messaging when catalog/model routing is not ready.
-- Proxy should cleanly provide all catalog artifacts; `qz-codex-common` can then
-  drop even the opt-in fallback path.
+- Proxy fully owns Codex catalog file generation; `qz-codex-common` opt-in fallback
+  can be removed once proxy is reliable for all cases.
 - Audit runtime-state JSON ownership and identify what should later move behind
   /qz/* or Phase 1 SQLite.
 - Bring scripts/qz-smoke-repeated-read from #43 onto qz-wait-ready once that
