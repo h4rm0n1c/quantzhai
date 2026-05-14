@@ -213,9 +213,10 @@ after `qz-proxy` starts. `qz-wait-ready --catalog` is called with
 Slice 2 also:
 - Fixed `--hold` to attach `qz-top` AFTER both catalog readiness and backend
   /health, not before backend wait.
-- Fixed `--codex PROFILE` → `--codex-model MODEL`. Now runs
-  `scripts/qz-codex exec -m MODEL`. Deprecated aliases (high/medium/low/max/
-  caveman) are rejected at the `qz-up` level with a clear error.
+- Fixed `--codex PROFILE` → `--codex-model MODEL`. Now opens interactive Codex
+  with the model pre-selected (`scripts/qz-codex -m MODEL`). Deprecated aliases
+  (high/medium/low/max/caveman) are rejected at the `qz-up` level with a clear
+  error.
 - Added `qz_exec_model_from_args()` helper in `qz-codex-common`.
 - Added exec preflight in `scripts/qz-codex`: calls `qz-wait-ready --catalog
   --model MODEL` before `exec codex`. Timeout via `QZ_CODEX_READY_TIMEOUT`

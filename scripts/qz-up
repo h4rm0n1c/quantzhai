@@ -11,7 +11,7 @@ Start the QuantZhai backend container and proxy.
 
 Options:
   --hold                Keep the terminal open by attaching qz-top after startup.
-  --codex-model MODEL   Start the stack, then exec scripts/qz-codex exec -m MODEL.
+  --codex-model MODEL   Start the stack, then open interactive Codex with MODEL selected.
   --codex MODEL         Alias for --codex-model MODEL.
   -h, --help            Show this help.
 
@@ -215,9 +215,10 @@ if [[ "$hold" == "1" ]]; then
 fi
 
 # -------------------------------------------------------------------------
-# --codex-model: launch Codex exec against the named model.
+# --codex-model: open interactive Codex with the named model pre-selected.
+# Uses the interactive (non-exec) path so no prompt is required.
 # -------------------------------------------------------------------------
 if [[ -n "$codex_model" ]]; then
   write_runtime_state --phase codex-start --source model --backend-healthy --proxy-healthy --merge-proxy
-  exec "$QZ_ROOT/scripts/qz-codex" exec -m "$codex_model"
+  exec "$QZ_ROOT/scripts/qz-codex" -m "$codex_model"
 fi
