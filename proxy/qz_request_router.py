@@ -39,6 +39,7 @@ try:
     from .qz_control_plane import build_control_plane_status
     from .qz_service_status import build_service_status
     from .qz_recovery_status import build_recovery_status
+    from .qz_recovery_plan import ALLOWED_RECOVERY_ACTIONS, build_recovery_plan
     from .qz_search_policy import resolve_search_policy_selection
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import (
@@ -81,6 +82,7 @@ except ImportError:
     from qz_control_plane import build_control_plane_status
     from qz_service_status import build_service_status
     from qz_recovery_status import build_recovery_status
+    from qz_recovery_plan import ALLOWED_RECOVERY_ACTIONS, build_recovery_plan
     from qz_search_policy import resolve_search_policy_selection
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import (
@@ -432,6 +434,113 @@ class RequestRouter:
 
         self.proxy_raw("GET")
 
+    # -------------------------------------------------------------------------
+    # Recovery helpers
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _recovery_error_payload(
+        error: str,
+        message: str,
+        action: str = "",
+        blocked_by: str = "bad_request",
+        recovery_status: dict | None = None,
+    ) -> dict:
+        """Build a qz.recovery.error.v1 error payload for recovery endpoint failures."""
+        return {
+            "schema": "qz.recovery.error.v1",
+            "ok": False,
+            "error": error,
+            "message": message,
+            "action": action,
+            "blocked_by": blocked_by,
+            "retry_after_secs": None,
+            "recovery_status": recovery_status,
+        }
+
+    @staticmethod
+    def _is_local_request(handler) -> bool:
+        """Return True if the request originates from loopback."""
+        try:
+            addr = handler.client_address
+            host = addr[0] if isinstance(addr, (list, tuple)) else str(addr)
+            return host in ("127.0.0.1", "::1", "localhost")
+        except Exception:
+            return False
+
+    def _handle_recovery_plan(self) -> None:
+        """Handle POST /qz/recovery/plan — dry-run feasibility planner.
+
+        Reads body, validates action, calls build_recovery_plan(), returns plan.
+        No side effects. No state mutation. No Docker calls. No telemetry emitted.
+        """
+        length = int(self.handler.headers.get("Content-Length", "0") or "0")
+        raw = self.handler.rfile.read(length) if length else b""
+
+        # --- Parse body ---
+        try:
+            body = json.loads(raw.decode("utf-8")) if raw.strip() else {}
+        except Exception as exc:
+            self.handler._send_json(400, self._recovery_error_payload(
+                "invalid_json",
+                f"Request body is not valid JSON: {exc}",
+                blocked_by="bad_request",
+            ))
+            return
+
+        if not isinstance(body, dict):
+            self.handler._send_json(400, self._recovery_error_payload(
+                "invalid_json",
+                "Request body must be a JSON object.",
+                blocked_by="bad_request",
+            ))
+            return
+
+        action = body.get("action", "")
+        if not action:
+            self.handler._send_json(400, self._recovery_error_payload(
+                "missing_action",
+                "Request body must include an 'action' field.",
+                blocked_by="bad_request",
+            ))
+            return
+
+        if action not in ALLOWED_RECOVERY_ACTIONS:
+            self.handler._send_json(400, self._recovery_error_payload(
+                "unknown_action",
+                f"Unknown action {action!r}. Allowed: {sorted(ALLOWED_RECOVERY_ACTIONS)}.",
+                action=action,
+                blocked_by="unknown_action",
+            ))
+            return
+
+        # --- Gather planner inputs from current runtime state ---
+        try:
+            cp = build_control_plane_status(self.handler)
+            ss = cp.get("service_status") or {}
+        except Exception:
+            ss = {}
+
+        model          = str(body.get("model") or "")
+        force          = bool(body.get("force", False))
+        authority      = os.environ.get("QZ_RECOVERY_ACTIONS", "0").strip() == "1"
+        local_req      = self._is_local_request(self.handler)
+
+        # active_requests, backoff_active, recovery_in_progress: slice 8
+        plan = build_recovery_plan(
+            ss,
+            action,
+            model=model,
+            force=force,
+            authority_enabled=authority,
+            local_request=local_req,
+            active_requests=None,    # tracking not yet implemented (slice 8)
+            backoff_active=False,    # tracking not yet implemented (slice 8)
+            recovery_in_progress=False,  # tracking not yet implemented (slice 8)
+        )
+
+        self.handler._send_json(200, plan)
+
     def handle_post(self):
         self._log_request_path("POST")
 
@@ -449,6 +558,10 @@ class RequestRouter:
 
         if self.handler.path in ("/responses", "/v1/responses"):
             self.proxy_json_api("/v1/responses")
+            return
+
+        if self.handler.path == "/qz/recovery/plan":
+            self._handle_recovery_plan()
             return
 
         if self.handler.path == "/qz/models/refresh":

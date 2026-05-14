@@ -593,5 +593,75 @@ class AllowedActionsTests(unittest.TestCase):
         self.assertIsInstance(ALLOWED_RECOVERY_ACTIONS, frozenset)
 
 
+# ---------------------------------------------------------------------------
+# 17. _recovery_error_payload helper (from RequestRouter)
+# ---------------------------------------------------------------------------
+
+class RecoveryErrorPayloadTests(unittest.TestCase):
+    def _make(self, **kwargs):
+        from proxy.qz_request_router import RequestRouter
+        return RequestRouter._recovery_error_payload(**kwargs)
+
+    def test_schema(self):
+        p = self._make(error="invalid_json", message="bad body")
+        self.assertEqual(p["schema"], "qz.recovery.error.v1")
+
+    def test_ok_false(self):
+        p = self._make(error="missing_action", message="no action")
+        self.assertFalse(p["ok"])
+
+    def test_error_field(self):
+        p = self._make(error="unknown_action", message="unknown", action="kaboom",
+                       blocked_by="unknown_action")
+        self.assertEqual(p["error"], "unknown_action")
+        self.assertEqual(p["action"], "kaboom")
+        self.assertEqual(p["blocked_by"], "unknown_action")
+
+    def test_defaults(self):
+        p = self._make(error="err", message="msg")
+        self.assertEqual(p["action"], "")
+        self.assertEqual(p["blocked_by"], "bad_request")
+        self.assertIsNone(p["retry_after_secs"])
+        self.assertIsNone(p["recovery_status"])
+
+    def test_json_serialisable(self):
+        p = self._make(error="invalid_json", message="oops")
+        json.dumps(p)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# 18. _is_local_request helper (from RequestRouter)
+# ---------------------------------------------------------------------------
+
+class IsLocalRequestTests(unittest.TestCase):
+    def _is_local(self, addr):
+        from proxy.qz_request_router import RequestRouter
+
+        class _FakeHandler:
+            client_address = addr
+
+        return RequestRouter._is_local_request(_FakeHandler())
+
+    def test_loopback_ipv4(self):
+        self.assertTrue(self._is_local(("127.0.0.1", 54321)))
+
+    def test_loopback_ipv6(self):
+        self.assertTrue(self._is_local(("::1", 54321)))
+
+    def test_localhost_string(self):
+        self.assertTrue(self._is_local(("localhost", 54321)))
+
+    def test_remote_ip_false(self):
+        self.assertFalse(self._is_local(("10.0.0.5", 54321)))
+
+    def test_missing_client_address(self):
+        from proxy.qz_request_router import RequestRouter
+
+        class _NoAddr:
+            pass
+
+        self.assertFalse(RequestRouter._is_local_request(_NoAddr()))
+
+
 if __name__ == "__main__":
     unittest.main()

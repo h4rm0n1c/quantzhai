@@ -468,6 +468,16 @@ when all blocking flags are False.
 Tests: `tests/test_qz_recovery_plan.py` — 75 assertions across 16 test classes.
 Details in `docs/backend-manual-recovery-endpoint-policy.md` section 12.
 
+### Slice 7 (done): `POST /qz/recovery/plan` dry-run endpoint
+
+Added route `POST /qz/recovery/plan` in `proxy/qz_request_router.py`.
+
+HTTP 200 for valid body + known action → `qz.recovery.plan.v1`.
+HTTP 400 for bad JSON, missing action, unknown action → `qz.recovery.error.v1`.
+
+`active_requests`, `backoff_active`, `recovery_in_progress` passed as `None`/`False`
+(slice 8 wires these up). No trigger. No state mutation. No Docker calls.
+
 ---
 
 ## Open questions

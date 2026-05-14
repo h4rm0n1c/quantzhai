@@ -541,12 +541,37 @@ Active request safety when `active_requests is None`:
 Tests: `tests/test_qz_recovery_plan.py` — 16 test classes, 75 assertions.
 No endpoint, no side effects, no I/O.
 
-### Slice 7: `POST /qz/recovery/plan` dry-run endpoint
+### Slice 7 (done): `POST /qz/recovery/plan` dry-run endpoint
 
-- Wire `build_recovery_plan()` to a new route in `qz_request_router.py`.
-- Returns `qz.recovery.plan.v1`. Always HTTP 200 or 400.
-- No side effects. `force` flag parsed but ignored (documented).
-- Tests: expand `test_qz_recovery_plan.py` with HTTP-level assertions.
+Wired `build_recovery_plan()` to `POST /qz/recovery/plan` in `qz_request_router.py`.
+
+Route behaviour:
+- `HTTP 200` — valid JSON body with known action; returns `qz.recovery.plan.v1`.
+  `feasible` may be `true` or `false`; that is not an HTTP error.
+- `HTTP 400` — invalid JSON, non-object body, missing `action`, or unknown action;
+  returns `qz.recovery.error.v1` with `error` in `{invalid_json, missing_action, unknown_action}`.
+
+Dry-run inputs passed to `build_recovery_plan()`:
+- `service_status` — from `build_control_plane_status(handler)["service_status"]`
+- `action` — `body["action"]`
+- `model` — `body.get("model", "")`
+- `force` — `bool(body.get("force", False))`
+- `authority_enabled` — `os.environ.get("QZ_RECOVERY_ACTIONS", "0") == "1"`
+- `local_request` — derived from `handler.client_address[0]` (127.0.0.1 / ::1 / localhost)
+- `active_requests=None` — tracking not yet implemented (slice 8)
+- `backoff_active=False` — tracking not yet implemented (slice 8)
+- `recovery_in_progress=False` — tracking not yet implemented (slice 8)
+
+New helpers in `RequestRouter`:
+- `_recovery_error_payload(error, message, action, blocked_by, recovery_status)` — static
+- `_is_local_request(handler)` — derives local/remote from `client_address`
+- `_handle_recovery_plan()` — route handler called by `handle_post`
+
+New tests added to `tests/test_qz_recovery_plan.py`:
+- `RecoveryErrorPayloadTests` (5 assertions) — schema, ok=False, fields, defaults, serialisable
+- `IsLocalRequestTests` (5 assertions) — ipv4/ipv6/localhost/remote/missing
+
+No trigger endpoint. No state mutation. No Docker calls. No action telemetry.
 
 ### Slice 8: In-memory backoff and attempt tracking
 
