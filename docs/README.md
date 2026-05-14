@@ -99,6 +99,7 @@ Useful scripts:
 ```bash
 scripts/qz-doctor
 scripts/qz-up
+scripts/qz-live-smoke    # validate live stack after startup
 scripts/qz-codex high
 scripts/qz-down
 ```
@@ -117,13 +118,14 @@ docs/progress-snapshot.md
 Current next engineering target:
 
 ```text
-P1 memory_domain config plumbing.
+P1 optional/non-fatal Phase 1 SQLite operational substrate.
 ```
 
 Then:
 
 ```text
-P2 optional/non-fatal Phase 1 SQLite operational substrate.
+P2 repeated-read v1 advisory signal.
+P3 telemetry filter ergonomics / qz-live-smoke refinements.
 ```
 
 ### I want to work on SQLite/state/memory
@@ -186,9 +188,10 @@ Audit before refactor.
 Do not move model files, profile symlinks, or Codex-visible slugs casually.
 Generated Codex metadata is a view of proxy policy, not routing authority.
 Do not add new one-off shell scripts unless there is a strong reason.
-Next smallest slice: memory_domain plumbing in the existing model-overrides loader.
-After that: qz.profiles.v1 schema and profiles/*.json directory loader.
-See the "Profile-Bundle Config Design" section in edge-case-config-contract-plan.md.
+qz.profiles.v1 is the active config format — memory_domain plumbing and
+profiles/*.json loader are already implemented. Next work is /qz/models/refresh
+regenerating the Codex catalog, then broader var/generated/ cleanup.
+See edge-case-config-contract-plan.md for the remaining items.
 ```
 
 ### I want to fix streaming, qz-top, or qz-thoughts

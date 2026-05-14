@@ -33,9 +33,9 @@ QuantZhai is early but has already run locally in a useful Codex workflow. Treat
 
 Current coverage is not hand-wavy:
 
-- 187 unit tests lock down established behavior.
+- Hundreds of unit tests lock down established behavior; the suite grows with every new proxy path.
 - Golden replay fixtures cover proxy logic, stream normalization, tool state, and patch adapter paths.
-- Live smoke tests cover the proxy, `apply_patch`, and Codex exec flows.
+- A maintained live stack smoke (`scripts/qz-live-smoke`) covers proxy health, Codex exec, and sandbox-denied telemetry end-to-end.
 - Symlink-based model profiles, prompt injection, and turn harnesses are all part of the runtime contract.
 - The wrapper is intended to stay removable and non-destructive to a native Codex install.
 
@@ -191,6 +191,7 @@ $EDITOR .env
 scripts/qz-doctor
 scripts/qz-build-image   # only needed if qz-doctor reports missing image
 scripts/qz-up
+scripts/qz-live-smoke    # validate the live stack end-to-end
 scripts/qz-codex high
 ```
 
@@ -227,37 +228,55 @@ ln -s Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ4_NL.gguf var/models/prom
 Contract:
 
 ```text
-Codex-visible profile: var/models/prompt-compiler.gguf
-Prompt overrides:       prompt-compiler.gguf in config/user/model-overrides.json
+Codex-visible profile: var/models/prompt-compiler.gguf (the symlink filename)
 Backend target:         resolved symlink target GGUF stem
 llama.cpp load id:      real backend target, not the profile filename
 ```
 
 Codex sees and selects the profile name. The proxy resolves the symlink target
-and routes llama.cpp backend requests to the real scanned GGUF model. Do not add
-a backend-name override in profile metadata.
+and routes llama.cpp backend requests to the real scanned GGUF model.
 
-Profile metadata lives on the Codex-visible symlink name, not on the resolved
-backend file. The shipped baseline overrides live in
-`config/default/model-overrides.json`. Local changes belong in
-`config/user/model-overrides.json`; the legacy `var/model-overrides.json`
-remains a compatibility fallback only when the user file is absent. Example
-override files under `config/example/` document the shape but stay inactive
-unless copied or explicitly enabled.
+## Profile Config: qz.profiles.v1
 
-Optional profile metadata lives in `config/user/model-overrides.json`:
+The active profile config format is `qz.profiles.v1`. Profiles are defined as
+cohesive bundles in JSON files — one profile per file is recommended.
+
+**Active config paths (loaded at startup):**
+
+```text
+config/default/profiles.json       shipped shared harnesses and defaults
+config/default/profiles/*.json     shipped profile split files (e.g. caveman.json)
+config/user/profiles.json          local user config — NOT committed
+config/user/profiles/*.json        local split profile files — NOT committed
+```
+
+User-layer files win over default-layer files. Within a layer, `profiles/*.json`
+files are loaded alphabetically after the top-level `profiles.json`.
+
+**Example profile bundle** (`config/user/profiles/prompt-compiler.json`):
 
 ```json
 {
-  "models": {
-    "prompt-compiler.gguf": {
-      "label": "prompt-compiler",
-      "runtime_context_length": 262144,
-      "system_prompt_file": "var/prompts/sillytavern_card_v2_runtime_prompt_compiler.md"
+  "schema": "qz.profiles.v1",
+  "profiles": {
+    "prompt-compiler": {
+      "backend": { "gguf": "prompt-compiler.gguf", "target_policy": "symlink_or_file" },
+      "runtime": { "context_length": 262144 },
+      "prompts": { "system_file": "config/user/prompts/prompt-compiler_v3.md" },
+      "memory": { "domain": "coding" },
+      "metadata": { "label": "prompt-compiler" }
     }
   }
 }
 ```
+
+**Legacy fallback:** `config/user/model-overrides.json` and
+`config/default/model-overrides.json` are still read when no `profiles.json` or
+`profiles/*.json` files exist for that config layer. New installs should use
+`qz.profiles.v1`. Do not commit `config/user/` files — they contain private
+local data.
+
+Optional profile metadata (in `config/user/profiles/*.json`):
 
 Profiles may also select a search policy and default search profile:
 
@@ -436,14 +455,14 @@ Important settings:
 
 The current defaults came from the working two-GPU Qwen3.6 setup. They are not universal.
 
-`proxy/qz_model_catalog.py` scans `QZ_MODEL_DIR`, merges
-`config/default/model-overrides.json`, local
-`config/user/model-overrides.json` through `QZ_MODEL_OVERRIDES`, legacy
-`var/model-overrides.json` when the user file is absent, and optional
-`config/example/model-overrides.json` when `QZ_LOAD_EXAMPLE_MODEL_OVERRIDES`
-is enabled. It writes
-`var/model-inventory.json` and feeds the proxy's `/v1/models`, `/qz/models`,
-and model-load paths.
+`proxy/qz_model_catalog.py` scans `QZ_MODEL_DIR` and loads profile config from
+`config/default/profiles.json` + `config/default/profiles/*.json` (shipped
+defaults) and `config/user/profiles.json` + `config/user/profiles/*.json` (local
+overrides). When no `profiles.json`/`profiles/*.json` files exist for a layer, it
+falls back to the legacy `model-overrides.json` for that layer. Optional
+`config/example/` profiles load when `QZ_LOAD_EXAMPLE_MODEL_OVERRIDES` is
+enabled. The catalog writes `var/model-inventory.json` and feeds the proxy's
+`/v1/models`, `/qz/models`, and model-load paths.
 
 `scripts/qz-codex` also refreshes its local Codex model catalog from that live
 inventory, so the model picker tracks the actual `var/models/*.gguf` files.
@@ -548,6 +567,12 @@ Watch streamed reasoning/thought output from the latest proxy request:
 
 ```bash
 scripts/qz-thoughts
+```
+
+Validate the live stack end-to-end (proxy health, normal path, denied-command telemetry):
+
+```bash
+scripts/qz-live-smoke
 ```
 
 Stop QuantZhai:

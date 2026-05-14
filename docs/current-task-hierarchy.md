@@ -1,7 +1,7 @@
 # QuantZhai Current Task Hierarchy
 
-Date: 2026-05-12
-Status: active control sheet for the next implementation pass.
+Date: 2026-05-14
+Status: active control sheet — post-stabilisation pass.
 
 This document turns the current planning docs into an execution order. It does
 not replace the architecture contracts. If this file conflicts with
@@ -21,22 +21,51 @@ No clever memory, active memory tools, learned preferences, roleplay memory,
 HSM/archive memory, automatic promotion, or cross-domain sharing in Phase 1.
 ```
 
+## Recently completed (2026-05-14 stabilisation run)
+
+```text
+qz.profiles.v1 active config + split default/example profiles (#26/PR#27)
+  - config/default/profiles.json + profiles/*.json  (shipped defaults)
+  - config/user/profiles.json + profiles/*.json     (local user config)
+  - model-overrides.json preserved as legacy fallback per layer
+
+memory_domain config plumbing (#23/PR#24, PR#25)
+  - memory_domain read from profile overrides, stored on catalog entries
+  - exposed in /v1/models, /qz/status, /qz/config/effective
+  - memory.domain in qz.profiles.v1 maps to memory_domain internally
+  - missing memory_domain resolves to isolated at request time
+  - no inference from model/profile/client/tool names
+
+Simplified reasoning-effort prompts (#29/PR#30)
+  - short depth-only prompts; removed hard tool-call caps and cross-file mandates
+  - high/xhigh preserve final-answer obligation
+
+Sandbox/tool-failure telemetry and guidance (#28/PRs#31-34)
+  - Slice 1: tool_escalation_requested on outgoing require_escalated calls
+  - Slice 2: native tool-output classifier before normalization
+    - tool_sandbox_denied  (Read-only file system)
+    - tool_connection_failed  (Connection refused)
+  - Slice 3: harness guidance in codex-core-qwenified.md
+  - qz-thoughts renders denied/conn-fail/escalation activity rows
+
+Live stack smoke test (#35/PR#36)
+  - scripts/qz-live-smoke validates proxy health, config, qz-thoughts,
+    unit guards, normal Codex path, and sandbox-denied telemetry end-to-end
+```
+
 ## Dependency chain
 
 ```text
-authority/docs cleanup
-  -> explicit memory_domain config plumbing
-    -> optional/non-fatal Phase 1 SQLite operational substrate
+authority/docs cleanup (ongoing)
+  -> [DONE] explicit memory_domain config plumbing
+    -> optional/non-fatal Phase 1 SQLite operational substrate  ← current P1
       -> same-scope operational signals, starting with repeated-read v1/v2
         -> rendered state packets / LimbiCore recall later
 ```
 
-Do not skip the memory-domain step. SQLite without explicit domain policy is how
-private/profile/coding state starts leaking by accident.
-
 ---
 
-## P0: Authority and task cleanup
+## P0: Authority and task cleanup (ongoing)
 
 Goal: stop agents from re-planning old decisions or following stale language.
 
@@ -57,84 +86,9 @@ A new agent can read docs/README.md, current-architecture-authority.md,
 codex-context-memory-contract.md, and this file, then know what to do next.
 ```
 
-Best resource:
-
-```text
-ChatGPT/GitHub API, DeepSeek for doc inventory, Gemini only for contradiction review.
-```
-
 ---
 
-## P1: memory_domain config plumbing
-
-Goal: replace the current safe skeleton where every request resolves to
-`isolated` with explicit config-driven policy.
-
-Scope:
-
-```text
-Resolve memory_domain from explicit model/profile config only.
-Missing memory_domain -> isolated.
-Unknown memory_domain -> isolated plus compact warning/report.
-No inference from model name, profile name, client name, tool names, user-agent,
-originator, prompt text, or vibes.
-```
-
-Likely files:
-
-```text
-proxy/qz_codex_metadata.py
-proxy/qz_model_catalog.py
-config/default/model-overrides.json
-config/user/model-overrides.json
-tests/test_qz_codex_metadata.py
-tests/test_qz_codex_request_metadata.py
-```
-
-Possible config shape:
-
-```json
-{
-  "models": {
-    "prompt-compiler.gguf": {
-      "memory_domain": "coding"
-    },
-    "caveman.gguf": {
-      "memory_domain": "coding"
-    },
-    "roleplay-character.gguf": {
-      "memory_domain": "roleplay"
-    }
-  }
-}
-```
-
-Acceptance tests:
-
-```text
-test_missing_memory_domain_is_isolated
-test_profile_memory_domain_from_override
-test_unknown_memory_domain_falls_back_isolated
-test_tool_names_do_not_grant_memory_domain
-test_client_headers_do_not_grant_memory_domain
-test_memory_domain_not_injected_into_forwarded_body
-```
-
-Blocked by:
-
-```text
-Nothing. This is the next implementation target.
-```
-
-Best resource:
-
-```text
-Codex/Claude after weekly refresh. DeepSeek can prepare a first draft or test plan.
-```
-
----
-
-## P2: Phase 1 SQLite operational substrate
+## P1: Phase 1 SQLite operational substrate
 
 Goal: store parser-derived operational facts safely without changing model-visible
 behaviour.
@@ -204,7 +158,7 @@ test_db_failure_does_not_break_proxy_request
 Blocked by:
 
 ```text
-P1 memory_domain config plumbing.
+Nothing. memory_domain plumbing is done. This is the current P1.
 ```
 
 Best resource:
@@ -215,7 +169,7 @@ Codex/Claude after refresh.
 
 ---
 
-## P3: Repeated-read signal
+## P2: Repeated-read signal
 
 Goal: reduce wasted tool calls from redundant file reads without suppressing
 legitimate re-reads.
@@ -263,14 +217,36 @@ Never cross workspace or memory_domain.
 Blocked by:
 
 ```text
-V1: not blocked, but best after P1 so terminology is stable.
-V2: blocked by P2 SQLite substrate and scope queries.
+V1: not blocked. Start any time; integration is cleaner after P1 SQLite.
+V2: blocked by P1 SQLite substrate and scope queries.
 ```
 
 Best resource:
 
 ```text
 DeepSeek can draft parser tests. Codex/Claude should do integration.
+```
+
+---
+
+## P3: Telemetry filter ergonomics / qz-live-smoke refinements
+
+Goal: reduce friction when diagnosing tool-failure events in a noisy telemetry
+stream.
+
+Scope:
+
+```text
+Optional /qz/telemetry/recent?type=tool_sandbox_denied query parameter.
+Optional /qz/telemetry/recent?types=A,B filter for multiple event types.
+qz-live-smoke --model flag default confirmation.
+Consider a per-request telemetry endpoint (/qz/telemetry/request?request_id=...).
+```
+
+Blocked by:
+
+```text
+Not blocked. Low priority; implement when the noisy-window problem recurs.
 ```
 
 ---
@@ -378,66 +354,7 @@ cross-domain isolation tests
 
 ---
 
-## Tonight's resource plan
-
-Use limited resources like this:
-
-```text
-DeepSeek/OpenCode:
-  doc inventory, stale terminology search, parser-test drafts, issue drafts.
-
-Gemini 9%:
-  one contradiction review only.
-
-ChatGPT/GitHub API:
-  repo-level triage, docs updates, issue/task breakdown, implementation prompts.
-
-Codex/Claude after refresh:
-  P1 memory_domain config patch,
-  P2 SQLite substrate patch,
-  P3 repeated-read integration.
-```
-
-Do not spend premium weekly refresh on rediscovering this plan.
-
----
-
-## First implementation prompt: P1 memory_domain
-
-```text
-Implement explicit memory_domain config plumbing for QuantZhai.
-
-Read first:
-- docs/current-architecture-authority.md
-- docs/codex-context-memory-contract.md
-- docs/current-task-hierarchy.md
-- proxy/qz_codex_metadata.py
-- proxy/qz_model_catalog.py
-- tests/test_qz_codex_metadata.py
-- tests/test_qz_codex_request_metadata.py
-- tests/test_qz_request_mutation_regression.py
-
-Goal:
-- resolve memory_domain from explicit model/profile config only
-- missing memory_domain resolves to isolated
-- unknown memory_domain resolves to isolated plus compact warning/report
-- no inference from model name, profile name, client name, tools, user-agent,
-  originator, prompt text, or request path
-- do not inject qz_memory_domain or other qz_* context into forwarded
-  /v1/responses request bodies
-
-Add/extend tests:
-- missing domain isolated
-- profile override domain used
-- unknown domain falls back isolated
-- tool names cannot grant domain
-- client headers cannot grant domain
-- forwarded request body does not contain qz_memory_domain
-
-Keep the patch small. Do not implement SQLite or model-visible memory.
-```
-
-## Second implementation prompt: P2 SQLite
+## First implementation prompt: P1 SQLite (current target)
 
 ```text
 Implement the Phase 1 SQLite operational substrate for QuantZhai.

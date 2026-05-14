@@ -203,14 +203,15 @@ python3 -m pytest tests/test_qz_request_mutation_regression.py
 python3 -m pytest tests/test_qz_runtime_io.py
 ```
 
-Recent full-system checkpoint:
+Recent full-system checkpoint (2026-05-14, post-stabilisation):
 
 ```text
-focused suite: 165 passed
-full suite: 377 passed
-live Codex smoke: passed
+full suite: 545 passed
+live smoke (scripts/qz-live-smoke): passed
+tool_sandbox_denied telemetry: confirmed
 /health: stable
 forbidden qz context metadata in recent captures: not found
+memory_domain plumbing: landed (PRs #24/#25, qz.profiles.v1 PR #27)
 ```
 
 ---
