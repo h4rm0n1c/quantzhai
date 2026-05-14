@@ -354,9 +354,31 @@ The old `/qz/status` + `/v1/models` deep reconciliation is now opt-in via
 operational facts stored in the Phase 1 SQLite substrate. `qz-write-runtime-state`
 becomes a thin shim or disappears.
 
+**Step 11 (done — slice 9):** Migrated `scripts/qz-top` to use
+`GET /qz/control-plane` as the primary live model/backend status source.
+
+Added `control_plane_status()` and `model_status_from_control_plane()`. Both
+`draw()` (curses loop) and `once()` (one-shot mode) now prefer control-plane and
+fall back to `/qz/status` + `model_status_from_proxy()` if the schema is absent.
+`_is_monitor_poll()` updated to exclude control-plane polling from activity rows.
+
+Fields mapped from `qz.control_plane.status.v1`:
+`ready`, `profile`, `selected`, `selected_key`, `selected_backend_id`,
+`selected_state` (derived from `status`), `loaded`, `loaded_count`, `load_state`,
+`error` (from `backend.error` or operator_hint).
+
+Fields intentionally left at defaults (not yet in `/qz/control-plane`):
+`profile_symlink`, `prompt_files`, `reasoning_level`, `reasoning_policy`,
+`sampling`, `selected_context_length`, `backend_context_length`.
+`backend_reasoning_budget` reads from env as before.
+
+Telemetry rendering, GPU rows, throughput, and benchmark display are unchanged.
+Backend unavailable still renders — qz-top remains useful when llama.cpp is down.
+
 **Remaining under #44 (deferred):**
-- Migrate qz-top, qz-codex-common, and qz-live-smoke to consume
+- Migrate qz-codex-common and qz-live-smoke to consume
   `/qz/control-plane` where useful.
+- qz-thoughts: next migration target.
 - Proxy fully owns Codex catalog file generation; `qz-codex-common` opt-in fallback
   can be removed once proxy is reliable for all cases.
 - Audit runtime-state JSON ownership and identify what should later move behind

@@ -170,6 +170,77 @@ def proxy_status() -> Optional[dict]:
     return fetch_json(f"{proxy_base_url()}/qz/status")
 
 
+def control_plane_status() -> Optional[dict]:
+    """Fetch /qz/control-plane — the primary proxy-owned status source."""
+    return fetch_json(f"{proxy_base_url()}/qz/control-plane")
+
+
+def model_status_from_control_plane(cp: Optional[dict]) -> "ModelStatus":
+    """Build ModelStatus from a qz.control_plane.status.v1 payload.
+
+    Fields not exposed by /qz/control-plane (prompt_files, reasoning_level,
+    reasoning_policy, sampling, profile_symlink, context lengths) are left at
+    their defaults. They can be filled by a future slice or from telemetry.
+    """
+    if not isinstance(cp, dict):
+        return ModelStatus()
+    r = cp.get("readiness") or {}
+    m = cp.get("models") or {}
+    b = cp.get("backend") or {}
+    hints = cp.get("operator_hints") or []
+    overall_status = cp.get("status") or ""
+
+    selected_key = str(m.get("selected") or "")
+    selected_backend_id = str(m.get("selected_backend_id") or selected_key)
+    loaded_model = str(b.get("loaded_model") or "")
+    loaded_count = int(b.get("loaded_count") or 0)
+    backend_error = str(b.get("error") or "")
+
+    # Derive a human-readable state label from the control-plane status string.
+    _status_map = {
+        "ready": "loaded",
+        "backend_unavailable": "unavailable",
+        "model_not_loaded": "not_loaded",
+        "initializing": "initializing",
+        "degraded": "degraded",
+    }
+    selected_state = _status_map.get(overall_status, overall_status)
+    load_state = overall_status
+
+    # Use backend error, or first backend-related hint, as the error field.
+    error = backend_error
+    if not error and not r.get("backend_reachable"):
+        for hint in hints:
+            h = str(hint)
+            if "backend" in h.lower() or "llama" in h.lower():
+                error = h[:120]
+                break
+
+    # backend_reasoning_budget is not in control-plane; read from env as fallback.
+    budget = str(os.environ.get("QZ_REASONING_BUDGET", ""))
+
+    return ModelStatus(
+        ready=bool(r.get("backend_ready")),
+        profile=selected_key,
+        selected=str(selected_backend_id or selected_key),
+        selected_key=selected_key,
+        selected_backend_id=selected_backend_id,
+        profile_symlink=False,           # not exposed by /qz/control-plane yet
+        prompt_files=[],                 # not exposed by /qz/control-plane yet
+        reasoning_level="",             # not exposed by /qz/control-plane yet
+        reasoning_policy="",            # not exposed by /qz/control-plane yet
+        sampling={},                    # not exposed by /qz/control-plane yet
+        backend_reasoning_budget=budget,
+        selected_state=selected_state,
+        selected_context_length=0,      # not exposed by /qz/control-plane yet
+        backend_context_length=0,       # not exposed by /qz/control-plane yet
+        loaded=loaded_model,
+        loaded_count=loaded_count,
+        load_state=load_state,
+        error=error,
+    )
+
+
 def _path_without_query(path: str) -> str:
     return str(path or "").split("?", 1)[0]
 
@@ -177,7 +248,7 @@ def _path_without_query(path: str) -> str:
 def _is_monitor_poll(path: str) -> bool:
     path = _path_without_query(path)
     return (
-        path in {"/health", "/ready", "/qz/status"}
+        path in {"/health", "/ready", "/qz/status", "/qz/control-plane", "/qz/control-plane/status"}
         or path.startswith("/qz/telemetry")
     )
 
@@ -1104,10 +1175,17 @@ class UI:
         gpus = parse_gpus()
 
         rates = Rates(recent=[])
-        status = proxy_status() if proxy_ok else None
-        model_status = model_status_from_proxy(status)
+        # Prefer /qz/control-plane (proxy-owned summary); fall back to /qz/status.
         if proxy_ok:
+            cp = control_plane_status()
+            if isinstance(cp, dict) and cp.get("schema") == "qz.control_plane.status.v1":
+                model_status = model_status_from_control_plane(cp)
+            else:
+                status = proxy_status()
+                model_status = model_status_from_proxy(status)
             rates = merge_telemetry(rates, telemetry_recent())
+        else:
+            model_status = ModelStatus()
         benchmark = latest_benchmark()
 
         self.draw_header(backend_ok, proxy_ok, gpus)
@@ -1157,10 +1235,17 @@ def once():
     proxy = curl_health(os.environ.get("QZ_PROXY_HOST", "127.0.0.1"), os.environ.get("QZ_PROXY_PORT", "18180"))
     gpus = parse_gpus()
     rates = Rates(recent=[])
-    status = proxy_status() if proxy else None
-    model_status = model_status_from_proxy(status)
+    # Prefer /qz/control-plane (proxy-owned summary); fall back to /qz/status.
     if proxy:
+        cp = control_plane_status()
+        if isinstance(cp, dict) and cp.get("schema") == "qz.control_plane.status.v1":
+            model_status = model_status_from_control_plane(cp)
+        else:
+            status = proxy_status()
+            model_status = model_status_from_proxy(status)
         rates = merge_telemetry(rates, telemetry_recent())
+    else:
+        model_status = ModelStatus()
     benchmark = latest_benchmark()
 
     backend_light = "●" if backend else "○"
