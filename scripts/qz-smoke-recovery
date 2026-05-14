@@ -9,6 +9,8 @@
 #   --confirm PHRASE         Confirmation phrase for dangerous trigger checks
 #                            (default: QZ_RECOVERY_CONFIRM_PHRASE env var)
 #   --wait-secs N            Max wait for proxy readiness (default: 30)
+#   --post-timeout N         curl max-time for ordinary POST checks (default: 15)
+#   --dangerous-timeout N    curl max-time for restart/reload trigger calls (default: 300)
 #   --skip-refresh-trigger   Skip the optional refresh_catalog trigger test
 #   --allow-restart          Run restart_backend trigger (INTERRUPTS backend)
 #   --allow-reload           Run reload_selected_model trigger (may stall)
@@ -19,9 +21,11 @@
 # Dangerous actions (restart/reload) only run if explicitly requested.
 #
 # Environment:
-#   QZ_PROXY_URL             Proxy base URL override
-#   QZ_RECOVERY_CONFIRM_PHRASE   Default confirmation phrase
-#   QZ_WAIT_SECS             Default wait-secs
+#   QZ_PROXY_URL                     Proxy base URL override
+#   QZ_RECOVERY_CONFIRM_PHRASE       Default confirmation phrase
+#   QZ_WAIT_SECS                     Default wait-secs
+#   QZ_SMOKE_POST_TIMEOUT            Default ordinary POST timeout (default: 15)
+#   QZ_SMOKE_DANGEROUS_POST_TIMEOUT  Default dangerous POST timeout (default: 300)
 #
 # Artifacts written to /tmp:
 #   /tmp/qz-recovery-smoke-status.json
@@ -29,6 +33,8 @@
 #   /tmp/qz-recovery-smoke-plan-refresh.json
 #   /tmp/qz-recovery-smoke-plan-restart.json
 #   /tmp/qz-recovery-smoke-trigger-*.json
+#   /tmp/qz-recovery-smoke-trigger-*.curl.err      (curl stderr for dangerous calls)
+#   /tmp/qz-recovery-smoke-*-after-000.json        (post-timeout diagnostics)
 #
 # Exit codes:
 #   0  all asserted checks passed
@@ -43,6 +49,8 @@ set -euo pipefail
 PROXY_URL="${QZ_PROXY_URL:-}"
 CONFIRM_PHRASE="${QZ_RECOVERY_CONFIRM_PHRASE:-}"
 WAIT_SECS="${QZ_WAIT_SECS:-30}"
+POST_TIMEOUT="${QZ_SMOKE_POST_TIMEOUT:-15}"
+DANGEROUS_POST_TIMEOUT="${QZ_SMOKE_DANGEROUS_POST_TIMEOUT:-300}"
 SKIP_REFRESH_TRIGGER=0
 ALLOW_RESTART=0
 ALLOW_RELOAD=0
@@ -61,6 +69,10 @@ while [[ $# -gt 0 ]]; do
     --confirm=*)                 CONFIRM_PHRASE="${1#*=}"; shift ;;
     --wait-secs)                 WAIT_SECS="${2:?--wait-secs requires a number}"; shift 2 ;;
     --wait-secs=*)               WAIT_SECS="${1#*=}"; shift ;;
+    --post-timeout)              POST_TIMEOUT="${2:?--post-timeout requires a number}"; shift 2 ;;
+    --post-timeout=*)            POST_TIMEOUT="${1#*=}"; shift ;;
+    --dangerous-timeout)         DANGEROUS_POST_TIMEOUT="${2:?--dangerous-timeout requires a number}"; shift 2 ;;
+    --dangerous-timeout=*)       DANGEROUS_POST_TIMEOUT="${1#*=}"; shift ;;
     --skip-refresh-trigger)      SKIP_REFRESH_TRIGGER=1; shift ;;
     --allow-restart)             ALLOW_RESTART=1; shift ;;
     --allow-reload)              ALLOW_RELOAD=1; shift ;;
@@ -127,16 +139,64 @@ _get_json() {
 }
 
 # post_json URL body outfile → writes response body to outfile, echoes HTTP status
+# Uses POST_TIMEOUT for ordinary (non-dangerous) calls.
 _post_json() {
   local url="$1" body="$2" out="$3"
   local tmpbody
   tmpbody="$(mktemp)"
   local status
-  status=$(curl -sS --max-time 15 -w '%{http_code}' -o "$tmpbody" \
+  status=$(curl -sS --max-time "$POST_TIMEOUT" -w '%{http_code}' -o "$tmpbody" \
     -X POST -H 'Content-Type: application/json' --data-raw "$body" "$url" 2>/dev/null) || status="000"
   cp "$tmpbody" "$out" 2>/dev/null || true
   rm -f "$tmpbody"
   printf '%s' "$status"
+}
+
+# post_json_ext URL body outfile timeout stderr_file
+# Extended version for dangerous trigger calls with configurable timeout and stderr capture.
+_post_json_ext() {
+  local url="$1" body="$2" out="$3" timeout="${4:-$POST_TIMEOUT}" errf="${5:-}"
+  local tmpbody tmperr
+  tmpbody="$(mktemp)"
+  tmperr="$(mktemp)"
+  local status
+  status=$(curl -sS --max-time "$timeout" -w '%{http_code}' -o "$tmpbody" \
+    -X POST -H 'Content-Type: application/json' --data-raw "$body" \
+    "$url" 2>"$tmperr") || status="000"
+  cp "$tmpbody" "$out" 2>/dev/null || true
+  [[ -n "$errf" ]] && cp "$tmperr" "$errf" 2>/dev/null || true
+  rm -f "$tmpbody" "$tmperr"
+  printf '%s' "$status"
+}
+
+# Capture recovery/status + control-plane immediately after HTTP 000 on a dangerous call.
+# Helps diagnose whether the action completed before curl timed out.
+_capture_dangerous_timeout_diagnostics() {
+  local label="$1"
+  local stat_file="/tmp/qz-recovery-smoke-${label}-recovery-status-after-000.json"
+  local cp_file="/tmp/qz-recovery-smoke-${label}-control-plane-after-000.json"
+  printf '  capturing post-timeout diagnostics...\n'
+  _get_json "${PROXY_URL}/qz/recovery/status" "$stat_file" >/dev/null || true
+  _get_json "${PROXY_URL}/qz/control-plane"   "$cp_file"   >/dev/null || true
+  printf '  recovery/status after timeout:\n'
+  printf '    in_progress:          %s\n' "$(_jq "$stat_file" '.runtime_state.in_progress // "?"')"
+  printf '    last_recovery_action: %s\n' "$(_jq "$stat_file" '.runtime_state.last_recovery_action // "?"')"
+  printf '    last_recovery_error:  %s\n' "$(_jq "$stat_file" '.runtime_state.last_recovery_error // "?"')"
+  printf '    active_requests:      %s\n' "$(_jq "$stat_file" '.active_requests.count // "?"')"
+  printf '  control-plane after timeout:\n'
+  printf '    backend.reachable:    %s\n' "$(_jq "$cp_file" '.backend.reachable // "?"')"
+  printf '    backend.loaded_model: %s\n' "$(_jq "$cp_file" '.backend.loaded_model // "?"')"
+  printf '    model_state:          %s\n' "$(_jq "$cp_file" '.service_status.model_state // "?"')"
+  printf '  artifacts:\n'
+  printf '    %s\n' "$stat_file"
+  printf '    %s\n' "$cp_file"
+  # If model appears loaded despite HTTP 000, give a clear hint
+  local _model_st
+  _model_st=$(_jq "$cp_file" '.service_status.model_state // ""')
+  if [[ "$_model_st" == "loaded" ]]; then
+    printf '  NOTE: model_state=loaded — action may have completed after client timeout.\n'
+    printf '  Increase --dangerous-timeout (current: %s) to capture success response.\n' "$DANGEROUS_POST_TIMEOUT"
+  fi
 }
 
 # jq_field FILE expr → prints field value or empty
@@ -459,13 +519,21 @@ if [[ "$ALLOW_RESTART" -eq 1 ]] && [[ "$ALLOW_RESTART_AND_RELOAD" -eq 0 ]]; then
     fail "trigger restart_backend: proxy authority not enabled (QZ_RECOVERY_ACTIONS!=1)"
   else
     RESTART_FILE=/tmp/qz-recovery-smoke-trigger-restart-backend.json
+    RESTART_ERR=/tmp/qz-recovery-smoke-trigger-restart-backend.curl.err
     _body=$(printf '{"action":"restart_backend","reason":"recovery smoke explicit restart","confirm":"%s","force":true}' \
       "$CONFIRM_PHRASE")
-    RS_TR_STATUS=$(_post_json "${PROXY_URL}/qz/recovery/trigger" "$_body" "$RESTART_FILE")
+    printf '  timeout: %ss\n' "$DANGEROUS_POST_TIMEOUT"
+    RS_TR_STATUS=$(_post_json_ext "${PROXY_URL}/qz/recovery/trigger" "$_body" \
+      "$RESTART_FILE" "$DANGEROUS_POST_TIMEOUT" "$RESTART_ERR")
     if [[ "$RS_TR_STATUS" == "200" ]]; then
       ok "trigger restart_backend: HTTP 200"
       _expect_field "trigger/restart_backend" "$RESTART_FILE" '.schema' "qz.recovery.trigger.v1"
       _expect_field "trigger/restart_backend" "$RESTART_FILE" '.accepted' "true"
+    elif [[ "$RS_TR_STATUS" == "000" ]]; then
+      fail "trigger restart_backend: HTTP 000 (curl timed out or client disconnected)"
+      info "  action may have completed after client timeout; increase --dangerous-timeout"
+      _capture_dangerous_timeout_diagnostics "restart-backend"
+      [[ -s "$RESTART_ERR" ]] && printf '  curl stderr: %s\n' "$(cat "$RESTART_ERR")"
     else
       fail "trigger restart_backend: expected HTTP 200 got ${RS_TR_STATUS}"
       info "  artifact: $RESTART_FILE"
@@ -486,9 +554,12 @@ if [[ "$ALLOW_RELOAD" -eq 1 ]] && [[ "$ALLOW_RESTART_AND_RELOAD" -eq 0 ]]; then
     fail "trigger reload_selected_model: proxy authority not enabled (QZ_RECOVERY_ACTIONS!=1)"
   else
     RELOAD_FILE=/tmp/qz-recovery-smoke-trigger-reload-selected-model.json
+    RELOAD_ERR=/tmp/qz-recovery-smoke-trigger-reload-selected-model.curl.err
     _body=$(printf '{"action":"reload_selected_model","reason":"recovery smoke explicit reload","confirm":"%s","force":true}' \
       "$CONFIRM_PHRASE")
-    RL_STATUS=$(_post_json "${PROXY_URL}/qz/recovery/trigger" "$_body" "$RELOAD_FILE")
+    printf '  timeout: %ss\n' "$DANGEROUS_POST_TIMEOUT"
+    RL_STATUS=$(_post_json_ext "${PROXY_URL}/qz/recovery/trigger" "$_body" \
+      "$RELOAD_FILE" "$DANGEROUS_POST_TIMEOUT" "$RELOAD_ERR")
     if [[ "$RL_STATUS" == "200" ]]; then
       ok "trigger reload_selected_model: HTTP 200"
       _expect_field "trigger/reload_selected_model" "$RELOAD_FILE" '.schema' "qz.recovery.trigger.v1"
@@ -502,6 +573,11 @@ if [[ "$ALLOW_RELOAD" -eq 1 ]] && [[ "$ALLOW_RESTART_AND_RELOAD" -eq 0 ]]; then
         fail "trigger reload_selected_model: HTTP 409 ${got_err}"
       fi
       info "  artifact: $RELOAD_FILE"
+    elif [[ "$RL_STATUS" == "000" ]]; then
+      fail "trigger reload_selected_model: HTTP 000 (curl timed out or client disconnected)"
+      info "  action may have completed after client timeout; increase --dangerous-timeout"
+      _capture_dangerous_timeout_diagnostics "reload-selected-model"
+      [[ -s "$RELOAD_ERR" ]] && printf '  curl stderr: %s\n' "$(cat "$RELOAD_ERR")"
     else
       fail "trigger reload_selected_model: expected HTTP 200 got ${RL_STATUS}"
       info "  artifact: $RELOAD_FILE"
@@ -522,13 +598,20 @@ if [[ "$ALLOW_RESTART_AND_RELOAD" -eq 1 ]]; then
     fail "trigger restart+reload: proxy authority not enabled (QZ_RECOVERY_ACTIONS!=1)"
   else
     # Step 1: restart_backend
-    printf '  step 1: restart_backend\n'
+    printf '  step 1: restart_backend (timeout: %ss)\n' "$DANGEROUS_POST_TIMEOUT"
     RR_RESTART_FILE=/tmp/qz-recovery-smoke-trigger-restart-backend.json
+    RR_RESTART_ERR=/tmp/qz-recovery-smoke-trigger-restart-backend.curl.err
     _body=$(printf '{"action":"restart_backend","reason":"recovery smoke restart+reload step1","confirm":"%s","force":true}' \
       "$CONFIRM_PHRASE")
-    RR_RS_STATUS=$(_post_json "${PROXY_URL}/qz/recovery/trigger" "$_body" "$RR_RESTART_FILE")
+    RR_RS_STATUS=$(_post_json_ext "${PROXY_URL}/qz/recovery/trigger" "$_body" \
+      "$RR_RESTART_FILE" "$DANGEROUS_POST_TIMEOUT" "$RR_RESTART_ERR")
     if [[ "$RR_RS_STATUS" == "200" ]]; then
       ok "trigger restart_backend (step 1): HTTP 200"
+    elif [[ "$RR_RS_STATUS" == "000" ]]; then
+      fail "trigger restart_backend (step 1): HTTP 000 (curl timed out or client disconnected)"
+      info "  Increase --dangerous-timeout (current: ${DANGEROUS_POST_TIMEOUT})"
+      _capture_dangerous_timeout_diagnostics "restart-and-reload-step1"
+      [[ -s "$RR_RESTART_ERR" ]] && printf '  curl stderr: %s\n' "$(cat "$RR_RESTART_ERR")"
     else
       fail "trigger restart_backend (step 1): expected HTTP 200 got ${RR_RS_STATUS}"
       info "  artifact: $RR_RESTART_FILE"
@@ -554,17 +637,24 @@ if [[ "$ALLOW_RESTART_AND_RELOAD" -eq 1 ]]; then
     fi
 
     # Step 3: reload_selected_model
-    printf '  step 3: reload_selected_model\n'
+    printf '  step 3: reload_selected_model (timeout: %ss)\n' "$DANGEROUS_POST_TIMEOUT"
     RR_RELOAD_FILE=/tmp/qz-recovery-smoke-trigger-reload-selected-model.json
+    RR_RELOAD_ERR=/tmp/qz-recovery-smoke-trigger-reload-selected-model.curl.err
     _body=$(printf '{"action":"reload_selected_model","reason":"recovery smoke restart+reload step3","confirm":"%s","force":true}' \
       "$CONFIRM_PHRASE")
-    RR_RL_STATUS=$(_post_json "${PROXY_URL}/qz/recovery/trigger" "$_body" "$RR_RELOAD_FILE")
+    RR_RL_STATUS=$(_post_json_ext "${PROXY_URL}/qz/recovery/trigger" "$_body" \
+      "$RR_RELOAD_FILE" "$DANGEROUS_POST_TIMEOUT" "$RR_RELOAD_ERR")
     if [[ "$RR_RL_STATUS" == "200" ]]; then
       ok "trigger reload_selected_model (step 3): HTTP 200"
     elif [[ "$RR_RL_STATUS" == "409" ]]; then
       _got_err=$(_jq "$RR_RELOAD_FILE" '.error')
       fail "trigger reload_selected_model (step 3): HTTP 409 ${_got_err}"
       info "  Select a model first with /qz/models/select, then retry --allow-restart-and-reload"
+    elif [[ "$RR_RL_STATUS" == "000" ]]; then
+      fail "trigger reload_selected_model (step 3): HTTP 000 (curl timed out or client disconnected)"
+      info "  Increase --dangerous-timeout (current: ${DANGEROUS_POST_TIMEOUT})"
+      _capture_dangerous_timeout_diagnostics "restart-and-reload-step3"
+      [[ -s "$RR_RELOAD_ERR" ]] && printf '  curl stderr: %s\n' "$(cat "$RR_RELOAD_ERR")"
     else
       fail "trigger reload_selected_model (step 3): expected HTTP 200 got ${RR_RL_STATUS}"
       info "  artifact: $RR_RELOAD_FILE"
@@ -607,7 +697,9 @@ for _art in \
   /tmp/qz-recovery-smoke-control-plane.json \
   /tmp/qz-recovery-smoke-plan-refresh.json \
   /tmp/qz-recovery-smoke-plan-restart.json \
-  /tmp/qz-recovery-smoke-trigger-*.json; do
+  /tmp/qz-recovery-smoke-trigger-*.json \
+  /tmp/qz-recovery-smoke-trigger-*.curl.err \
+  /tmp/qz-recovery-smoke-*-after-000.json; do
   [[ -f "$_art" ]] && printf '  %s\n' "$_art"
 done
 

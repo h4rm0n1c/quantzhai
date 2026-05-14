@@ -840,6 +840,24 @@ scripts/qz-smoke-recovery --confirm 'phrase' --allow-restart
 scripts/qz-smoke-recovery --confirm 'phrase' --allow-restart-and-reload
 ```
 
+### Slice 13b (done): Harden recovery smoke timeout handling
+
+**`scripts/qz-smoke-recovery` changes:**
+- `POST_TIMEOUT` (default 15 s) for ordinary checks; `DANGEROUS_POST_TIMEOUT` (default 300 s) for restart/reload
+- New `--post-timeout N` and `--dangerous-timeout N` CLI options; env overrides via `QZ_SMOKE_POST_TIMEOUT` / `QZ_SMOKE_DANGEROUS_POST_TIMEOUT`
+- New `_post_json_ext URL body outfile timeout stderr_file` helper with explicit timeout + stderr capture
+- All dangerous trigger calls now use `_post_json_ext` with `DANGEROUS_POST_TIMEOUT`
+- New `_capture_dangerous_timeout_diagnostics LABEL` — on HTTP 000, captures `/qz/recovery/status` + `/qz/control-plane` and prints diagnostic summary
+- HTTP 000 now prints: `action may have completed after client timeout; increase --dangerous-timeout`
+- If post-timeout control-plane shows `model_state=loaded`, prints specific hint about increasing timeout
+- Artifacts extended: `*.curl.err` for curl stderr, `*-after-000.json` for post-timeout diagnostics
+
+**`proxy/quantzhai_proxy.py` `_send_json` change:**
+- `BrokenPipeError` and `ConnectionResetError` now caught instead of propagating
+- On disconnect: logs to `latest-send-json-disconnect.txt` via `runtime_log`, sets `close_connection = True`
+- Normal responses unaffected; other exceptions still propagate
+- Eliminates noisy BrokenPipeError traceback spam when curl times out mid-response
+
 ### Future: durable state (requires #2 SQLite)
 
 - Move attempt history and backoff tracking from in-memory to SQLite.

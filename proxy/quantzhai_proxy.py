@@ -199,12 +199,24 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def _send_json(self, status, obj):
         data = json.dumps(obj).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self._send_codex_rate_limit_headers()
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self._send_codex_rate_limit_headers()
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            # Client disconnected before the response could be sent.
+            # The action has already completed; this is a transport-only failure.
+            try:
+                runtime_log(
+                    "latest-send-json-disconnect.txt",
+                    f"_send_json: client disconnected (status={status})\n",
+                )
+            except Exception:
+                pass
+            self.close_connection = True
 
     def _send_telemetry_sse(self):
         self.send_response(200)

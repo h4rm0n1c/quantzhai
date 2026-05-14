@@ -583,6 +583,13 @@ Two-step smoke flow available with `--allow-restart-and-reload`:
 3. trigger reload_selected_model
 4. verify control-plane backend.reachable + model state
 
+### Slice 13b (done): Harden recovery smoke timeout + `_send_json` disconnect
+
+- `_post_json_ext` helper with configurable timeout + stderr capture
+- Dangerous trigger calls use `DANGEROUS_POST_TIMEOUT=300s` (configurable via `--dangerous-timeout N`)
+- HTTP 000 diagnostic capture via `_capture_dangerous_timeout_diagnostics`
+- `proxy/quantzhai_proxy.py` `_send_json` now silently handles client disconnect (BrokenPipe/ConnectionReset)
+
 ---
 
 ## Open questions
