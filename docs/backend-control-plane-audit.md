@@ -466,17 +466,78 @@ in qz-live-smoke for model visibility.
 When added it should call `qz-wait-ready --catalog --model MODEL` as the readiness
 preflight rather than rolling its own.
 
-**Remaining under #44 (deferred):**
-- `qz-smoke-repeated-read` from #43: script added (#43). It uses qz-wait-ready
-  for catalog+model preflight and telemetry seq-gated pass condition.
-- Proxy fully owns Codex catalog file generation; `qz-codex-common` opt-in fallback
-  can be removed once proxy is reliable for all cases.
-- Replace `qz-write-runtime-state` launcher trace with proxy startup event telemetry
-  once Phase 1 SQLite is in place.
-- Bring scripts/qz-smoke-repeated-read from #43 onto qz-wait-ready once that
-  script exists.
-- Continue identifying script/proxy data-flow duplication and convert only tiny,
-  testable pieces.
+## Final #44 status (2026-05-15)
+
+**#44 is complete.** The main backend control-plane and script/proxy data-flow migration pass is done. Remaining cleanup has been split into follow-up issues.
+
+### What is now proxy-owned
+
+```text
+GET /qz/control-plane          — live status authority (qz.control_plane.status.v1)
+GET /qz/status                 — existing proxy status (retained, still used as fallback)
+POST /qz/models/refresh        — proxy-owned catalog refresh (qz.codex.catalog.refresh.v1)
+/v1/responses errors           — qz.responses.error.v1 for proxy-not-ready / model-missing / backend-unavailable
+/qz/telemetry/*                — proxy-owned telemetry stream
+```
+
+### What remains script-owned by design
+
+```text
+Docker/backend process start   — OS process management (qz-up)
+Proxy process start            — OS process management (qz-proxy)
+Local client config (CODEX_HOME, config.toml, model-catalog file) — Codex client setup
+nvidia-smi / hardware checks   — qz-doctor local only
+```
+
+### What was demoted to legacy/trace
+
+```text
+var/run/qz-runtime-state.json  — launcher trace only, no live consumer reads it for decisions
+scripts/qz-write-runtime-state — launcher trace writer; docstring updated; removal tracked in #46
+```
+
+### What was deliberately split into follow-up issues
+
+```text
+#45: Remove legacy qz-codex local catalog fallback (QZ_CODEX_ALLOW_LOCAL_CATALOG_FALLBACK)
+     — explicit opt-in only since slice 3; remove once proxy artifact generation is fully trusted.
+#46: Replace qz-write-runtime-state launcher trace with startup telemetry / Phase 1 SQLite
+     — depends on #2 (Phase 1 SQLite) or proxy startup event telemetry.
+#2:  Phase 1 SQLite operational substrate
+     — prerequisite for #46 and for repeated-read v2; not part of #44 scope.
+```
+
+### Script/consumer migration summary
+
+| Script | Before #44 | After #44 |
+|---|---|---|
+| `qz-wait-ready` | polled `/health`, `/v1/models`, `/qz/status` | polls `/qz/control-plane` primary; legacy fallback |
+| `qz-doctor` | fetched `/qz/status` + `/v1/models` for live contract | fetches `/qz/control-plane`; old reconciliation opt-in via `QZ_DOCTOR_LEGACY_LIVE_CONTRACT=1` |
+| `qz-top` | fetched `/qz/status` for model/backend status | fetches `/qz/control-plane`; falls back to `/qz/status` |
+| `qz-thoughts` | no live proxy/backend rows | adds control-plane rows on connect/reconnect |
+| `qz-codex-common` | fetched `/qz/status` for selected model | fetches `/qz/control-plane`; falls back to `/qz/status` |
+| `qz-live-smoke` | hand-parsed `/v1/models` for model visibility | calls `qz-wait-ready --catalog --model MODEL` |
+| `qz-smoke-repeated-read` | did not exist | added (#43); uses `qz-wait-ready` for preflight |
+| `qz-write-runtime-state` | described as "runtime truth" | docstring updated: "launcher trace; not live authority" |
+
+### Why #44 closes
+
+The original issue asked for:
+1. ✅ Audit document — `docs/backend-control-plane-audit.md`
+2. ✅ Readiness levels clearly separated — distinct levels in `qz-wait-ready`
+3. ✅ Shared readiness helper — `scripts/qz-wait-ready`
+4. ✅ Live smoke uses helper — `qz-live-smoke`, `qz-smoke-repeated-read`
+5. ✅ Missing model diagnostics proxy-owned — `/qz/control-plane` + `qz-wait-ready`
+6. ✅ Diagnostic routes work when backend down — `/qz/control-plane` always returns JSON
+7. ✅ No qz_* injected into forwarded /v1/responses bodies — regression test unchanged
+8. ✅ Runtime-state JSON not treated as live authority — downgraded to launcher trace
+
+Long-tail cleanup (#45, #46) does not block closing #44.
+
+**Remaining under #44 (deferred to follow-up issues):**
+- #45: Remove local catalog fallback from qz-codex-common.
+- #46: Replace qz-write-runtime-state launcher trace with startup telemetry.
+- #2: Phase 1 SQLite (prerequisite for #46 and repeated-read v2).
 
 ---
 
