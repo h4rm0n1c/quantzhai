@@ -239,34 +239,36 @@ mechanisms.
 
 ## Current state
 
-Effort prompts as of 2026-05-13 (post issue #11 retuning):
+Effort prompts as of 2026-05-14 (post issue #29 simplification):
 
 ```
-low:    Use at most one tool call. Do not follow imports, explore subdirectories,
-        or run a second command unless the first fails. Answer directly in two
-        sentences or fewer.
+low:    Think briefly. Answer from obvious evidence. Do not over-investigate.
 
-medium: Use at most 3 tool calls. Stop after 3 regardless of task complexity —
-        work with what you have. Give a concise answer with brief supporting detail.
+medium: Reason enough to be correct. Use tools when useful.
+        Stop when the answer is clear.
 
-high:   Use up to 8 tool calls. Read the most relevant files first.
-        Cross-reference at least two sources when the answer depends on code
-        behaviour. Stop early if the answer is clear. Do not chase every possible
-        dependency. If uncertainty remains after the budget, state the uncertainty
-        and answer from the evidence gathered. Give a concise answer with the key
-        evidence.
+high:   Think carefully. Check important assumptions.
+        Stop on diminishing returns. Produce a final answer.
 
-xhigh:  Use up to 16 tool calls. Map the relevant area before editing or judging
-        architecture. Trace only dependencies that can change the answer. Avoid
-        rereading the same file unless it changed or you need a specific line
-        range. Stop when further reads are unlikely to change the answer, not when
-        all uncertainty is gone. If uncertainty remains after the budget, list the
-        remaining checks instead of continuing. Document the important findings
-        and the decision.
+xhigh:  Use deeper reasoning for difficult problems.
+        Explore alternatives, but remain bounded. Produce a final answer.
 ```
+
+**Design principle (issue #29):** Effort prompts control reasoning depth only.
+They are not mini system prompts. Tool policy, cross-file investigation rules,
+response format, and task authority belong in the main agent harness, AGENTS.md,
+and turn harnesses — not in the effort prompt. High/xhigh still carry explicit
+boundedness and final-answer obligation to prevent reasoning loops.
+
+**Prior state (issue #11, 2026-05-13):** Prompts included hard tool-call caps,
+cross-file mandates ("cross-reference at least two sources"), and verbose
+stopping conditions. Those were removed in issue #29 after symptoms suggested
+the verbose prompts were conflicting with the main harness and causing
+reasoning loops, over-investigation, and answer suppression.
 
 All four levels share medium's sampling params (temp=0.6, top_p=0.95).
 
-**Known limitation:** `low` and `medium` hard caps are not reliably enforced on
-fully open-ended exploration tasks ("examine this repo"). This is structural and
-not solvable through prompt text alone given current Codex/proxy architecture.
+**Known limitation:** Effort prompts are advisory. They can steer reasoning depth,
+but they do not strictly enforce tool-use counts, search breadth, or stop timing.
+Those controls belong in the main agent harness, tool policy, or runtime state
+handling — not in the effort prompt.
