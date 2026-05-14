@@ -33,6 +33,7 @@ REQUEST_LIFECYCLE_EVENT_TYPES = {
     "tool_call_completed",
     "tool_call_failed",
     "tool_call_started",
+    "tool_escalation_requested",
 }
 
 REQUEST_TIMING_EVENT_TYPES = {
