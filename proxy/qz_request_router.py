@@ -1044,10 +1044,7 @@ class RequestRouter:
             runtime_metrics = self._runtime_metrics(client_model)
             runtime_metrics["request_id"] = request_id
 
-            overrides = (
-                selected_model.get("overrides", {}) if isinstance(selected_model, dict) else {}
-            )
-            explicit_domain = overrides.get("memory_domain")
+            explicit_domain = selected_model.get("memory_domain") if isinstance(selected_model, dict) else None
             ctx = extract_codex_request_context(
                 headers_raw, body, explicit_memory_domain=explicit_domain
             )

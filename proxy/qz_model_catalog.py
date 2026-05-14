@@ -382,6 +382,8 @@ def build_entry(path: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
     entry["default_reasoning_level"] = infer_reasoning_level(entry)
     entry["supported_reasoning_levels"] = supported_reasoning_levels(entry["default_reasoning_level"])
     entry["selected"] = False
+    raw_domain = overrides.get("memory_domain")
+    entry["memory_domain"] = raw_domain if isinstance(raw_domain, str) and raw_domain.strip() else None
     return entry
 
 
@@ -423,6 +425,8 @@ def build_broken_symlink_entry(path: Path, manifest: Dict[str, Any], error: str)
     entry["default_reasoning_level"] = infer_reasoning_level(entry)
     entry["supported_reasoning_levels"] = supported_reasoning_levels(entry["default_reasoning_level"])
     entry["selected"] = False
+    raw_domain = overrides.get("memory_domain")
+    entry["memory_domain"] = raw_domain if isinstance(raw_domain, str) and raw_domain.strip() else None
     return entry
 
 
@@ -681,6 +685,7 @@ class ModelCatalog:
                 "backend_target": entry.get("backend_target"),
                 "profile_valid": entry.get("profile_valid", True),
                 "profile_error": entry.get("profile_error"),
+                "memory_domain": entry.get("memory_domain"),
                 "state": backend.get("state", "unloaded"),
                 "backend_path": backend.get("path"),
                 "notes": entry.get("notes"),

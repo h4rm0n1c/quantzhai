@@ -26,7 +26,8 @@
       "label": "prompt-compiler",
       "notes": "Example v2 compiler profile. Create var/models/prompt-compiler.gguf as a symlink to a real GGUF in var/models/; routing uses the symlink target, while Codex sees prompt-compiler.",
       "runtime_context_length": 262144,
-      "system_prompt_file": "config/example/prompts/prompt-compiler.md"
+      "system_prompt_file": "config/example/prompts/prompt-compiler.md",
+      "memory_domain": "coding"
     },
     "roleplay-character.gguf": {
       "label": "roleplay-character",
@@ -36,7 +37,8 @@
       "turn_harnesses": ["roleplay-private-thoughts"],
       "default_reasoning_level": "low",
       "allow_client_reasoning_override": false,
-      "reasoning_stream_format": "hidden"
+      "reasoning_stream_format": "hidden",
+      "memory_domain": "roleplay"
     },
     "caveman.gguf": {
       "label": "caveman",
@@ -44,7 +46,8 @@
       "runtime_context_length": 262144,
       "default_reasoning_level": "medium",
       "prompt_append_files": ["config/default/prompts/caveman-mode.md"],
-      "turn_harnesses": ["caveman-ultra-lock"]
+      "turn_harnesses": ["caveman-ultra-lock"],
+      "memory_domain": "coding"
     }
   }
 }

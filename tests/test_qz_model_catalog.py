@@ -471,5 +471,182 @@ class ModelCatalogProfileValidationTests(unittest.TestCase):
         self.assertIn("restore the missing target GGUF", payload["fix"])
 
 
+class MemoryDomainCatalogTests(unittest.TestCase):
+    """Tests for memory_domain plumbing through model-overrides -> catalog entry."""
+
+    def test_explicit_memory_domain_stored_on_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            _write_gguf(model_dir / "prompt-compiler.gguf")
+            overrides = root / "config" / "user" / "model-overrides.json"
+            overrides.parent.mkdir(parents=True, exist_ok=True)
+            overrides.write_text(json.dumps({
+                "models": {
+                    "prompt-compiler.gguf": {
+                        "label": "prompt-compiler",
+                        "memory_domain": "coding",
+                    }
+                }
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+            entry, _ = catalog.resolve("prompt-compiler")
+
+            self.assertIsNotNone(entry)
+            self.assertEqual(entry["memory_domain"], "coding")
+
+    def test_missing_memory_domain_is_none_on_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            _write_gguf(model_dir / "plain.gguf")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+            entry, _ = catalog.resolve("plain")
+
+            self.assertIsNotNone(entry)
+            self.assertIsNone(entry["memory_domain"])
+
+    def test_two_profiles_sharing_same_memory_domain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            _write_gguf(model_dir / "alpha.gguf")
+            _write_gguf(model_dir / "beta.gguf")
+            overrides = root / "config" / "user" / "model-overrides.json"
+            overrides.parent.mkdir(parents=True, exist_ok=True)
+            overrides.write_text(json.dumps({
+                "models": {
+                    "alpha.gguf": {"memory_domain": "coding"},
+                    "beta.gguf":  {"memory_domain": "coding"},
+                }
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+            alpha, _ = catalog.resolve("alpha")
+            beta, _ = catalog.resolve("beta")
+
+            self.assertEqual(alpha["memory_domain"], "coding")
+            self.assertEqual(beta["memory_domain"], "coding")
+
+    def test_different_profiles_different_domains(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            _write_gguf(model_dir / "coder.gguf")
+            _write_gguf(model_dir / "roleplay.gguf")
+            overrides = root / "config" / "user" / "model-overrides.json"
+            overrides.parent.mkdir(parents=True, exist_ok=True)
+            overrides.write_text(json.dumps({
+                "models": {
+                    "coder.gguf":   {"memory_domain": "coding"},
+                    "roleplay.gguf": {"memory_domain": "roleplay"},
+                }
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+            coder, _ = catalog.resolve("coder")
+            rp, _ = catalog.resolve("roleplay")
+
+            self.assertEqual(coder["memory_domain"], "coding")
+            self.assertEqual(rp["memory_domain"], "roleplay")
+
+    def test_memory_domain_exposed_in_v1_models(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            _write_gguf(model_dir / "prompt-compiler.gguf")
+            overrides = root / "config" / "user" / "model-overrides.json"
+            overrides.parent.mkdir(parents=True, exist_ok=True)
+            overrides.write_text(json.dumps({
+                "models": {
+                    "prompt-compiler.gguf": {
+                        "label": "prompt-compiler",
+                        "memory_domain": "coding",
+                    }
+                }
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+            v1 = catalog.to_v1_models()
+
+            # entry_identity uses filename ("prompt-compiler.gguf") as the /v1/models id
+            model = next(m for m in v1["data"] if m["id"] == "prompt-compiler.gguf")
+            self.assertEqual(model["memory_domain"], "coding")
+
+    def test_missing_memory_domain_is_none_in_v1_models(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            _write_gguf(model_dir / "plain.gguf")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+            v1 = catalog.to_v1_models()
+
+            model = next(m for m in v1["data"] if m["id"] == "plain.gguf")
+            self.assertIsNone(model["memory_domain"])
+
+    def test_domains_list_not_accepted(self):
+        """domains:[] must not be treated as a valid memory_domain — only singular string."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            _write_gguf(model_dir / "multi.gguf")
+            overrides = root / "config" / "user" / "model-overrides.json"
+            overrides.parent.mkdir(parents=True, exist_ok=True)
+            overrides.write_text(json.dumps({
+                "models": {
+                    "multi.gguf": {
+                        "memory_domain": ["coding", "research"],
+                    }
+                }
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+            entry, _ = catalog.resolve("multi")
+
+            # A list value must not be stored as the memory_domain; fall back to None (isolated)
+            self.assertIsNone(entry["memory_domain"])
+
+    def test_whitespace_only_memory_domain_stored_as_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            _write_gguf(model_dir / "ws.gguf")
+            overrides = root / "config" / "user" / "model-overrides.json"
+            overrides.parent.mkdir(parents=True, exist_ok=True)
+            overrides.write_text(json.dumps({
+                "models": {"ws.gguf": {"memory_domain": "   "}}
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+            entry, _ = catalog.resolve("ws")
+
+            self.assertIsNone(entry["memory_domain"])
+
+    def test_memory_domain_on_broken_symlink_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            model_dir.mkdir(parents=True, exist_ok=True)
+            _write_gguf(model_dir / "healthy.gguf")
+            (model_dir / "broken.gguf").symlink_to(model_dir / "missing.gguf")
+            overrides = root / "config" / "user" / "model-overrides.json"
+            overrides.parent.mkdir(parents=True, exist_ok=True)
+            overrides.write_text(json.dumps({
+                "models": {
+                    "broken.gguf": {"memory_domain": "coding"},
+                }
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+            broken, _ = catalog.resolve("broken")
+
+            self.assertIsNotNone(broken)
+            self.assertFalse(broken["profile_valid"])
+            self.assertEqual(broken["memory_domain"], "coding")
+
+
 if __name__ == "__main__":
     unittest.main()
