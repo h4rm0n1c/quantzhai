@@ -38,7 +38,8 @@ No clever memory, active memory tools, learned preferences, roleplay memory, HSM
 8. [Responses stream and tool state contract](responses-stream-tool-state-contract.md) — runtime contract for streamed Responses events, tool-call state, telemetry, and captures.
 9. [Master stabilisation plan](master-stabilisation-plan.md) — broader stabilisation map; current authority and task hierarchy win for state/memory terms.
 10. [Progress snapshot](progress-snapshot.md) — short overall percentage/status view.
-11. [Repeated-read signal plan](repeated-read-dedup-plan.md) — approved v1 plan for advisory repeated file-read signals.
+11. [Codex/QuantZhai bidirectional signal map](codex-quantzhai-bidirectional-signal-map.md) — complete source-grounded map of signals in all directions, safety matrix, gaps, and next targets.
+12. [Repeated-read signal plan](repeated-read-dedup-plan.md) — approved v1 plan for advisory repeated file-read signals.
 12. [Benchmark findings: effort tuning](benchmark-findings-effort-tuning.md) — measured profile/tool-use behaviour and open questions.
 13. [Edge case and config contract plan](edge-case-config-contract-plan.md) — audit/refactor plan for config layout, compact errors, profile safety, and script sprawl.
 14. [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) — focused TODO/review plan for `/status`, `qz-top`, `qz-thoughts`, profiles, and streaming.
@@ -59,6 +60,7 @@ No clever memory, active memory tools, learned preferences, roleplay memory, HSM
 | Codex evidence | [Codex 0.130 live signal capture](codex-0130-live-signal-capture.md) | Live capture evidence for Codex 0.130 request/header/body/turn/workspace signals. |
 | Runtime contract | [Codex native first request capture](codex-native-request-capture.md) | Raw first request shape Codex CLI sends before QuantZhai wrapper/proxy normalization. |
 | LimbiCore contract | [Model state signal contract](model-state-signal-contract.md) | Future-facing state/signal/memory envelope; no clever memory in Phase 1. |
+| Signal surface map | [Codex/QuantZhai bidirectional signal map](codex-quantzhai-bidirectional-signal-map.md) | Source-grounded map of all signals: Codex→QZ, QZ→model, backend→QZ, QZ→monitor, safety matrix, gaps, and next targets. |
 | Repeated-read signal | [Repeated-read signal plan](repeated-read-dedup-plan.md) | Advisory repeated-read v1 plan and v2 scope blockers. |
 | LLM signal system | [LLM signal system](llm-signal-system.md) | Hop budget, context pressure, compaction, and signal design notes. |
 | Benchmarking | [Benchmark findings: effort tuning](benchmark-findings-effort-tuning.md) | Measured profile/tool-use behaviour and open questions around open-ended repo exploration. |
@@ -136,6 +138,7 @@ Read:
 docs/current-architecture-authority.md
 docs/current-task-hierarchy.md
 docs/codex-context-memory-contract.md
+docs/codex-quantzhai-bidirectional-signal-map.md
 docs/model-state-signal-contract.md
 docs/codex-0130-live-signal-capture.md
 ```
@@ -280,6 +283,7 @@ AGENTS.md
 docs/README.md
 docs/current-architecture-authority.md
 docs/current-task-hierarchy.md
+docs/codex-quantzhai-bidirectional-signal-map.md
 docs/model-state-signal-contract.md
 docs/qz-codex-control-plane-future.md
 docs/bugs/responses-streaming-and-qz-thoughts.md
