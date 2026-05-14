@@ -107,6 +107,7 @@ scripts/qz-doctor
 scripts/qz-up
 scripts/qz-live-smoke    # validate live stack after startup
 scripts/qz-smoke-repeated-read --model MODEL   # validate repeated-read v1 signal end-to-end
+scripts/qz-smoke-recovery                      # validate recovery API (safe by default; --allow-restart/--allow-reload for dangerous)
 scripts/qz-codex high
 scripts/qz-down
 ```

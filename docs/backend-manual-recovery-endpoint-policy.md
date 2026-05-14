@@ -802,6 +802,44 @@ These are two separate trigger actions. `restart_backend` does NOT auto-load.
 
 Tests: `tests/test_qz_recovery_trigger.py` — 124 assertions across 25 test classes.
 
+### Slice 13 (done): `scripts/qz-smoke-recovery` smoke harness
+
+Added `scripts/qz-smoke-recovery` — a repeatable smoke script for the recovery API.
+
+**Default mode (no dangerous flags):**
+- Required commands check (curl, jq, python3)
+- Proxy and catalog readiness via `qz-wait-ready`
+- GET /qz/recovery/status: schema, service_status, runtime_state, active_requests
+- GET /qz/control-plane: schema, service_status, recovery, recovery.active_requests
+- POST /qz/recovery/plan refresh_catalog: schema, action, feasible
+- POST /qz/recovery/plan restart_backend: schema, action, would_interrupt_requests
+- Authority detection (probe clear_failure → detects 403 vs 200)
+- If authority disabled: asserts 403 authority_disabled + schema
+- If authority enabled: bad_confirm/start_backend blocked/select_model blocked/clear_failure ok + refresh_catalog
+
+**Dangerous flags (never run by default):**
+- `--allow-restart`: runs restart_backend trigger (interrupts backend)
+- `--allow-reload`: runs reload_selected_model trigger
+- `--allow-restart-and-reload`: runs restart then polls + reload then verifies control-plane
+
+**Artifacts:** `/tmp/qz-recovery-smoke-*.json`
+
+**Usage:**
+```bash
+# Default safe mode
+scripts/qz-smoke-recovery
+
+# With authority enabled
+QZ_RECOVERY_ACTIONS=1 QZ_RECOVERY_CONFIRM_PHRASE='phrase' scripts/qz-proxy
+scripts/qz-smoke-recovery --confirm 'phrase'
+
+# Explicit restart smoke (interrupts backend)
+scripts/qz-smoke-recovery --confirm 'phrase' --allow-restart
+
+# Full recovery flow
+scripts/qz-smoke-recovery --confirm 'phrase' --allow-restart-and-reload
+```
+
 ### Future: durable state (requires #2 SQLite)
 
 - Move attempt history and backoff tracking from in-memory to SQLite.

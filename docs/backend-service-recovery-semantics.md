@@ -569,6 +569,20 @@ Planner blocks when backend unreachable or active requests + force=false.
 Remaining blocked: `start_backend`, `select_model`.
 Tests: `tests/test_qz_recovery_trigger.py` — 124 assertions.
 
+### Slice 13 (done): `scripts/qz-smoke-recovery` smoke harness
+
+Added `scripts/qz-smoke-recovery` — repeatable recovery API smoke test.
+
+Default mode: read-only + plan checks + authority detection + safe trigger checks.
+Dangerous flags: `--allow-restart`, `--allow-reload`, `--allow-restart-and-reload`.
+Artifacts: `/tmp/qz-recovery-smoke-*.json`.
+
+Two-step smoke flow available with `--allow-restart-and-reload`:
+1. trigger restart_backend
+2. poll until not in_progress
+3. trigger reload_selected_model
+4. verify control-plane backend.reachable + model state
+
 ---
 
 ## Open questions

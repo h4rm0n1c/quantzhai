@@ -1,0 +1,632 @@
+#!/usr/bin/env bash
+# qz-smoke-recovery: validate the recovery API (GET/POST /qz/recovery/*).
+#
+# Usage:
+#   scripts/qz-smoke-recovery [options]
+#
+# Options:
+#   --proxy URL              Proxy base URL (default: QZ_PROXY_URL or http://127.0.0.1:18180)
+#   --confirm PHRASE         Confirmation phrase for dangerous trigger checks
+#                            (default: QZ_RECOVERY_CONFIRM_PHRASE env var)
+#   --wait-secs N            Max wait for proxy readiness (default: 30)
+#   --skip-refresh-trigger   Skip the optional refresh_catalog trigger test
+#   --allow-restart          Run restart_backend trigger (INTERRUPTS backend)
+#   --allow-reload           Run reload_selected_model trigger (may stall)
+#   --allow-restart-and-reload   Run restart_backend then reload_selected_model
+#   -h, --help               Show this help
+#
+# Default mode: read-only checks + safe plan checks + authority detection.
+# Dangerous actions (restart/reload) only run if explicitly requested.
+#
+# Environment:
+#   QZ_PROXY_URL             Proxy base URL override
+#   QZ_RECOVERY_CONFIRM_PHRASE   Default confirmation phrase
+#   QZ_WAIT_SECS             Default wait-secs
+#
+# Artifacts written to /tmp:
+#   /tmp/qz-recovery-smoke-status.json
+#   /tmp/qz-recovery-smoke-control-plane.json
+#   /tmp/qz-recovery-smoke-plan-refresh.json
+#   /tmp/qz-recovery-smoke-plan-restart.json
+#   /tmp/qz-recovery-smoke-trigger-*.json
+#
+# Exit codes:
+#   0  all asserted checks passed
+#   1  one or more checks failed
+#   2  usage / argument error
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Defaults and argument parsing
+# ---------------------------------------------------------------------------
+PROXY_URL="${QZ_PROXY_URL:-}"
+CONFIRM_PHRASE="${QZ_RECOVERY_CONFIRM_PHRASE:-}"
+WAIT_SECS="${QZ_WAIT_SECS:-30}"
+SKIP_REFRESH_TRIGGER=0
+ALLOW_RESTART=0
+ALLOW_RELOAD=0
+ALLOW_RESTART_AND_RELOAD=0
+
+usage() {
+  sed -n '2,/^[^#]/{ s/^# \{0,1\}//; p }' "${BASH_SOURCE[0]}" | head -30 >&2
+  exit 2
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --proxy)                     PROXY_URL="${2:?--proxy requires a URL}"; shift 2 ;;
+    --proxy=*)                   PROXY_URL="${1#*=}"; shift ;;
+    --confirm)                   CONFIRM_PHRASE="${2:?--confirm requires a phrase}"; shift 2 ;;
+    --confirm=*)                 CONFIRM_PHRASE="${1#*=}"; shift ;;
+    --wait-secs)                 WAIT_SECS="${2:?--wait-secs requires a number}"; shift 2 ;;
+    --wait-secs=*)               WAIT_SECS="${1#*=}"; shift ;;
+    --skip-refresh-trigger)      SKIP_REFRESH_TRIGGER=1; shift ;;
+    --allow-restart)             ALLOW_RESTART=1; shift ;;
+    --allow-reload)              ALLOW_RELOAD=1; shift ;;
+    --allow-restart-and-reload)  ALLOW_RESTART_AND_RELOAD=1; ALLOW_RESTART=1; ALLOW_RELOAD=1; shift ;;
+    -h|--help)                   usage ;;
+    *)                           printf 'Unknown option: %s\n' "$1" >&2; usage ;;
+  esac
+done
+
+# ---------------------------------------------------------------------------
+# Environment
+# ---------------------------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/qz-env"
+
+if [[ -z "$PROXY_URL" ]]; then
+  PROXY_URL="http://${QZ_PROXY_HOST}:${QZ_PROXY_PORT}"
+fi
+
+FAIL_LIST=()
+SKIP_LIST=()
+INFO_LIST=()
+
+ok()   { printf 'PASS  %s\n' "$*"; }
+fail() { printf 'FAIL  %s\n' "$*" >&2; FAIL_LIST+=("$*"); }
+skip() { printf 'SKIP  %s\n' "$*"; SKIP_LIST+=("$*"); }
+info() { printf 'INFO  %s\n' "$*"; INFO_LIST+=("$*"); }
+
+printf '=== qz-smoke-recovery  proxy=%s ===\n' "$PROXY_URL"
+echo
+
+# ---------------------------------------------------------------------------
+# Required commands
+# ---------------------------------------------------------------------------
+echo '--- required commands ---'
+for _cmd in curl jq python3; do
+  if command -v "$_cmd" >/dev/null 2>&1; then
+    ok "command: $_cmd"
+  else
+    fail "required command missing: $_cmd"
+  fi
+done
+
+if [[ ${#FAIL_LIST[@]} -gt 0 ]]; then
+  echo
+  printf 'Prerequisite checks failed — aborting.\n' >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# HTTP helpers
+# ---------------------------------------------------------------------------
+
+# get_json URL outfile → writes response body to outfile, echoes HTTP status
+_get_json() {
+  local url="$1" out="$2"
+  local tmpbody
+  tmpbody="$(mktemp)"
+  local status
+  status=$(curl -sS --max-time 10 -w '%{http_code}' -o "$tmpbody" "$url" 2>/dev/null) || status="000"
+  cp "$tmpbody" "$out" 2>/dev/null || true
+  rm -f "$tmpbody"
+  printf '%s' "$status"
+}
+
+# post_json URL body outfile → writes response body to outfile, echoes HTTP status
+_post_json() {
+  local url="$1" body="$2" out="$3"
+  local tmpbody
+  tmpbody="$(mktemp)"
+  local status
+  status=$(curl -sS --max-time 15 -w '%{http_code}' -o "$tmpbody" \
+    -X POST -H 'Content-Type: application/json' --data-raw "$body" "$url" 2>/dev/null) || status="000"
+  cp "$tmpbody" "$out" 2>/dev/null || true
+  rm -f "$tmpbody"
+  printf '%s' "$status"
+}
+
+# jq_field FILE expr → prints field value or empty
+_jq() { jq -r "${2}" "${1}" 2>/dev/null || printf ''; }
+
+# check field in file equals expected; records fail on mismatch
+_expect_field() {
+  local label="$1" file="$2" expr="$3" expected="$4"
+  local got
+  got=$(_jq "$file" "$expr")
+  if [[ "$got" == "$expected" ]]; then
+    ok "${label}: ${expr} == ${expected}"
+  else
+    fail "${label}: expected ${expr}==${expected!r} got ${got!r}"
+    info "  artifact: $file"
+  fi
+}
+
+# check field exists (non-empty) in file
+_expect_field_exists() {
+  local label="$1" file="$2" expr="$3"
+  local got
+  got=$(_jq "$file" "$expr")
+  if [[ -n "$got" ]] && [[ "$got" != "null" ]]; then
+    ok "${label}: ${expr} exists (=${got})"
+  else
+    fail "${label}: ${expr} is missing or null"
+    info "  artifact: $file"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Proxy readiness
+# ---------------------------------------------------------------------------
+echo
+echo '--- proxy readiness ---'
+if "${SCRIPT_DIR}/qz-wait-ready" \
+     --catalog \
+     --wait-secs "$WAIT_SECS" \
+     --proxy-url "$PROXY_URL" \
+     --quiet 2>/dev/null; then
+  ok "proxy and catalog ready"
+else
+  "${SCRIPT_DIR}/qz-wait-ready" \
+    --catalog --wait-secs 1 --proxy-url "$PROXY_URL" 2>&1 || true
+  fail "proxy/catalog not ready"
+  printf '\nProxy readiness failed — aborting.\n' >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 1. GET /qz/recovery/status
+# ---------------------------------------------------------------------------
+echo
+echo '--- GET /qz/recovery/status ---'
+RECOVERY_STATUS_FILE=/tmp/qz-recovery-smoke-status.json
+RS_STATUS=$(_get_json "${PROXY_URL}/qz/recovery/status" "$RECOVERY_STATUS_FILE")
+
+if [[ "$RS_STATUS" == "200" ]]; then
+  ok "GET /qz/recovery/status: HTTP 200"
+else
+  fail "GET /qz/recovery/status: expected HTTP 200 got ${RS_STATUS}"
+fi
+
+_expect_field "recovery/status" "$RECOVERY_STATUS_FILE" '.schema' "qz.recovery.status.v1"
+_expect_field_exists "recovery/status" "$RECOVERY_STATUS_FILE" '.service_status.schema'
+_expect_field_exists "recovery/status" "$RECOVERY_STATUS_FILE" '.runtime_state.schema'
+_expect_field_exists "recovery/status" "$RECOVERY_STATUS_FILE" '.active_requests.schema'
+_expect_field_exists "recovery/status" "$RECOVERY_STATUS_FILE" '.active_requests.count'
+
+# ---------------------------------------------------------------------------
+# 2. GET /qz/control-plane — recovery/service_status fields
+# ---------------------------------------------------------------------------
+echo
+echo '--- GET /qz/control-plane (recovery fields) ---'
+CP_FILE=/tmp/qz-recovery-smoke-control-plane.json
+CP_STATUS=$(_get_json "${PROXY_URL}/qz/control-plane" "$CP_FILE")
+
+if [[ "$CP_STATUS" == "200" ]]; then
+  ok "GET /qz/control-plane: HTTP 200"
+else
+  fail "GET /qz/control-plane: expected HTTP 200 got ${CP_STATUS}"
+fi
+
+_expect_field "control-plane" "$CP_FILE" '.schema' "qz.control_plane.status.v1"
+_expect_field "control-plane" "$CP_FILE" '.service_status.schema' "qz.service.status.v1"
+_expect_field "control-plane" "$CP_FILE" '.recovery.schema' "qz.recovery.status.v1"
+_expect_field_exists "control-plane" "$CP_FILE" '.recovery.active_requests.schema'
+
+# ---------------------------------------------------------------------------
+# 3. POST /qz/recovery/plan — refresh_catalog
+# ---------------------------------------------------------------------------
+echo
+echo '--- POST /qz/recovery/plan (refresh_catalog) ---'
+PLAN_REFRESH_FILE=/tmp/qz-recovery-smoke-plan-refresh.json
+PL_RF_STATUS=$(_post_json \
+  "${PROXY_URL}/qz/recovery/plan" \
+  '{"action":"refresh_catalog"}' \
+  "$PLAN_REFRESH_FILE")
+
+if [[ "$PL_RF_STATUS" == "200" ]]; then
+  ok "POST /qz/recovery/plan refresh_catalog: HTTP 200"
+else
+  fail "POST /qz/recovery/plan refresh_catalog: expected HTTP 200 got ${PL_RF_STATUS}"
+fi
+_expect_field "plan/refresh_catalog" "$PLAN_REFRESH_FILE" '.schema' "qz.recovery.plan.v1"
+_expect_field "plan/refresh_catalog" "$PLAN_REFRESH_FILE" '.action' "refresh_catalog"
+_expect_field_exists "plan/refresh_catalog" "$PLAN_REFRESH_FILE" '.feasible'
+
+# ---------------------------------------------------------------------------
+# 4. POST /qz/recovery/plan — restart_backend dry-run
+# ---------------------------------------------------------------------------
+echo
+echo '--- POST /qz/recovery/plan (restart_backend dry-run) ---'
+PLAN_RESTART_FILE=/tmp/qz-recovery-smoke-plan-restart.json
+PL_RS_STATUS=$(_post_json \
+  "${PROXY_URL}/qz/recovery/plan" \
+  '{"action":"restart_backend","force":true}' \
+  "$PLAN_RESTART_FILE")
+
+if [[ "$PL_RS_STATUS" == "200" ]]; then
+  ok "POST /qz/recovery/plan restart_backend: HTTP 200"
+else
+  fail "POST /qz/recovery/plan restart_backend: expected HTTP 200 got ${PL_RS_STATUS}"
+fi
+_expect_field "plan/restart_backend" "$PLAN_RESTART_FILE" '.schema' "qz.recovery.plan.v1"
+_expect_field "plan/restart_backend" "$PLAN_RESTART_FILE" '.action' "restart_backend"
+_expect_field "plan/restart_backend" "$PLAN_RESTART_FILE" '.would_interrupt_requests' "true"
+
+# ---------------------------------------------------------------------------
+# 5. Detect authority status (probe with clear_failure, no confirm)
+# ---------------------------------------------------------------------------
+echo
+echo '--- authority detection ---'
+AUTH_PROBE_FILE=/tmp/qz-recovery-smoke-trigger-auth-probe.json
+AUTH_PROBE_STATUS=$(_post_json \
+  "${PROXY_URL}/qz/recovery/trigger" \
+  '{"action":"clear_failure","reason":"smoke authority probe"}' \
+  "$AUTH_PROBE_FILE")
+
+AUTHORITY_ENABLED=0
+if [[ "$AUTH_PROBE_STATUS" == "403" ]]; then
+  PROBE_ERR=$(_jq "$AUTH_PROBE_FILE" '.error')
+  if [[ "$PROBE_ERR" == "authority_disabled" ]]; then
+    AUTHORITY_ENABLED=0
+    info "proxy authority disabled (QZ_RECOVERY_ACTIONS!=1): 403 authority_disabled confirmed"
+  else
+    # 403 for some other reason (e.g. non-local)
+    AUTHORITY_ENABLED=0
+    info "proxy trigger blocked (403 ${PROBE_ERR}): authority treated as disabled for this smoke"
+  fi
+elif [[ "$AUTH_PROBE_STATUS" == "200" ]]; then
+  AUTHORITY_ENABLED=1
+  info "proxy authority enabled (QZ_RECOVERY_ACTIONS=1): trigger returned 200"
+elif [[ "$AUTH_PROBE_STATUS" == "400" ]]; then
+  # Could be bad_confirm (env phrase set) or missing_reason — still enabled
+  AUTHORITY_ENABLED=1
+  info "proxy authority enabled (HTTP 400 from trigger validation): treating as enabled"
+elif [[ "$AUTH_PROBE_STATUS" == "423" ]] || [[ "$AUTH_PROBE_STATUS" == "429" ]]; then
+  AUTHORITY_ENABLED=1
+  info "proxy authority enabled (HTTP ${AUTH_PROBE_STATUS}): treating as enabled"
+else
+  AUTHORITY_ENABLED=0
+  info "unexpected auth probe status ${AUTH_PROBE_STATUS}: treating authority as disabled"
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Authority-disabled trigger check
+# ---------------------------------------------------------------------------
+echo
+echo '--- trigger: authority-disabled check ---'
+if [[ "$AUTHORITY_ENABLED" -eq 0 ]]; then
+  AUTH_DIS_FILE=/tmp/qz-recovery-smoke-trigger-auth-disabled.json
+  AUTH_DIS_STATUS=$(_post_json \
+    "${PROXY_URL}/qz/recovery/trigger" \
+    '{"action":"clear_failure","reason":"smoke authority disabled check"}' \
+    "$AUTH_DIS_FILE")
+  if [[ "$AUTH_DIS_STATUS" == "403" ]]; then
+    got_err=$(_jq "$AUTH_DIS_FILE" '.error')
+    if [[ "$got_err" == "authority_disabled" ]]; then
+      ok "trigger authority-disabled: HTTP 403 authority_disabled"
+    else
+      fail "trigger authority-disabled: HTTP 403 but error=${got_err} (expected authority_disabled)"
+    fi
+    _expect_field "trigger/auth-disabled" "$AUTH_DIS_FILE" '.schema' "qz.recovery.error.v1"
+  else
+    fail "trigger authority-disabled: expected HTTP 403 got ${AUTH_DIS_STATUS}"
+  fi
+else
+  skip "trigger authority-disabled check: proxy has authority enabled"
+fi
+
+# ---------------------------------------------------------------------------
+# 7. Authority-enabled trigger checks
+# ---------------------------------------------------------------------------
+if [[ "$AUTHORITY_ENABLED" -eq 1 ]]; then
+  echo
+  echo '--- trigger: authority-enabled checks ---'
+
+  # 7a. bad confirm for restart_backend
+  BAD_CONFIRM_FILE=/tmp/qz-recovery-smoke-trigger-bad-confirm.json
+  BAD_CON_STATUS=$(_post_json \
+    "${PROXY_URL}/qz/recovery/trigger" \
+    '{"action":"restart_backend","reason":"bad confirm smoke","confirm":"this is definitely wrong"}' \
+    "$BAD_CONFIRM_FILE")
+  if [[ "$BAD_CON_STATUS" == "400" ]]; then
+    got_err=$(_jq "$BAD_CONFIRM_FILE" '.error')
+    if [[ "$got_err" == "bad_confirm" ]]; then
+      ok "trigger bad_confirm restart_backend: HTTP 400 bad_confirm"
+    else
+      fail "trigger bad_confirm restart_backend: HTTP 400 but error=${got_err} (expected bad_confirm)"
+    fi
+    _expect_field "trigger/bad-confirm" "$BAD_CONFIRM_FILE" '.schema' "qz.recovery.error.v1"
+  else
+    fail "trigger bad_confirm restart_backend: expected HTTP 400 got ${BAD_CON_STATUS}"
+    info "  artifact: $BAD_CONFIRM_FILE"
+  fi
+
+  # 7b. start_backend remains 409
+  START_BLOCK_FILE=/tmp/qz-recovery-smoke-trigger-start-blocked.json
+  _jq_body='{"action":"start_backend","reason":"start_backend must remain blocked","confirm":"this is definitely wrong"}'
+  SB_STATUS=$(_post_json "${PROXY_URL}/qz/recovery/trigger" "$_jq_body" "$START_BLOCK_FILE")
+  if [[ "$SB_STATUS" == "409" ]]; then
+    got_err=$(_jq "$START_BLOCK_FILE" '.error')
+    if [[ "$got_err" == "action_not_implemented" ]]; then
+      ok "trigger start_backend: HTTP 409 action_not_implemented"
+    else
+      fail "trigger start_backend: HTTP 409 but error=${got_err} (expected action_not_implemented)"
+    fi
+    _expect_field "trigger/start_backend" "$START_BLOCK_FILE" '.schema' "qz.recovery.error.v1"
+  else
+    fail "trigger start_backend: expected HTTP 409 got ${SB_STATUS}"
+    info "  artifact: $START_BLOCK_FILE"
+  fi
+
+  # 7c. select_model remains 409
+  SEL_BLOCK_FILE=/tmp/qz-recovery-smoke-trigger-select-blocked.json
+  _jq_body='{"action":"select_model","reason":"select_model must remain blocked","confirm":"this is definitely wrong"}'
+  SM_STATUS=$(_post_json "${PROXY_URL}/qz/recovery/trigger" "$_jq_body" "$SEL_BLOCK_FILE")
+  if [[ "$SM_STATUS" == "409" ]]; then
+    got_err=$(_jq "$SEL_BLOCK_FILE" '.error')
+    if [[ "$got_err" == "action_not_implemented" ]]; then
+      ok "trigger select_model: HTTP 409 action_not_implemented"
+    else
+      fail "trigger select_model: HTTP 409 but error=${got_err} (expected action_not_implemented)"
+    fi
+    _expect_field "trigger/select_model" "$SEL_BLOCK_FILE" '.schema' "qz.recovery.error.v1"
+  else
+    fail "trigger select_model: expected HTTP 409 got ${SM_STATUS}"
+    info "  artifact: $SEL_BLOCK_FILE"
+  fi
+
+  # 7d. clear_failure succeeds
+  CLEAR_FILE=/tmp/qz-recovery-smoke-trigger-clear-failure.json
+  CLR_STATUS=$(_post_json \
+    "${PROXY_URL}/qz/recovery/trigger" \
+    '{"action":"clear_failure","reason":"recovery smoke clear failure"}' \
+    "$CLEAR_FILE")
+  if [[ "$CLR_STATUS" == "200" ]]; then
+    got_accepted=$(_jq "$CLEAR_FILE" '.accepted')
+    got_action=$(_jq "$CLEAR_FILE" '.action')
+    if [[ "$got_accepted" == "true" ]] && [[ "$got_action" == "clear_failure" ]]; then
+      ok "trigger clear_failure: HTTP 200 accepted=true action=clear_failure"
+    else
+      fail "trigger clear_failure: HTTP 200 but accepted=${got_accepted} action=${got_action}"
+    fi
+    _expect_field "trigger/clear_failure" "$CLEAR_FILE" '.schema' "qz.recovery.trigger.v1"
+  else
+    fail "trigger clear_failure: expected HTTP 200 got ${CLR_STATUS}"
+    info "  artifact: $CLEAR_FILE"
+  fi
+
+  # 7e. Optional refresh_catalog trigger
+  if [[ "$SKIP_REFRESH_TRIGGER" -eq 0 ]]; then
+    echo
+    echo '--- trigger: refresh_catalog (optional) ---'
+    REFRESH_FILE=/tmp/qz-recovery-smoke-trigger-refresh-catalog.json
+    RF_STATUS=$(_post_json \
+      "${PROXY_URL}/qz/recovery/trigger" \
+      '{"action":"refresh_catalog","reason":"recovery smoke refresh catalog"}' \
+      "$REFRESH_FILE")
+    if [[ "$RF_STATUS" == "200" ]]; then
+      ok "trigger refresh_catalog: HTTP 200"
+      _expect_field "trigger/refresh_catalog" "$REFRESH_FILE" '.schema' "qz.recovery.trigger.v1"
+      _expect_field "trigger/refresh_catalog" "$REFRESH_FILE" '.accepted' "true"
+    else
+      fail "trigger refresh_catalog: expected HTTP 200 got ${RF_STATUS}"
+      info "  artifact: $REFRESH_FILE"
+    fi
+  else
+    skip "trigger refresh_catalog: --skip-refresh-trigger passed"
+  fi
+
+else
+  # Authority disabled — skip all authority-enabled trigger checks
+  echo
+  echo '--- trigger: authority-enabled checks SKIPPED ---'
+  skip "trigger authority-enabled checks: proxy does not have QZ_RECOVERY_ACTIONS=1"
+  echo
+  printf '  To enable authority for trigger checks, restart the proxy with:\n'
+  if [[ -n "$CONFIRM_PHRASE" ]]; then
+    printf '    QZ_RECOVERY_ACTIONS=1 QZ_RECOVERY_CONFIRM_PHRASE=%q scripts/qz-proxy\n' \
+      "$CONFIRM_PHRASE"
+  else
+    printf '    QZ_RECOVERY_ACTIONS=1 QZ_RECOVERY_CONFIRM_PHRASE='"'"'your phrase'"'"' scripts/qz-proxy\n'
+  fi
+  printf '  Then re-run: scripts/qz-smoke-recovery --confirm %q\n' \
+    "${CONFIRM_PHRASE:-your phrase}"
+fi
+
+# ---------------------------------------------------------------------------
+# 8. Optional dangerous: restart_backend
+# ---------------------------------------------------------------------------
+if [[ "$ALLOW_RESTART" -eq 1 ]] && [[ "$ALLOW_RESTART_AND_RELOAD" -eq 0 ]]; then
+  echo
+  echo '--- trigger: restart_backend (--allow-restart) ---'
+  if [[ -z "$CONFIRM_PHRASE" ]]; then
+    fail "trigger restart_backend: --confirm PHRASE required for --allow-restart"
+  elif [[ "$AUTHORITY_ENABLED" -eq 0 ]]; then
+    fail "trigger restart_backend: proxy authority not enabled (QZ_RECOVERY_ACTIONS!=1)"
+  else
+    RESTART_FILE=/tmp/qz-recovery-smoke-trigger-restart-backend.json
+    _body=$(printf '{"action":"restart_backend","reason":"recovery smoke explicit restart","confirm":"%s","force":true}' \
+      "$CONFIRM_PHRASE")
+    RS_TR_STATUS=$(_post_json "${PROXY_URL}/qz/recovery/trigger" "$_body" "$RESTART_FILE")
+    if [[ "$RS_TR_STATUS" == "200" ]]; then
+      ok "trigger restart_backend: HTTP 200"
+      _expect_field "trigger/restart_backend" "$RESTART_FILE" '.schema' "qz.recovery.trigger.v1"
+      _expect_field "trigger/restart_backend" "$RESTART_FILE" '.accepted' "true"
+    else
+      fail "trigger restart_backend: expected HTTP 200 got ${RS_TR_STATUS}"
+      info "  artifact: $RESTART_FILE"
+      printf '  response: %s\n' "$(cat "$RESTART_FILE" 2>/dev/null || echo '(empty)')" >&2
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 9. Optional dangerous: reload_selected_model
+# ---------------------------------------------------------------------------
+if [[ "$ALLOW_RELOAD" -eq 1 ]] && [[ "$ALLOW_RESTART_AND_RELOAD" -eq 0 ]]; then
+  echo
+  echo '--- trigger: reload_selected_model (--allow-reload) ---'
+  if [[ -z "$CONFIRM_PHRASE" ]]; then
+    fail "trigger reload_selected_model: --confirm PHRASE required for --allow-reload"
+  elif [[ "$AUTHORITY_ENABLED" -eq 0 ]]; then
+    fail "trigger reload_selected_model: proxy authority not enabled (QZ_RECOVERY_ACTIONS!=1)"
+  else
+    RELOAD_FILE=/tmp/qz-recovery-smoke-trigger-reload-selected-model.json
+    _body=$(printf '{"action":"reload_selected_model","reason":"recovery smoke explicit reload","confirm":"%s","force":true}' \
+      "$CONFIRM_PHRASE")
+    RL_STATUS=$(_post_json "${PROXY_URL}/qz/recovery/trigger" "$_body" "$RELOAD_FILE")
+    if [[ "$RL_STATUS" == "200" ]]; then
+      ok "trigger reload_selected_model: HTTP 200"
+      _expect_field "trigger/reload_selected_model" "$RELOAD_FILE" '.schema' "qz.recovery.trigger.v1"
+      _expect_field "trigger/reload_selected_model" "$RELOAD_FILE" '.accepted' "true"
+    elif [[ "$RL_STATUS" == "409" ]]; then
+      got_err=$(_jq "$RELOAD_FILE" '.error')
+      if [[ "$got_err" == "selected_model_missing" ]]; then
+        fail "trigger reload_selected_model: HTTP 409 selected_model_missing — select a model first"
+        info "  Use /qz/models/select or start via qz-codex to establish a selected model"
+      else
+        fail "trigger reload_selected_model: HTTP 409 ${got_err}"
+      fi
+      info "  artifact: $RELOAD_FILE"
+    else
+      fail "trigger reload_selected_model: expected HTTP 200 got ${RL_STATUS}"
+      info "  artifact: $RELOAD_FILE"
+      printf '  response: %s\n' "$(cat "$RELOAD_FILE" 2>/dev/null || echo '(empty)')" >&2
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 10. Optional: restart_backend then reload_selected_model (--allow-restart-and-reload)
+# ---------------------------------------------------------------------------
+if [[ "$ALLOW_RESTART_AND_RELOAD" -eq 1 ]]; then
+  echo
+  echo '--- trigger: restart_backend then reload_selected_model (--allow-restart-and-reload) ---'
+  if [[ -z "$CONFIRM_PHRASE" ]]; then
+    fail "trigger restart+reload: --confirm PHRASE required for --allow-restart-and-reload"
+  elif [[ "$AUTHORITY_ENABLED" -eq 0 ]]; then
+    fail "trigger restart+reload: proxy authority not enabled (QZ_RECOVERY_ACTIONS!=1)"
+  else
+    # Step 1: restart_backend
+    printf '  step 1: restart_backend\n'
+    RR_RESTART_FILE=/tmp/qz-recovery-smoke-trigger-restart-backend.json
+    _body=$(printf '{"action":"restart_backend","reason":"recovery smoke restart+reload step1","confirm":"%s","force":true}' \
+      "$CONFIRM_PHRASE")
+    RR_RS_STATUS=$(_post_json "${PROXY_URL}/qz/recovery/trigger" "$_body" "$RR_RESTART_FILE")
+    if [[ "$RR_RS_STATUS" == "200" ]]; then
+      ok "trigger restart_backend (step 1): HTTP 200"
+    else
+      fail "trigger restart_backend (step 1): expected HTTP 200 got ${RR_RS_STATUS}"
+      info "  artifact: $RR_RESTART_FILE"
+    fi
+
+    # Step 2: poll until not in_progress
+    printf '  step 2: wait for recovery not in_progress\n'
+    POLL_MAX=30
+    POLL_COUNT=0
+    POLL_STATUS_FILE=/tmp/qz-recovery-smoke-status.json
+    while [[ $POLL_COUNT -lt $POLL_MAX ]]; do
+      _poll_st=$(_get_json "${PROXY_URL}/qz/recovery/status" "$POLL_STATUS_FILE")
+      _in_prog=$(_jq "$POLL_STATUS_FILE" '.runtime_state.in_progress // false')
+      if [[ "$_in_prog" == "false" ]]; then
+        ok "recovery not in_progress after ${POLL_COUNT}s"
+        break
+      fi
+      sleep 1
+      POLL_COUNT=$((POLL_COUNT + 1))
+    done
+    if [[ "$POLL_COUNT" -ge "$POLL_MAX" ]]; then
+      fail "recovery still in_progress after ${POLL_MAX}s poll"
+    fi
+
+    # Step 3: reload_selected_model
+    printf '  step 3: reload_selected_model\n'
+    RR_RELOAD_FILE=/tmp/qz-recovery-smoke-trigger-reload-selected-model.json
+    _body=$(printf '{"action":"reload_selected_model","reason":"recovery smoke restart+reload step3","confirm":"%s","force":true}' \
+      "$CONFIRM_PHRASE")
+    RR_RL_STATUS=$(_post_json "${PROXY_URL}/qz/recovery/trigger" "$_body" "$RR_RELOAD_FILE")
+    if [[ "$RR_RL_STATUS" == "200" ]]; then
+      ok "trigger reload_selected_model (step 3): HTTP 200"
+    elif [[ "$RR_RL_STATUS" == "409" ]]; then
+      _got_err=$(_jq "$RR_RELOAD_FILE" '.error')
+      fail "trigger reload_selected_model (step 3): HTTP 409 ${_got_err}"
+      info "  Select a model first with /qz/models/select, then retry --allow-restart-and-reload"
+    else
+      fail "trigger reload_selected_model (step 3): expected HTTP 200 got ${RR_RL_STATUS}"
+      info "  artifact: $RR_RELOAD_FILE"
+    fi
+
+    # Step 4: verify control-plane
+    if [[ ${#FAIL_LIST[@]} -eq 0 ]] || [[ "${FAIL_LIST[*]}" != *"step 3"* ]]; then
+      printf '  step 4: verify backend+model state in /qz/control-plane\n'
+      CP_POST_FILE=/tmp/qz-recovery-smoke-control-plane-post-reload.json
+      _cp_st=$(_get_json "${PROXY_URL}/qz/control-plane" "$CP_POST_FILE")
+      if [[ "$_cp_st" == "200" ]]; then
+        _reachable=$(_jq "$CP_POST_FILE" '.backend.reachable // false')
+        _loaded=$(_jq "$CP_POST_FILE" '.backend.loaded_model // ""')
+        _model_state=$(_jq "$CP_POST_FILE" '.service_status.model_state // ""')
+        if [[ "$_reachable" == "true" ]]; then
+          ok "control-plane post-reload: backend.reachable=true"
+        else
+          fail "control-plane post-reload: backend.reachable=${_reachable}"
+        fi
+        if [[ -n "$_loaded" ]] && [[ "$_loaded" != "null" ]] && [[ "$_loaded" != "" ]] \
+           || [[ "$_model_state" == "loaded" ]]; then
+          ok "control-plane post-reload: model loaded (loaded_model=${_loaded} model_state=${_model_state})"
+        else
+          info "control-plane post-reload: model may not be loaded yet (loaded_model=${_loaded} model_state=${_model_state})"
+        fi
+      else
+        fail "control-plane post-reload: expected HTTP 200 got ${_cp_st}"
+      fi
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Artifact list
+# ---------------------------------------------------------------------------
+echo
+echo '--- artifacts ---'
+for _art in \
+  /tmp/qz-recovery-smoke-status.json \
+  /tmp/qz-recovery-smoke-control-plane.json \
+  /tmp/qz-recovery-smoke-plan-refresh.json \
+  /tmp/qz-recovery-smoke-plan-restart.json \
+  /tmp/qz-recovery-smoke-trigger-*.json; do
+  [[ -f "$_art" ]] && printf '  %s\n' "$_art"
+done
+
+# ---------------------------------------------------------------------------
+# Final summary
+# ---------------------------------------------------------------------------
+echo
+if [[ ${#FAIL_LIST[@]} -eq 0 ]]; then
+  SKIP_COUNT=${#SKIP_LIST[@]}
+  if [[ $SKIP_COUNT -gt 0 ]]; then
+    printf 'SMOKE OK — all asserted checks passed (%d skipped)\n' "$SKIP_COUNT"
+  else
+    printf 'SMOKE OK — all checks passed\n'
+  fi
+else
+  FAIL_COUNT=${#FAIL_LIST[@]}
+  printf 'SMOKE FAILED — %d failure(s):\n' "$FAIL_COUNT" >&2
+  for _f in "${FAIL_LIST[@]}"; do
+    printf '  FAIL  %s\n' "$_f" >&2
+  done
+  exit 1
+fi
