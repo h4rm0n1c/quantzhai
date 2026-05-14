@@ -297,6 +297,36 @@ class ResponsesStreamRuntime:
     def _emit(self, event_type: str, payload: dict | None = None):
         self.telemetry_emitter.emit(event_type, payload)
 
+    def _check_sandbox_escalation(self, call: dict) -> dict | None:
+        """Return a telemetry payload if this outgoing function_call requests
+        sandbox escalation (sandbox_permissions == 'require_escalated').
+
+        Returns None for any other call or if arguments are unparseable.
+        The cmd_preview is truncated to avoid exposing full command text in
+        telemetry.
+        """
+        if not isinstance(call, dict):
+            return None
+        raw_args = call.get("arguments")
+        if not isinstance(raw_args, str) or not raw_args.strip():
+            return None
+        try:
+            args = json.loads(raw_args)
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(args, dict):
+            return None
+        if args.get("sandbox_permissions") != "require_escalated":
+            return None
+        cmd = args.get("cmd") or ""
+        return {
+            "tool": call.get("name") or "exec_command",
+            "call_id": call.get("call_id") or call.get("id") or "",
+            "sandbox_permissions": "require_escalated",
+            "justification": (args.get("justification") or "")[:200],
+            "cmd_preview": cmd[:80] if cmd else "",
+        }
+
     def _emit_stream_event_timing(
         self,
         event_type: str,
@@ -932,6 +962,10 @@ class ResponsesStreamRuntime:
                             if not isinstance(public_index, int):
                                 public_index = max_output_index + 1
                             public_index += output_index_offset
+
+                            escalation = self._check_sandbox_escalation(completed_call)
+                            if escalation:
+                                self._emit("tool_escalation_requested", escalation)
 
                             decision = self.proxy_tool_registry.completed_call_decision(
                                 completed_call,

@@ -4,6 +4,16 @@ Date: 2026-04-29
 
 ## What We Discovered
 
+- When an outgoing `exec_command` function_call carries
+  `sandbox_permissions: "require_escalated"` in its arguments, the proxy emits
+  a `tool_escalation_requested` telemetry event before the call is forwarded.
+  Payload includes `tool`, `call_id`, `sandbox_permissions`, `cmd_preview`
+  (truncated to 80 chars), and `justification` (truncated to 200 chars).
+  `qz-thoughts` renders this as an `escalation` activity row distinct from
+  normal `tool` rows. This is the structured slice of issue #28 (Slice 1).
+  Textual stderr classification (Slice 2) is deferred until a real denied-command
+  capture is available.
+
 - `qz-top` recent activity can fail silently if it asks the sudo Docker helper
   for more log lines than the helper allows. The helper boundary is
   `docker logs --tail <= 1000`, so monitor defaults need to stay inside that

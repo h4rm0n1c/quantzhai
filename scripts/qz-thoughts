@@ -789,6 +789,18 @@ def _apply_telemetry_event(state: ThoughtState, event: dict, prefix_rows: List[T
             state.backend_error = str(payload.get("error"))
         return latest_ts
 
+    if ev_type == "tool_escalation_requested":
+        tool = payload.get("tool") or "tool"
+        parts = [str(tool)]
+        preview = payload.get("cmd_preview") or ""
+        justification = payload.get("justification") or ""
+        if preview:
+            parts.append(f"cmd={clip(preview, 48)}")
+        if justification:
+            parts.append(f"reason={clip(justification, 48)}")
+        _append_backend(state, "escalation", " ".join(parts))
+        return latest_ts
+
     if ev_type == "web_search_route":
         _append_backend(state, "web", _format_web_route(payload))
         return latest_ts

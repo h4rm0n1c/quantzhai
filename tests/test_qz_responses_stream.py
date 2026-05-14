@@ -2868,5 +2868,187 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertEqual(len(signal_msgs), 0)
 
 
+class SandboxEscalationDetectionTests(unittest.TestCase):
+    """Tests for tool_escalation_requested telemetry on outgoing require_escalated calls."""
+
+    def _make_runtime(self):
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=lambda _: None,
+            capture_enabled=False,
+        )
+        return runtime
+
+    def _exec_command_call(self, sandbox_permissions="use_default", cmd="ls", justification=""):
+        args = {"cmd": cmd}
+        if sandbox_permissions:
+            args["sandbox_permissions"] = sandbox_permissions
+        if justification:
+            args["justification"] = justification
+        return {
+            "type": "function_call",
+            "name": "exec_command",
+            "call_id": "call_test_1",
+            "id": "fc_test_1",
+            "arguments": json.dumps(args),
+        }
+
+    # ------------------------------------------------------------------
+    # _check_sandbox_escalation unit tests
+    # ------------------------------------------------------------------
+
+    def test_require_escalated_returns_payload(self):
+        rt = self._make_runtime()
+        call = self._exec_command_call(sandbox_permissions="require_escalated", cmd="sudo thing")
+        result = rt._check_sandbox_escalation(call)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["sandbox_permissions"], "require_escalated")
+        self.assertEqual(result["tool"], "exec_command")
+        self.assertEqual(result["call_id"], "call_test_1")
+        self.assertIn("sudo thing", result["cmd_preview"])
+
+    def test_use_default_returns_none(self):
+        rt = self._make_runtime()
+        call = self._exec_command_call(sandbox_permissions="use_default")
+        self.assertIsNone(rt._check_sandbox_escalation(call))
+
+    def test_absent_sandbox_permissions_returns_none(self):
+        rt = self._make_runtime()
+        call = {
+            "type": "function_call",
+            "name": "exec_command",
+            "call_id": "call_no_perm",
+            "arguments": json.dumps({"cmd": "ls"}),
+        }
+        self.assertIsNone(rt._check_sandbox_escalation(call))
+
+    def test_non_json_arguments_returns_none_without_crash(self):
+        rt = self._make_runtime()
+        call = {
+            "type": "function_call",
+            "name": "exec_command",
+            "call_id": "call_bad_args",
+            "arguments": "NOT VALID JSON {{{",
+        }
+        result = rt._check_sandbox_escalation(call)
+        self.assertIsNone(result)
+
+    def test_empty_arguments_returns_none(self):
+        rt = self._make_runtime()
+        call = {"type": "function_call", "name": "exec_command", "call_id": "c", "arguments": ""}
+        self.assertIsNone(rt._check_sandbox_escalation(call))
+
+    def test_null_call_returns_none(self):
+        rt = self._make_runtime()
+        self.assertIsNone(rt._check_sandbox_escalation(None))
+
+    def test_justification_included_in_payload(self):
+        rt = self._make_runtime()
+        call = self._exec_command_call(
+            sandbox_permissions="require_escalated",
+            cmd="systemctl restart thing",
+            justification="need to restart service for task",
+        )
+        result = rt._check_sandbox_escalation(call)
+        self.assertIsNotNone(result)
+        self.assertIn("restart service", result["justification"])
+
+    def test_cmd_preview_is_truncated_at_80_chars(self):
+        rt = self._make_runtime()
+        long_cmd = "x" * 200
+        call = self._exec_command_call(sandbox_permissions="require_escalated", cmd=long_cmd)
+        result = rt._check_sandbox_escalation(call)
+        self.assertIsNotNone(result)
+        self.assertLessEqual(len(result["cmd_preview"]), 80)
+
+    def test_justification_truncated_at_200_chars(self):
+        rt = self._make_runtime()
+        long_just = "j" * 300
+        call = self._exec_command_call(
+            sandbox_permissions="require_escalated",
+            justification=long_just,
+        )
+        result = rt._check_sandbox_escalation(call)
+        self.assertIsNotNone(result)
+        self.assertLessEqual(len(result["justification"]), 200)
+
+    def test_non_exec_command_tool_with_require_escalated_detected(self):
+        """Any tool can theoretically set sandbox_permissions; detect them all."""
+        rt = self._make_runtime()
+        call = {
+            "type": "function_call",
+            "name": "some_other_tool",
+            "call_id": "call_other",
+            "arguments": json.dumps({"sandbox_permissions": "require_escalated"}),
+        }
+        result = rt._check_sandbox_escalation(call)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["tool"], "some_other_tool")
+
+    # ------------------------------------------------------------------
+    # Integration test: event emitted through the stream loop
+    # ------------------------------------------------------------------
+
+    def _run_escalation_stream(self, args_json, *, telemetry=None):
+        """Run a single-hop stream with an exec_command function_call and return events."""
+        stream_chunks = _named_function_call_stream(
+            "fc_esc", "call_esc", "exec_command", args_json
+        )
+        chunks = []
+
+        def opener(body):
+            return FakeStream(stream_chunks)
+
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=chunks.append,
+            stream_opener=opener,
+            capture_enabled=False,
+            telemetry=telemetry,
+            request_id="req_esc_test",
+        )
+        body = {"model": "fake", "input": [], "tools": []}
+        runtime.run(body, "fake")
+        return chunks
+
+    def test_stream_emits_tool_escalation_requested_telemetry(self):
+        """Full stream: exec_command with require_escalated emits tool_escalation_requested."""
+        args = json.dumps({
+            "cmd": "sudo systemctl restart nginx",
+            "sandbox_permissions": "require_escalated",
+            "justification": "restart web server for task",
+        })
+        telemetry = TelemetryBus()
+        self._run_escalation_stream(args, telemetry=telemetry)
+
+        events = telemetry.recent()
+        escalation_events = [e for e in events if e["type"] == "tool_escalation_requested"]
+        self.assertTrue(
+            len(escalation_events) >= 1,
+            f"Expected tool_escalation_requested event, got: {[e['type'] for e in events]}",
+        )
+        payload = escalation_events[0]["payload"]
+        self.assertEqual(payload["tool"], "exec_command")
+        self.assertEqual(payload["sandbox_permissions"], "require_escalated")
+        self.assertIn("restart web server", payload["justification"])
+        self.assertIn("nginx", payload["cmd_preview"])
+
+    def test_stream_no_escalation_event_for_normal_exec_command(self):
+        """Normal exec_command (use_default) does not emit tool_escalation_requested."""
+        args = json.dumps({"cmd": "ls -la", "sandbox_permissions": "use_default"})
+        telemetry = TelemetryBus()
+        self._run_escalation_stream(args, telemetry=telemetry)
+
+        events = telemetry.recent()
+        escalation_events = [e for e in events if e["type"] == "tool_escalation_requested"]
+        self.assertEqual(escalation_events, [])
+
+
 if __name__ == "__main__":
     unittest.main()

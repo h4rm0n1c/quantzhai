@@ -337,5 +337,109 @@ class QzThoughtsCliTests(unittest.TestCase):
         self.assertIn(("stream", "idle reconnected"), state.backend)
 
 
+class EscalationRenderingTests(unittest.TestCase):
+    """Tests for qz-thoughts rendering of tool_escalation_requested events."""
+
+    def _make_event(self, seq, ev_type, payload):
+        payload = dict(payload)
+        payload.setdefault("request_id", "req-esc")
+        return {
+            "schema": "qz.telemetry.event.v1",
+            "seq": seq,
+            "type": ev_type,
+            "request_id": "req-esc",
+            "ts": 4102444800 + seq,
+            "payload": payload,
+        }
+
+    def test_tool_escalation_requested_renders_as_escalation_label(self):
+        """tool_escalation_requested event renders with 'escalation' kind in qz-thoughts."""
+        event = self._make_event(1, "tool_escalation_requested", {
+            "tool": "exec_command",
+            "call_id": "call_esc_1",
+            "sandbox_permissions": "require_escalated",
+            "justification": "need to restart service",
+            "cmd_preview": "sudo systemctl restart nginx",
+        })
+        telemetry_payload = {
+            "schema": "qz.telemetry.recent.v1",
+            "events": [event],
+            "state": {
+                "schema": "qz.telemetry.state.v1",
+                "status": "ok",
+                "latest_completed_events": [event],
+            },
+        }
+
+        with _JsonServer(telemetry_payload, {}) as server:
+            env = os.environ.copy()
+            env["QZ_PROXY_HOST"] = "127.0.0.1"
+            env["QZ_PROXY_PORT"] = str(server.port)
+            result = subprocess.run(
+                [str(ROOT / "scripts/qz-thoughts"), "--once"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+                check=True,
+            )
+
+        self.assertIn("escalation", result.stdout)
+        self.assertIn("exec_command", result.stdout)
+        self.assertIn("nginx", result.stdout)
+
+    def test_tool_escalation_renders_with_cmd_and_reason(self):
+        """qz-thoughts shows cmd_preview and justification for escalation events."""
+        ns = _load_qz_thoughts_namespace()
+        state = ns["ThoughtState"](path=Path("proxy-telemetry"))
+        feed = object.__new__(ns["TelemetryFeed"])
+        feed.state = state
+
+        feed._apply_event({
+            "seq": 1,
+            "type": "tool_escalation_requested",
+            "ts": 4102444801,
+            "payload": {
+                "tool": "exec_command",
+                "call_id": "call_esc_unit",
+                "sandbox_permissions": "require_escalated",
+                "justification": "need host access",
+                "cmd_preview": "sudo rm /etc/x",
+                "request_id": "req-unit",
+            },
+        })
+
+        backend_kinds = [kind for kind, _ in state.backend]
+        self.assertIn("escalation", backend_kinds)
+        escalation_entry = next(msg for kind, msg in state.backend if kind == "escalation")
+        self.assertIn("exec_command", escalation_entry)
+        self.assertIn("sudo rm", escalation_entry)
+        self.assertIn("need host access", escalation_entry)
+
+    def test_escalation_without_cmd_or_justification_renders_just_tool(self):
+        """Minimal escalation event (no cmd, no justification) still renders tool name."""
+        ns = _load_qz_thoughts_namespace()
+        state = ns["ThoughtState"](path=Path("proxy-telemetry"))
+        feed = object.__new__(ns["TelemetryFeed"])
+        feed.state = state
+
+        feed._apply_event({
+            "seq": 1,
+            "type": "tool_escalation_requested",
+            "ts": 4102444801,
+            "payload": {
+                "tool": "exec_command",
+                "call_id": "call_min",
+                "sandbox_permissions": "require_escalated",
+                "request_id": "req-min",
+            },
+        })
+
+        backend_kinds = [kind for kind, _ in state.backend]
+        self.assertIn("escalation", backend_kinds)
+
+
 if __name__ == "__main__":
     unittest.main()
