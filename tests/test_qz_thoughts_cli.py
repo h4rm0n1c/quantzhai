@@ -441,5 +441,136 @@ class EscalationRenderingTests(unittest.TestCase):
         self.assertIn("escalation", backend_kinds)
 
 
+class NativeToolOutputRenderingTests(unittest.TestCase):
+    """Tests for qz-thoughts rendering of tool_sandbox_denied and tool_connection_failed."""
+
+    def _apply(self, ns, state, ev_type, payload):
+        feed = object.__new__(ns["TelemetryFeed"])
+        feed.state = state
+        feed._apply_event({
+            "seq": 1, "type": ev_type, "ts": 4102444801,
+            "payload": {**payload, "request_id": "req-obs"},
+        })
+
+    def test_tool_sandbox_denied_renders_as_denied(self):
+        ns = _load_qz_thoughts_namespace()
+        state = ns["ThoughtState"](path=Path("proxy-telemetry"))
+        self._apply(ns, state, "tool_sandbox_denied", {
+            "tool": "exec_command",
+            "call_id": "call_ro",
+            "classifier": "sandbox_denied_readonly_fs",
+            "matched_string": "Read-only file system",
+            "exit_code": 1,
+            "output_preview": "/bin/bash: line 1: /etc/qz-denied-test: Read-only file system",
+            "confidence": "high",
+        })
+        backend_kinds = [kind for kind, _ in state.backend]
+        self.assertIn("denied", backend_kinds)
+        entry = next(msg for kind, msg in state.backend if kind == "denied")
+        self.assertIn("exec_command", entry)
+        self.assertIn("Read-only file system", entry)
+        self.assertIn("exit=1", entry)
+
+    def test_tool_sandbox_denied_without_exit_code(self):
+        ns = _load_qz_thoughts_namespace()
+        state = ns["ThoughtState"](path=Path("proxy-telemetry"))
+        self._apply(ns, state, "tool_sandbox_denied", {
+            "tool": "exec_command",
+            "matched_string": "Read-only file system",
+            "exit_code": None,
+            "output_preview": "Read-only file system",
+            "classifier": "sandbox_denied_readonly_fs",
+            "confidence": "high",
+            "call_id": "c",
+        })
+        entry = next(msg for kind, msg in state.backend if kind == "denied")
+        self.assertNotIn("exit=", entry)
+
+    def test_tool_connection_failed_renders_as_conn_fail(self):
+        ns = _load_qz_thoughts_namespace()
+        state = ns["ThoughtState"](path=Path("proxy-telemetry"))
+        self._apply(ns, state, "tool_connection_failed", {
+            "tool": "exec_command",
+            "call_id": "call_conn",
+            "classifier": "native_tool_connection_refused",
+            "matched_string": "Connection refused",
+            "exit_code": 1,
+            "output_preview": "curl: Connection refused",
+            "confidence": "medium",
+        })
+        backend_kinds = [kind for kind, _ in state.backend]
+        self.assertIn("conn-fail", backend_kinds)
+        entry = next(msg for kind, msg in state.backend if kind == "conn-fail")
+        self.assertIn("exec_command", entry)
+        self.assertIn("Connection refused", entry)
+
+    def test_tool_sandbox_denied_subprocess_rendering(self):
+        """Verify tool_sandbox_denied is visible through the full --once subprocess path."""
+        event = {
+            "schema": "qz.telemetry.event.v1",
+            "seq": 1, "type": "tool_sandbox_denied", "request_id": "req-sb",
+            "ts": 4102444801,
+            "payload": {
+                "tool": "exec_command",
+                "call_id": "call_sb",
+                "classifier": "sandbox_denied_readonly_fs",
+                "matched_string": "Read-only file system",
+                "exit_code": 1,
+                "output_preview": "/bin/bash: /etc/denied: Read-only file system",
+                "confidence": "high",
+            },
+        }
+        telemetry_payload = {
+            "schema": "qz.telemetry.recent.v1",
+            "events": [event],
+            "state": {"schema": "qz.telemetry.state.v1", "status": "ok", "latest_completed_events": [event]},
+        }
+        with _JsonServer(telemetry_payload, {}) as server:
+            env = os.environ.copy()
+            env["QZ_PROXY_HOST"] = "127.0.0.1"
+            env["QZ_PROXY_PORT"] = str(server.port)
+            result = subprocess.run(
+                [str(ROOT / "scripts/qz-thoughts"), "--once"],
+                cwd=ROOT, env=env, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, check=True,
+            )
+        self.assertIn("denied", result.stdout)
+        self.assertIn("exec_command", result.stdout)
+        self.assertIn("Read-only file system", result.stdout)
+
+    def test_tool_connection_failed_subprocess_rendering(self):
+        event = {
+            "schema": "qz.telemetry.event.v1",
+            "seq": 1, "type": "tool_connection_failed", "request_id": "req-cn",
+            "ts": 4102444801,
+            "payload": {
+                "tool": "exec_command",
+                "call_id": "call_cn",
+                "classifier": "native_tool_connection_refused",
+                "matched_string": "Connection refused",
+                "exit_code": 1,
+                "output_preview": "curl: Connection refused",
+                "confidence": "medium",
+            },
+        }
+        telemetry_payload = {
+            "schema": "qz.telemetry.recent.v1",
+            "events": [event],
+            "state": {"schema": "qz.telemetry.state.v1", "status": "ok", "latest_completed_events": [event]},
+        }
+        with _JsonServer(telemetry_payload, {}) as server:
+            env = os.environ.copy()
+            env["QZ_PROXY_HOST"] = "127.0.0.1"
+            env["QZ_PROXY_PORT"] = str(server.port)
+            result = subprocess.run(
+                [str(ROOT / "scripts/qz-thoughts"), "--once"],
+                cwd=ROOT, env=env, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, check=True,
+            )
+        self.assertIn("conn-fail", result.stdout)
+        self.assertIn("exec_command", result.stdout)
+        self.assertIn("Connection refused", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

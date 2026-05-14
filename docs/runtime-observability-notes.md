@@ -4,15 +4,32 @@ Date: 2026-04-29
 
 ## What We Discovered
 
-- When an outgoing `exec_command` function_call carries
-  `sandbox_permissions: "require_escalated"` in its arguments, the proxy emits
-  a `tool_escalation_requested` telemetry event before the call is forwarded.
+- **Sandbox escalation (Slice 1 — structured signal):** When an outgoing
+  `exec_command` function_call carries `sandbox_permissions: "require_escalated"`
+  in its arguments, the proxy emits `tool_escalation_requested` before forwarding.
   Payload includes `tool`, `call_id`, `sandbox_permissions`, `cmd_preview`
-  (truncated to 80 chars), and `justification` (truncated to 200 chars).
-  `qz-thoughts` renders this as an `escalation` activity row distinct from
-  normal `tool` rows. This is the structured slice of issue #28 (Slice 1).
-  Textual stderr classification (Slice 2) is deferred until a real denied-command
-  capture is available.
+  (≤80 chars), and `justification` (≤200 chars). `qz-thoughts` renders this as
+  an `escalation` activity row.
+
+- **Incoming native tool output observation (Slice 2 — textual classifier):**
+  The proxy scans `function_call_output` items in the incoming request body
+  before forwarding to the model. This is read-only — the request is not mutated.
+  Conservative classifiers match specific high-signal strings and emit telemetry:
+
+  | Classifier | Trigger string | Event | Confidence |
+  |---|---|---|---|
+  | `sandbox_denied_readonly_fs` | `Read-only file system` | `tool_sandbox_denied` | high |
+  | `native_tool_connection_refused` | `Connection refused` | `tool_connection_failed` | medium |
+
+  Payload includes `call_id`, `tool` (recovered from a matching `function_call`
+  item by call_id, else `"unknown"`), `classifier`, `matched_string`, `exit_code`
+  (parsed from Codex envelope `Process exited with code N`), `output_preview`
+  (≤200 chars), and `confidence`. `qz-thoughts` renders `tool_sandbox_denied` as
+  a `denied` row and `tool_connection_failed` as a `conn-fail` row.
+
+  Deliberately NOT classified: plain `permission denied`, exit code alone,
+  `Process exited with code 1` alone. These are too broad for safe classification
+  without additional context. Implementation lives in `proxy/qz_native_tool_output.py`.
 
 - `qz-top` recent activity can fail silently if it asks the sudo Docker helper
   for more log lines than the helper allows. The helper boundary is
