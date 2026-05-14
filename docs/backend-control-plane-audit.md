@@ -467,7 +467,8 @@ When added it should call `qz-wait-ready --catalog --model MODEL` as the readine
 preflight rather than rolling its own.
 
 **Remaining under #44 (deferred):**
-- `qz-smoke-repeated-read` from #43: integrate with qz-wait-ready when created.
+- `qz-smoke-repeated-read` from #43: script added (#43). It uses qz-wait-ready
+  for catalog+model preflight and telemetry seq-gated pass condition.
 - Proxy fully owns Codex catalog file generation; `qz-codex-common` opt-in fallback
   can be removed once proxy is reliable for all cases.
 - Replace `qz-write-runtime-state` launcher trace with proxy startup event telemetry

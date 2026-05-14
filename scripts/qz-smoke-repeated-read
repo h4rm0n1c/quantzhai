@@ -1,0 +1,327 @@
+#!/usr/bin/env bash
+# qz-smoke-repeated-read: live end-to-end smoke for repeated-read v1 signal.
+#
+# Validates the full path:
+#   Codex -> QuantZhai proxy -> tool lifecycle -> repeated_read_signal telemetry
+#
+# Usage:
+#   scripts/qz-smoke-repeated-read --model MODEL [options]
+#
+# Options:
+#   --model MODEL            Real /v1/models ID to use (required if no env default)
+#   --telemetry-limit N      Telemetry window size (default: 2000)
+#   --wait-secs N            Max wait for readiness (default: 120)
+#   --no-restart-proxy       Skip proxy restart before run
+#   -h, --help               Show this help
+#
+# Environment:
+#   QZ_REPEATED_READ_SMOKE_MODEL   Default model if --model is not supplied
+#   QZ_TELEM_LIMIT                 Default telemetry limit
+#   QZ_WAIT_SECS                   Default wait-secs
+#   QZ_PROXY_HOST / QZ_PROXY_PORT  From scripts/qz-env
+#
+# Pass condition: at least one new repeated_read_signal telemetry event after
+# the baseline seq, with payload.paths containing docs/README.md.
+#
+# Artifacts written to /tmp:
+#   /tmp/qz-rr-smoke-codex.jsonl
+#   /tmp/qz-rr-smoke-codex.stderr
+#   /tmp/qz-rr-smoke-telemetry.json
+#   /tmp/qz-rr-smoke-repeated-read-events.json
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Defaults and argument parsing
+# ---------------------------------------------------------------------------
+RR_MODEL="${QZ_REPEATED_READ_SMOKE_MODEL:-}"
+TELEMETRY_LIMIT="${QZ_TELEM_LIMIT:-2000}"
+WAIT_SECS="${QZ_WAIT_SECS:-120}"
+RESTART_PROXY=1
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: scripts/qz-smoke-repeated-read --model MODEL [options]
+
+Options:
+  --model MODEL         Real /v1/models ID (required if QZ_REPEATED_READ_SMOKE_MODEL not set)
+  --telemetry-limit N   Telemetry window (default: 2000)
+  --wait-secs N         Max readiness wait in seconds (default: 120)
+  --no-restart-proxy    Skip proxy restart before run
+  -h, --help            Show this help
+
+Pass condition:
+  At least one new repeated_read_signal event with payload.paths containing
+  docs/README.md appears in telemetry after the Codex run.
+
+Example:
+  scripts/qz-smoke-repeated-read --model kuato --wait-secs 180
+EOF
+  exit 2
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model)              RR_MODEL="${2:?--model requires a value}"; shift 2 ;;
+    --model=*)            RR_MODEL="${1#*=}"; shift ;;
+    --telemetry-limit)    TELEMETRY_LIMIT="${2:?--telemetry-limit requires a value}"; shift 2 ;;
+    --telemetry-limit=*)  TELEMETRY_LIMIT="${1#*=}"; shift ;;
+    --wait-secs)          WAIT_SECS="${2:?--wait-secs requires a value}"; shift 2 ;;
+    --wait-secs=*)        WAIT_SECS="${1#*=}"; shift ;;
+    --no-restart-proxy)   RESTART_PROXY=0; shift ;;
+    -h|--help)            usage ;;
+    *)  printf 'unknown option: %s\n' "$1" >&2; usage ;;
+  esac
+done
+
+# ---------------------------------------------------------------------------
+# Environment
+# ---------------------------------------------------------------------------
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qz-env"
+
+PROXY_BASE="http://${QZ_PROXY_HOST}:${QZ_PROXY_PORT}"
+
+# Artifact paths
+CODEX_JSONL=/tmp/qz-rr-smoke-codex.jsonl
+CODEX_STDERR=/tmp/qz-rr-smoke-codex.stderr
+TELEM_JSON=/tmp/qz-rr-smoke-telemetry.json
+RR_EVENTS_JSON=/tmp/qz-rr-smoke-repeated-read-events.json
+
+ok()   { printf 'OK   %s\n' "$*"; }
+fail() { printf 'FAIL %s\n' "$*" >&2; }
+
+printf '=== qz-smoke-repeated-read  proxy=%s ===\n' "$PROXY_BASE"
+printf '    model=%s  wait=%ss  telem_limit=%s\n' \
+  "${RR_MODEL:-<not set>}" "$WAIT_SECS" "$TELEMETRY_LIMIT"
+echo
+
+# ---------------------------------------------------------------------------
+# Require a model
+# ---------------------------------------------------------------------------
+if [[ -z "$RR_MODEL" ]]; then
+  printf 'ERROR: no model specified.\n' >&2
+  printf '\n' >&2
+  printf '  Set --model MODEL or QZ_REPEATED_READ_SMOKE_MODEL.\n' >&2
+  printf '\n' >&2
+  printf '  To list available models:\n' >&2
+  printf '    curl -s %s/v1/models | python3 -c "import json,sys; [print(m[\"id\"]) for m in json.load(sys.stdin).get(\"data\",[])]\n' \
+    "$PROXY_BASE" >&2
+  printf '\n' >&2
+  printf '  Example:\n' >&2
+  printf '    scripts/qz-smoke-repeated-read --model kuato\n' >&2
+  exit 2
+fi
+
+# ---------------------------------------------------------------------------
+# Optional proxy restart
+# ---------------------------------------------------------------------------
+if [[ "$RESTART_PROXY" -eq 1 ]]; then
+  echo '--- restarting proxy ---'
+  if "${QZ_ROOT}/scripts/qz-proxy" 2>/dev/null; then
+    ok "proxy restarted"
+    sleep 2
+  else
+    printf 'WARN proxy restart failed or not available; continuing\n' >&2
+  fi
+  echo
+fi
+
+# ---------------------------------------------------------------------------
+# Readiness via qz-wait-ready (uses /qz/control-plane as primary source)
+# ---------------------------------------------------------------------------
+echo '--- readiness ---'
+if ! "${QZ_ROOT}/scripts/qz-wait-ready" \
+     --catalog \
+     --model "$RR_MODEL" \
+     --wait-secs "$WAIT_SECS" \
+     --proxy-url "$PROXY_BASE"; then
+  printf '\nREADINESS FAILED — aborting repeated-read smoke.\n' >&2
+  exit 1
+fi
+echo
+
+# ---------------------------------------------------------------------------
+# Telemetry baseline (record max seq before Codex run)
+# ---------------------------------------------------------------------------
+echo '--- telemetry baseline ---'
+BASELINE_SEQ=$(curl -sf --max-time 8 \
+  "${PROXY_BASE}/qz/telemetry/recent?limit=${TELEMETRY_LIMIT}" 2>/dev/null | \
+  python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    seqs = [e.get('seq', 0) for e in d.get('events', [])]
+    seqs += [e.get('seq', 0) for e in (d.get('state', {}).get('latest_completed_events') or [])]
+    print(max(seqs) if seqs else 0)
+except Exception:
+    print(0)
+" 2>/dev/null || echo 0)
+printf '  baseline telemetry seq: %s\n' "$BASELINE_SEQ"
+echo
+
+# ---------------------------------------------------------------------------
+# Codex run: read docs/README.md twice to trigger repeated-read signal
+# ---------------------------------------------------------------------------
+echo '--- Codex run (repeated-read trigger) ---'
+printf '  prompt: cat docs/README.md twice via exec_command\n'
+printf '  model:  %s\n' "$RR_MODEL"
+printf '  output: %s\n' "$CODEX_JSONL"
+echo
+
+CODEX_RC=0
+"${QZ_ROOT}/scripts/qz-codex" exec \
+  -m "$RR_MODEL" \
+  --json \
+  --ephemeral \
+  -c approval_policy=never \
+  'Live smoke test for QuantZhai repeated-read v1.
+
+Use exec_command tool calls.
+
+Run these exact commands in order:
+1. cat docs/README.md >/tmp/qz_rr_smoke_first.txt
+2. cat docs/README.md >/tmp/qz_rr_smoke_second.txt
+
+Then answer briefly. Do not use sed, head, rg, grep, or Python. Use cat exactly.' \
+  >"$CODEX_JSONL" 2>"$CODEX_STDERR" || CODEX_RC=$?
+
+printf '  codex_rc: %s\n' "$CODEX_RC"
+if [[ "$CODEX_RC" -ne 0 ]]; then
+  printf '  WARN: codex exited %s (checking telemetry anyway)\n' "$CODEX_RC"
+fi
+echo
+
+# Brief pause for telemetry to propagate
+sleep 1
+
+# ---------------------------------------------------------------------------
+# Telemetry verification
+# ---------------------------------------------------------------------------
+echo '--- telemetry verification ---'
+
+# Fetch telemetry into artifact file
+curl -sf --max-time 10 \
+  "${PROXY_BASE}/qz/telemetry/recent?limit=${TELEMETRY_LIMIT}" \
+  >"$TELEM_JSON" 2>/dev/null || printf '{}' >"$TELEM_JSON"
+
+# Extract new repeated_read_signal events after baseline
+python3 - "$BASELINE_SEQ" "$TELEM_JSON" "$RR_EVENTS_JSON" <<'PY'
+import json, sys
+
+baseline_seq = int(sys.argv[1])
+telem_path   = sys.argv[2]
+out_path     = sys.argv[3]
+
+try:
+    d = json.loads(open(telem_path).read())
+except Exception:
+    d = {}
+
+events = list(d.get("events", []))
+events += list(d.get("state", {}).get("latest_completed_events") or [])
+
+new_rr = [
+    e for e in events
+    if e.get("type") == "repeated_read_signal"
+    and e.get("seq", 0) > baseline_seq
+]
+
+with open(out_path, "w") as f:
+    json.dump(new_rr, f, indent=2)
+
+print(f"  new repeated_read_signal events after seq {baseline_seq}: {len(new_rr)}")
+for e in new_rr[:3]:
+    p = e.get("payload", {})
+    paths = p.get("paths", [])
+    action = p.get("action", "")
+    scope  = p.get("scope", "")
+    tool   = p.get("tool", "")
+    print(f"    seq={e.get('seq')} tool={tool} paths={paths} action={action} scope={scope}")
+PY
+
+# Check pass condition: at least one event with docs/README.md in paths
+RR_PASS=$(python3 - "$RR_EVENTS_JSON" <<'PY'
+import json, sys
+try:
+    events = json.loads(open(sys.argv[1]).read())
+    target = "docs/README.md"
+    for e in events:
+        paths = e.get("payload", {}).get("paths", [])
+        if any(target in str(p) for p in paths):
+            print("true")
+            raise SystemExit(0)
+    print("false")
+except SystemExit:
+    raise
+except Exception:
+    print("false")
+PY
+)
+
+echo
+
+# ---------------------------------------------------------------------------
+# Result
+# ---------------------------------------------------------------------------
+if [[ "$RR_PASS" == "true" ]]; then
+  printf 'PASS: new repeated_read_signal event observed for docs/README.md\n'
+  echo
+  printf 'Artifacts:\n'
+  printf '  %s\n' "$CODEX_JSONL" "$CODEX_STDERR" "$TELEM_JSON" "$RR_EVENTS_JSON"
+  exit 0
+else
+  printf 'FAIL: no new repeated_read_signal for docs/README.md after baseline seq %s\n' \
+    "$BASELINE_SEQ" >&2
+  echo >&2
+  printf 'Diagnostics:\n' >&2
+  printf '  codex_rc:    %s\n' "$CODEX_RC" >&2
+  printf '  model:       %s\n' "$RR_MODEL" >&2
+  printf '  proxy:       %s\n' "$PROXY_BASE" >&2
+  echo >&2
+
+  echo '--- Codex JSONL (exec_command / cat / repeated_read / error lines) ---' >&2
+  grep -i 'exec_command\|"cat\|repeated_read\|"error\|"type":"error' "$CODEX_JSONL" \
+    2>/dev/null | head -20 >&2 || printf '  (none found or empty)\n' >&2
+  echo >&2
+
+  echo '--- Codex stderr tail ---' >&2
+  tail -20 "$CODEX_STDERR" 2>/dev/null >&2 || printf '  (empty)\n' >&2
+  echo >&2
+
+  echo '--- repeated_read_signal events after baseline ---' >&2
+  python3 -c "
+import json, sys
+try:
+    evs = json.loads(open('$RR_EVENTS_JSON').read())
+    if evs:
+        print(json.dumps(evs, indent=2))
+    else:
+        print('  (none)')
+except Exception as e:
+    print(f'  (error reading: {e})')
+" >&2
+
+  echo >&2
+  echo '--- recent telemetry event types (last 20) ---' >&2
+  python3 -c "
+import json, sys
+try:
+    d = json.loads(open('$TELEM_JSON').read())
+    evs = list(d.get('events', []))
+    for e in evs[-20:]:
+        print(f\"  seq={e.get('seq')} type={e.get('type')}\")
+except Exception as e:
+    print(f'  (error: {e})')
+" >&2
+
+  echo >&2
+  if [[ -f "${QZ_VAR_DIR}/logs/qz-proxy.log" ]]; then
+    echo '--- proxy log tail ---' >&2
+    tail -20 "${QZ_VAR_DIR}/logs/qz-proxy.log" >&2
+    echo >&2
+  fi
+
+  printf 'Artifacts:\n' >&2
+  printf '  %s\n' "$CODEX_JSONL" "$CODEX_STDERR" "$TELEM_JSON" "$RR_EVENTS_JSON" >&2
+  exit 1
+fi

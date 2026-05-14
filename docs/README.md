@@ -104,6 +104,7 @@ Useful scripts:
 scripts/qz-doctor
 scripts/qz-up
 scripts/qz-live-smoke    # validate live stack after startup
+scripts/qz-smoke-repeated-read --model MODEL   # validate repeated-read v1 signal end-to-end
 scripts/qz-codex high
 scripts/qz-down
 ```
