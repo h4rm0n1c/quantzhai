@@ -42,6 +42,7 @@ try:
     from .qz_recovery_status import build_recovery_status
     from .qz_recovery_plan import ALLOWED_RECOVERY_ACTIONS, build_recovery_plan
     from .qz_recovery_state import RECOVERY_STATE
+    from .qz_active_requests import ACTIVE_REQUESTS
     from .qz_search_policy import resolve_search_policy_selection
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import (
@@ -86,6 +87,7 @@ except ImportError:
     from qz_recovery_status import build_recovery_status
     from qz_recovery_plan import ALLOWED_RECOVERY_ACTIONS, build_recovery_plan
     from qz_recovery_state import RECOVERY_STATE
+    from qz_active_requests import ACTIVE_REQUESTS
     from qz_search_policy import resolve_search_policy_selection
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import (
@@ -427,7 +429,13 @@ class RequestRouter:
                 ss = cp.get("service_status") or {}
                 rs = getattr(self.handler, "recovery_state", RECOVERY_STATE)
                 runtime_snapshot = rs.snapshot() if rs is not None else None
-                recovery_payload = build_recovery_status(ss, runtime_state=runtime_snapshot)
+                ar = getattr(self.handler, "active_requests", ACTIVE_REQUESTS)
+                ar_snapshot = ar.snapshot() if ar is not None else None
+                recovery_payload = build_recovery_status(
+                    ss,
+                    runtime_state=runtime_snapshot,
+                    active_requests=ar_snapshot,
+                )
             except Exception as exc:
                 recovery_payload = {
                     "schema": "qz.recovery.status.v1",
@@ -811,6 +819,8 @@ class RequestRouter:
         rs            = getattr(self.handler, "recovery_state", RECOVERY_STATE)
         backoff_act   = rs.is_backoff_active(action) if rs is not None else False
         in_progress   = rs.is_recovery_in_progress() if rs is not None else False
+        ar            = getattr(self.handler, "active_requests", ACTIVE_REQUESTS)
+        active_count  = ar.count() if ar is not None else None
 
         plan = build_recovery_plan(
             ss,
@@ -819,7 +829,7 @@ class RequestRouter:
             force=force,
             authority_enabled=authority,
             local_request=local_req,
-            active_requests=None,   # tracking not yet implemented (slice 9)
+            active_requests=active_count,
             backoff_active=backoff_act,
             recovery_in_progress=in_progress,
         )
@@ -1783,6 +1793,8 @@ class RequestRouter:
                 except Exception:
                     pass
 
+                _ar = getattr(self.handler, "active_requests", ACTIVE_REQUESTS)
+                _ar.begin(request_id, route=upstream_path, model=client_model)
                 if client_wants_stream:
                     self.handler.send_response(200)
                     self.handler.send_header("Content-Type", "text/event-stream")
@@ -1865,6 +1877,7 @@ class RequestRouter:
                         self._write_sse_chunk(make_sse_block("response.failed", error_payload))
                         self._write_sse_chunk(b"data: [DONE]\n\n")
                     self.handler.close_connection = True
+                    _ar.finish(request_id)
                     return
 
                 try:
@@ -1897,6 +1910,7 @@ class RequestRouter:
                             runtime_metrics=runtime_metrics,
                             request_id=request_id,
                         )
+                        _ar.finish(request_id)
                         return
 
                     self.handler._send_json(status, out)
@@ -1913,6 +1927,7 @@ class RequestRouter:
                         runtime_metrics=runtime_metrics,
                         request_id=request_id,
                     )
+                    _ar.finish(request_id)
                     return
                 except Exception as e:
                     try:
@@ -1933,6 +1948,7 @@ class RequestRouter:
                         request_id=request_id,
                     )
                     self.handler._send_json(502, {"error": f"local web runtime error: {e}"})
+                    _ar.finish(request_id)
                     return
 
         try:

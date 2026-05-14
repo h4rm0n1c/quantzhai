@@ -507,7 +507,25 @@ Response: `qz.recovery.trigger.v1` with `accepted`, `pre_status`, `post_status`.
 Telemetry: `recovery_trigger_requested`, `recovery_action_started`, `recovery_action_completed`,
 `recovery_action_failed`, `recovery_trigger_rejected`.
 
-Still missing: active request tracking, restart actions, durable state (#2 SQLite). #47 open.
+Still missing: active request tracking (slice 10a), restart actions, durable state (#2 SQLite). #47 open.
+
+### Slice 10a (done): Active request tracking
+
+Added `proxy/qz_active_requests.py` with `ActiveRequestTracker` / `ACTIVE_REQUESTS` singleton.
+
+In-memory, thread-safe, non-durable. `begin()` / `finish()` guaranteed non-raising.
+Schema: `qz.active_requests.v1` with `count` and `requests[]` including `age_secs`.
+
+Integration:
+- `ProxyHandler.active_requests = ACTIVE_REQUESTS`
+- `/v1/responses` in `proxy_json_api`: `begin()` before upstream dispatch; `finish()` at each exit
+- `GET /qz/recovery/status` — `active_requests` snapshot embedded
+- `/qz/control-plane` `recovery` field — `active_requests` embedded
+- `POST /qz/recovery/plan` — passes real `ar.count()` instead of `None`
+- `build_recovery_status(ss, runtime_state=None, active_requests=None)` — backward-compat
+
+`restart_backend` plan now reports `blocked_by_active_requests=True` when count > 0.
+Tests: `tests/test_qz_active_requests.py` — 29 assertions.
 
 ---
 

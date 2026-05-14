@@ -46,17 +46,18 @@ _SUMMARY_MAP: dict[str, str] = {
 def build_recovery_status(
     service_status: dict[str, Any],
     runtime_state: dict[str, Any] | None = None,
+    active_requests: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a qz.recovery.status.v1 payload from a qz.service.status.v1 dict.
 
     Args:
-        service_status:  A qz.service.status.v1 dict (from build_service_status()).
-                         If None or invalid, returns a safe degraded payload.
-        runtime_state:   Optional qz.recovery.runtime_state.v1 snapshot from
-                         RecoveryRuntimeState.snapshot(). When supplied, the result
-                         includes a "runtime_state" field and a per-action "backoff"
-                         summary for the current operator_action. Existing callers
-                         without this argument are unaffected.
+        service_status:   A qz.service.status.v1 dict (from build_service_status()).
+                          If None or invalid, returns a safe degraded payload.
+        runtime_state:    Optional qz.recovery.runtime_state.v1 snapshot.
+                          When supplied, adds "runtime_state" and per-action "backoff".
+        active_requests:  Optional qz.active_requests.v1 snapshot.
+                          When supplied, adds "active_requests" field. Existing callers
+                          without this argument are unaffected.
 
     Returns:
         A qz.recovery.status.v1 dict. Always returns a valid dict; never raises.
@@ -80,6 +81,8 @@ def build_recovery_status(
         if runtime_state is not None:
             result["runtime_state"] = runtime_state
             result["backoff"] = None
+        if active_requests is not None:
+            result["active_requests"] = active_requests
         return result
 
     recovery_state = str(service_status.get("recovery_state") or "none")
@@ -137,5 +140,8 @@ def build_recovery_status(
             }
         else:
             result["backoff"] = None
+
+    if active_requests is not None:
+        result["active_requests"] = active_requests
 
     return result

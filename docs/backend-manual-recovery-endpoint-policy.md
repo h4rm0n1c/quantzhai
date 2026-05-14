@@ -649,20 +649,42 @@ New helpers in `RequestRouter`:
 - `_do_refresh_catalog()` — calls existing `catalog.refresh()` + `_refresh_codex_catalog(catalog)`
 - `_do_clear_failure(rs)` — calls `rs.clear()` (in-memory only; no file mutation)
 
-**Gaps / not yet done:**
-- `active_requests` tracking: still `None` — restart actions cannot safely gate on this
+**Remaining gaps after slice 9:**
+- `active_requests` tracking: still `None` — addressed in slice 10a
 - Restart actions: deferred to slice 10 or later
 - Durable attempt history: requires #2 SQLite
-- `QZ_RECOVERY_CONFIRM_PHRASE`: skipped for safe actions in slice 9
+- `QZ_RECOVERY_CONFIRM_PHRASE`: skipped for safe actions
 
-Tests: `tests/test_qz_recovery_trigger.py` — 7 test classes, 34 assertions (helpers and constants only; HTTP route tested via manual curl).
+Tests: `tests/test_qz_recovery_trigger.py` — 7 test classes, 34 assertions.
 
-### Slice 10: `restart_backend` — only after slices 8 and 9 are stable
+### Slice 10a (done): Active request tracking
 
-- Gated by `QZ_RECOVERY_ACTIONS=1`, confirmation phrase, and active request safety.
+Added `proxy/qz_active_requests.py` with `ActiveRequestTracker` and `ACTIVE_REQUESTS` singleton.
+
+Schema: `qz.active_requests.v1`. Thread-safe. In-memory. Non-durable.
+`begin()` and `finish()` guaranteed non-raising.
+
+Snapshot fields: `schema`, `count`, `requests[]` with `request_id`, `route`, `model`, `started_at`, `age_secs`.
+
+Integration:
+- `ProxyHandler.active_requests = ACTIVE_REQUESTS` — class var
+- `/v1/responses` path in `proxy_json_api()`: `begin()` before streaming/non-streaming dispatch; `finish()` at each exit
+- Compaction early-return is before `begin()` — correctly not tracked
+- `GET /qz/recovery/status` — includes `active_requests` snapshot
+- `/qz/control-plane` `recovery` field — includes `active_requests` snapshot
+- `POST /qz/recovery/plan` — passes real `active_requests=ar.count()` instead of `None`
+- `build_recovery_status(ss, runtime_state=None, active_requests=None)` — extended (backward-compat)
+
+`restart_backend` planning now correctly reports `blocked_by_active_requests=True`
+when in-flight count > 0 and `force=False`. No "active request count unavailable" note.
+
+Tests: `tests/test_qz_active_requests.py` — 9 test classes, 29 assertions.
+
+### Slice 10: `restart_backend` — only after active request tracking and backoff are stable
+
+- Gated by `QZ_RECOVERY_ACTIONS=1`, `force=true` (since restarts interrupt requests), and real active-request count.
 - Emits full telemetry including `recovery_backoff_started` on failure.
-- Documents the gap if active request count is still unavailable.
-- Requires `force=true` if request tracking is not yet implemented.
+- All restart preconditions now available from slices 8 + 10a.
 
 ### Future: durable state (requires #2 SQLite)
 

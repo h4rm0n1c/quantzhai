@@ -23,10 +23,12 @@ try:
     from .qz_service_status import build_service_status
     from .qz_recovery_status import build_recovery_status
     from .qz_recovery_state import RECOVERY_STATE
+    from .qz_active_requests import ACTIVE_REQUESTS
 except ImportError:
     from qz_service_status import build_service_status
     from qz_recovery_status import build_recovery_status
     from qz_recovery_state import RECOVERY_STATE
+    from qz_active_requests import ACTIVE_REQUESTS
 from typing import Any
 
 QZ_CONTROL_PLANE_SCHEMA = "qz.control_plane.status.v1"
@@ -212,7 +214,13 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
         runtime_snapshot = RECOVERY_STATE.snapshot()
     except Exception:
         runtime_snapshot = None
+    try:
+        ar_snapshot = ACTIVE_REQUESTS.snapshot()
+    except Exception:
+        ar_snapshot = None
     payload["recovery"] = build_recovery_status(
-        payload["service_status"], runtime_state=runtime_snapshot
+        payload["service_status"],
+        runtime_state=runtime_snapshot,
+        active_requests=ar_snapshot,
     )
     return payload
