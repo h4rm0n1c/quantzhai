@@ -433,11 +433,25 @@ Existing control-plane fields unchanged.
 
 Tests: `tests/test_qz_recovery_status.py`.
 
-### Slice 5: Manual recovery endpoint design
+### Slice 5 (done): Manual recovery endpoint design
 
-- Design `/qz/recovery/trigger` or similar with explicit operator-confirms semantics.
-- Define backoff policy.
-- Still no automatic crash-looping.
+Policy doc: `docs/backend-manual-recovery-endpoint-policy.md`.
+
+Key decisions:
+- `POST /qz/recovery/plan` — dry-run only; always HTTP 200/400; no side effects.
+- `POST /qz/recovery/trigger` — state-changing; requires `QZ_RECOVERY_ACTIONS=1`;
+  explicit `action`, `reason`, and `confirm` in request body.
+- Allowed actions: `refresh_catalog`, `select_model`, `reload_selected_model`,
+  `start_backend`, `restart_backend`, `clear_failure`.
+- Forbidden: automatic crash-loop restart, remote-client restart, restart without
+  `QZ_RECOVERY_ACTIONS=1`, restart with active requests unless `force=true`.
+- Backoff: 30 s / 2 min / 5 min, then `manual_required`. Per-action, not global.
+- Active request safety: restart actions blocked until request tracking or `force=true`.
+- Authority flags: `QZ_RECOVERY_ACTIONS`, `QZ_RECOVERY_BIND_LOCAL_ONLY`,
+  `QZ_RECOVERY_CONFIRM_PHRASE`, `QZ_RECOVERY_MAX_ATTEMPTS`, `QZ_RECOVERY_BACKOFF_SECS`.
+- New error schema: `qz.recovery.error.v1` (separate from `qz.responses.error.v1`).
+- Future implementation slices 6–10 defined in the policy doc.
+- Still no automatic crash-looping. No Docker calls. #47 stays open.
 
 ---
 
