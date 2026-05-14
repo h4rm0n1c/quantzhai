@@ -1,0 +1,273 @@
+#!/usr/bin/env bash
+# qz-wait-ready: wait for QuantZhai proxy/catalog/model readiness.
+#
+# Usage:
+#   scripts/qz-wait-ready [--catalog] [--model MODEL] [--backend] [--proxy-only]
+#                         [--wait-secs N] [--proxy-url URL] [--quiet]
+#
+# Checks proxy HTTP responsiveness, catalog readiness, optional model
+# visibility, and optional backend/model loaded state.
+#
+# Exits 0 when all requested readiness levels are satisfied.
+# Exits 1 if any level is not satisfied within the timeout.
+# Exits 2 on usage error.
+#
+# Readiness levels (checked in order when requested):
+#   (always)    proxy HTTP up     /health responds
+#   (always)    proxy ready       .proxy_initialization.ready == true
+#   --catalog   catalog ready     .proxy_initialization.catalog_ready == true
+#   --model M   model visible     /v1/models contains model ID M
+#   --backend   backend ready     /qz/status ready == true
+#
+# --proxy-only: check only proxy HTTP up (skips ready/catalog/model/backend).
+# --status:     alias for --backend (check /qz/status ready).
+# --quiet:      suppress progress dots; only print pass/fail lines.
+
+set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qz-env"
+
+# ---------------------------------------------------------------------------
+# Defaults
+# ---------------------------------------------------------------------------
+WAIT_SECS=60
+PROXY_URL="http://${QZ_PROXY_HOST}:${QZ_PROXY_PORT}"
+WANT_CATALOG=0
+WANT_MODEL=""
+WANT_BACKEND=0
+PROXY_ONLY=0
+QUIET=0
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: scripts/qz-wait-ready [options]
+
+Options:
+  --catalog            Wait for catalog readiness (catalog_ready == true)
+  --model MODEL        Wait until MODEL appears in /v1/models
+  --backend            Wait until /qz/status ready == true (model loaded)
+  --status             Alias for --backend
+  --proxy-only         Check proxy HTTP up only; skip ready/catalog/model/backend
+  --wait-secs N        Timeout in seconds (default: 60)
+  --proxy-url URL      Override proxy base URL (default: QZ_PROXY_HOST:QZ_PROXY_PORT)
+  --quiet              Suppress progress output; only print pass/fail lines
+  -h, --help           Show this help
+EOF
+  exit 2
+}
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --catalog)             WANT_CATALOG=1;                   shift ;;
+    --model)               WANT_MODEL="${2:?--model requires a value}"; shift 2 ;;
+    --model=*)             WANT_MODEL="${1#*=}";              shift ;;
+    --backend|--status)    WANT_BACKEND=1;                   shift ;;
+    --proxy-only)          PROXY_ONLY=1;                     shift ;;
+    --wait-secs)           WAIT_SECS="${2:?--wait-secs requires a value}"; shift 2 ;;
+    --wait-secs=*)         WAIT_SECS="${1#*=}";              shift ;;
+    --proxy-url)           PROXY_URL="${2:?--proxy-url requires a value}"; shift 2 ;;
+    --proxy-url=*)         PROXY_URL="${1#*=}";              shift ;;
+    --quiet)               QUIET=1;                          shift ;;
+    -h|--help)             usage ;;
+    *)  printf 'unknown option: %s\n' "$1" >&2; usage ;;
+  esac
+done
+
+if ! [[ "$WAIT_SECS" =~ ^[0-9]+$ ]] || [[ "$WAIT_SECS" -lt 1 ]]; then
+  printf 'qz-wait-ready: --wait-secs must be a positive integer\n' >&2
+  exit 2
+fi
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+_quiet() { [[ "$QUIET" -eq 1 ]]; }
+
+_dot() {
+  if ! _quiet; then printf '.'; fi
+}
+
+_print_available_models() {
+  local models
+  models=$(curl -sf --max-time 5 "${PROXY_URL}/v1/models" 2>/dev/null | \
+    python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    ids = [m.get('id','') for m in d.get('data',[]) if isinstance(m,dict)]
+    for mid in sorted(ids):
+        print(' ', mid)
+except Exception:
+    pass
+" 2>/dev/null) || true
+  if [[ -n "$models" ]]; then
+    printf 'Available /v1/models IDs:\n%s\n' "$models" >&2
+  else
+    printf '(could not retrieve /v1/models list)\n' >&2
+  fi
+  printf '\nHint: old aliases (high/medium/low/max/caveman) are deprecated.\n' >&2
+  printf 'Use:  scripts/qz-codex exec -m MODEL ...\n' >&2
+  printf '      scripts/qz-live-smoke --model MODEL\n' >&2
+}
+
+# ---------------------------------------------------------------------------
+# Wait loop
+# ---------------------------------------------------------------------------
+deadline=$((SECONDS + WAIT_SECS))
+level="proxy_http"
+passed_proxy_http=0
+passed_proxy_ready=0
+passed_catalog=0
+passed_model=0
+passed_backend=0
+
+if ! _quiet; then
+  printf 'qz-wait-ready  proxy=%s  wait=%ss' "$PROXY_URL" "$WAIT_SECS"
+  [[ "$PROXY_ONLY" -eq 1 ]]  && printf '  proxy-only'
+  [[ "$WANT_CATALOG" -eq 1 ]] && printf '  +catalog'
+  [[ -n "$WANT_MODEL" ]]     && printf '  +model=%s' "$WANT_MODEL"
+  [[ "$WANT_BACKEND" -eq 1 ]] && printf '  +backend'
+  printf '\n'
+fi
+
+while (( SECONDS <= deadline )); do
+
+  # --- Level 1: proxy HTTP up ---
+  if [[ "$passed_proxy_http" -eq 0 ]]; then
+    if HEALTH_JSON=$(curl -sf --max-time 2 "${PROXY_URL}/health" 2>/dev/null); then
+      passed_proxy_http=1
+      if ! _quiet; then printf '\nOK   proxy HTTP up\n'; fi
+    else
+      _dot
+      sleep 1
+      continue
+    fi
+  fi
+
+  if [[ "$PROXY_ONLY" -eq 1 ]]; then
+    break
+  fi
+
+  # --- Level 2: proxy fully ready ---
+  if [[ "$passed_proxy_ready" -eq 0 ]]; then
+    PROXY_READY=$(printf '%s' "${HEALTH_JSON:-}" | \
+      python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('proxy_initialization',{}).get('ready','false'))" 2>/dev/null || echo false)
+    if [[ "$PROXY_READY" == "True" ]] || [[ "$PROXY_READY" == "true" ]]; then
+      passed_proxy_ready=1
+      if ! _quiet; then printf 'OK   proxy ready\n'; fi
+    else
+      _dot
+      sleep 1
+      HEALTH_JSON=$(curl -sf --max-time 2 "${PROXY_URL}/health" 2>/dev/null) || true
+      continue
+    fi
+  fi
+
+  # --- Level 3: catalog ready (optional) ---
+  if [[ "$WANT_CATALOG" -eq 1 ]] && [[ "$passed_catalog" -eq 0 ]]; then
+    CATALOG_READY=$(printf '%s' "${HEALTH_JSON:-}" | \
+      python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('proxy_initialization',{}).get('catalog_ready','false'))" 2>/dev/null || echo false)
+    if [[ "$CATALOG_READY" == "True" ]] || [[ "$CATALOG_READY" == "true" ]]; then
+      passed_catalog=1
+      if ! _quiet; then printf 'OK   catalog ready\n'; fi
+    else
+      _dot
+      sleep 1
+      HEALTH_JSON=$(curl -sf --max-time 2 "${PROXY_URL}/health" 2>/dev/null) || true
+      continue
+    fi
+  fi
+
+  # --- Level 4: model visible (optional) ---
+  if [[ -n "$WANT_MODEL" ]] && [[ "$passed_model" -eq 0 ]]; then
+    MODEL_FOUND=$(curl -sf --max-time 5 "${PROXY_URL}/v1/models" 2>/dev/null | \
+      python3 -c "
+import json, sys
+model = sys.argv[1]
+try:
+    d = json.load(sys.stdin)
+    ids = [m.get('id','') for m in d.get('data',[]) if isinstance(m,dict)]
+    print('true' if model in ids else 'false')
+except Exception:
+    print('false')
+" "$WANT_MODEL" 2>/dev/null || echo false)
+    if [[ "$MODEL_FOUND" == "true" ]]; then
+      passed_model=1
+      if ! _quiet; then printf 'OK   model visible: %s\n' "$WANT_MODEL"; fi
+    else
+      _dot
+      sleep 1
+      HEALTH_JSON=$(curl -sf --max-time 2 "${PROXY_URL}/health" 2>/dev/null) || true
+      continue
+    fi
+  fi
+
+  # --- Level 5: backend/model loaded (optional) ---
+  if [[ "$WANT_BACKEND" -eq 1 ]] && [[ "$passed_backend" -eq 0 ]]; then
+    BACKEND_READY=$(curl -sf --max-time 5 "${PROXY_URL}/qz/status" 2>/dev/null | \
+      python3 -c "import json,sys; d=json.load(sys.stdin); print('true' if d.get('ready') else 'false')" 2>/dev/null || echo false)
+    if [[ "$BACKEND_READY" == "true" ]]; then
+      passed_backend=1
+      if ! _quiet; then printf 'OK   backend ready\n'; fi
+    else
+      _dot
+      sleep 1
+      HEALTH_JSON=$(curl -sf --max-time 2 "${PROXY_URL}/health" 2>/dev/null) || true
+      continue
+    fi
+  fi
+
+  # All requested levels passed
+  break
+
+done
+
+if ! _quiet; then printf '\n'; fi
+
+# ---------------------------------------------------------------------------
+# Final verdict
+# ---------------------------------------------------------------------------
+FAILED=0
+
+if [[ "$passed_proxy_http" -eq 0 ]]; then
+  printf 'FAIL proxy HTTP unreachable: %s/health\n' "$PROXY_URL" >&2
+  printf '     Is qz-up running? Check var/logs/qz-proxy.log\n' >&2
+  FAILED=1
+fi
+
+if [[ "$PROXY_ONLY" -eq 0 ]]; then
+  if [[ "$passed_proxy_ready" -eq 0 ]]; then
+    printf 'FAIL proxy not ready: proxy_initialization.ready is false\n' >&2
+    printf '     Check var/logs/qz-proxy.log for initialization errors\n' >&2
+    FAILED=1
+  fi
+
+  if [[ "$WANT_CATALOG" -eq 1 ]] && [[ "$passed_catalog" -eq 0 ]]; then
+    printf 'FAIL catalog not ready: proxy_initialization.catalog_ready is false\n' >&2
+    printf '     Try: curl %s/qz/config/effective | jq .proxy_initialization\n' "$PROXY_URL" >&2
+    FAILED=1
+  fi
+
+  if [[ -n "$WANT_MODEL" ]] && [[ "$passed_model" -eq 0 ]]; then
+    printf 'FAIL model not visible: %s not in /v1/models\n' "$WANT_MODEL" >&2
+    _print_available_models
+    FAILED=1
+  fi
+
+  if [[ "$WANT_BACKEND" -eq 1 ]] && [[ "$passed_backend" -eq 0 ]]; then
+    printf 'FAIL backend not ready: /qz/status ready is not true\n' >&2
+    printf '     Is the llama.cpp model loaded? Check var/logs/qz-proxy.log\n' >&2
+    FAILED=1
+  fi
+fi
+
+if [[ "$FAILED" -eq 1 ]]; then
+  exit 1
+fi
+
+if ! _quiet; then
+  printf 'READY\n'
+fi

@@ -70,20 +70,76 @@ if [[ ${#FAIL_LIST[@]} -gt 0 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 2. Proxy health
+# 2. Proxy and catalog readiness (via qz-wait-ready)
 # ---------------------------------------------------------------------------
 echo
-echo "--- proxy health ---"
-if HEALTH_JSON=$(curl -sf --max-time 8 "${PROXY_BASE}/health" 2>/dev/null); then
-  ok "/health responded"
-  PROXY_READY=$(echo "$HEALTH_JSON" | jq -r '.proxy_initialization.ready // false' 2>/dev/null || echo false)
-  if [[ "$PROXY_READY" == "true" ]]; then
-    ok "proxy_initialization.ready == true"
-  else
-    fail "proxy_initialization.ready is not true (got: $PROXY_READY) — is the proxy fully started?"
-  fi
+echo "--- proxy and catalog readiness ---"
+if "${QZ_ROOT}/scripts/qz-wait-ready" \
+     --catalog \
+     --wait-secs 30 \
+     --proxy-url "$PROXY_BASE" \
+     --quiet 2>/dev/null; then
+  ok "proxy ready and catalog ready"
 else
-  fail "/health unreachable — is qz-up running?"
+  # Run again without --quiet to surface the diagnostic
+  "${QZ_ROOT}/scripts/qz-wait-ready" \
+    --catalog \
+    --wait-secs 1 \
+    --proxy-url "$PROXY_BASE" 2>&1 || true
+  fail "proxy/catalog not ready — is qz-up running?"
+  echo
+  printf 'Proxy readiness failed — aborting.\n' >&2
+  exit 1
+fi
+
+# Check model visibility if a model was specified
+if [[ -n "$SMOKE_MODEL" ]] && [[ "$SKIP_LIVE_CODEX" -eq 0 ]]; then
+  MODEL_FOUND=$(curl -sf --max-time 5 "${PROXY_BASE}/v1/models" 2>/dev/null | \
+    python3 -c "
+import json, sys
+model = sys.argv[1]
+try:
+    d = json.load(sys.stdin)
+    ids = [m.get('id','') for m in d.get('data',[]) if isinstance(m,dict)]
+    print('true' if model in ids else 'false')
+    if model not in ids:
+        import sys
+        print('Available models:', file=sys.stderr)
+        for mid in sorted(ids):
+            print(' ', mid, file=sys.stderr)
+        print('Hint: old aliases (high/medium/low/max/caveman) are deprecated.', file=sys.stderr)
+        print('Use:  scripts/qz-live-smoke --model MODEL', file=sys.stderr)
+except Exception:
+    print('false')
+" "$SMOKE_MODEL" 2>&1 | head -1) || MODEL_FOUND="false"
+  if [[ "$MODEL_FOUND" == "true" ]]; then
+    ok "model visible: $SMOKE_MODEL"
+  else
+    # Print full diagnostics
+    curl -sf --max-time 5 "${PROXY_BASE}/v1/models" 2>/dev/null | \
+      python3 -c "
+import json, sys
+model = sys.argv[1]
+try:
+    d = json.load(sys.stdin)
+    ids = [m.get('id','') for m in d.get('data',[]) if isinstance(m,dict)]
+    print(f'FAIL model not visible: {model}', file=sys.stderr)
+    print(f'     Requested: {model}', file=sys.stderr)
+    print('     Available /v1/models IDs:', file=sys.stderr)
+    for mid in sorted(ids):
+        print(f'       {mid}', file=sys.stderr)
+    if not ids:
+        print('       (no models found — catalog may not be ready)', file=sys.stderr)
+    print('     Hint: old aliases (high/medium/low/max/caveman) are deprecated.', file=sys.stderr)
+    print('     Use:  scripts/qz-live-smoke --model MODEL', file=sys.stderr)
+except Exception as e:
+    print(f'FAIL could not retrieve /v1/models: {e}', file=sys.stderr)
+" "$SMOKE_MODEL" >&2 || true
+    FAIL_LIST+=("model not visible: $SMOKE_MODEL")
+    echo
+    printf 'Model check failed — aborting live Codex paths.\n' >&2
+    SKIP_LIVE_CODEX=1
+  fi
 fi
 
 # ---------------------------------------------------------------------------
