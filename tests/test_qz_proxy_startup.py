@@ -91,8 +91,12 @@ class ProxyStartupTest(unittest.TestCase):
 
                 status, response = _request_json(f"{base}/v1/responses", {"model": "anything", "input": "hi"})
                 self.assertEqual(status, 503)
-                self.assertEqual(response["error"], "proxy initializing")
-                self.assertEqual(response["initialization"]["state"], "initializing")
+                # New schema: qz.responses.error.v1
+                self.assertEqual(response.get("schema"), "qz.responses.error.v1")
+                self.assertEqual(response["error"], "proxy not ready")
+                self.assertFalse(response["readiness"]["proxy_ready"])
+                self.assertIn("proxy_initialization", response)
+                self.assertEqual(response["proxy_initialization"]["state"], "initializing")
             finally:
                 server.shutdown()
                 server.server_close()

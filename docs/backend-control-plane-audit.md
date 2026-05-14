@@ -258,16 +258,34 @@ is treated as success (old format compatibility). The proxy is now the authority
 scripts no longer need to interpret catalog internals. Backwards-compatible
 fields (`catalog`, `backend`, `codex_catalog_updated`) remain.
 
-**Step 6 (future):** Move Codex catalog regeneration entirely into the proxy
+**Step 6 (done — slice 5):** `/v1/responses` now returns structured
+`qz.responses.error.v1` payloads for three rejection paths:
+
+1. **Proxy not ready** (503): includes `proxy_initialization`, readiness booleans,
+   and an operator hint that does not assume local Docker/llama.cpp access.
+2. **Model not found** (503): includes `requested_model`, `available_models` list,
+   deprecated alias hint if applicable, and readiness booleans.
+3. **Backend unavailable** (502): includes model found (`model_visible: true`),
+   `backend_ready: false`, and a remote-friendly operator hint.
+
+New telemetry events registered in `REQUEST_LIFECYCLE_EVENT_TYPES`:
+- `responses_rejected_proxy_not_ready`
+- `responses_rejected_model_missing`
+- `responses_rejected_backend_unavailable`
+
+Scripts no longer need to interpret `/v1/responses` errors to decide backend
+truth; the proxy provides structured, actionable rejection payloads. Remote
+`qz-codex` clients receive useful errors without needing local infrastructure.
+
+**Step 7 (future):** Move Codex catalog regeneration entirely into the proxy
 `/qz/models/refresh` endpoint. `qz-codex-common` becomes a thin shim that just
 calls the endpoint.
 
-**Step 7 (future, SQLite era):** Merge `var/run/*.json` runtime state into
+**Step 8 (future, SQLite era):** Merge `var/run/*.json` runtime state into
 operational facts stored in the Phase 1 SQLite substrate. `qz-write-runtime-state`
 becomes a thin shim or disappears.
 
 **Remaining under #44 (deferred):**
-- `/v1/responses` early-failure messaging when catalog/model routing is not ready.
 - Proxy fully owns Codex catalog file generation; `qz-codex-common` opt-in fallback
   can be removed once proxy is reliable for all cases.
 - Audit runtime-state JSON ownership and identify what should later move behind

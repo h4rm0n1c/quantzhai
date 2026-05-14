@@ -35,6 +35,7 @@ try:
     from .qz_codex_metadata import extract_codex_request_context
     from .qz_native_tool_output import classify_native_tool_outputs
     from .qz_file_signal import record_tool_call, seed_repeated_read_state
+    from .qz_responses_error import build_responses_error_payload, is_deprecated_alias
     from .qz_search_policy import resolve_search_policy_selection
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import (
@@ -73,6 +74,7 @@ except ImportError:
     from qz_codex_metadata import extract_codex_request_context
     from qz_native_tool_output import classify_native_tool_outputs
     from qz_file_signal import record_tool_call, seed_repeated_read_state
+    from qz_responses_error import build_responses_error_payload, is_deprecated_alias
     from qz_search_policy import resolve_search_policy_selection
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import (
@@ -1050,16 +1052,44 @@ class RequestRouter:
             headers_raw = {}
 
         if not self._proxy_startup_ready():
-            payload = self._proxy_initializing_error_payload()
+            initialization = self.handler._initialization_payload()
+            payload = build_responses_error_payload(
+                error="proxy not ready",
+                reason=initialization.get("error") or "model catalog and startup policy are still loading",
+                requested_model=body.get("model") or "",
+                proxy_initialization=initialization,
+                readiness={
+                    "proxy_ready": bool(initialization.get("ready")),
+                    "catalog_ready": bool(initialization.get("catalog_ready")),
+                    "model_visible": False,
+                    "backend_ready": False,
+                },
+                operator_hint=(
+                    "The QuantZhai proxy is initializing. "
+                    "Check /qz/status or /health for readiness details. "
+                    "qz-codex does not require local Docker or llama.cpp access."
+                ),
+            )
             self._emit_request_telemetry(
                 "request_failed",
                 started_at,
                 upstream_path,
                 body.get("model") or "",
-                error=payload.get("reason") or payload.get("error"),
+                error=payload.get("reason"),
                 phase="proxy_initialization",
                 request_id=request_id,
             )
+            try:
+                self.handler.telemetry.emit("responses_rejected_proxy_not_ready", {
+                    "request_id": request_id,
+                    "model": body.get("model") or "",
+                    "path": upstream_path,
+                    "stream": body.get("stream", False),
+                    "proxy_ready": bool(initialization.get("ready")),
+                    "catalog_ready": bool(initialization.get("catalog_ready")),
+                })
+            except Exception:
+                pass
             self.handler._send_json(503, payload)
             return
 
@@ -1085,13 +1115,53 @@ class RequestRouter:
             if selected_model is None:
                 error_text = selection_reason.get("reason") if isinstance(selection_reason, dict) else selection_reason
                 self._emit_request_telemetry("request_failed", started_at, upstream_path, client_model, error=error_text or "no model available", phase="select_model", request_id=request_id)
-                if isinstance(selection_reason, dict):
-                    self.handler._send_json(503, selection_reason)
-                else:
-                    self.handler._send_json(503, {
-                        "error": "no model available",
-                        "reason": selection_reason,
+
+                # Gather available model IDs for a more actionable error.
+                available_ids: list[str] = []
+                try:
+                    catalog = self.handler._model_catalog()
+                    available_ids = [
+                        e.get("key") or e.get("stem") or ""
+                        for e in catalog.entries
+                        if isinstance(e, dict) and e.get("profile_valid", True) is not False
+                    ]
+                    available_ids = [m for m in available_ids if m]
+                except Exception:
+                    pass
+
+                initialization = self.handler._initialization_payload()
+                payload = build_responses_error_payload(
+                    error="model not found",
+                    reason=error_text or f"no model matching '{client_model}'",
+                    requested_model=client_model,
+                    available_models=available_ids,
+                    proxy_initialization=initialization,
+                    readiness={
+                        "proxy_ready": bool(initialization.get("ready")),
+                        "catalog_ready": bool(initialization.get("catalog_ready")),
+                        "model_visible": False,
+                        "backend_ready": False,
+                    },
+                    operator_hint=(
+                        "Use a real model ID from /v1/models or POST /qz/models/refresh. "
+                        "Old aliases (low/medium/high/max/caveman) are deprecated."
+                    ),
+                )
+                # Carry forward profile-backend-missing fix hint if present.
+                if isinstance(selection_reason, dict) and selection_reason.get("fix"):
+                    payload["fix"] = selection_reason["fix"]
+                try:
+                    self.handler.telemetry.emit("responses_rejected_model_missing", {
+                        "request_id": request_id,
+                        "model": client_model,
+                        "path": upstream_path,
+                        "stream": bool(client_wants_stream),
+                        "available_count": len(available_ids),
+                        "deprecated_alias": is_deprecated_alias(client_model),
                     })
+                except Exception:
+                    pass
+                self.handler._send_json(503, payload)
                 return
 
             selected_identity = (
@@ -1398,7 +1468,36 @@ class RequestRouter:
                 runtime_metrics=runtime_metrics,
                 request_id=request_id,
             )
-            self.handler._send_json(502, {"error": f"upstream error: {e}"})
+            initialization = self.handler._initialization_payload()
+            _backend_payload = build_responses_error_payload(
+                error="backend unavailable",
+                reason=str(e),
+                requested_model=client_model,
+                proxy_initialization=initialization,
+                readiness={
+                    "proxy_ready": bool(initialization.get("ready")),
+                    "catalog_ready": bool(initialization.get("catalog_ready")),
+                    "model_visible": True,
+                    "backend_ready": False,
+                },
+                operator_hint=(
+                    "The QuantZhai proxy is running but the llama.cpp/TurboQuant backend "
+                    "is unreachable. Check /qz/status for backend health. "
+                    "qz-codex does not need local Docker or llama.cpp access."
+                ),
+            )
+            try:
+                self.handler.telemetry.emit("responses_rejected_backend_unavailable", {
+                    "request_id": request_id,
+                    "model": client_model,
+                    "backend_model": backend_model,
+                    "path": upstream_path,
+                    "stream": bool(body.get("stream")),
+                    "error": str(e),
+                })
+            except Exception:
+                pass
+            self.handler._send_json(502, _backend_payload)
             return
 
         content_type = resp.content_type
