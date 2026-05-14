@@ -115,35 +115,41 @@ _print_cp_diagnostics() {
   local _json="${1:-}"
   [[ -z "$_json" ]] && return 0
   printf '%s' "$_json" | python3 -c \
-    'import json,sys
+    'import json, sys
+se = sys.stderr
 try:
-    d=json.load(sys.stdin)
-    r=d.get("readiness",{})
-    m=d.get("models",{})
-    b=d.get("backend",{})
-    hints=d.get("operator_hints",[])
-    ids=m.get("ids",[])
-    print(f"  status: {d.get(\"status\",\"unknown\")}", file=sys.stderr)
-    print(f"  proxy_ready={r.get(\"proxy_ready\")}  "
-          f"catalog_ready={r.get(\"catalog_ready\")}  "
-          f"backend_reachable={r.get(\"backend_reachable\")}  "
-          f"backend_ready={r.get(\"backend_ready\")}", file=sys.stderr)
-    if m.get("selected"):
-        print(f"  selected: {m.get(\"selected\")}", file=sys.stderr)
+    d = json.load(sys.stdin)
+    r = d.get("readiness", {})
+    m = d.get("models", {})
+    b = d.get("backend", {})
+    hints = d.get("operator_hints", [])
+    ids = m.get("ids", [])
+    status = d.get("status", "unknown")
+    print("  status: " + str(status), file=se)
+    pr = r.get("proxy_ready")
+    cr = r.get("catalog_ready")
+    br = r.get("backend_reachable")
+    bd = r.get("backend_ready")
+    print("  proxy_ready={}  catalog_ready={}  backend_reachable={}  backend_ready={}".format(
+        pr, cr, br, bd), file=se)
+    selected = m.get("selected")
+    if selected:
+        print("  selected: " + str(selected), file=se)
     if ids:
-        top=sorted(ids)[:6]
-        print(f"  available models: {chr(44).join(top)}"
-              +(" ..." if len(ids)>6 else ""), file=sys.stderr)
-    if b.get("error"):
-        print(f"  backend error: {b.get(\"error\")}", file=sys.stderr)
+        top = sorted(ids)[:6]
+        suffix = " ..." if len(ids) > 6 else ""
+        print("  available models: " + ", ".join(top) + suffix, file=se)
+    backend_error = b.get("error")
+    if backend_error:
+        print("  backend error: " + str(backend_error), file=se)
     for hint in hints:
-        print(f"  hint: {hint}", file=sys.stderr)
+        print("  hint: " + str(hint), file=se)
     if not hints:
-        print("  hint: Old aliases (high/medium/low/max/caveman) are deprecated.", file=sys.stderr)
-        print("  hint: Use a real model ID from /v1/models.", file=sys.stderr)
+        print("  hint: Old aliases (high/medium/low/max/caveman) are deprecated.", file=se)
+        print("  hint: Use a real model ID from /v1/models.", file=se)
 except Exception as e:
-    print(f"  (could not parse /qz/control-plane response: {e})", file=sys.stderr)' \
-    2>/dev/null || true
+    print("  (could not parse /qz/control-plane response: " + str(e) + ")", file=se)' \
+    || true
 }
 
 # ---------------------------------------------------------------------------
