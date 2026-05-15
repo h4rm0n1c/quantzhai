@@ -319,10 +319,10 @@ class ResponsesStreamRuntime:
         )
         return urllib.request.urlopen(req, timeout=900)
 
-    def _configure_stream_read_timeout(self, resp) -> None:
+    def _configure_stream_read_timeout(self, resp):
         """Apply the no-output watchdog timeout to the upstream socket if possible."""
         if self.stream_no_output_timeout_s <= 0:
-            return
+            return None
         timeout = max(0.001, float(self.stream_no_output_timeout_s))
         targets = [resp]
         fp = getattr(resp, "fp", None)
@@ -338,10 +338,25 @@ class ResponsesStreamRuntime:
             settimeout = getattr(target, "settimeout", None)
             if callable(settimeout):
                 try:
+                    gettimeout = getattr(target, "gettimeout", None)
+                    previous_timeout = gettimeout() if callable(gettimeout) else None
                     settimeout(timeout)
-                    return
+                    return target, previous_timeout
                 except Exception:
                     continue
+        return None
+
+    @staticmethod
+    def _restore_stream_read_timeout(handle) -> None:
+        if not handle:
+            return
+        target, previous_timeout = handle
+        settimeout = getattr(target, "settimeout", None)
+        if callable(settimeout):
+            try:
+                settimeout(previous_timeout)
+            except Exception:
+                pass
 
     @staticmethod
     def _read_stream_line(resp):
@@ -766,6 +781,7 @@ class ResponsesStreamRuntime:
                 output_timeout=True,
                 request_id=self.request_id,
             ),
+            emit_terminal_classified=False,
         )
 
     @staticmethod
@@ -971,7 +987,13 @@ class ResponsesStreamRuntime:
                 raw_log = None
                 try:
                     resp = self.stream_opener(hop_body)
-                    self._configure_stream_read_timeout(resp)
+                    read_timeout_handle = self._configure_stream_read_timeout(resp)
+                    def restore_read_timeout_once():
+                        nonlocal read_timeout_handle
+                        if read_timeout_handle is not None:
+                            self._restore_stream_read_timeout(read_timeout_handle)
+                            read_timeout_handle = None
+
                     raw_log = self._open_raw_log()
                     tool_call_state = StreamToolCallState()
                     event_lines = []
@@ -1053,6 +1075,7 @@ class ResponsesStreamRuntime:
                             if delta_text.strip():
                                 visible_output_text_seen = True
                                 watchdog_state.mark_visible_output(event_parsed_at)
+                                restore_read_timeout_once()
                         if event_type in {
                             "response.output_item.added",
                             "response.output_item.done",
@@ -1061,6 +1084,7 @@ class ResponsesStreamRuntime:
                             if event_type == "response.output_item.done" and _is_completed_assistant_message_item(item):
                                 assistant_item_seen = True
                                 watchdog_state.mark_visible_output(event_parsed_at)
+                                restore_read_timeout_once()
                             if event_type == "response.output_item.done" and _is_valid_public_output_item(item):
                                 public_item_seen = True
                         if event_type == "response.completed":
@@ -1069,6 +1093,7 @@ class ResponsesStreamRuntime:
                                 final_usage = _normalize_response_usage(response.get("usage"))
                         if is_terminal_stream_event(event_type, payload):
                             watchdog_state.mark_terminal(event_parsed_at)
+                            restore_read_timeout_once()
 
                         # No-output watchdog: fires on any event arrival if deadline passed
                         # and no visible output or terminal event has been seen.
@@ -1721,6 +1746,7 @@ class ResponsesStreamRuntime:
         output_items: int,
         fallback: bool = False,
         obs: "StreamObservation | None" = None,
+        emit_terminal_classified: bool = True,
     ) -> dict:
         prompt_ms = 0.0
         gen_ms = 0.0
@@ -1743,7 +1769,7 @@ class ResponsesStreamRuntime:
             try:
                 terminal = classify_stream_terminal(obs)
                 result["stream_terminal"] = terminal
-                if terminal.get("classification") != "ok":
+                if emit_terminal_classified and terminal.get("classification") != "ok":
                     self._emit("stream_terminal_classified", terminal)
             except Exception:
                 pass

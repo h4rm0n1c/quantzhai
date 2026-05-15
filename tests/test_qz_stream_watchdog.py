@@ -351,6 +351,10 @@ class WatchdogStreamRuntimeTests(unittest.TestCase):
             event for event in telemetry.recent()
             if event.get("type") == "stream_completed"
         ]
+        terminal_classified = [
+            event for event in telemetry.recent()
+            if event.get("type") == "stream_terminal_classified"
+        ]
 
         self.assertTrue(result["fallback"])
         self.assertEqual(terminal.get("classification"), "stream_no_output_timeout")
@@ -358,6 +362,7 @@ class WatchdogStreamRuntimeTests(unittest.TestCase):
         self.assertIn(b"event: response.completed", combined)
         self.assertTrue(combined.endswith(b"data: [DONE]\n\n"))
         self.assertTrue(any(event.get("payload", {}).get("fallback") is True for event in stream_completed))
+        self.assertEqual(len(terminal_classified), 1)
 
     def test_watchdog_timeout_path_reachable(self):
         """Verify the timeout fallback path produces the right structure.
@@ -431,6 +436,85 @@ class WatchdogStreamRuntimeTests(unittest.TestCase):
         terminal = result.get("stream_terminal")
         if terminal:
             self.assertNotEqual(terminal.get("classification"), "stream_no_output_timeout")
+
+    def test_read_timeout_is_restored_after_visible_output(self):
+        """A later would-be read timeout after visible output is not a no-output timeout."""
+        from proxy.qz_responses_stream import ResponsesStreamRuntime
+        from proxy.qz_telemetry import TelemetryBus
+
+        lines = []
+        events_data = [
+            ("response.created", {"response": {"id": "ok", "object": "response", "created_at": 0, "status": "in_progress", "model": "f", "output": []}, "type": "response.created", "sequence_number": 1}),
+            ("response.in_progress", {"response": {"id": "ok", "object": "response", "created_at": 0, "status": "in_progress", "model": "f", "output": []}, "type": "response.in_progress", "sequence_number": 2}),
+            ("response.output_text.delta", {"item_id": "msg_ok", "output_index": 0, "content_index": 0, "delta": "hello", "type": "response.output_text.delta", "sequence_number": 3}),
+        ]
+        for etype, payload in events_data:
+            lines.append(f"event: {etype}\n".encode())
+            lines.append(f"data: {json.dumps(payload)}\n".encode())
+            lines.append(b"\n")
+
+        class FakeStream:
+            def __init__(self, stream_lines):
+                self._lines = list(stream_lines)
+                self._idx = 0
+                self.timeout = None
+                self.timeout_calls = []
+
+            def gettimeout(self):
+                return self.timeout
+
+            def settimeout(self, timeout):
+                self.timeout = timeout
+                self.timeout_calls.append(timeout)
+
+            def readline(self):
+                if self._idx >= len(self._lines):
+                    if self.timeout is not None:
+                        raise TimeoutError("simulated read timeout after visible output")
+                    return b""
+                line = self._lines[self._idx]
+                self._idx += 1
+                return line
+
+            def close(self):
+                pass
+
+        streams = []
+        telemetry = TelemetryBus()
+
+        def stream_opener(body):
+            stream = FakeStream(lines)
+            streams.append(stream)
+            return stream
+
+        written = []
+        runtime = ResponsesStreamRuntime(
+            upstream="http://localhost:1",
+            authorization="Bearer test",
+            reasoning_stream_format="native",
+            web_runtime=None,
+            chunk_writer=written.append,
+            stream_opener=stream_opener,
+            capture_enabled=False,
+            telemetry=telemetry,
+            request_id="watchdog-visible-output-test",
+            stream_no_output_timeout_s=1.0,
+        )
+
+        result = runtime.run({"model": "fixture", "input": []}, "fixture")
+        terminal = result.get("stream_terminal") or {}
+        terminal_classified = [
+            event for event in telemetry.recent()
+            if event.get("type") == "stream_terminal_classified"
+        ]
+
+        self.assertFalse(result["fallback"])
+        self.assertNotEqual(terminal.get("classification"), "stream_no_output_timeout")
+        self.assertFalse(any(
+            event.get("payload", {}).get("classification") == "stream_no_output_timeout"
+            for event in terminal_classified
+        ))
+        self.assertEqual(streams[0].timeout_calls, [1.0, None])
 
 
 # ---------------------------------------------------------------------------
