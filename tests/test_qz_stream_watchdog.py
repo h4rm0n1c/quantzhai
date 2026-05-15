@@ -320,6 +320,22 @@ class WatchdogStreamRuntimeTests(unittest.TestCase):
             lines.append(b"\n")
         return lines
 
+    def _reasoning_no_output_hang_events(self):
+        """No visible output, but reasoning activity before the upstream read stalls."""
+        lines = self._no_output_hang_events()
+        payload = {
+            "item_id": "rs_hang",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "thinking",
+            "type": "response.reasoning_text.delta",
+            "sequence_number": 3,
+        }
+        lines.append(b"event: response.reasoning_text.delta\n")
+        lines.append(f"data: {json.dumps(payload)}\n".encode())
+        lines.append(b"\n")
+        return lines
+
     def test_disabled_watchdog_does_not_fire(self):
         """With timeout=0, no-output stream completes without timeout fallback."""
         from proxy.qz_responses_stream import ResponsesStreamRuntime
@@ -362,6 +378,32 @@ class WatchdogStreamRuntimeTests(unittest.TestCase):
         self.assertIn(b"event: response.completed", combined)
         self.assertTrue(combined.endswith(b"data: [DONE]\n\n"))
         self.assertTrue(any(event.get("payload", {}).get("fallback") is True for event in stream_completed))
+        self.assertEqual(len(terminal_classified), 1)
+
+    def test_watchdog_timeout_result_preserves_reasoning_observation(self):
+        """The returned terminal result keeps the rich timeout observation facts."""
+        from proxy.qz_telemetry import TelemetryBus
+
+        telemetry = TelemetryBus()
+        runtime, written = self._make_runtime(
+            timeout_s=1.0,
+            events=self._reasoning_no_output_hang_events(),
+            stall_after_eof=True,
+            telemetry=telemetry,
+        )
+
+        result = runtime.run({"model": "fixture", "input": []}, "fixture")
+        terminal = result.get("stream_terminal") or {}
+        terminal_classified = [
+            event for event in telemetry.recent()
+            if event.get("type") == "stream_terminal_classified"
+        ]
+
+        self.assertTrue(result["fallback"])
+        self.assertEqual(terminal.get("classification"), "stream_no_output_timeout")
+        self.assertTrue(terminal.get("saw_reasoning"))
+        self.assertTrue(terminal.get("fallback_emitted"))
+        self.assertFalse(terminal.get("saw_output_text"))
         self.assertEqual(len(terminal_classified), 1)
 
     def test_watchdog_timeout_path_reachable(self):

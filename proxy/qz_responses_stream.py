@@ -768,6 +768,7 @@ class ResponsesStreamRuntime:
             requested_model, len(public_trace), started_at, fallback=True
         )
         completed_at = time.time()
+        timeout_obs.fallback_emitted = True
         return self._build_result(
             requested_model,
             started_at,
@@ -776,11 +777,7 @@ class ResponsesStreamRuntime:
             final_usage,
             len(public_trace),
             fallback=True,
-            obs=StreamObservation(
-                fallback_emitted=True,
-                output_timeout=True,
-                request_id=self.request_id,
-            ),
+            obs=timeout_obs,
             emit_terminal_classified=False,
         )
 
