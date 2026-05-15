@@ -1,0 +1,10 @@
+event: response.created
+data: {"response":{"id":"resp_fixture_compact_failed","object":"response","created_at":4102444800,"status":"in_progress","model":"fixture","output":[]},"type":"response.created","sequence_number":1}
+
+event: response.compact.started
+data: {"type":"response.compact.started","sequence_number":2}
+
+event: response.compact.failed
+data: {"type":"response.compact.failed","error":"compact task failed: context too large","sequence_number":3}
+
+data: [DONE]

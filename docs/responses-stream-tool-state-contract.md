@@ -750,6 +750,42 @@ Still needed:
 - External gateway behavior is useful evidence, but not a substitute for local
   captures against Qwen plus llama.cpp/TurboQuant.
 
+## Stream Terminal Classification (#40 slice 1)
+
+Added: `proxy/qz_stream_terminal.py` — pure stream outcome classifier.
+
+`StreamObservation` captures boolean stream facts (saw_reasoning, saw_output_text,
+saw_assistant_item, saw_tool_call, saw_response_completed, saw_done, saw_error,
+saw_compact_started, saw_compact_failed, saw_protocol_drift_event, fallback_emitted,
+repair_emitted, output_timeout).
+
+`classify_stream_terminal(obs)` returns `qz.stream.terminal.v1`:
+
+| Classification | Condition |
+|---|---|
+| `ok` | visible answer + terminal event |
+| `repaired` | repair hop triggered + visible answer + terminal |
+| `fallback_emitted` | proxy emitted synthetic fallback message |
+| `compact_failed` | compact task failed / session stuck |
+| `stream_completed_without_visible_answer` | terminal seen, no visible answer |
+| `stream_terminal_missing` | activity seen but no terminal before close |
+| `protocol_drift_seen` | unknown/newer item-delta events but stream ok |
+| `unrecoverable` | error event, no terminal, no fallback |
+| `stream_no_output_timeout` | reserved for slice 2 watchdog; set by output_timeout flag |
+
+`observation_from_event_type(event_type, payload)` maps individual SSE events
+to partial observation dicts, including:
+- legacy `response.output_text.delta` shape
+- newer `response.output_item.content.delta` shape (protocol drift tolerance)
+- compact events: `response.compact.started`, `response.compact.failed`
+
+Telemetry: `stream_terminal_classified` emitted for non-ok outcomes.
+`ResponsesStreamRuntime._build_result` accepts `obs=StreamObservation` and
+classifies/emits at the end of each normal hop.
+
+**Slice 2 (future):** real-time watchdog; set `output_timeout=True` on the
+StreamObservation to trigger `stream_no_output_timeout` classification.
+
 ## Related Docs
 
 - [Master stabilisation plan](master-stabilisation-plan.md)

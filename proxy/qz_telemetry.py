@@ -40,6 +40,7 @@ REQUEST_LIFECYCLE_EVENT_TYPES = {
     "responses_rejected_backend_unavailable",
     "responses_rejected_model_missing",
     "responses_rejected_proxy_not_ready",
+    "stream_terminal_classified",
 }
 
 REQUEST_TIMING_EVENT_TYPES = {

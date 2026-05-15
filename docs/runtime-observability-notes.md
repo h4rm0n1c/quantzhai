@@ -168,6 +168,14 @@ to avoid false failures from SSE timing events crowding out `tool_sandbox_denied
 - #6 (done): `proxy/qz_vram_snapshot.py` builds `qz.vram.snapshot.v1` with
   provenance-labelled components. See `docs/patterns/provenance-telemetry.md`
   for the full pattern. See below for current component semantics.
+- #40 slice 1 (done): `proxy/qz_stream_terminal.py` adds a pure stream terminal
+  classification seam. `StreamObservation` + `classify_stream_terminal()` classify
+  stream outcomes as ok / repaired / fallback_emitted / compact_failed /
+  stream_completed_without_visible_answer / stream_terminal_missing /
+  protocol_drift_seen / unrecoverable / stream_no_output_timeout. Telemetry:
+  `stream_terminal_classified` emitted for non-ok outcomes. Also adds protocol
+  drift tolerance for newer `response.output_item.content.delta` event shape.
+  Slice 2 (future): real-time watchdog to trigger `output_timeout`.
 - `README.md` documents the new launcher and monitor entry points.
 
 ## qz.vram.snapshot.v1 component semantics

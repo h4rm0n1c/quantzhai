@@ -1,0 +1,19 @@
+event: response.created
+data: {"response":{"id":"resp_fixture_item_delta","object":"response","created_at":4102444800,"status":"in_progress","model":"fixture","output":[]},"type":"response.created","sequence_number":1}
+
+event: response.in_progress
+data: {"response":{"id":"resp_fixture_item_delta","object":"response","created_at":4102444800,"status":"in_progress","model":"fixture","output":[]},"type":"response.in_progress","sequence_number":2}
+
+event: response.output_item.added
+data: {"output_index":0,"item":{"id":"msg_fixture_item_delta","type":"message","status":"in_progress","role":"assistant","content":[]},"type":"response.output_item.added","sequence_number":3}
+
+event: response.output_item.content.delta
+data: {"item_id":"msg_fixture_item_delta","output_index":0,"content_index":0,"delta":{"type":"text","text":"hello from newer delta"},"type":"response.output_item.content.delta","sequence_number":4}
+
+event: response.output_item.done
+data: {"output_index":0,"item":{"id":"msg_fixture_item_delta","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hello from newer delta","annotations":[]}]},"type":"response.output_item.done","sequence_number":5}
+
+event: response.completed
+data: {"response":{"id":"resp_fixture_item_delta","object":"response","created_at":4102444800,"status":"completed","model":"fixture","output":[{"id":"msg_fixture_item_delta","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hello from newer delta","annotations":[]}]}],"usage":{}},"type":"response.completed","sequence_number":6}
+
+data: [DONE]

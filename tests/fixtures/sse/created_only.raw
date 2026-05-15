@@ -1,0 +1,7 @@
+event: response.created
+data: {"response":{"id":"resp_fixture_created_only","object":"response","created_at":4102444800,"status":"in_progress","model":"fixture","output":[]},"type":"response.created","sequence_number":1}
+
+event: response.in_progress
+data: {"response":{"id":"resp_fixture_created_only","object":"response","created_at":4102444800,"status":"in_progress","model":"fixture","output":[]},"type":"response.in_progress","sequence_number":2}
+
+data: [DONE]

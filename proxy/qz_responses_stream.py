@@ -27,6 +27,7 @@ try:
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS
     from .qz_telemetry import RequestTelemetryEmitter
     from .qz_file_signal import record_tool_call, seed_repeated_read_state
+    from .qz_stream_terminal import StreamObservation, classify_stream_terminal
 except ImportError:
     from qz_responses import (
         _now_ts,
@@ -50,6 +51,7 @@ except ImportError:
     from qz_tool_web import WEB_SEARCH_MAX_HOPS
     from qz_telemetry import RequestTelemetryEmitter
     from qz_file_signal import record_tool_call, seed_repeated_read_state
+    from qz_stream_terminal import StreamObservation, classify_stream_terminal
 
 
 PRIVATE_FUNCTION_CALL_TIMEOUT_S = float(os.environ.get("QZ_PRIVATE_TOOL_CALL_TIMEOUT_S", "120"))
@@ -1429,6 +1431,15 @@ class ResponsesStreamRuntime:
                     sent_done = True
 
                 completed_at = time.time()
+                hop_obs = StreamObservation(
+                    saw_reasoning=bool(reasoning_only_chars > 0),
+                    saw_output_text=bool(visible_output_text_seen),
+                    saw_assistant_item=bool(public_item_seen),
+                    saw_tool_call=bool(completed_call is not None),
+                    saw_response_completed=bool(sent_terminal),
+                    saw_done=bool(sent_done),
+                    request_id=self.request_id,
+                )
                 return self._build_result(
                     requested_model,
                     started_at,
@@ -1436,6 +1447,7 @@ class ResponsesStreamRuntime:
                     completed_at,
                     final_usage,
                     len(public_trace),
+                    obs=hop_obs,
                 )
         except ClientStreamDisconnected as exc:
             self._emit("client_disconnected", {
@@ -1486,13 +1498,14 @@ class ResponsesStreamRuntime:
         usage: dict,
         output_items: int,
         fallback: bool = False,
+        obs: "StreamObservation | None" = None,
     ) -> dict:
         prompt_ms = 0.0
         gen_ms = 0.0
         if isinstance(first_output_at, (int, float)) and first_output_at >= started_at:
             prompt_ms = max(0.0, (first_output_at - started_at) * 1000.0)
             gen_ms = max(0.0, (completed_at - first_output_at) * 1000.0)
-        return {
+        result = {
             "model": requested_model,
             "usage": _normalize_response_usage(usage),
             "started_at": started_at,
@@ -1504,3 +1517,12 @@ class ResponsesStreamRuntime:
             "output_items": output_items,
             "fallback": bool(fallback),
         }
+        if obs is not None:
+            try:
+                terminal = classify_stream_terminal(obs)
+                result["stream_terminal"] = terminal
+                if terminal.get("classification") != "ok":
+                    self._emit("stream_terminal_classified", terminal)
+            except Exception:
+                pass
+        return result
