@@ -25,6 +25,7 @@ Hard rules:
 """
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from proxy.qz_braincase_db import _FORBIDDEN_RECORD_FIELDS
@@ -33,18 +34,54 @@ if TYPE_CHECKING:
     from proxy.qz_braincase_db import BrainCaseDB
 
 # ---------------------------------------------------------------------------
-# Opposing-marker pairs for conflict_check (v1 — crude substring matching).
-# Keep simple; do not overfit. These are hints only.
+# Constraint-marker detection for conflict_check.
+# v1 — simple regex word boundaries. Hints only; do not overfit.
+#
+# Compound forms ("must not", "do not") are detected before their components
+# to avoid "must not" accidentally matching as "must".
 # ---------------------------------------------------------------------------
-_OPPOSING_PAIRS = (
-    ("must not", "must"),
-    ("must", "must not"),
-    ("do not", "do "),
-    ("allowed", "forbidden"),
-    ("forbidden", "allowed"),
-    ("enabled", "disabled"),
-    ("disabled", "enabled"),
-)
+
+def _claim_markers(text: str) -> set[str]:
+    """Extract normalised constraint markers from claim text.
+
+    Returns a set of marker names. Compound forms take priority:
+      "must not" -> {"must_not"}   (not also "must")
+      "do not"   -> {"do_not"}     (not also "do")
+
+    Hints only — not a semantic analyser.
+    """
+    t = text.strip().lower()
+    markers: set[str] = set()
+    # Compound forms first (must not bleed into their shorter components)
+    if re.search(r"\bmust\s+not\b", t):
+        markers.add("must_not")
+    elif re.search(r"\bmust\b", t):
+        markers.add("must")
+    if re.search(r"\bdo\s+not\b", t):
+        markers.add("do_not")
+    elif re.search(r"\bdo\b", t):
+        markers.add("do")
+    if re.search(r"\ballowed\b", t):
+        markers.add("allowed")
+    if re.search(r"\bforbidden\b", t):
+        markers.add("forbidden")
+    if re.search(r"\benabled\b", t):
+        markers.add("enabled")
+    if re.search(r"\bdisabled\b", t):
+        markers.add("disabled")
+    return markers
+
+
+_CONFLICTING_MARKERS: dict[str, str] = {
+    "must_not":  "must",
+    "must":      "must_not",
+    "do_not":    "do",
+    "do":        "do_not",
+    "allowed":   "forbidden",
+    "forbidden": "allowed",
+    "enabled":   "disabled",
+    "disabled":  "enabled",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -173,17 +210,24 @@ def conflict_check(
 ) -> dict:
     """Surface likely contradictions before write. Returns hints only — does not block.
 
-    v1: crude substring matching for opposing constraint markers.
+    v1.1: uses _claim_markers() for reliable compound-form detection.
+    "must not" and "must" are distinguished correctly; same-direction markers
+    (e.g. "must not" vs "must not") do not produce a false conflict.
+
     Checks: same memory_domain, overlapping tags, same record_type, active status.
     Returns {"conflicts", "warning"}.
     """
     domain = memory_domain or record.get("memory_domain")
-    claim = (record.get("claim") or "").strip().lower()
+    claim = record.get("claim") or ""
     tags = set(record.get("tags") or [])
     record_type = record.get("record_type")
     record_id = record.get("record_id")
 
-    if not domain or not claim or not record_type:
+    if not domain or not claim.strip() or not record_type:
+        return {"conflicts": [], "warning": None}
+
+    new_markers = _claim_markers(claim)
+    if not new_markers:
         return {"conflicts": [], "warning": None}
 
     candidates = db.list_state_records(memory_domain=domain, tier=tier, limit=50)
@@ -199,9 +243,10 @@ def conflict_check(
         candidate_tags = set(candidate.get("tags") or [])
         if not (tags & candidate_tags):
             continue
-        candidate_claim = (candidate.get("claim") or "").strip().lower()
-        for marker, opposing in _OPPOSING_PAIRS:
-            if marker in claim and opposing in candidate_claim:
+        candidate_markers = _claim_markers(candidate.get("claim") or "")
+        for marker in new_markers:
+            opposing = _CONFLICTING_MARKERS.get(marker)
+            if opposing and opposing in candidate_markers:
                 conflicts.append({
                     "record_id": candidate["record_id"],
                     "reason": f"opposing constraint marker: '{marker}' vs '{opposing}'",

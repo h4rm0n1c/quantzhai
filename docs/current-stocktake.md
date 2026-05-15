@@ -79,9 +79,8 @@ Agent rules:         AGENTS.md includes telemetry doctrine
 
 ### Notes on each
 
-**#2** — Storage substrate. Slices A and B are complete (Slice A: schemas/fixtures;
-Slice B: BrainCaseDB schema v2 + put/get/list/retire/supersede methods). #2
-remains the storage substrate only. Slices A–D (and C.1) complete
+**#2** — Storage substrate. Slices A–D (and C.1) are complete. #2
+remains the storage substrate only. Details:
 (schemas/fixtures; BrainCaseDB v3; search/inspect/FTS5; FTS reindex; explicit
 write/update helpers in qz_braincase_write.py). Next work is Slice E (render
 packet builder). Unlocks #51 and #46 after Slice E. See
@@ -273,28 +272,29 @@ Signal/feedback subsystem design (#42)
 
 ### Prompt A: BrainCase Slice E — render packet builder (#53)
 
-**Slices A, B, and C are complete. Slice D may now start.**
+**Slices A through D (and C.1) are complete. Slice E may now start.**
 
 Read `docs/braincase-memory-tool-api.md` before starting.
 
 ```text
-Slice A COMPLETE: schemas + fixtures + 44 tests
-Slice B COMPLETE: schema v3 + put/get/list/retire/supersede + 33 new tests (44 total)
-Slice C COMPLETE: query_plan/search/inspect + FTS5 + 36 new tests (80 total)
+Slice A   COMPLETE: schemas + fixtures + 44 tests
+Slice B   COMPLETE: BrainCaseDB schema v3, 5 tables, put/get/list/retire/supersede
+Slice C   COMPLETE: query_plan/search/inspect + FTS5 + 36 new tests (80 total)
+Slice C.1 COMPLETE: rebuild_fts_index / FTS backfill + 12 tests (92 total)
+Slice D   COMPLETE: qz_braincase_write.py helpers + write/update paths + 51 tests (1744 total)
+Slice D.1 COMPLETE: conflict marker detection tightened (must_not vs must, do_not vs do)
 
 Read first:
-- docs/braincase-memory-tool-api.md       (architecture; Slice D spec)
-- proxy/qz_braincase_db.py                (Slice C methods — Slice D extends these)
+- docs/braincase-memory-tool-api.md       (architecture; Slice E spec)
+- proxy/qz_braincase_write.py             (Slice D helpers — Slice E builds on write path)
+- proxy/qz_braincase_db.py               (storage layer)
 - AGENTS.md BrainCase Memory Tool Plane Doctrine
 
-Slice D goal: explicit braincase.write/update tool path with deterministic helpers.
-- scope_resolve: confirm memory_domain + workspace scope.
-- dedup_check: detect near-duplicate records before write (returns hints, not block).
-- conflict_check: surface contradictions (returns refs, not block).
-- source_link: attach provenance.
-- braincase.write: explicit write of a durable StateRecord through helper-constrained path.
-- braincase.update: correct/supersede/retire/link records.
-- No model-facing tool yet (tool-plane wiring is Slice F).
+Slice E goal: braincase.render — bounded model-facing memory packet builder.
+- render_pack: assemble bounded packet from stored StateRecords.
+- redaction_check for render: exclude never_model_visible records.
+- Enforce scope (memory_domain), tier filter, and token budget.
+- No model-facing tool wiring yet (Slice F).
 - No automatic ingestion at any step.
 ```
 

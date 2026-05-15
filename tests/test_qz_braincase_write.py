@@ -15,6 +15,8 @@ from pathlib import Path
 
 from proxy.qz_braincase_db import BrainCaseDB
 from proxy.qz_braincase_write import (
+    _claim_markers,
+    _CONFLICTING_MARKERS,
     braincase_update_state_record,
     braincase_write_state_record,
     conflict_check,
@@ -824,6 +826,203 @@ class HSMDomainTests(unittest.TestCase):
             self.assertIsNotNone(stored)
             meta = stored.get("metadata") or {}
             self.assertIn("hsm_domain_note", meta)
+            db.close()
+
+
+# ---------------------------------------------------------------------------
+# Slice D.1 tests: improved conflict marker detection
+# ---------------------------------------------------------------------------
+
+class ClaimMarkersTests(unittest.TestCase):
+    """Unit tests for _claim_markers() — the compound-form-aware extractor."""
+
+    def test_must_not_gives_must_not_not_must(self):
+        markers = _claim_markers("BrainCaseDB must not store requests.")
+        self.assertIn("must_not", markers)
+        self.assertNotIn("must", markers)
+
+    def test_must_alone_gives_must_not_must_not(self):
+        markers = _claim_markers("BrainCaseDB must store requests.")
+        self.assertIn("must", markers)
+        self.assertNotIn("must_not", markers)
+
+    def test_do_not_gives_do_not_not_do(self):
+        markers = _claim_markers("Do not ingest requests.")
+        self.assertIn("do_not", markers)
+        self.assertNotIn("do", markers)
+
+    def test_do_alone_gives_do_not_do_not(self):
+        markers = _claim_markers("Do this when writing.")
+        self.assertIn("do", markers)
+        self.assertNotIn("do_not", markers)
+
+    def test_allowed_detected(self):
+        self.assertIn("allowed", _claim_markers("This is allowed."))
+
+    def test_forbidden_detected(self):
+        self.assertIn("forbidden", _claim_markers("This is forbidden."))
+
+    def test_enabled_detected(self):
+        self.assertIn("enabled", _claim_markers("FTS is enabled."))
+
+    def test_disabled_detected(self):
+        self.assertIn("disabled", _claim_markers("Feature is disabled."))
+
+    def test_empty_claim_returns_empty_set(self):
+        self.assertEqual(_claim_markers(""), set())
+
+    def test_no_markers_returns_empty_set(self):
+        self.assertEqual(_claim_markers("BrainCaseDB stores records."), set())
+
+    def test_multiple_markers(self):
+        markers = _claim_markers("FTS is enabled and automatic ingestion is forbidden.")
+        self.assertIn("enabled", markers)
+        self.assertIn("forbidden", markers)
+
+
+class ConflictMarkerDetectionTests(unittest.TestCase):
+    """Tests for the improved conflict_check marker detection (Slice D.1)."""
+
+    def _make_constraint(self, record_id: str, claim: str, domain: str = "coding") -> dict:
+        return _make_record(
+            record_id=record_id,
+            memory_domain=domain,
+            tier="project_state",
+            record_type="constraint",
+            claim=claim,
+            tags=["braincase", "constraint"],
+        )
+
+    # 1. same-direction "must not" vs "must not" does NOT conflict
+    def test_same_direction_must_not_no_conflict(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            stored = self._make_constraint("rec_same_1", "BrainCaseDB must not store requests.")
+            db.put_state_record(stored)
+            new_rec = self._make_constraint("rec_same_2", "Proxy must not ingest telemetry.")
+            result = conflict_check(db, new_rec)
+            self.assertIsNone(result["warning"])
+            self.assertEqual(result["conflicts"], [])
+            db.close()
+
+    # 2. "must not" vs "must" conflicts
+    def test_must_not_vs_must_conflicts(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            stored = self._make_constraint("rec_must_not", "BrainCaseDB must not store requests.")
+            db.put_state_record(stored)
+            new_rec = self._make_constraint("rec_must", "BrainCaseDB must store every request.")
+            result = conflict_check(db, new_rec)
+            self.assertEqual(result["warning"], "possible_conflict")
+            conflict_ids = [c["record_id"] for c in result["conflicts"]]
+            self.assertIn("rec_must_not", conflict_ids)
+            db.close()
+
+    def test_must_vs_must_not_conflicts(self):
+        """Conflict is symmetric: must → must_not."""
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            stored = self._make_constraint("rec_must2", "System must always store requests.")
+            db.put_state_record(stored)
+            new_rec = self._make_constraint("rec_must_not2", "System must not store requests.")
+            result = conflict_check(db, new_rec)
+            self.assertEqual(result["warning"], "possible_conflict")
+            db.close()
+
+    # 3. "do not" vs "do" conflicts
+    def test_do_not_vs_do_conflicts(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            stored = self._make_constraint("rec_do_not", "Do not ingest sessions automatically.")
+            db.put_state_record(stored)
+            new_rec = self._make_constraint("rec_do", "Do ingest sessions for every request.")
+            result = conflict_check(db, new_rec)
+            self.assertEqual(result["warning"], "possible_conflict")
+            conflict_ids = [c["record_id"] for c in result["conflicts"]]
+            self.assertIn("rec_do_not", conflict_ids)
+            db.close()
+
+    def test_same_direction_do_not_no_conflict(self):
+        """Two 'do not' claims must not falsely conflict with each other."""
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            stored = self._make_constraint("rec_do_not_a", "Do not ingest sessions.")
+            db.put_state_record(stored)
+            new_rec = self._make_constraint("rec_do_not_b", "Do not store telemetry.")
+            result = conflict_check(db, new_rec)
+            self.assertIsNone(result["warning"])
+            db.close()
+
+    # 4. "forbidden" vs "allowed" conflicts
+    def test_forbidden_vs_allowed_conflicts(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            stored = self._make_constraint("rec_allowed", "Automatic ingestion is allowed.")
+            db.put_state_record(stored)
+            new_rec = self._make_constraint("rec_forbidden", "Automatic ingestion is forbidden.")
+            result = conflict_check(db, new_rec)
+            self.assertEqual(result["warning"], "possible_conflict")
+            db.close()
+
+    def test_same_direction_forbidden_no_conflict(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            stored = self._make_constraint("rec_forb_a", "Raw prompts are forbidden.")
+            db.put_state_record(stored)
+            new_rec = self._make_constraint("rec_forb_b", "Telemetry ingestion is forbidden.")
+            result = conflict_check(db, new_rec)
+            self.assertIsNone(result["warning"])
+            db.close()
+
+    # 5. "disabled" vs "enabled" conflicts
+    def test_disabled_vs_enabled_conflicts(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            stored = self._make_constraint("rec_enabled", "FTS is enabled by default.")
+            db.put_state_record(stored)
+            new_rec = self._make_constraint("rec_disabled", "FTS is disabled by default.")
+            result = conflict_check(db, new_rec)
+            self.assertEqual(result["warning"], "possible_conflict")
+            db.close()
+
+    # 6. conflict remains hint-only; write still stores with warning
+    def test_conflict_hint_write_stores_record(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            stored = self._make_constraint("rec_conflict_stored", "Feature must not be used.")
+            db.put_state_record(stored)
+            new_rec = self._make_constraint("rec_conflict_new", "Feature must be used.")
+            write_result = braincase_write_state_record(db, new_rec)
+            self.assertTrue(write_result["ok"])
+            self.assertTrue(write_result["stored"])
+            self.assertEqual(write_result["conflicts"]["warning"], "possible_conflict")
+            # Record is actually in DB
+            self.assertIsNotNone(db.get_state_record("rec_conflict_new"))
+            db.close()
+
+    # 7. conflict_check does not cross memory_domain
+    def test_conflict_does_not_cross_memory_domain(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            # Store a "must" record in coding domain
+            stored = self._make_constraint("rec_coding_must", "System must always run.", domain="coding")
+            db.put_state_record(stored)
+            # New "must not" record in hsm domain — different domain → no conflict
+            new_rec = self._make_constraint("rec_hsm_must_not", "System must not run.", domain="hsm")
+            result = conflict_check(db, new_rec)
+            self.assertIsNone(result["warning"])
+            db.close()
+
+    # 8. conflict_check does not mutate inputs
+    def test_conflict_does_not_mutate_inputs(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            stored = self._make_constraint("rec_immutable", "BrainCaseDB must not ingest.")
+            db.put_state_record(stored)
+            new_rec = self._make_constraint("rec_check_mutate", "BrainCaseDB must ingest.")
+            original = copy.deepcopy(new_rec)
+            conflict_check(db, new_rec)
+            self.assertEqual(new_rec, original)
             db.close()
 
 

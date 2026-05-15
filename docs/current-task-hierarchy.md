@@ -244,7 +244,7 @@ tests/test_braincase_schema_fixtures.py          — 44 tests, all passing
 Slice B acceptance (COMPLETE):
 
 ```text
-proxy/qz_braincase_db.py — schema v2, 5 new tables, 7 new methods
+proxy/qz_braincase_db.py — schema v3, 5 new tables, 7 new methods
 tests/test_qz_braincase_db.py — BrainCaseDBSliceBTests: 33 new tests (44 total)
 All 1645 tests passing.
 ```
