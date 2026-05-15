@@ -30,6 +30,7 @@ ALLOWED_RECOVERY_ACTIONS: frozenset[str] = frozenset({
 # Per-action static properties -----------------------------------------------
 
 _REQUIRES_AUTHORITY: frozenset[str] = frozenset({
+    "select_model",
     "reload_selected_model",
     "start_backend",
     "restart_backend",
@@ -37,6 +38,7 @@ _REQUIRES_AUTHORITY: frozenset[str] = frozenset({
 })
 
 _REQUIRES_CONFIRMATION: frozenset[str] = frozenset({
+    "select_model",
     "reload_selected_model",
     "start_backend",
     "restart_backend",
@@ -45,9 +47,11 @@ _REQUIRES_CONFIRMATION: frozenset[str] = frozenset({
 _WOULD_INTERRUPT: frozenset[str] = frozenset({
     "reload_selected_model",
     "restart_backend",
+    # select_model does not interrupt active requests (no backend call)
 })
 
 _BACKOFF_APPLIES: frozenset[str] = frozenset({
+    "select_model",
     "start_backend",
     "restart_backend",
     "reload_selected_model",
@@ -55,6 +59,7 @@ _BACKOFF_APPLIES: frozenset[str] = frozenset({
 
 # State-changing actions blocked by an already-in-progress recovery
 _BLOCKED_BY_IN_PROGRESS: frozenset[str] = frozenset({
+    "select_model",
     "reload_selected_model",
     "start_backend",
     "restart_backend",

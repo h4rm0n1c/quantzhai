@@ -107,7 +107,12 @@ except ImportError:
 
 
 SAFE_TRIGGER_ACTIONS: frozenset = frozenset({"refresh_catalog", "clear_failure"})
-DANGEROUS_TRIGGER_ACTIONS: frozenset = frozenset({"restart_backend", "reload_selected_model", "start_backend"})
+DANGEROUS_TRIGGER_ACTIONS: frozenset = frozenset({
+    "start_backend",
+    "restart_backend",
+    "reload_selected_model",
+    "select_model",
+})
 ASYNC_SUPPORTED_ACTIONS: frozenset = frozenset({"reload_selected_model"})
 IMPLEMENTED_TRIGGER_ACTIONS: frozenset = SAFE_TRIGGER_ACTIONS | DANGEROUS_TRIGGER_ACTIONS
 UNIMPLEMENTED_TRIGGER_ACTIONS: frozenset = ALLOWED_RECOVERY_ACTIONS - IMPLEMENTED_TRIGGER_ACTIONS
@@ -116,6 +121,10 @@ RECOVERY_TRIGGER_SCHEMA = "qz.recovery.trigger.v1"
 _TRIGGER_WARNINGS: dict = {
     "refresh_catalog":      "Refreshing the catalog does not restart the backend.",
     "clear_failure":        "Clearing failure state does not start or restart the backend.",
+    "select_model":         (
+        "Selecting a model changes the active selection state only; "
+        "the model is NOT loaded. Call reload_selected_model separately to load it."
+    ),
     "start_backend":        (
         "Starting the backend creates or starts the container without modifying models. "
         "Use restart_backend if the existing container must be replaced."
@@ -689,9 +698,15 @@ class RequestRouter:
             return 409, "action_not_implemented", "state", (
                 f"Action {action!r} is not yet implemented. "
                 "Implemented: refresh_catalog, clear_failure, start_backend, "
-                "restart_backend, reload_selected_model. "
-                "select_model remains deferred."
+                "restart_backend, reload_selected_model, select_model."
             )
+
+        # select_model requires a model field
+        if action == "select_model":
+            model_val = str(body.get("model") or "")
+            if not model_val:
+                return 400, "missing_model", "bad_request", \
+                    "Request body must include a 'model' field for select_model."
 
         # force=true is only valid for dangerous (interrupt) actions, not safe ones
         if force and action in SAFE_TRIGGER_ACTIONS:
@@ -825,6 +840,41 @@ class RequestRouter:
             if state == "ready":
                 return True, ""
             return False, err or f"Model load did not complete (state={state!r})"
+        except Exception as exc:
+            return False, str(exc)
+
+    def _do_select_model(self, model: str) -> tuple[bool, str]:
+        """Select a model in catalog/router state without loading it.
+
+        Uses catalog.resolve() for lookup, then sets catalog.selected and persists
+        model state via the model router. Does NOT call backend.load_model(),
+        start_container(), or restart_container(). Does NOT load the model.
+        Returns (success, error_message). Never raises.
+        """
+        try:
+            if not model:
+                return False, "No model specified."
+
+            catalog = self.handler._model_catalog()
+            selected, reason = catalog.resolve(query=model)
+            if selected is None:
+                return False, f"Model {model!r} not found in catalog: {reason}"
+            if selected.get("profile_valid", True) is False:
+                return False, f"Model {model!r} has an invalid profile (profile_valid=false)."
+
+            # Set catalog selection (no backend interaction)
+            catalog.selected = selected
+            catalog.reason = reason
+
+            # Persist selection via model router (no load, no backend call)
+            router = self.handler._model_router()
+            router._persist_model_state(
+                selected,
+                reason="recovery select_model",
+                source="recovery_select_model",
+            )
+
+            return True, ""
         except Exception as exc:
             return False, str(exc)
 
@@ -1082,6 +1132,40 @@ class RequestRouter:
                 ))
                 return
 
+        # --- select_model model existence pre-check ---
+        if action == "select_model":
+            _sm_model = str(body.get("model") or "")
+            try:
+                _sm_catalog = self.handler._model_catalog()
+                _sm_entry, _sm_reason = _sm_catalog.resolve(query=_sm_model)
+                if _sm_entry is None:
+                    self.handler._send_json(409, self._recovery_error_payload(
+                        "model_not_found",
+                        f"Model {_sm_model!r} not found in catalog: {_sm_reason}",
+                        action=action,
+                        blocked_by="state",
+                        recovery_status=runtime_rs,
+                    ))
+                    return
+                if _sm_entry.get("profile_valid", True) is False:
+                    self.handler._send_json(409, self._recovery_error_payload(
+                        "model_invalid_profile",
+                        f"Model {_sm_model!r} has an invalid profile and cannot be selected.",
+                        action=action,
+                        blocked_by="state",
+                        recovery_status=runtime_rs,
+                    ))
+                    return
+            except Exception as exc:
+                self.handler._send_json(409, self._recovery_error_payload(
+                    "catalog_unavailable",
+                    f"Catalog unavailable for model resolution: {exc}",
+                    action=action,
+                    blocked_by="state",
+                    recovery_status=runtime_rs,
+                ))
+                return
+
         # --- Selected model pre-check (before mark_started to avoid spurious backoff) ---
         if action == "reload_selected_model":
             precheck_model_id, precheck_err = self._selected_model_for_reload()
@@ -1108,6 +1192,7 @@ class RequestRouter:
             "reason": reason,
             "force": force,
             "async": async_requested,
+            "model": str(body.get("model") or "") if action == "select_model" else None,
             "active_request_count": active_count_at_start,
             "pre_recovery_status": pre_status,
             "operator_action": action,
@@ -1168,6 +1253,8 @@ class RequestRouter:
                 ok, error = self._do_refresh_catalog()
             elif action == "clear_failure":
                 ok, error = self._do_clear_failure(rs)
+            elif action == "select_model":
+                ok, error = self._do_select_model(str(body.get("model") or ""))
             elif action == "start_backend":
                 ok, error = self._do_start_backend()
             elif action == "restart_backend":

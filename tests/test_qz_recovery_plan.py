@@ -193,14 +193,15 @@ class SelectModelMissingModelTests(unittest.TestCase):
 
 class SelectModelFeasibleTests(unittest.TestCase):
     def test_feasible_with_model(self):
-        p = build_recovery_plan(_READY, "select_model", model="qwen3-6b")
+        p = build_recovery_plan(_READY, "select_model", model="qwen3-6b",
+                                authority_enabled=True, local_request=True)
         self.assertTrue(p["feasible"])
         self.assertFalse(p["blocked_by_missing_model"])
 
-    def test_not_blocked_by_authority(self):
+    def test_blocked_by_authority_when_disabled(self):
         p = build_recovery_plan(_READY, "select_model", model="qwen3-6b",
                                 authority_enabled=False)
-        self.assertFalse(p["blocked_by_authority"])
+        self.assertTrue(p["blocked_by_authority"])
 
     def test_no_interrupt(self):
         p = build_recovery_plan(_READY, "select_model", model="qwen3-6b")
@@ -536,10 +537,11 @@ class RecoveryInProgressTests(unittest.TestCase):
         p = build_recovery_plan(_READY, "refresh_catalog", recovery_in_progress=True)
         self.assertFalse(p["blocked_by_in_progress"])
 
-    def test_in_progress_does_not_block_select_model(self):
+    def test_in_progress_blocks_select_model(self):
         p = build_recovery_plan(_READY, "select_model", model="qwen3-6b",
+                                authority_enabled=True, local_request=True,
                                 recovery_in_progress=True)
-        self.assertFalse(p["blocked_by_in_progress"])
+        self.assertTrue(p["blocked_by_in_progress"])
 
 
 # ---------------------------------------------------------------------------

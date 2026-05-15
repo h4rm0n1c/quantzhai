@@ -858,6 +858,44 @@ scripts/qz-smoke-recovery --confirm 'phrase' --allow-restart-and-reload
 - Normal responses unaffected; other exceptions still propagate
 - Eliminates noisy BrokenPipeError traceback spam when curl times out mid-response
 
+### #49 (done): `select_model` trigger action
+
+Added `select_model` to `POST /qz/recovery/trigger`. All 6 recovery actions now implemented.
+
+**`select_model` semantics (conservative Option A):**
+- Changes the active model selection only — does NOT load the model
+- Operator workflow: `select_model` → (optionally) `reload_selected_model`
+- Does NOT call Docker, start/restart backend, or trigger load
+
+**Manual service-control chain:**
+1. `start_backend` — start/check backend container
+2. `select_model` — select desired model
+3. `reload_selected_model` — load it into the running backend
+4. `restart_backend` — if container needs replacement
+
+**Request body:** `action`, `model` (required), `reason`, `confirm`, `force`
+
+**Gates:** same as other dangerous actions — authority, locality, phrase, not in progress, backoff, planner.
+
+**`_do_select_model(model)`** implementation:
+- `catalog.resolve(query=model)` for lookup (no backend call)
+- Sets `catalog.selected = selected` + `catalog.reason`
+- Calls `router._persist_model_state(selected, ...)` — no load, no backend
+- Returns `(True, "")` or `(False, error)`
+
+**Pre-checks before `mark_started`:**
+- `catalog.resolve()` must find the model → 409 `model_not_found` if absent
+- `profile_valid` checked → 409 `model_invalid_profile` if false
+- Catalog unavailable → 409 `catalog_unavailable`
+
+**Planner updates:** `select_model` added to `_REQUIRES_AUTHORITY`, `_REQUIRES_CONFIRMATION`, `_BACKOFF_APPLIES`, `_BLOCKED_BY_IN_PROGRESS`. Does NOT interrupt active requests.
+
+**Smoke script:** default checks now show `plan/select_model` (feasibility check, no trigger). `--allow-select-model MODEL` runs the actual trigger.
+
+**`UNIMPLEMENTED_TRIGGER_ACTIONS` is now empty** — all 6 actions implemented.
+
+**Tests:** `tests/test_qz_recovery_trigger.py` — 172 assertions; `tests/test_qz_recovery_plan.py` updated.
+
 ### #48 (done): `start_backend` trigger action
 
 Added `start_backend` to `POST /qz/recovery/trigger`. Non-destructive backend start.

@@ -507,13 +507,11 @@ class ValidateTriggerBodyTests(unittest.TestCase):
         )
         self.assertIsNone(result)
 
-    def test_unimplemented_action_message_mentions_implemented(self):
+    def test_select_model_now_valid_body(self):
         result = RequestRouter._validate_recovery_trigger_body(
-            {"action": "select_model", "reason": "x"}
+            {"action": "select_model", "reason": "x", "model": "qwen3"}
         )
-        _, _, _, msg = result
-        self.assertIn("refresh_catalog", msg)
-        self.assertIn("start_backend", msg)
+        self.assertIsNone(result)
 
 
 # ---------------------------------------------------------------------------
@@ -561,8 +559,11 @@ class UpdatedConstantsTests(unittest.TestCase):
     def test_reload_selected_model_now_implemented(self):
         self.assertNotIn("reload_selected_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
 
-    def test_select_model_still_unimplemented(self):
-        self.assertIn("select_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
+    def test_select_model_now_implemented(self):
+        self.assertNotIn("select_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
+
+    def test_select_model_in_dangerous(self):
+        self.assertIn("select_model", DANGEROUS_TRIGGER_ACTIONS)
 
     def test_implemented_subset_of_all(self):
         self.assertTrue(IMPLEMENTED_TRIGGER_ACTIONS <= ALLOWED_RECOVERY_ACTIONS)
@@ -700,12 +701,14 @@ class RestartBackendBodyValidationTests(unittest.TestCase):
         )
         self.assertIsNone(result)
 
-    def test_unimplemented_message_updated(self):
+    def test_select_model_missing_model_is_400(self):
         result = RequestRouter._validate_recovery_trigger_body(
             {"action": "select_model", "reason": "x"}
         )
-        _, _, _, msg = result
-        self.assertIn("restart_backend", msg)
+        self.assertIsNotNone(result)
+        status, error, _, _ = result
+        self.assertEqual(status, 400)
+        self.assertEqual(error, "missing_model")
 
 
 # ---------------------------------------------------------------------------
@@ -811,8 +814,11 @@ class ReloadConstantsTests(unittest.TestCase):
     def test_start_backend_now_implemented(self):
         self.assertNotIn("start_backend", UNIMPLEMENTED_TRIGGER_ACTIONS)
 
-    def test_select_model_still_unimplemented(self):
-        self.assertIn("select_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
+    def test_select_model_now_implemented(self):
+        self.assertNotIn("select_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
+
+    def test_select_model_in_dangerous(self):
+        self.assertIn("select_model", DANGEROUS_TRIGGER_ACTIONS)
 
 
 # ---------------------------------------------------------------------------
@@ -906,20 +912,20 @@ class ReloadBodyValidationTests(unittest.TestCase):
         )
         self.assertIsNone(result)
 
-    def test_select_model_still_409(self):
+    def test_select_model_now_valid(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "select_model", "reason": "x", "model": "qwen3"}
+        )
+        self.assertIsNone(result)
+
+    def test_select_model_missing_model_blocked(self):
         result = RequestRouter._validate_recovery_trigger_body(
             {"action": "select_model", "reason": "x"}
         )
         self.assertIsNotNone(result)
-        status, error, _, _ = result
-        self.assertEqual(status, 409)
-
-    def test_unimplemented_message_mentions_select_model(self):
-        result = RequestRouter._validate_recovery_trigger_body(
-            {"action": "select_model", "reason": "x"}
-        )
-        _, _, _, msg = result
-        self.assertIn("reload_selected_model", msg)
+        _, error, blocked_by, _ = result
+        self.assertEqual(error, "missing_model")
+        self.assertEqual(blocked_by, "bad_request")
 
 
 # ---------------------------------------------------------------------------
@@ -1157,8 +1163,11 @@ class StartBackendConstantsTests(unittest.TestCase):
     def test_start_not_unimplemented(self):
         self.assertNotIn("start_backend", UNIMPLEMENTED_TRIGGER_ACTIONS)
 
-    def test_select_model_still_unimplemented(self):
-        self.assertIn("select_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
+    def test_select_model_now_implemented(self):
+        self.assertNotIn("select_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
+
+    def test_select_model_in_dangerous(self):
+        self.assertIn("select_model", DANGEROUS_TRIGGER_ACTIONS)
 
     def test_force_allowed_for_start_backend(self):
         result = RequestRouter._validate_recovery_trigger_body(
@@ -1170,12 +1179,9 @@ class StartBackendConstantsTests(unittest.TestCase):
         from proxy.qz_request_router import ASYNC_SUPPORTED_ACTIONS
         self.assertNotIn("start_backend", ASYNC_SUPPORTED_ACTIONS)
 
-    def test_unimplemented_message_now_includes_start(self):
-        result = RequestRouter._validate_recovery_trigger_body(
-            {"action": "select_model", "reason": "x"}
-        )
-        _, _, _, msg = result
-        self.assertIn("start_backend", msg)
+    def test_all_implemented_now(self):
+        from proxy.qz_request_router import UNIMPLEMENTED_TRIGGER_ACTIONS
+        self.assertEqual(UNIMPLEMENTED_TRIGGER_ACTIONS, frozenset())
 
 
 # ---------------------------------------------------------------------------
@@ -1366,6 +1372,265 @@ class StartBackendPlannerTests(unittest.TestCase):
             local_request=True,
         )
         self.assertFalse(p["would_interrupt_requests"])
+
+
+# ---------------------------------------------------------------------------
+# 30. select_model — constants and validation
+# ---------------------------------------------------------------------------
+
+class SelectModelConstantsTests(unittest.TestCase):
+    def test_select_model_in_dangerous(self):
+        self.assertIn("select_model", DANGEROUS_TRIGGER_ACTIONS)
+
+    def test_select_model_in_implemented(self):
+        self.assertIn("select_model", IMPLEMENTED_TRIGGER_ACTIONS)
+
+    def test_select_model_not_unimplemented(self):
+        self.assertNotIn("select_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
+
+    def test_async_not_supported_for_select_model(self):
+        from proxy.qz_request_router import ASYNC_SUPPORTED_ACTIONS
+        self.assertNotIn("select_model", ASYNC_SUPPORTED_ACTIONS)
+
+    def test_force_allowed_for_select_model(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "select_model", "reason": "x", "model": "qwen3", "force": True}
+        )
+        self.assertIsNone(result)
+
+    def test_missing_model_returns_400(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "select_model", "reason": "x"}
+        )
+        self.assertIsNotNone(result)
+        status, error, blocked_by, _ = result
+        self.assertEqual(status, 400)
+        self.assertEqual(error, "missing_model")
+        self.assertEqual(blocked_by, "bad_request")
+
+    def test_model_field_present_passes_validator(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "select_model", "reason": "x", "model": "some-model"}
+        )
+        self.assertIsNone(result)
+
+
+# ---------------------------------------------------------------------------
+# 31. select_model confirmation phrase
+# ---------------------------------------------------------------------------
+
+class SelectModelConfirmTests(unittest.TestCase):
+    def test_phrase_required(self):
+        self.assertTrue(RequestRouter._confirm_phrase_required("select_model"))
+
+    def test_rejected_when_env_unset(self):
+        with unittest.mock.patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("QZ_RECOVERY_CONFIRM_PHRASE", None)
+            ok, msg = RequestRouter._confirm_phrase_matches({}, "select_model")
+            self.assertFalse(ok)
+            self.assertIn("QZ_RECOVERY_CONFIRM_PHRASE", msg)
+
+    def test_rejected_wrong_phrase(self):
+        with unittest.mock.patch.dict("os.environ", {"QZ_RECOVERY_CONFIRM_PHRASE": "go"}):
+            ok, _ = RequestRouter._confirm_phrase_matches({"confirm": "stop"}, "select_model")
+            self.assertFalse(ok)
+
+    def test_accepted_exact_phrase(self):
+        with unittest.mock.patch.dict("os.environ", {"QZ_RECOVERY_CONFIRM_PHRASE": "go"}):
+            ok, _ = RequestRouter._confirm_phrase_matches({"confirm": "go"}, "select_model")
+            self.assertTrue(ok)
+
+
+# ---------------------------------------------------------------------------
+# 32. _do_select_model with fake handler
+# ---------------------------------------------------------------------------
+
+class DoSelectModelTests(unittest.TestCase):
+    def _make_router(self, model_id="qwen3", resolve_ok=True, persist_raises=False):
+        """Make a router with fake catalog and model router."""
+        inner_router_ref: list = [None]
+
+        class FakeCatalog:
+            def __init__(self, mid, ok):
+                self._mid = mid
+                self._ok = ok
+                self.selected = None
+                self.reason = ""
+
+            def resolve(self, query=None):
+                if not self._ok or query != self._mid:
+                    return None, f"no entry for {query!r}"
+                entry = {"key": self._mid, "backend_id": self._mid, "profile_valid": True}
+                return entry, "found"
+
+        class FakeModelRouter:
+            def __init__(self, raises):
+                self._raises = raises
+                self.persist_called_with = None
+                self.start_called = False
+                self.restart_called = False
+                self.load_called = False
+
+            def _persist_model_state(self, selected, reason="", source=""):
+                if self._raises:
+                    raise RuntimeError("persist failed")
+                self.persist_called_with = selected
+
+            def start_container(self, *a, **kw):
+                self.start_called = True
+
+            def restart_container(self, *a, **kw):
+                self.restart_called = True
+
+            def load_backend_model(self, *a, **kw):
+                self.load_called = True
+
+        fake_catalog = FakeCatalog(model_id, resolve_ok)
+        fake_router = FakeModelRouter(persist_raises)
+        inner_router_ref[0] = fake_router
+
+        class FH:
+            model_load_state = "idle"
+            model_load_error = None
+            model_load_timeout = 30.0
+
+            def _model_catalog(self):
+                return fake_catalog
+
+            def _model_router(self):
+                return inner_router_ref[0]
+
+        router = RequestRouter.__new__(RequestRouter)
+        router.handler = FH()
+        return router, fake_catalog, fake_router
+
+    def test_success_sets_catalog_selected(self):
+        router, catalog, _ = self._make_router("qwen3", resolve_ok=True)
+        ok, error = router._do_select_model("qwen3")
+        self.assertTrue(ok)
+        self.assertEqual(error, "")
+        self.assertIsNotNone(catalog.selected)
+        self.assertEqual(catalog.selected.get("key"), "qwen3")
+
+    def test_calls_persist_model_state(self):
+        router, _, model_router = self._make_router("qwen3", resolve_ok=True)
+        router._do_select_model("qwen3")
+        self.assertIsNotNone(model_router.persist_called_with)
+
+    def test_does_not_call_load_model(self):
+        router, _, model_router = self._make_router("qwen3", resolve_ok=True)
+        router._do_select_model("qwen3")
+        self.assertFalse(model_router.load_called)
+
+    def test_does_not_call_start_container(self):
+        router, _, model_router = self._make_router("qwen3", resolve_ok=True)
+        router._do_select_model("qwen3")
+        self.assertFalse(model_router.start_called)
+
+    def test_does_not_call_restart_container(self):
+        router, _, model_router = self._make_router("qwen3", resolve_ok=True)
+        router._do_select_model("qwen3")
+        self.assertFalse(model_router.restart_called)
+
+    def test_unknown_model_returns_false(self):
+        router, _, _ = self._make_router("qwen3", resolve_ok=False)
+        ok, error = router._do_select_model("unknown-model")
+        self.assertFalse(ok)
+        self.assertGreater(len(error), 0)
+
+    def test_empty_model_returns_false(self):
+        router, _, _ = self._make_router("qwen3")
+        ok, error = router._do_select_model("")
+        self.assertFalse(ok)
+
+    def test_persist_failure_returns_false(self):
+        router, _, _ = self._make_router("qwen3", resolve_ok=True, persist_raises=True)
+        ok, error = router._do_select_model("qwen3")
+        self.assertFalse(ok)
+        self.assertIn("persist failed", error)
+
+
+# ---------------------------------------------------------------------------
+# 33. select_model planner
+# ---------------------------------------------------------------------------
+
+class SelectModelPlannerTests(unittest.TestCase):
+    def _ss(self, proxy_state="ready", catalog_state="ready", backend_state="unreachable",
+            model_state="unknown"):
+        return {
+            "schema": "qz.service.status.v1",
+            "proxy_state": proxy_state,
+            "catalog_state": catalog_state,
+            "backend_state": backend_state,
+            "model_state": model_state,
+            "request_admission": "rejected_backend_unavailable",
+            "recovery_state": "available",
+            "recoverable": True,
+            "retryable": False,
+            "fatal": False,
+            "last_error": "",
+            "operator_action": "select_model",
+            "operator_hints": [],
+        }
+
+    def test_feasible_with_backend_unreachable(self):
+        from proxy.qz_recovery_plan import build_recovery_plan
+        p = build_recovery_plan(
+            self._ss(),
+            "select_model",
+            model="qwen3",
+            authority_enabled=True,
+            local_request=True,
+            active_requests=0,
+        )
+        self.assertTrue(p["feasible"])
+
+    def test_feasible_does_not_require_backend_healthy(self):
+        from proxy.qz_recovery_plan import build_recovery_plan
+        # Backend unreachable should still allow select_model
+        p = build_recovery_plan(
+            self._ss(backend_state="unreachable"),
+            "select_model",
+            model="qwen3",
+            authority_enabled=True,
+            local_request=True,
+            active_requests=0,
+        )
+        self.assertTrue(p["feasible"])
+
+    def test_blocked_by_authority(self):
+        from proxy.qz_recovery_plan import build_recovery_plan
+        p = build_recovery_plan(
+            self._ss(),
+            "select_model",
+            model="qwen3",
+            authority_enabled=False,
+            local_request=True,
+        )
+        self.assertTrue(p["blocked_by_authority"])
+
+    def test_blocked_by_backoff(self):
+        from proxy.qz_recovery_plan import build_recovery_plan
+        p = build_recovery_plan(
+            self._ss(),
+            "select_model",
+            model="qwen3",
+            authority_enabled=True,
+            local_request=True,
+            backoff_active=True,
+        )
+        self.assertTrue(p["blocked_by_backoff"])
+
+    def test_missing_model_blocked(self):
+        from proxy.qz_recovery_plan import build_recovery_plan
+        p = build_recovery_plan(
+            self._ss(),
+            "select_model",
+            model="",   # missing
+            authority_enabled=True,
+            local_request=True,
+        )
+        self.assertTrue(p["blocked_by_missing_model"])
 
 
 if __name__ == "__main__":

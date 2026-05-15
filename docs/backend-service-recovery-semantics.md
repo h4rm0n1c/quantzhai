@@ -583,6 +583,16 @@ Two-step smoke flow available with `--allow-restart-and-reload`:
 3. trigger reload_selected_model
 4. verify control-plane backend.reachable + model state
 
+### #49 (done): `select_model` trigger action
+
+Added `select_model` to `POST /qz/recovery/trigger`. All 6 recovery actions now implemented.
+`UNIMPLEMENTED_TRIGGER_ACTIONS` is now empty.
+
+`select_model` changes active model selection only — does NOT load model, touch Docker, or start/restart backend.
+Workflow: `start_backend` → `select_model` → `reload_selected_model` (→ `restart_backend` if needed).
+Uses `catalog.resolve()` + `_persist_model_state()`. No backend call.
+Tests: `tests/test_qz_recovery_trigger.py` — 172 assertions.
+
 ### #48 (done): `start_backend` trigger action
 
 Added `start_backend` to `POST /qz/recovery/trigger`. Non-destructive: inspects container state,
