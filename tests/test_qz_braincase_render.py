@@ -20,6 +20,7 @@ from pathlib import Path
 
 from proxy.qz_braincase_db import BrainCaseDB
 from proxy.qz_braincase_render import (
+    _FOOTER_SIZE_ESTIMATE,
     _FORBIDDEN_OUTPUT_FIELDS,
     _SCHEMA,
     braincase_render_packet,
@@ -602,6 +603,258 @@ class RenderRecordLineTests(unittest.TestCase):
         line = render_record_line(rec)
         self.assertNotIn("internal_key", line)
         self.assertNotIn("internal_value", line)
+
+
+# ---------------------------------------------------------------------------
+# Slice E.1 tests: hard budget enforcement
+# ---------------------------------------------------------------------------
+
+class HardBudgetTests(unittest.TestCase):
+    """Tests for the hard-bounded RenderPacket budget added in Slice E.1."""
+
+    def _two_renderable(self, claim1: str = "Claim A.", claim2: str = "Claim B.") -> list[dict]:
+        return [
+            _make_simple_record("r1", importance=0.9, claim=claim1),
+            _make_simple_record("r2", importance=0.6, claim=claim2),
+        ]
+
+    # 1. render_pack never exceeds render_budget_chars()
+    def test_rendered_text_never_exceeds_budget(self):
+        for budget_tokens in (1, 5, 20, 100, 600):
+            chars = render_budget_chars(budget_tokens)
+            records = self._two_renderable(
+                claim1="A" * 400,
+                claim2="B" * 400,
+            )
+            pkt = render_pack(records, purpose="test", memory_domain="coding",
+                              budget_tokens=budget_tokens)
+            self.assertLessEqual(
+                len(pkt["rendered_text"]), chars,
+                f"Budget {chars} chars exceeded at budget_tokens={budget_tokens}: "
+                f"got {len(pkt['rendered_text'])} chars",
+            )
+
+    def test_rendered_text_bounded_with_short_records(self):
+        for budget_tokens in (5, 50, 200):
+            chars = render_budget_chars(budget_tokens)
+            records = [_make_simple_record(f"r{i}", claim=f"Short claim {i}.") for i in range(5)]
+            pkt = render_pack(records, purpose="test", memory_domain="coding",
+                              budget_tokens=budget_tokens)
+            self.assertLessEqual(len(pkt["rendered_text"]), chars)
+
+    # 2. first eligible long record is truncated or omitted, never over budget
+    def test_first_long_record_truncated_or_omitted_not_over_budget(self):
+        long_claim = "X" * 2000
+        records = [_make_simple_record("r_long", claim=long_claim)]
+        for budget_tokens in (1, 5, 100):
+            chars = render_budget_chars(budget_tokens)
+            pkt = render_pack(records, purpose="test", memory_domain="coding",
+                              budget_tokens=budget_tokens)
+            self.assertLessEqual(len(pkt["rendered_text"]), chars,
+                                 f"First record violated budget at {budget_tokens} tokens")
+            # Either included (truncated) or omitted — both are valid
+            # What is not valid: included AND over budget
+
+    def test_large_budget_includes_long_record(self):
+        """With a generous budget, a long record is included (possibly truncated to 200 chars)."""
+        long_claim = "Y" * 500
+        records = [_make_simple_record("r_large", claim=long_claim)]
+        pkt = render_pack(records, purpose="test", memory_domain="coding",
+                          budget_tokens=600)
+        self.assertIn("r_large", pkt["source_record_ids"])
+        self.assertLessEqual(len(pkt["rendered_text"]), render_budget_chars(600))
+
+    # 3. source_record_ids includes only actually rendered records
+    def test_source_ids_only_includes_rendered_records(self):
+        records = [
+            _make_simple_record("r1", claim="Short fits."),
+            _make_simple_record("r2", claim="Z" * 2000, importance=0.1),
+        ]
+        # Budget large enough for r1 but should not include r2 if r2 is omitted
+        pkt = render_pack(records, purpose="test", memory_domain="coding",
+                          budget_tokens=600)
+        for rid in pkt["source_record_ids"]:
+            self.assertIn(rid, pkt["rendered_text"],
+                          f"source_record_id '{rid}' not found in rendered_text")
+
+    def test_source_ids_empty_when_nothing_rendered(self):
+        # Extremely tiny budget that can't fit any record
+        records = [_make_simple_record("r1", claim="A" * 2000)]
+        pkt = render_pack(records, purpose="t", memory_domain="c",
+                          budget_tokens=1)  # 80 chars; header alone ~32 chars, tight
+        # Either r1 is in source_ids and rendered_text, or neither
+        for rid in pkt["source_record_ids"]:
+            self.assertIn(rid, pkt["rendered_text"])
+
+    # 4. omitted_count counts eligible records omitted by budget
+    def test_omitted_count_correct_when_budget_tight(self):
+        records = self._two_renderable(claim1="A" * 2000, claim2="B" * 2000)
+        pkt = render_pack(records, purpose="test", memory_domain="coding",
+                          budget_tokens=5)  # 80 chars — very tight
+        # Both records have 2000-char claims; expect both omitted
+        self.assertEqual(pkt["omitted_count"], 2)
+        self.assertEqual(pkt["source_record_ids"], [])
+
+    def test_omitted_count_accurate_for_partial_fit(self):
+        """One record fits, one is omitted due to insufficient remaining budget.
+
+        budget_tokens=40 (160 chars) is tight enough that after r_fits is included
+        (~55 chars of body), the remaining budget is too small for even the minimal
+        form of r_omit (~45 chars for classification + Source line).
+        """
+        records = [
+            _make_simple_record("r_fits", importance=0.9, claim="Short."),
+            _make_simple_record("r_omit", importance=0.1, claim="Q" * 2000),
+        ]
+        pkt = render_pack(records, purpose="test", memory_domain="coding",
+                          budget_tokens=40)  # 160 chars — tight after first record
+        self.assertIn("r_fits", pkt["source_record_ids"])
+        self.assertNotIn("r_omit", pkt["source_record_ids"])
+        self.assertEqual(pkt["omitted_count"], 1)
+
+    # 5. budget_exhausted warning when records omitted
+    def test_budget_exhausted_warning_when_omitted(self):
+        records = self._two_renderable(claim1="A" * 2000, claim2="B" * 2000)
+        pkt = render_pack(records, purpose="test", memory_domain="coding",
+                          budget_tokens=5)
+        self.assertGreater(pkt["omitted_count"], 0)
+        self.assertIn("budget_exhausted", pkt["warnings"])
+
+    def test_no_budget_exhausted_when_all_fit(self):
+        records = [_make_simple_record("r1", claim="Short claim.")]
+        pkt = render_pack(records, purpose="test", memory_domain="coding",
+                          budget_tokens=600)
+        self.assertNotIn("budget_exhausted", pkt["warnings"])
+
+    # 6. record_truncated warning when truncation occurs
+    def test_record_truncated_warning_when_claim_is_long(self):
+        """A very long claim triggers the budget-constrained truncation path.
+
+        budget_tokens=50 (200 chars) is tight enough that the default 200-char
+        claim pre-truncation still produces a line (~247 chars with tier+source)
+        that exceeds max_line_chars (~122 chars), forcing the budget-constrained
+        render_record_line(max_chars=...) path, which adds record_truncated.
+        """
+        records = [_make_simple_record("r_trunc", claim="W" * 2000)]
+        pkt = render_pack(records, purpose="test", memory_domain="coding",
+                          budget_tokens=50)  # 200 chars — tight enough to trigger truncation path
+        chars = render_budget_chars(50)
+        self.assertLessEqual(len(pkt["rendered_text"]), chars)
+        if pkt["source_record_ids"]:
+            # Record was included via truncation path
+            self.assertIn("record_truncated", pkt["warnings"])
+            self.assertIn("r_trunc", pkt["rendered_text"])
+
+    def test_no_record_truncated_warning_for_short_claims(self):
+        records = [_make_simple_record("r1", claim="A short claim.")]
+        pkt = render_pack(records, purpose="test", memory_domain="coding",
+                          budget_tokens=600)
+        self.assertNotIn("record_truncated", pkt["warnings"])
+
+    # 7. tiny budget returns valid RenderPacket with bounded rendered_text
+    def test_tiny_budget_returns_bounded_text(self):
+        records = [_make_simple_record("r1", claim="This is a claim.")]
+        pkt = render_pack(records, purpose="t", memory_domain="c",
+                          budget_tokens=1)  # 80 chars minimum
+        chars = render_budget_chars(1)
+        self.assertLessEqual(len(pkt["rendered_text"]), chars)
+        # Must still have all required fields
+        for field in _RENDER_PACKET_REQUIRED_FIELDS:
+            self.assertIn(field, pkt)
+
+    def test_zero_eligible_records_renders_header_footer_within_budget(self):
+        pkt = render_pack([], purpose="test", memory_domain="coding",
+                          budget_tokens=1)
+        self.assertLessEqual(len(pkt["rendered_text"]), render_budget_chars(1))
+
+    # 8. no forbidden raw fields after truncation path
+    def test_no_forbidden_fields_in_truncated_output(self):
+        # Even if a record had a forbidden field name in its claim (unusual but defensive)
+        rec = _make_simple_record("r1", claim="raw_prompt: some claim text here " * 10)
+        pkt = render_pack([rec], purpose="test", memory_domain="coding",
+                          budget_tokens=5)
+        # Whether included or omitted, the rendered_text must never contain forbidden key patterns
+        for field in _FORBIDDEN_OUTPUT_FIELDS - {"raw_prompt"}:  # raw_prompt can appear as text
+            self.assertNotIn(field, pkt["rendered_text"])
+
+    # 9. braincase_render_packet obeys budget for all retrieval modes
+    def test_braincase_render_packet_obeys_budget_list_mode(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            for i in range(5):
+                db.put_state_record(_make_simple_record(f"r{i}", claim="Z" * 300))
+            for budget_tokens in (5, 50, 200):
+                chars = render_budget_chars(budget_tokens)
+                pkt = braincase_render_packet(db, purpose="test",
+                                              memory_domain="coding",
+                                              budget_tokens=budget_tokens)
+                self.assertLessEqual(len(pkt["rendered_text"]), chars,
+                                     f"Budget violated at {budget_tokens} tokens")
+            db.close()
+
+    def test_braincase_render_packet_obeys_budget_query_mode(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            db.put_state_record(_make_simple_record("r_q", claim="unique_search_xyzzy " * 50))
+            chars = render_budget_chars(10)
+            pkt = braincase_render_packet(db, purpose="test",
+                                          memory_domain="coding",
+                                          query="unique_search_xyzzy",
+                                          budget_tokens=10)
+            self.assertLessEqual(len(pkt["rendered_text"]), chars)
+            db.close()
+
+    def test_braincase_render_packet_obeys_budget_record_ids_mode(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            db.put_state_record(_make_simple_record("r_id", claim="K" * 500))
+            chars = render_budget_chars(5)
+            pkt = braincase_render_packet(db, purpose="test",
+                                          memory_domain="coding",
+                                          record_ids=["r_id"],
+                                          budget_tokens=5)
+            self.assertLessEqual(len(pkt["rendered_text"]), chars)
+            db.close()
+
+
+# ---------------------------------------------------------------------------
+# render_record_line max_chars tests (Slice E.1)
+# ---------------------------------------------------------------------------
+
+class RenderRecordLineMaxCharsTests(unittest.TestCase):
+
+    def _rec(self, claim: str = "Test claim.", **kw) -> dict:
+        return _make_simple_record("r1", claim=claim, **kw)
+
+    def test_no_max_chars_returns_string(self):
+        result = render_record_line(self._rec())
+        self.assertIsInstance(result, str)
+
+    def test_generous_max_chars_returns_full_line(self):
+        rec = self._rec(claim="Short.")
+        result = render_record_line(rec, max_chars=500)
+        self.assertIsNotNone(result)
+        self.assertIn("Short.", result)
+
+    def test_tiny_max_chars_returns_none_when_minimal_cant_fit(self):
+        rec = self._rec()
+        # Max 1 char — even minimal form can't fit
+        result = render_record_line(rec, max_chars=1)
+        self.assertIsNone(result)
+
+    def test_max_chars_result_within_limit(self):
+        rec = self._rec(claim="A" * 500)
+        for limit in (50, 100, 200):
+            result = render_record_line(rec, max_chars=limit)
+            if result is not None:
+                self.assertLessEqual(len(result), limit,
+                                     f"render_record_line exceeded max_chars={limit}")
+
+    def test_truncated_result_preserves_record_id(self):
+        rec = _make_simple_record("my_unique_id", claim="B" * 500)
+        result = render_record_line(rec, max_chars=80)
+        if result is not None:
+            self.assertIn("my_unique_id", result)
 
 
 if __name__ == "__main__":

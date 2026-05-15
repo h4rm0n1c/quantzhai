@@ -504,8 +504,11 @@ Slice F:   NEXT — harness injection for memory tool-use policy
 
 Slice F scope:
 - Wire braincase_render_packet into the harness/prompt stack.
-- Define tool-use policy: when to use recall vs search vs inspect vs write.
-- Expose braincase.recall and braincase.render as model-visible tools (LLM tool plane).
+- Expose braincase.render as the first model-visible tool.
+- Define recall semantics BEFORE exposing braincase.recall:
+    what tiers are searched, what budget applies, whether it returns
+    RenderPackets only, and how it differs from a vague memory dump.
+  Do not expose recall as a broad unscoped dump — define semantics first.
 - Harness teaches when each tool should be called.
 - No automatic ingestion at any step.
 - visibility=renderable records become model-visible only through the render path.

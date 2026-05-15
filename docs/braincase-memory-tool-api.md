@@ -674,7 +674,8 @@ Functions:
   render_pack(records, *, purpose, memory_domain, budget_tokens, tiers, ...) -> dict
     Filters eligible records, ranks by importance desc / updated_at_ms desc,
     assembles bounded text, returns RenderPacket dict.
-    Always includes at least one record even if budget is tight.
+    Budget is hard: rendered_text is always <= render_budget_chars(budget_tokens).
+    Records that cannot fit (even truncated) are omitted; omitted_count incremented.
     Adds budget_exhausted warning and increments omitted_count when records skip.
   braincase_render_packet(db, *, purpose, memory_domain, query, tiers, record_ids, ...) -> dict
     Retrieves records from DB (by record_ids, query, or list), calls render_pack.

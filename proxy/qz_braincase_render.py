@@ -31,6 +31,10 @@ if TYPE_CHECKING:
 
 _SCHEMA = "braincase/render-packet@1"
 
+# Conservative estimate of footer length for budget accounting.
+# Actual footer will be shorter, so this keeps the budget check safe.
+_FOOTER_SIZE_ESTIMATE = len("[records=999 omitted=999]")
+
 # Forbidden raw-content field names that must never appear in rendered output.
 _FORBIDDEN_OUTPUT_FIELDS = frozenset({
     "raw_prompt",
@@ -83,13 +87,18 @@ def eligible_for_render(
     return True, None
 
 
-def render_record_line(record: dict) -> str:
+def render_record_line(record: dict, max_chars: int | None = None) -> str | None:
     """Format a single StateRecord for inclusion in rendered_text.
 
     Includes: tier/record_type classification, claim (truncated if long),
     summary (if present and fits), source record_id marker.
 
     Does NOT include: raw metadata JSON, forbidden raw fields, full SourceRef details.
+
+    If max_chars is supplied:
+      - The returned string will be <= max_chars characters.
+      - Returns None if even the minimal form (classification + Source line) cannot fit.
+      - Truncation omits or shortens claim/summary to fit within max_chars.
     """
     tier = record.get("tier", "unknown")
     record_type = record.get("record_type", "unknown")
@@ -97,10 +106,16 @@ def render_record_line(record: dict) -> str:
     summary = str(record.get("summary") or "")
     record_id = str(record.get("record_id") or "")
 
-    # Truncate long claims
+    # Minimal form: only classification header and source marker (no claim/summary).
+    minimal = f"[{tier}/{record_type}]\n   Source: {record_id}"
+
+    if max_chars is not None and len(minimal) > max_chars:
+        # Even the minimal form cannot fit — signal that this record must be omitted.
+        return None
+
+    # Apply default upper bounds before considering max_chars.
     if len(claim) > 200:
         claim = claim[:197] + "..."
-    # Truncate long summaries
     if len(summary) > 150:
         summary = summary[:147] + "..."
 
@@ -108,7 +123,29 @@ def render_record_line(record: dict) -> str:
     if summary and summary != claim:
         parts.append(f"   Summary: {summary}")
     parts.append(f"   Source: {record_id}")
-    return "\n".join(parts)
+    result = "\n".join(parts)
+
+    if max_chars is None or len(result) <= max_chars:
+        return result
+
+    # Hard truncation path: progressively simplify to fit within max_chars.
+    # 1. Try without summary.
+    no_sum = f"[{tier}/{record_type}] {claim}\n   Source: {record_id}"
+    if len(no_sum) <= max_chars:
+        return no_sum
+
+    # 2. Truncate the claim to what fits alongside classification and Source line.
+    source_line = f"\n   Source: {record_id}"
+    header_prefix = f"[{tier}/{record_type}] "
+    available_for_claim = max_chars - len(header_prefix) - len(source_line)
+    if available_for_claim <= 0:
+        # Claim can't fit at all — return minimal form (already verified fits above).
+        return minimal
+    if available_for_claim <= 3:
+        clamped_claim = "..."[:available_for_claim]
+    else:
+        clamped_claim = claim[:available_for_claim - 3] + "..."
+    return f"{header_prefix}{clamped_claim}{source_line}"
 
 
 # ---------------------------------------------------------------------------
@@ -157,38 +194,86 @@ def render_pack(
         )
     )
 
-    # 3. Build rendered text within budget
+    # 3. Build rendered text within a hard budget.
+    #
+    # Budget accounting uses current_base (what is built so far) plus a
+    # conservative footer size estimate. This ensures the final rendered_text
+    # never exceeds chars_budget regardless of which records are included.
+    #
+    # For each eligible record:
+    #   a. Compute how many chars the numbered item line may use.
+    #   b. Try the full render_record_line first.
+    #   c. If too long, try render_record_line(rec, max_chars=...) to truncate.
+    #   d. If even the minimal form cannot fit, omit the record.
+    #
+    # No record is ever forcibly included at the expense of exceeding the budget.
     header = f"== BrainCase Memory Packet: {purpose} ({memory_domain}) =="
     body_parts: list[str] = []
     source_ids: list[str] = []
     omitted = 0
     warnings: list[str] = []
-
-    # Reserve overhead for header, blank line, and footer estimate
-    footer_est = len("[records=99 omitted=99]")
-    overhead = len(header) + 1 + footer_est + 4
-    body_budget = max(0, chars_budget - overhead)
-    body_used = 0
     item_num = 0
 
     for rec in eligible:
-        item_text = render_record_line(rec)
-        numbered = f"{item_num + 1}. {item_text}\n"
-        # Always include at least one record even if it marginally exceeds budget.
-        if body_used + len(numbered) > body_budget and item_num > 0:
+        prefix = f"{item_num + 1}. "
+
+        # Chars consumed by everything built so far (header + blank + body so far).
+        # "\n".join([header, ""] + body_parts) gives one "\n" between each element.
+        current_base_len = len("\n".join([header, ""] + body_parts))
+
+        # After adding this item the total will be:
+        #   current_base + "\n" + prefix+line + "\n" + "" + "\n" + footer
+        #   = current_base_len + 1 + len(prefix+line) + 1 + 0 + 1 + footer_len
+        #   = current_base_len + 3 + len(prefix+line) + footer_len
+        # => len(prefix+line) <= chars_budget - current_base_len - 3 - _FOOTER_SIZE_ESTIMATE
+        max_item_chars = chars_budget - current_base_len - 3 - _FOOTER_SIZE_ESTIMATE
+
+        if max_item_chars <= len(prefix):
+            # Not enough room even for the numbering prefix.
             omitted += 1
             if "budget_exhausted" not in warnings:
                 warnings.append("budget_exhausted")
             continue
+
+        max_line_chars = max_item_chars - len(prefix)
+
+        # Try full rendering first (no truncation).
+        full_line = render_record_line(rec)
+        assert full_line is not None  # no max_chars means it always returns a string
+        if len(full_line) <= max_line_chars:
+            item_num += 1
+            body_parts.append(prefix + full_line)
+            body_parts.append("")
+            source_ids.append(rec["record_id"])
+            continue
+
+        # Full line doesn't fit — try truncated rendering.
+        truncated_line = render_record_line(rec, max_chars=max_line_chars)
+        if truncated_line is None:
+            # Even minimal form cannot fit within remaining budget.
+            omitted += 1
+            if "budget_exhausted" not in warnings:
+                warnings.append("budget_exhausted")
+            continue
+
+        # Truncated line fits.
         item_num += 1
-        body_parts.append(f"{item_num}. {item_text}")
+        body_parts.append(prefix + truncated_line)
         body_parts.append("")
         source_ids.append(rec["record_id"])
-        body_used += len(numbered)
+        if "record_truncated" not in warnings:
+            warnings.append("record_truncated")
 
     footer = f"[records={item_num} omitted={omitted}]"
     all_parts = [header, ""] + body_parts + [footer]
     rendered_text = "\n".join(all_parts)
+
+    # Final hard clamp: if header+footer overhead alone exceeded the budget
+    # (e.g. very long purpose string with a tiny budget), clamp the output.
+    if len(rendered_text) > chars_budget:
+        rendered_text = rendered_text[:max(0, chars_budget - 3)] + "..." if chars_budget >= 3 else "..."
+        if "budget_clamped" not in warnings:
+            warnings.append("budget_clamped")
 
     return {
         "packet_id": pid,

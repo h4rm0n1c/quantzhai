@@ -293,10 +293,12 @@ Read first:
 - proxy/qz_braincase_db.py               (storage layer)
 - AGENTS.md BrainCase Memory Tool Plane Doctrine
 
-Slice F goal: wire render/write into harness and expose memory tool plane.
+Slice F goal: wire render into harness; expose minimal safe tool surface.
 - Add memory tool-use policy to harness/prompt stack.
-- Expose braincase.recall and braincase.render as LLM-visible tools.
-- Teach LLM when to use each tool (recall vs search vs write vs render).
+- Expose braincase.render as first LLM-visible tool.
+- Define braincase.recall semantics (tier routing, budget, RenderPacket output)
+  before exposing it — do not expose as a vague broad memory dump.
+- Teach LLM when to use each tool (search vs render vs write).
 - visibility=renderable records become model-visible only through render path.
 - No automatic ingestion at any step.
 ```

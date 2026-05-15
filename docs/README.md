@@ -135,7 +135,7 @@ docs/progress-snapshot.md
 Current next engineering target:
 
 ```text
-P1 BrainCase — Slice F: harness/tool exposure (braincase.recall + braincase.render).
+P1 BrainCase — Slice F: harness/tool exposure (braincase.render first; recall semantics must be defined before exposure).
 Slices A–E (and C.1, D.1) complete: schemas/fixtures; BrainCaseDB v3; search/inspect/FTS5;
 FTS reindex; write/update helpers; internal render packet builder.
 See docs/braincase-memory-tool-api.md for the full slice plan.
