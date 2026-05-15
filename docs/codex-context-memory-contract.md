@@ -629,10 +629,9 @@ preferences, profile-private memory, HSM memory, or promotion.
 Slice 1 status:
 
 ```text
-proxy/qz_operational_db.py exists as the optional/non-fatal SQLite substrate
-skeleton.
-The module name keeps "operational" for now; in this context it means
-non-model-visible storage plumbing, not an event warehouse.
+proxy/qz_braincase_db.py exists as the optional/non-fatal SQLite state/memory
+storage substrate skeleton. BrainCaseDB is the low-level storage case — not
+a policy layer. It stores parser-boundary identity/scoping facts.
 QZ_STATE_DB_ENABLED defaults to disabled.
 QZ_STATE_DB_PATH defaults to var/qz-state.sqlite3 when enabled.
 Schema version metadata and PRAGMA user_version are initialized.

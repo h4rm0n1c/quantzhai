@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Optional SQLite storage substrate for QuantZhai state/memory experiments.
+"""Optional SQLite state/memory storage substrate for QuantZhai experiments.
 
-Slice 1 only owns DB availability and schema metadata. "Operational" here means
-non-model-visible storage plumbing for future parser-boundary scoping facts. It
-is not a runtime telemetry warehouse, recovery-state store, config authority, or
-memory_domain registry.
+BrainCaseDB is the low-level storage case — not a policy layer.
+Slice 1 only owns DB availability and schema metadata. It stores
+parser-boundary identity/scoping facts. It is not a runtime telemetry
+warehouse, recovery-state store, config authority, or memory_domain registry.
+
+memory_domain definitions remain config-owned. BrainCaseDB may record which
+configured memory_domain applied to a stored fact, but it must not infer,
+create, normalize, or grant memory domains.
 """
 from __future__ import annotations
 
@@ -14,7 +18,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-QZ_OPERATIONAL_DB_SCHEMA_VERSION = 1
+QZ_BRAINCASE_DB_SCHEMA_VERSION = 1
 QZ_STATE_DB_ENABLED_ENV = "QZ_STATE_DB_ENABLED"
 QZ_STATE_DB_PATH_ENV = "QZ_STATE_DB_PATH"
 
@@ -32,8 +36,8 @@ def _env_enabled(value: str | None) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
-class OperationalDB:
-    """Small non-fatal wrapper around the optional SQLite storage substrate."""
+class BrainCaseDB:
+    """Small non-fatal wrapper around the optional SQLite state/memory storage substrate."""
 
     def __init__(self, path: str | Path | None = None, enabled: bool = False):
         self.path = Path(path) if path is not None else default_db_path()
@@ -43,7 +47,7 @@ class OperationalDB:
         self._conn: sqlite3.Connection | None = None
 
     @classmethod
-    def from_env(cls, env: dict[str, str] | None = None) -> "OperationalDB":
+    def from_env(cls, env: dict[str, str] | None = None) -> "BrainCaseDB":
         source = os.environ if env is None else env
         path = source.get(QZ_STATE_DB_PATH_ENV)
         enabled = _env_enabled(source.get(QZ_STATE_DB_ENABLED_ENV))
@@ -123,7 +127,7 @@ class OperationalDB:
     def _initialize_schema(self) -> None:
         assert self._conn is not None
         now_ms = int(time.time() * 1000)
-        self._conn.execute(f"PRAGMA user_version = {QZ_OPERATIONAL_DB_SCHEMA_VERSION}")
+        self._conn.execute(f"PRAGMA user_version = {QZ_BRAINCASE_DB_SCHEMA_VERSION}")
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS qz_schema_metadata (
@@ -141,7 +145,7 @@ class OperationalDB:
                 value = excluded.value,
                 updated_at_ms = excluded.updated_at_ms
             """,
-            (str(QZ_OPERATIONAL_DB_SCHEMA_VERSION), now_ms),
+            (str(QZ_BRAINCASE_DB_SCHEMA_VERSION), now_ms),
         )
         self._conn.commit()
 

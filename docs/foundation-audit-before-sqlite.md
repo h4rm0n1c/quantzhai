@@ -335,7 +335,7 @@ state first and do not implement a generic signal framework first.
 The #2 first implementation slice is safe if it touches only:
 
 ```text
-proxy/qz_state_db.py or proxy/qz_operational_db.py
+proxy/qz_braincase_db.py
 request-router integration immediately after extract_codex_request_context()
 small tests proving optional/non-fatal DB writes and parser-boundary storage
 docs describing DB scope

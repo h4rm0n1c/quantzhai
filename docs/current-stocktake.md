@@ -280,7 +280,7 @@ Read first:
 - docs/current-architecture-authority.md
 - docs/codex-context-memory-contract.md
 - docs/current-task-hierarchy.md
-- proxy/qz_operational_db.py
+- proxy/qz_braincase_db.py
 - proxy/qz_codex_metadata.py
 
 Goal: optional/non-fatal SQLite storage for parser-derived identity/scoping facts.

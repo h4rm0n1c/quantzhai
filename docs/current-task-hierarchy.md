@@ -135,10 +135,10 @@ identity/scoping facts without changing model-visible behaviour.
 Current slice status:
 
 ```text
-Slice 1 landed: optional/non-fatal SQLite storage substrate skeleton only.
-Module: proxy/qz_operational_db.py
-Name note: "operational" here means non-model-visible storage plumbing, not a
-runtime telemetry warehouse.
+Slice 1 landed: optional/non-fatal SQLite state/memory storage substrate skeleton only.
+Module: proxy/qz_braincase_db.py
+BrainCaseDB is the low-level storage case — not a policy layer.
+It stores parser-boundary identity/scoping facts, not runtime telemetry.
 Env: QZ_STATE_DB_ENABLED, QZ_STATE_DB_PATH
 Default: disabled; enabling is explicit via QZ_STATE_DB_ENABLED.
 Schema: version metadata only, PRAGMA user_version = 1.
@@ -169,7 +169,7 @@ SQLite must not infer or create domains.
 Substrate file:
 
 ```text
-proxy/qz_operational_db.py
+proxy/qz_braincase_db.py
 ```
 
 Likely tests:
@@ -427,7 +427,7 @@ Read first:
 - docs/codex-context-memory-contract.md
 - docs/model-state-signal-contract.md
 - docs/current-task-hierarchy.md
-- proxy/qz_operational_db.py
+- proxy/qz_braincase_db.py
 - proxy/qz_codex_metadata.py
 
 Goal:

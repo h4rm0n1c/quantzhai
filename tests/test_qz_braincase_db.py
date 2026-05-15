@@ -4,19 +4,19 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from proxy.qz_operational_db import (
-    OperationalDB,
-    QZ_OPERATIONAL_DB_SCHEMA_VERSION,
+from proxy.qz_braincase_db import (
+    BrainCaseDB,
+    QZ_BRAINCASE_DB_SCHEMA_VERSION,
     QZ_STATE_DB_ENABLED_ENV,
     QZ_STATE_DB_PATH_ENV,
 )
 
 
-class OperationalDBTests(unittest.TestCase):
+class BrainCaseDBTests(unittest.TestCase):
     def test_disabled_mode_does_not_open_or_create_db(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = Path(td) / "state.sqlite3"
-            db = OperationalDB(path=db_path, enabled=False)
+            db = BrainCaseDB(path=db_path, enabled=False)
 
             self.assertFalse(db.init())
 
@@ -29,7 +29,7 @@ class OperationalDBTests(unittest.TestCase):
             env = {
                 "QZ_ROOT": td,
             }
-            db = OperationalDB.from_env(env)
+            db = BrainCaseDB.from_env(env)
 
             self.assertFalse(db.enabled)
             self.assertEqual(db.path, Path(td) / "var" / "qz-state.sqlite3")
@@ -38,7 +38,7 @@ class OperationalDBTests(unittest.TestCase):
     def test_enabled_tmpdir_path_creates_db(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = Path(td) / "nested" / "state.sqlite3"
-            db = OperationalDB(path=db_path, enabled=True)
+            db = BrainCaseDB(path=db_path, enabled=True)
 
             self.assertTrue(db.init())
 
@@ -54,14 +54,14 @@ class OperationalDBTests(unittest.TestCase):
                 QZ_STATE_DB_PATH_ENV: str(db_path),
             }
 
-            db = OperationalDB.from_env(env)
+            db = BrainCaseDB.from_env(env)
 
             self.assertTrue(db.enabled)
             self.assertEqual(db.path, db_path)
 
     def test_init_is_idempotent(self):
         with tempfile.TemporaryDirectory() as td:
-            db = OperationalDB(path=Path(td) / "state.sqlite3", enabled=True)
+            db = BrainCaseDB(path=Path(td) / "state.sqlite3", enabled=True)
 
             self.assertTrue(db.init())
             self.assertTrue(db.init())
@@ -73,7 +73,7 @@ class OperationalDBTests(unittest.TestCase):
     def test_schema_version_and_metadata_are_set(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = Path(td) / "state.sqlite3"
-            db = OperationalDB(path=db_path, enabled=True)
+            db = BrainCaseDB(path=db_path, enabled=True)
 
             self.assertTrue(db.init())
             db.close()
@@ -87,13 +87,13 @@ class OperationalDBTests(unittest.TestCase):
             finally:
                 conn.close()
 
-            self.assertEqual(user_version, QZ_OPERATIONAL_DB_SCHEMA_VERSION)
-            self.assertEqual(metadata_value, str(QZ_OPERATIONAL_DB_SCHEMA_VERSION))
+            self.assertEqual(user_version, QZ_BRAINCASE_DB_SCHEMA_VERSION)
+            self.assertEqual(metadata_value, str(QZ_BRAINCASE_DB_SCHEMA_VERSION))
 
     def test_health_reports_state(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = Path(td) / "state.sqlite3"
-            db = OperationalDB(path=db_path, enabled=True)
+            db = BrainCaseDB(path=db_path, enabled=True)
 
             self.assertTrue(db.init())
             health = db.health()
@@ -104,7 +104,7 @@ class OperationalDBTests(unittest.TestCase):
                     "enabled": True,
                     "path": str(db_path),
                     "available": True,
-                    "schema_version": QZ_OPERATIONAL_DB_SCHEMA_VERSION,
+                    "schema_version": QZ_BRAINCASE_DB_SCHEMA_VERSION,
                     "last_error": None,
                 },
             )
@@ -112,7 +112,7 @@ class OperationalDBTests(unittest.TestCase):
 
     def test_close_is_idempotent(self):
         with tempfile.TemporaryDirectory() as td:
-            db = OperationalDB(path=Path(td) / "state.sqlite3", enabled=True)
+            db = BrainCaseDB(path=Path(td) / "state.sqlite3", enabled=True)
             self.assertTrue(db.init())
 
             db.close()
@@ -125,7 +125,7 @@ class OperationalDBTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             db_path = Path(td) / "state.sqlite3"
             os.mkdir(db_path)
-            db = OperationalDB(path=db_path, enabled=True)
+            db = BrainCaseDB(path=db_path, enabled=True)
 
             self.assertFalse(db.init())
 
@@ -134,7 +134,7 @@ class OperationalDBTests(unittest.TestCase):
 
     def test_write_wrapper_catches_sqlite_errors(self):
         with tempfile.TemporaryDirectory() as td:
-            db = OperationalDB(path=Path(td) / "state.sqlite3", enabled=True)
+            db = BrainCaseDB(path=Path(td) / "state.sqlite3", enabled=True)
             self.assertTrue(db.init())
 
             self.assertFalse(db.execute_write("INSERT INTO missing_table VALUES (?)", ("x",)))
@@ -145,7 +145,7 @@ class OperationalDBTests(unittest.TestCase):
     def test_write_wrapper_noops_when_disabled(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = Path(td) / "state.sqlite3"
-            db = OperationalDB(path=db_path, enabled=False)
+            db = BrainCaseDB(path=db_path, enabled=False)
 
             self.assertFalse(db.execute_write("CREATE TABLE should_not_exist(value TEXT)"))
 
