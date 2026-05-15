@@ -1,7 +1,7 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-15
-Status: active control sheet — post-VRAM/recovery stabilisation.
+Status: active control sheet — post-VRAM/recovery/stream-watchdog stabilisation.
 
 See `docs/current-stocktake.md` for the full point-in-time state summary.
 
@@ -42,6 +42,20 @@ Backend control-plane and recovery (#44, #47-#50, #45, now closed)
   - recovery_state.py: in-memory backoff/attempt counts (to be SQLite later)
   - #51 opened: SQLite persistence of recovery state (blocked by #2)
   - Legacy catalog fallback removed (#45)
+
+Stream watchdog and signal planning (#40, #42, now closed)
+  - qz_stream_terminal.py classifies stream terminal outcomes
+  - qz_stream_watchdog.py detects no-output and terminal-after-output timeouts
+  - qz-thoughts renders non-ok stream_terminal_classified rows
+  - qz_feedback.py exists for bounded future signal adoption
+  - Runtime signal migration is deferred until after #2 unless a concrete bug
+    requires touching that path
+
+Foundation audit before SQLite
+  - docs/foundation-audit-before-sqlite.md maps gravity wells, signal paths,
+    duplicated/underused signals, Codex feedback gaps, and #2 prerequisites
+  - #2 may start as parser-boundary SQLite only; do not turn it into a broad
+    runtime signal store or model-visible memory path
 ```
 
 ## Recently completed (2026-05-14 run — profiles/sandbox/smoke)
@@ -81,7 +95,8 @@ Live stack smoke test (#35/PR#36)
 ```text
 authority/docs cleanup (ongoing)
   -> [DONE] explicit memory_domain config plumbing
-    -> optional/non-fatal Phase 1 SQLite operational substrate  ← current P1
+    -> [DONE] stream watchdog and foundation audit before SQLite
+      -> optional/non-fatal Phase 1 SQLite operational substrate  ← current P1
       -> same-scope operational signals, starting with repeated-read v1/v2
         -> rendered state packets / LimbiCore recall later
 ```
@@ -124,6 +139,7 @@ Parser-boundary only.
 Consume extract_codex_request_context().
 Store structured facts and summaries, not giant raw request bodies.
 DB write failure logs/telemeters but does not break proxy responses.
+Follow docs/foundation-audit-before-sqlite.md.
 ```
 
 Likely new file:
@@ -181,7 +197,8 @@ test_db_failure_does_not_break_proxy_request
 Blocked by:
 
 ```text
-Nothing. memory_domain plumbing is done. This is the current P1.
+Nothing in runtime code. memory_domain plumbing, #40, #42, and the foundation
+audit are done. This is the current P1, constrained to parser-boundary facts.
 ```
 
 Best resource:
@@ -322,13 +339,15 @@ Codex/Claude, after tests are strong.
 
 ## P5: Observability polish — VRAM DONE; remaining items
 
-VRAM telemetry (#6) is closed. The panel is live and provenance-labelled.
-See docs/patterns/provenance-telemetry.md for doctrine.
+VRAM telemetry (#6) and the stream/compaction hang watchdog (#40) are closed.
+The VRAM panel is live and provenance-labelled. Stream terminal/no-output
+classifications are live. See docs/patterns/provenance-telemetry.md for
+telemetry doctrine and docs/runtime-observability-notes.md for stream/VRAM
+runtime notes.
 
 Remaining observability work:
 
 ```text
-#40  compaction/stream hang watchdog (PROMOTED to top of recommended order)
 #52  backend allocator metrics (upstream-blocked; QuantZhai already wired)
 first-status correctness tests
 long-running TUI validation
@@ -339,7 +358,6 @@ fixed profile-eval prompt set in benchmark harness
 Blocked by:
 
 ```text
-#40: not blocked. Implement any time.
 #52: blocked by TurboQuant emitting allocator metrics; no QuantZhai action.
 ```
 
@@ -380,6 +398,7 @@ cross-domain isolation tests
 Implement the Phase 1 SQLite operational substrate for QuantZhai.
 
 Read first:
+- docs/foundation-audit-before-sqlite.md
 - docs/current-architecture-authority.md
 - docs/codex-context-memory-contract.md
 - docs/model-state-signal-contract.md
@@ -394,6 +413,7 @@ Goal:
 - store structured metadata/digests/summaries, not giant raw request bodies
 - DB open/write failures must not break proxy request handling
 - do not change model-visible behaviour
+- do not persist broad runtime signal history in the first slice
 - do not implement learned preferences, durable memory, profile-private memory,
   HSM/archive memory, promotion, recall, renderers, or repeated-read v2
 

@@ -1,7 +1,7 @@
 # QuantZhai Post-Stabilisation Stocktake
 
 Date: 2026-05-15
-Status: post-VRAM/recovery stabilisation stocktake.
+Status: post-VRAM/recovery/stream-watchdog stabilisation stocktake.
 
 This document is a point-in-time snapshot for agents picking up after the
 2026-05-15 stabilisation run. For the live execution order, read
@@ -14,13 +14,15 @@ This document is a point-in-time snapshot for agents picking up after the
 
 The local Codex + Qwen stack is usable, observable, and has a working recovery
 system. VRAM telemetry is live in qz-top with provenance labels. The state
-substrate (SQLite) has not been implemented.
+substrate (SQLite) has not been implemented. A foundation audit now constrains
+#2 to parser-boundary operational facts and defers runtime signal unification.
 
 ```text
 Full test suite:     1442 tests passing
 Live smoke:          qz-live-smoke passes
 Recovery system:     full trigger/plan/backoff/async-job API operational
 VRAM panel (qz-top): live, provenance-labelled, calibrated
+Stream watchdog:     terminal/no-output classifications operational
 Docs doctrine:       docs/patterns/provenance-telemetry.md active
 Agent rules:         AGENTS.md includes telemetry doctrine
 ```
@@ -39,6 +41,9 @@ Agent rules:         AGENTS.md includes telemetry doctrine
 | #48 start_backend trigger | Closed. Non-destructive; skips if already running. |
 | #49 select_model trigger | Closed. All 6 recovery actions now implemented. |
 | #50 Async recovery job model | Closed. reload_selected_model supports async=true; job state in RecoveryJobStore. |
+| #40 Stream/compaction hang watchdog | Closed. Stream terminal classifications and watchdog fallbacks live. |
+| #42 Signal/feedback subsystem | Closed as design/mapping/core wrapper work; runtime signal migration deferred. |
+| Foundation audit before SQLite | New. `docs/foundation-audit-before-sqlite.md` is the pre-#2 signal/data-path audit. |
 | #45 Remove legacy catalog fallback | Closed. Proxy is sole model catalog path. |
 | docs/patterns/provenance-telemetry.md | New. Confidence vocabulary, arithmetic rule, anti-patterns, VRAM example. |
 | #52 Backend VRAM metrics follow-up | Opened. Upstream-blocked; QuantZhai side already wired. |
@@ -61,8 +66,7 @@ Agent rules:         AGENTS.md includes telemetry doctrine
 
 | # | Title | Classification |
 |---|---|---|
-| #40 | Add compaction/stream hang watchdog and recovery seam | **next-actionable** |
-| #2 | Add optional Phase 1 SQLite operational substrate | **next-actionable** (foundational) |
+| #2 | Add optional Phase 1 SQLite operational substrate | **next-actionable** (foundational, constrained by audit) |
 | #51 | Promote recovery/backoff runtime state to SQLite | **blocked-by-#2** |
 | #46 | Replace qz-write-runtime-state launcher trace | **blocked-by-#2** (or startup-telemetry) |
 | #37 | Architectural seam extraction plan | **architectural/refactor** (small targeted seams only) |
@@ -74,12 +78,10 @@ Agent rules:         AGENTS.md includes telemetry doctrine
 
 ### Notes on each
 
-**#40** — Prevents users being stuck in Working.../compacting hangs indefinitely.
-Directly actionable. No hard dependency on SQLite. Should come before or alongside #2.
-
 **#2** — The foundational next state work. Unblocked since memory_domain plumbing
-landed. Scope is narrow: optional/non-fatal, parser-boundary only, no model-visible
-memory. Unlocks #51 and #46.
+landed and the foundation audit completed. Scope is narrow: optional/non-fatal,
+parser-boundary only, no model-visible memory, and no broad runtime signal
+persistence in the first slice. Unlocks #51 and #46.
 
 **#51** — Recovery backoff state is currently in-memory only. Should be persisted
 once #2 exists. Do not implement before #2.
@@ -91,8 +93,8 @@ Removal blocked until a startup-telemetry or SQLite replacement path exists.
 rewrite. Extract small targeted seams when touching relevant modules. Never
 rewrite behaviour purely for structure.
 
-**#5** — Config/var cleanup is ongoing and never fully done. Do not preempt #2 or
-#40 for it.
+**#5** — Config/var cleanup is ongoing and never fully done. Do not preempt #2
+for it.
 
 **#39** — Useful when search work resumes. Not urgent.
 
@@ -109,10 +111,6 @@ now track. Keep as historical planning record; do not implement from it directly
 ## 4. Dependency map
 
 ```
-#40 compaction watchdog              → no hard dependencies; do any time
-  \
-   -> improves Codex reliability independently of state work
-
 #2 Phase 1 SQLite                   → no hard dependencies; unblocked
   \
    -> #51 recovery state persistence
@@ -121,7 +119,7 @@ now track. Keep as historical planning record; do not implement from it directly
    -> #P6 LimbiCore rendered state packets (much later)
 
 #37 seam extraction                 → guide it from active work, not upfront
-#5  config cleanup                  → incremental; do not preempt #2/#40
+#5  config cleanup                  → incremental; do not preempt #2
 #39 search config split             → when search work resumes
 #52 backend allocator metrics       → upstream-blocked; no action needed now
 #8  compaction RFC                  → research; no implementation dependency
@@ -132,33 +130,30 @@ now track. Keep as historical planning record; do not implement from it directly
 ## 5. Recommended next work order
 
 ```
-A. #40  Compaction/stream hang watchdog
-        User-visible reliability. Prevents infinite client stuck states.
-        No hard blockers. Implement before or alongside #2.
-
-B. #2   Phase 1 SQLite substrate
+A. #2   Phase 1 SQLite substrate
         Foundational. Unblocked. Unlocks #51 and #46.
         Scope is narrow: sessions/turns/requests/workspace_candidates/
         resolved_workspaces/session_workspace_bindings/identity_conflicts.
-        Optional/non-fatal. No model-visible memory.
+        Optional/non-fatal. No model-visible memory. Follow
+        docs/foundation-audit-before-sqlite.md.
 
-C. #51  Recovery/backoff state persistence
+B. #51  Recovery/backoff state persistence
         Direct follow-up to #47+#2. Implement after #2 exists.
 
-D. #46  Remove qz-write-runtime-state
+C. #46  Remove qz-write-runtime-state
         Clean once startup telemetry or #2 replacement is established.
 
-E. #37  Seam extraction (incremental slices only)
-        Extract seams when touching relevant modules for A-D above.
+D. #37  Seam extraction (incremental slices only)
+        Extract seams when touching relevant modules above.
         Do not do a grand rewrite.
 
-F. #5   Config/var/script cleanup
+E. #5   Config/var/script cleanup
         Ongoing. Do not preempt the state spine.
 
-G. #39  Search config split
+F. #39  Search config split
         When search work resumes.
 
-H. #52  Backend allocator metrics
+G. #52  Backend allocator metrics
         Upstream-blocked. No action needed in QuantZhai.
 ```
 
@@ -206,6 +201,13 @@ VRAM telemetry (#6)
 
 Legacy catalog fallback removal (#45)
   → Proxy is sole model catalog path.
+
+Stream/compaction hang watchdog (#40)
+  → Closed. Stream terminal classifier/watchdog fallbacks live.
+
+Signal/feedback subsystem design (#42)
+  → Closed. Use qz_feedback for future bounded adoption, but do not migrate
+    stream/runtime signals before #2.
 ```
 
 ---
@@ -218,6 +220,7 @@ Legacy catalog fallback removal (#45)
 | VRAM component semantics | `docs/runtime-observability-notes.md` | qz.vram.snapshot.v1 |
 | Recovery semantics | `docs/backend-service-recovery-semantics.md` | Recovery triggers, backoff, jobs |
 | Memory/state scope | `docs/codex-context-memory-contract.md` | SQLite, memory_domain, workspace |
+| Foundation audit | `docs/foundation-audit-before-sqlite.md` | Pre-#2 gravity wells, signal paths, feedback gaps |
 | Agent behaviour rules | `AGENTS.md` | All agents working in the repo |
 | Architecture authority | `docs/current-architecture-authority.md` | Supersedes older planning docs |
 
@@ -244,6 +247,7 @@ Legacy catalog fallback removal (#45)
 | `docs/runtime-observability-notes.md` | VRAM component semantics, qz-top |
 | `docs/backend-service-recovery-semantics.md` | Recovery taxonomy and status |
 | `docs/responses-stream-tool-state-contract.md` | Streaming event/tool lifecycle |
+| `docs/foundation-audit-before-sqlite.md` | Pre-#2 gravity wells, signal paths, feedback gaps |
 | `proxy/qz_codex_metadata.py` (+ tests) | Parser boundary implementation |
 | `AGENTS.md` | Agent rules |
 
@@ -261,27 +265,13 @@ Legacy catalog fallback removal (#45)
 
 ## 10. Suggested next agent prompts
 
-### Prompt A: Compaction watchdog (#40)
-
-```text
-Implement the compaction/stream hang watchdog seam described in #40.
-
-Read first:
-- docs/current-task-hierarchy.md
-- docs/responses-stream-tool-state-contract.md
-- #40 issue body
-
-Goal: prevent clients from hanging indefinitely in Working.../compacting states.
-Add a timeout mechanism or terminal-state guarantee for compaction/stream handoff.
-Do not change the compaction algorithm itself.
-```
-
-### Prompt B: Phase 1 SQLite (#2)
+### Prompt A: Phase 1 SQLite (#2)
 
 ```text
 Implement the Phase 1 SQLite operational substrate described in #2.
 
 Read first:
+- docs/foundation-audit-before-sqlite.md
 - docs/current-architecture-authority.md
 - docs/codex-context-memory-contract.md
 - docs/current-task-hierarchy.md
@@ -291,10 +281,11 @@ Goal: optional/non-fatal SQLite storage for parser-derived operational facts.
 Store sessions, turns, requests, workspace candidates, resolved workspaces,
 session_workspace_bindings, identity_conflicts.
 DB failure must not break proxy request handling.
-Do not implement model-visible memory or change forwarded request bodies.
+Do not implement model-visible memory, broad runtime signal history, or change
+forwarded request bodies.
 ```
 
-### Prompt C: Recovery state persistence (#51, after #2)
+### Prompt B: Recovery state persistence (#51, after #2)
 
 ```text
 Promote #47 in-memory recovery/backoff state to Phase 1 SQLite.

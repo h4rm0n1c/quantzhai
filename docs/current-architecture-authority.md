@@ -1,8 +1,9 @@
 # Current Architecture Authority Map
 
-Date: 2026-05-12
+Date: 2026-05-15
 
-Status: current source-of-truth map before Phase 1 SQLite work.
+Status: current source-of-truth map before Phase 1 SQLite work, updated after
+the foundation audit.
 
 This document does not replace the detailed planning documents. It tells agents
 which documents are authoritative now, which documents are historical inputs,
@@ -22,6 +23,7 @@ Use these documents for current implementation decisions:
 | Parser boundary | `proxy/qz_codex_metadata.py` and its tests |
 | Request-body ownership / no internal qz metadata injection | `tests/test_qz_request_mutation_regression.py` and commit `0d7ae3b7dd2869cf9c9819464c4cceeb4adddbd1` |
 | Responses stream/tool lifecycle | `docs/responses-stream-tool-state-contract.md` |
+| Pre-#2 gravity wells, signal paths, and feedback-routing audit | `docs/foundation-audit-before-sqlite.md` |
 | Current stabilisation order | `docs/master-stabilisation-plan.md`, with this map and the Codex contract taking precedence for state/memory terms |
 | Repeated-read v2 scope policy | `docs/codex-context-memory-contract.md` plus `docs/repeated-read-dedup-plan.md`; if stale terms conflict, use `memory_domain` + `workspace_id` from the Codex context contract |
 
@@ -184,11 +186,13 @@ forwarded qz_* request-body metadata injection
 Recommended next implementation step:
 
 ```text
-Phase 1 SQLite substrate, optional/non-fatal, parser-boundary only.
+Phase 1 SQLite substrate, optional/non-fatal, parser-boundary only, constrained
+by docs/foundation-audit-before-sqlite.md.
 ```
 
 The DB should consume `extract_codex_request_context()` internally. It should not
-modify the forwarded request body.
+modify the forwarded request body, persist broad runtime signal history in the
+first slice, or create any model-visible memory path.
 
 ---
 
@@ -197,6 +201,7 @@ modify the forwarded request body.
 Before handing implementation to an agent, verify:
 
 ```text
+read docs/foundation-audit-before-sqlite.md
 python3 -m pytest tests/test_qz_codex_metadata.py
 python3 -m pytest tests/test_qz_codex_request_metadata.py
 python3 -m pytest tests/test_qz_request_mutation_regression.py

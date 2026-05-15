@@ -11,6 +11,7 @@ Read these first for current implementation authority:
 3. [Current stocktake](current-stocktake.md) — point-in-time state summary, open issue classification, recommended next order
 4. [Codex context and memory contract](codex-context-memory-contract.md)
 5. [Model state signal contract](model-state-signal-contract.md)
+6. [Foundation audit before SQLite](foundation-audit-before-sqlite.md) — pre-#2 gravity-well, signal-path, and feedback-routing audit
 
 The authority map tells agents which documents are current, which documents are historical inputs, and which stale assumptions must not be used for new work. The task hierarchy turns that authority map into the current execution order. The stocktake gives a quick "where are we now" for agents starting fresh.
 
@@ -40,11 +41,12 @@ No clever memory, active memory tools, learned preferences, roleplay memory, HSM
 9. [Master stabilisation plan](master-stabilisation-plan.md) — broader stabilisation map; current authority and task hierarchy win for state/memory terms.
 10. [Progress snapshot](progress-snapshot.md) — short overall percentage/status view.
 11. [Codex/QuantZhai bidirectional signal map](codex-quantzhai-bidirectional-signal-map.md) — complete source-grounded map of signals in all directions, safety matrix, gaps, and next targets.
-12. [Repeated-read signal plan](repeated-read-dedup-plan.md) — approved v1 plan for advisory repeated file-read signals.
-12. [Benchmark findings: effort tuning](benchmark-findings-effort-tuning.md) — measured profile/tool-use behaviour and open questions.
-13. [Edge case and config contract plan](edge-case-config-contract-plan.md) — audit/refactor plan for config layout, compact errors, profile safety, and script sprawl.
-14. [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) — focused TODO/review plan for `/status`, `qz-top`, `qz-thoughts`, profiles, and streaming.
-15. [Runtime observability notes](runtime-observability-notes.md) — how to inspect live proxy/model behaviour.
+12. [Foundation audit before SQLite](foundation-audit-before-sqlite.md) — current pre-#2 signal/data-path audit and gravity-well map.
+13. [Repeated-read signal plan](repeated-read-dedup-plan.md) — approved v1 plan for advisory repeated file-read signals.
+14. [Benchmark findings: effort tuning](benchmark-findings-effort-tuning.md) — measured profile/tool-use behaviour and open questions.
+15. [Edge case and config contract plan](edge-case-config-contract-plan.md) — audit/refactor plan for config layout, compact errors, profile safety, and script sprawl.
+16. [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) — focused TODO/review plan for `/status`, `qz-top`, `qz-thoughts`, profiles, and streaming.
+17. [Runtime observability notes](runtime-observability-notes.md) — how to inspect live proxy/model behaviour.
 
 ## Documentation by area
 
@@ -64,6 +66,7 @@ No clever memory, active memory tools, learned preferences, roleplay memory, HSM
 | LimbiCore contract | [Model state signal contract](model-state-signal-contract.md) | Future-facing state/signal/memory envelope; no clever memory in Phase 1. |
 | Signal surface map | [Codex/QuantZhai bidirectional signal map](codex-quantzhai-bidirectional-signal-map.md) | Source-grounded map of all signals: Codex→QZ, QZ→model, backend→QZ, QZ→monitor, safety matrix, gaps, and next targets. |
 | Feedback subsystem plan | [Signal/feedback subsystem plan](signal-feedback-subsystem-plan.md) | Phased plan for unifying tool coercion, native tool-output classifiers, and runtime signals into qz_feedback.py. |
+| Foundation audit | [Foundation audit before SQLite](foundation-audit-before-sqlite.md) | Pre-#2 architecture audit covering gravity wells, signal inventory, reaction taxonomy, Codex feedback gaps, and minimal SQLite prerequisites. |
 | Backend control plane | [Backend control plane audit](backend-control-plane-audit.md) | Audit of llama.cpp/script/proxy data flow, readiness gap, ownership table, and safe next steps. |
 | Backend service recovery | [Backend service recovery semantics](backend-service-recovery-semantics.md) | Status taxonomy, recovery classification matrix, HTTP behaviour map, canonical enum proposals, and next slices for #47. |
 | Manual recovery policy | [Backend manual recovery endpoint policy](backend-manual-recovery-endpoint-policy.md) | Design policy for future `/qz/recovery/plan` and `/qz/recovery/trigger` endpoints: allowed actions, forbidden actions, backoff schedule, authority flags, active request safety, telemetry events, HTTP semantics, and implementation slices 6–10. Slice 6 done: pure `build_recovery_plan()` planner with 75 tests. |
@@ -129,7 +132,8 @@ docs/progress-snapshot.md
 Current next engineering target:
 
 ```text
-P1 optional/non-fatal Phase 1 SQLite operational substrate.
+P1 optional/non-fatal Phase 1 SQLite operational substrate, constrained by
+docs/foundation-audit-before-sqlite.md.
 ```
 
 Then:
@@ -148,6 +152,7 @@ docs/current-architecture-authority.md
 docs/current-task-hierarchy.md
 docs/codex-context-memory-contract.md
 docs/codex-quantzhai-bidirectional-signal-map.md
+docs/foundation-audit-before-sqlite.md
 docs/model-state-signal-contract.md
 docs/codex-0130-live-signal-capture.md
 ```
