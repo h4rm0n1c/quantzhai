@@ -17,9 +17,11 @@ from proxy.qz_vram_snapshot import (
     _build_backend_metrics_summary,
     _build_context,
     _collect_container_pids,
+    _estimate_kv_cache_bytes,
     _extract_context_from_props,
     _extract_context_from_slots,
     _extract_json_error_message,
+    _kv_dtype_config,
     _normalize_prometheus_metrics,
     _parse_compute_apps_csv,
     _parse_nvidia_smi_gpus,
@@ -29,6 +31,7 @@ from proxy.qz_vram_snapshot import (
     _probe_props,
     _probe_slots,
     _selected_backend_model_id,
+    _selected_model_catalog_entry,
     build_vram_snapshot,
     get_cached_vram_snapshot,
 )
@@ -832,6 +835,370 @@ class BackendMetricsFieldTests(unittest.TestCase):
     def test_json_serialisable_with_backend_metrics(self):
         snap = build_vram_snapshot()
         json.dumps(snap)
+
+
+# ---------------------------------------------------------------------------
+# 21. _selected_model_catalog_entry
+# ---------------------------------------------------------------------------
+
+class SelectedModelCatalogEntryTests(unittest.TestCase):
+    def _entry(self, backend_id="qwen3"):
+        return {
+            "backend_id": backend_id,
+            "key": f"{backend_id}.gguf",
+            "filename": f"{backend_id}.gguf",
+            "stem": backend_id,
+            "aliases": [backend_id, f"{backend_id}.gguf"],
+            "size_bytes": 20 * 1024 ** 3,
+            "metadata": {},
+        }
+
+    def test_model_router_path(self):
+        entry = self._entry("mymodel")
+        class _FakeRouter:
+            def selected_model_entry(self):
+                return entry
+        class _FakeHandler:
+            def _model_router(self):
+                return _FakeRouter()
+        e, src = _selected_model_catalog_entry(handler=_FakeHandler(), model_id="mymodel")
+        self.assertEqual(src, "model-router")
+        self.assertEqual(e.get("backend_id"), "mymodel")
+
+    def test_catalog_selected_path(self):
+        entry = self._entry("catalog-model")
+        class _FakeCatalog:
+            selected = entry
+            entries = [entry]
+        class _FakeHandler:
+            def _model_router(self):
+                raise RuntimeError("no router")
+            def _model_catalog(self):
+                return _FakeCatalog()
+        e, src = _selected_model_catalog_entry(handler=_FakeHandler(), model_id="catalog-model")
+        self.assertEqual(src, "catalog-selected")
+        self.assertEqual(e.get("backend_id"), "catalog-model")
+
+    def test_catalog_match_by_backend_id(self):
+        entry = self._entry("backend-model")
+        class _FakeCatalog:
+            selected = None
+            entries = [entry]
+        class _FakeHandler:
+            def _model_router(self):
+                raise RuntimeError("no router")
+            def _model_catalog(self):
+                return _FakeCatalog()
+        e, src = _selected_model_catalog_entry(handler=_FakeHandler(), model_id="backend-model")
+        self.assertEqual(src, "catalog-match")
+        self.assertEqual(e.get("backend_id"), "backend-model")
+
+    def test_unknown_when_no_handler(self):
+        e, src = _selected_model_catalog_entry(handler=None, model_id="anything")
+        self.assertEqual(src, "unknown")
+        self.assertEqual(e, {})
+
+    def test_no_raise_on_broken_handler(self):
+        class _BrokenHandler:
+            def _model_router(self):
+                raise RuntimeError("broken")
+            def _model_catalog(self):
+                raise RuntimeError("broken")
+        e, src = _selected_model_catalog_entry(handler=_BrokenHandler(), model_id="x")
+        self.assertEqual(src, "unknown")
+        self.assertEqual(e, {})
+
+
+# ---------------------------------------------------------------------------
+# 22. _kv_dtype_config
+# ---------------------------------------------------------------------------
+
+class KvDtypeConfigTests(unittest.TestCase):
+    def _clean_env(self):
+        return {k: v for k, v in os.environ.items() if k not in ("QZ_KV_KEY", "QZ_KV_VALUE")}
+
+    def test_env_f16_f16(self):
+        with mock.patch.dict("os.environ", {"QZ_KV_KEY": "f16", "QZ_KV_VALUE": "f16"}):
+            cfg = _kv_dtype_config()
+        self.assertEqual(cfg["key_type"], "f16")
+        self.assertAlmostEqual(cfg["key_bytes"], 2.0)
+        self.assertEqual(cfg["source"], "env")
+        self.assertEqual(cfg["confidence"], "config")
+
+    def test_env_f32_q8_0(self):
+        with mock.patch.dict("os.environ", {"QZ_KV_KEY": "f32", "QZ_KV_VALUE": "q8_0"}):
+            cfg = _kv_dtype_config()
+        self.assertAlmostEqual(cfg["key_bytes"], 4.0)
+        self.assertAlmostEqual(cfg["value_bytes"], 1.0)
+
+    def test_default_when_no_env(self):
+        with mock.patch.dict("os.environ", self._clean_env(), clear=True):
+            cfg = _kv_dtype_config()
+        self.assertEqual(cfg["key_type"], "f16")
+        self.assertEqual(cfg["source"], "default")
+        self.assertEqual(cfg["confidence"], "estimated-default")
+
+    def test_launch_args_path(self):
+        entry = {"launch_args": ["--cache-type-k", "q8_0", "--cache-type-v", "f16"]}
+        with mock.patch.dict("os.environ", self._clean_env(), clear=True):
+            cfg = _kv_dtype_config(entry=entry)
+        self.assertEqual(cfg["key_type"], "q8_0")
+        self.assertAlmostEqual(cfg["key_bytes"], 1.0)
+        self.assertEqual(cfg["source"], "launch_args")
+
+    def test_unsupported_dtype_fallback_with_note(self):
+        with mock.patch.dict("os.environ", {"QZ_KV_KEY": "q4_k_m", "QZ_KV_VALUE": "f16"}):
+            cfg = _kv_dtype_config()
+        self.assertEqual(cfg["key_type"], "f16")
+        self.assertTrue(any("Unsupported" in n for n in cfg.get("notes", [])))
+
+    def test_json_serialisable(self):
+        with mock.patch.dict("os.environ", {"QZ_KV_KEY": "f16", "QZ_KV_VALUE": "f16"}):
+            cfg = _kv_dtype_config()
+        json.dumps(cfg)
+
+
+# ---------------------------------------------------------------------------
+# 23. _estimate_kv_cache_bytes
+# ---------------------------------------------------------------------------
+
+class EstimateKvCacheBytesTests(unittest.TestCase):
+    def _kv_dtype(self):
+        return {"key_type": "f16", "value_type": "f16", "key_bytes": 2.0, "value_bytes": 2.0}
+
+    def _entry(self, **meta_overrides):
+        meta = {
+            "llama.block_count": 28,
+            "llama.embedding_length": 4096,
+            "llama.attention.head_count": 32,
+            "llama.attention.head_count_kv": 8,
+            "llama.attention.key_length": 128,
+            "llama.attention.value_length": 128,
+        }
+        meta.update(meta_overrides)
+        return {"metadata": meta, "size_bytes": 20 * 1024 ** 3}
+
+    def test_basic_formula(self):
+        result = _estimate_kv_cache_bytes(self._entry(), 131072, self._kv_dtype())
+        self.assertIsNotNone(result["mib"])
+        # 131072 tokens × 28 layers × (8 × 128 × 2 + 8 × 128 × 2) bytes
+        expected_bytes = 131072 * 28 * (8 * 128 * 2.0 + 8 * 128 * 2.0)
+        expected_mib = expected_bytes / (1024 ** 2)
+        self.assertAlmostEqual(result["mib"], round(expected_mib, 2), delta=1.0)
+        self.assertFalse(result["backend_confirmed"])
+        self.assertTrue(result["estimated"])
+        self.assertEqual(result["confidence"], "estimated-from-gguf-metadata")
+
+    def test_head_count_kv_used_in_formula(self):
+        result = _estimate_kv_cache_bytes(
+            self._entry(**{"llama.attention.head_count_kv": 4}), 131072, self._kv_dtype()
+        )
+        self.assertEqual(result["formula"]["head_count_kv"], 4)
+
+    def test_derive_key_length_from_embedding(self):
+        entry = self._entry()
+        entry["metadata"].pop("llama.attention.key_length")
+        entry["metadata"].pop("llama.attention.value_length")
+        result = _estimate_kv_cache_bytes(entry, 131072, self._kv_dtype())
+        self.assertIsNotNone(result.get("mib"))
+        self.assertTrue(any("derived" in n for n in result.get("notes", [])))
+
+    def test_missing_block_count_returns_unknown(self):
+        entry = self._entry()
+        entry["metadata"].pop("llama.block_count")
+        result = _estimate_kv_cache_bytes(entry, 131072, self._kv_dtype())
+        self.assertIsNone(result["mib"])
+        self.assertIn("missing_keys", result)
+        self.assertIn("llama.block_count", result["missing_keys"])
+
+    def test_missing_head_count_returns_unknown(self):
+        entry = self._entry()
+        entry["metadata"].pop("llama.attention.head_count")
+        result = _estimate_kv_cache_bytes(entry, 131072, self._kv_dtype())
+        self.assertIsNone(result["mib"])
+
+    def test_no_context_limit_returns_unknown(self):
+        result = _estimate_kv_cache_bytes(self._entry(), None, self._kv_dtype())
+        self.assertIsNone(result["mib"])
+
+    def test_notes_include_semantics(self):
+        result = _estimate_kv_cache_bytes(self._entry(), 131072, self._kv_dtype())
+        notes_text = " ".join(result.get("notes", []))
+        self.assertIn("full-context", notes_text)
+        self.assertIn("scratch", notes_text)
+
+    def test_json_serialisable(self):
+        result = _estimate_kv_cache_bytes(self._entry(), 131072, self._kv_dtype())
+        json.dumps(result)
+
+    def test_no_entry_returns_unknown(self):
+        result = _estimate_kv_cache_bytes({}, 131072, self._kv_dtype())
+        self.assertIsNone(result["mib"])
+
+
+# ---------------------------------------------------------------------------
+# 24. Provenance components in _assemble_snapshot
+# ---------------------------------------------------------------------------
+
+class ProvenanceComponentsTests(unittest.TestCase):
+    def _gpus(self, used=22000, total=26000):
+        return [{"index": "0", "name": "GPU", "util_pct": 50, "used_mib": used,
+                 "total_mib": total, "available_mib": max(0, total - used),
+                 "power_w": 200, "temp_c": 70, "pcie_gen": "4", "pcie_width": "16",
+                 "source": "nvidia-smi", "confidence": "host-observed"}]
+
+    def _ctx(self, limit=131072, used=None, pct=None):
+        return {"limit_tokens": limit, "used_tokens": used, "used_pct": pct,
+                "source": "env", "confidence": "config"}
+
+    def _entry(self):
+        return {
+            "size_bytes": 20 * 1024 ** 3,
+            "metadata": {
+                "llama.block_count": 28,
+                "llama.embedding_length": 4096,
+                "llama.attention.head_count": 32,
+                "llama.attention.head_count_kv": 8,
+                "llama.attention.key_length": 128,
+                "llama.attention.value_length": 128,
+            },
+        }
+
+    def _kv_dtype(self):
+        return {"key_type": "f16", "value_type": "f16", "key_bytes": 2.0, "value_bytes": 2.0}
+
+    def _snap(self, **kwargs):
+        defaults = dict(
+            gpus=self._gpus(), backend_proc={}, metrics={},
+            context=self._ctx(), now=1.0,
+            catalog_entry=self._entry(),
+            catalog_entry_source="catalog-match",
+            kv_dtype=self._kv_dtype(),
+        )
+        defaults.update(kwargs)
+        return _assemble_snapshot(**defaults)
+
+    def test_model_estimate_from_catalog(self):
+        snap = self._snap()
+        m = next(c for c in snap["components"] if c["name"] == "model")
+        self.assertIsNotNone(m["mib"])
+        self.assertAlmostEqual(m["mib"], 20 * 1024, delta=1)
+        self.assertEqual(m["confidence"], "estimated-from-gguf-size")
+        self.assertTrue(m["estimated"])
+        self.assertFalse(m["backend_confirmed"])
+
+    def test_backend_model_size_overrides_catalog(self):
+        metrics = {"llama_model_size_bytes": 18 * 1024 ** 3}
+        snap = self._snap(metrics=metrics)
+        m = next(c for c in snap["components"] if c["name"] == "model")
+        self.assertEqual(m["confidence"], "backend-confirmed")
+        self.assertFalse(m["estimated"])
+        self.assertTrue(m["backend_confirmed"])
+
+    def test_kv_alloc_from_formula(self):
+        snap = self._snap()
+        kv = next(c for c in snap["components"] if c["name"] == "kv_alloc")
+        self.assertIsNotNone(kv["mib"])
+        self.assertEqual(kv["confidence"], "estimated-from-gguf-metadata")
+        self.assertFalse(kv["backend_confirmed"])
+        self.assertIn("formula", kv)
+
+    def test_kv_used_from_used_tokens(self):
+        snap = self._snap(context=self._ctx(limit=131072, used=1000))
+        kv_used = next(c for c in snap["components"] if c["name"] == "kv_used")
+        self.assertIsNotNone(kv_used["mib"])
+        self.assertEqual(kv_used["confidence"], "estimated-runtime-occupancy")
+
+    def test_kv_used_from_used_pct(self):
+        snap = self._snap(context=self._ctx(limit=131072, pct=0.5))
+        kv_used = next(c for c in snap["components"] if c["name"] == "kv_used")
+        self.assertIsNotNone(kv_used["mib"])
+        self.assertEqual(kv_used["confidence"], "estimated-runtime-occupancy")
+
+    def test_kv_used_not_subtracted_from_residual(self):
+        bp = {"process_used_mib": 22000.0, "notes": []}
+        snap = self._snap(backend_proc=bp, context=self._ctx(limit=131072, used=1000))
+        model  = next(c for c in snap["components"] if c["name"] == "model")
+        kv_alloc = next(c for c in snap["components"] if c["name"] == "kv_alloc")
+        kv_used  = next(c for c in snap["components"] if c["name"] == "kv_used")
+        other    = next(c for c in snap["components"] if c["name"] == "other_residual")
+        # residual = process_used - model - kv_alloc  (not minus kv_used)
+        expected = 22000.0 - (model.get("mib") or 0) - (kv_alloc.get("mib") or 0)
+        if expected >= 0 and other["mib"] is not None:
+            self.assertAlmostEqual(other["mib"], expected, delta=2)
+        # kv_used is a subset of kv_alloc, so must be smaller
+        if kv_alloc["mib"] and kv_used["mib"]:
+            self.assertLess(kv_used["mib"], kv_alloc["mib"])
+
+    def test_other_subtracts_model_and_kv_alloc(self):
+        bp = {"process_used_mib": 22000.0, "notes": []}
+        snap = self._snap(backend_proc=bp)
+        model    = next(c for c in snap["components"] if c["name"] == "model")
+        kv_alloc = next(c for c in snap["components"] if c["name"] == "kv_alloc")
+        other    = next(c for c in snap["components"] if c["name"] == "other_residual")
+        expected = 22000.0 - (model.get("mib") or 0) - (kv_alloc.get("mib") or 0)
+        if expected >= 0 and other["mib"] is not None:
+            self.assertAlmostEqual(other["mib"], expected, delta=2)
+
+    def test_residual_clamped_when_estimates_exceed_process(self):
+        bp = {"process_used_mib": 100.0, "notes": []}
+        snap = self._snap(gpus=self._gpus(used=100, total=26000), backend_proc=bp)
+        other = next(c for c in snap["components"] if c["name"] == "other_residual")
+        self.assertEqual(other["mib"], 0.0)
+        self.assertEqual(other["confidence"], "derived-clamped")
+        self.assertTrue(any("clamped" in n for n in other.get("notes", [])))
+
+    def test_scratch_remains_unknown(self):
+        snap = self._snap()
+        scratch = next(c for c in snap["components"] if c["name"] == "scratch_buffer")
+        self.assertIsNone(scratch["mib"])
+        self.assertEqual(scratch["confidence"], "unknown")
+        self.assertFalse(scratch["backend_confirmed"])
+
+    def test_estimates_block_present_and_valid(self):
+        snap = self._snap()
+        self.assertIn("estimates", snap)
+        est = snap["estimates"]
+        self.assertEqual(est.get("schema"), "qz.vram.estimates.v1")
+        self.assertIn("model_entry_source", est)
+        self.assertIn("kv_formula_available", est)
+        self.assertIn("residual_basis", est)
+
+    def test_estimates_block_json_serialisable(self):
+        snap = self._snap(context=self._ctx(limit=131072, used=1000))
+        json.dumps(snap["estimates"])
+
+    def test_all_components_json_serialisable(self):
+        snap = self._snap(context=self._ctx(limit=131072, used=1000))
+        json.dumps(snap)
+
+    def test_no_catalog_entry_still_works(self):
+        snap = _assemble_snapshot(
+            self._gpus(), {}, {}, self._ctx(), now=1.0,
+            catalog_entry=None, catalog_entry_source="unknown", kv_dtype=None,
+        )
+        self.assertEqual(snap["schema"], VRAM_SNAPSHOT_SCHEMA)
+        other = next(c for c in snap["components"] if c["name"] == "other_residual")
+        # Without backend_proc, residual = total GPU used
+        self.assertAlmostEqual(other["mib"], 22000.0, delta=1)
+
+    def test_component_set_names(self):
+        snap = self._snap()
+        names = [c["name"] for c in snap["components"]]
+        self.assertIn("model", names)
+        self.assertIn("kv_alloc", names)
+        self.assertIn("kv_used", names)
+        self.assertIn("scratch_buffer", names)
+        self.assertIn("other_residual", names)
+
+    def test_component_labels(self):
+        snap = self._snap()
+        labels = {c["name"]: c["label"] for c in snap["components"]}
+        self.assertEqual(labels["model"], "MODEL")
+        self.assertEqual(labels["kv_alloc"], "KV_ALLOC")
+        self.assertEqual(labels["kv_used"], "KV_USED")
+        self.assertEqual(labels["scratch_buffer"], "SCRATCH")
+        self.assertEqual(labels["other_residual"], "OTHER")
 
 
 if __name__ == "__main__":

@@ -207,7 +207,11 @@ def _vram_total_line(vram_snap: Optional[dict]) -> str:
 
 
 def _vram_comp_line(vram_snap: Optional[dict]) -> str:
-    """Build compact component line: MODEL=? KV=? SCRATCH=? OTHER=22.0GiB CTX=?/262144."""
+    """Build compact component line with confidence markers.
+
+    Markers: ~ estimated  ✓ backend-confirmed  ? unknown
+    Example: MODEL=20.3GiB~  KV_ALLOC=1.6GiB~  KV_USED=0.2GiB~  SCRATCH=?  OTHER=0.9GiB  CTX=1234/262144✓
+    """
     if not isinstance(vram_snap, dict):
         return ""
     comps = vram_snap.get("components") or []
@@ -216,8 +220,16 @@ def _vram_comp_line(vram_snap: Optional[dict]) -> str:
     for comp in comps:
         label = comp.get("label", comp.get("name", "?").upper())
         mib   = comp.get("mib")
-        val   = _mib_str(mib) if mib is not None else "?"
-        parts.append(f"{label}={val}")
+        conf  = comp.get("confidence", "unknown")
+        if mib is None:
+            parts.append(f"{label}=?")
+        else:
+            val = _mib_str(mib)
+            if conf == "backend-confirmed":
+                val += "✓"
+            elif conf not in ("unknown",):
+                val += "~"
+            parts.append(f"{label}={val}")
     ctx_limit = ctx.get("limit_tokens")
     if ctx_limit:
         ctx_used = ctx.get("used_tokens")
@@ -1680,10 +1692,17 @@ def once():
             label = comp.get("label", comp.get("name", "?")).upper()
             extra = ""
             if comp.get("context_used_pct") is not None:
-                extra = f"  kv={comp['context_used_pct']}%"
+                extra = f"  kv_used_pct={comp['context_used_pct']}%"
+            elif comp.get("context_used_tokens") is not None:
+                extra = f"  ctx_used={comp['context_used_tokens']}"
             elif comp.get("context_limit"):
                 extra = f"  ctx_limit={comp['context_limit']}"
-            print(f"  {label:<8} {mib_s:<12} conf={conf}  src={src_s}{extra}")
+            est_marker = ""
+            if comp.get("backend_confirmed"):
+                est_marker = "✓"
+            elif comp.get("estimated") and comp.get("mib") is not None:
+                est_marker = "~"
+            print(f"  {label:<10} {mib_s+est_marker:<14} conf={conf}  src={src_s}{extra}")
         # Backend metrics discovery
         bm = vs.get("backend_metrics") or {}
         if bm:
@@ -1704,6 +1723,15 @@ def once():
                 if err:
                     ep_line += f" err={err[:60]}"
                 print(ep_line)
+        # Estimates/provenance block
+        est = vs.get("estimates") or {}
+        if est:
+            print(f"  ESTIMATES entry_src={est.get('model_entry_source','?')}  model_size_src={est.get('model_size_source','?')}  kv_formula={est.get('kv_formula_available',False)}")
+            if est.get("known_allocated_mib") is not None:
+                print(f"  ALLOCATED {_mib_str(est['known_allocated_mib'])}~  conf={est.get('known_allocated_confidence','?')}  basis={est.get('residual_basis','?')}")
+            kv_dt = est.get("kv_dtype") or {}
+            if kv_dt:
+                print(f"  KV_DTYPE  key={kv_dt.get('key_type','?')}({kv_dt.get('key_bytes','?')}B)  val={kv_dt.get('value_type','?')}({kv_dt.get('value_bytes','?')}B)  src={kv_dt.get('source','?')}")
         # Notes
         for note in (vs.get("notes") or []):
             print(f"  note: {note}")

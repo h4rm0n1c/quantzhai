@@ -629,8 +629,11 @@ Other actions (restart_backend, refresh_catalog, clear_failure) remain synchrono
    from "wait and retry".
 
 3. **How should VRAM allocation confidence be expressed in the service status?**
-   Currently qz-top shows approximations (delta-based). Exact allocation requires
-   backend-side reporting. Tracked by #6; out of scope for #47.
+   Slice 6 of #6 adds provenance-labelled estimates: MODEL from catalog size_bytes
+   (estimated-from-gguf-size), KV_ALLOC from GGUF metadata formula
+   (estimated-from-gguf-metadata), KV_USED from context occupancy
+   (estimated-runtime-occupancy). No estimate is marked backend-confirmed.
+   Exact allocation still requires backend-side byte allocator metrics.
 
 4. **Should `/qz/status` be deprecated in favour of `/qz/control-plane`?** Currently
    both exist. `/qz/status` is richer for internal/proxy use; `/qz/control-plane` is
@@ -654,7 +657,7 @@ Other actions (restart_backend, refresh_catalog, clear_failure) remain synchrono
 | `tests/test_qz_control_plane.py` | Control-plane test coverage |
 | `tests/test_qz_responses_error.py` | Responses error test coverage |
 | `#2` | Phase 1 SQLite substrate (prerequisite for durable recovery tracking) |
-| `#6` | Backend VRAM telemetry — slices 1–4: service/recovery monitors, VRAM snapshot, process isolation, TurboQuant model-param probing; slice 5: live curses VRAM component panel (VRAM+COMP rows), BASE/DELTA removed |
+| `#6` | Backend VRAM telemetry — slices 1–4: service/recovery monitors, VRAM snapshot, process isolation, TurboQuant model-param probing; slice 5: live curses VRAM component panel (VRAM+COMP rows), BASE/DELTA removed; slice 6: provenance VRAM estimator (MODEL from catalog size_bytes, KV_ALLOC from GGUF metadata formula, KV_USED from context occupancy, OTHER residual from process_used minus MODEL minus KV_ALLOC) |
 | `#45` (done) | Remove local qz-codex catalog fallback — completed; proxy is sole path |
 | `#46` | Replace qz-write-runtime-state launcher trace |
 | `#47` | This issue — normalize backend service status and recovery semantics |

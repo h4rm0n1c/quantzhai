@@ -165,11 +165,19 @@ to avoid false failures from SSE timing events crowding out `tool_sandbox_denied
   low-water `BASE` and live `DELTA`. `DELTA` is useful for cache/buffer pressure
   testing, but it is an approximation until the backend reports exact model,
   KV-cache, and scratch-buffer allocations.
-- Remaining qz-top telemetry work: add proxy/backend `vram_snapshot` or
-  `gpu_snapshot` events and surface them through `/qz/status` and
-  `/qz/telemetry/recent`. The target split is current used, confirmed model
-  base, confirmed KV/cache, confirmed scratch buffers, fallback delta, free,
-  total, source, and confidence state.
+- #6 slice 6 (done): `proxy/qz_vram_snapshot.py` now adds provenance-labelled
+  component estimates: MODEL from catalog `size_bytes` (confidence
+  `estimated-from-gguf-size`), KV_ALLOC from GGUF metadata formula
+  (confidence `estimated-from-gguf-metadata`), KV_USED from KV_ALLOC ×
+  context occupancy ratio (confidence `estimated-runtime-occupancy`), SCRATCH
+  remains unknown, OTHER/residual = `backend_process_used_mib` - MODEL -
+  KV_ALLOC (clamped at 0 if negative). An `estimates` block at the snapshot
+  top level records schema, model entry source, KV dtype, and known allocated
+  MiB. qz-top COMP line adds `~` (estimated) / `✓` (backend-confirmed) / `?`
+  (unknown) markers. No estimate is marked backend-confirmed.
+- Remaining qz-top telemetry work: expose exact backend allocator metrics
+  (model_size_bytes, kv_cache_size_bytes from /metrics) to replace estimates
+  with confirmed values; currently TurboQuant does not emit these.
 - `README.md` documents the new launcher and monitor entry points.
 
 ## Roadmap Impact

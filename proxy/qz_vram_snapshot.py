@@ -6,14 +6,19 @@ Calls nvidia-smi (host-observed) and optionally the llama.cpp /metrics endpoint
 (backend-confirmed if available). All values are clamped; no NaN/Inf.
 
 Source/confidence vocabulary:
-  backend-confirmed      llama.cpp /metrics returned this value directly
-  host-observed          nvidia-smi GPU total on this host
-  host-observed-residual GPU total minus known components (conservative residual)
-  estimated              derived from other observed values
-  config                 from QZ_CONTEXT env or model router
-  unknown                no data source available
+  backend-confirmed            llama.cpp /metrics returned this value directly
+  host-observed                nvidia-smi GPU total on this host
+  host-observed-residual       GPU total minus known components (conservative residual)
+  estimated-from-gguf-size     GGUF file size used as model weight proxy
+  estimated-from-gguf-metadata GGUF metadata formula used to estimate KV allocation
+  estimated-runtime-occupancy  KV_ALLOC scaled by context token occupancy ratio
+  derived-clamped              residual clamped because estimates exceeded process VRAM
+  estimated                    derived from other observed values
+  config                       from QZ_CONTEXT env or model router
+  unknown                      no data source available
 
 Updated in #6 slice 4: TurboQuant router requires ?model=<selected_backend_id>.
+Updated in #6 slice 6: provenance-based MODEL/KV_ALLOC/KV_USED split estimates.
 """
 from __future__ import annotations
 
@@ -58,6 +63,14 @@ _METRIC_ALIASES: dict[str, list[str]] = {
 }
 
 VRAM_SNAPSHOT_SCHEMA = "qz.vram.snapshot.v1"
+
+# KV dtype → bytes per element
+_KV_DTYPE_BYTES: dict[str, float] = {
+    "f16":  2.0,
+    "bf16": 2.0,
+    "f32":  4.0,
+    "q8_0": 1.0,
+}
 
 # Module-level TTL cache so nvidia-smi is not called more than once per interval.
 _VRAM_CACHE_TTL: float = 3.0
@@ -711,6 +724,211 @@ def _build_context(
     }
 
 
+def _selected_model_catalog_entry(handler=None, model_id: str = "") -> tuple[dict, str]:
+    """Resolve the selected catalog entry. Returns (entry, source). Never raises.
+
+    Resolution order:
+    1. handler._model_router().selected_model_entry()
+    2. handler._model_catalog().selected
+    3. handler._model_catalog().entries matched by backend_id / key / filename / stem / alias
+    4. empty dict if unavailable
+    """
+    if handler is not None:
+        try:
+            router = handler._model_router()
+            entry = router.selected_model_entry()
+            if isinstance(entry, dict) and entry:
+                return entry, "model-router"
+        except Exception:
+            pass
+        try:
+            catalog = handler._model_catalog()
+            entry = catalog.selected
+            if isinstance(entry, dict) and entry:
+                return entry, "catalog-selected"
+        except Exception:
+            pass
+        if model_id:
+            try:
+                catalog = handler._model_catalog()
+                q = model_id.lower()
+                for entry in (catalog.entries or []):
+                    if not isinstance(entry, dict):
+                        continue
+                    candidates: set = {
+                        entry.get("backend_id"),
+                        entry.get("key"),
+                        entry.get("filename"),
+                        entry.get("stem"),
+                    }
+                    candidates.update(entry.get("aliases") or [])
+                    if any(isinstance(c, str) and c.lower() == q for c in candidates):
+                        return entry, "catalog-match"
+            except Exception:
+                pass
+    return {}, "unknown"
+
+
+def _kv_dtype_config(handler=None, entry=None) -> dict:
+    """Return KV key/value dtype config. Never raises.
+
+    Sources in order: env QZ_KV_KEY/QZ_KV_VALUE, launch_args, default f16/f16.
+    """
+    notes: list = []
+
+    env_key = os.environ.get("QZ_KV_KEY", "").strip().lower()
+    env_val = os.environ.get("QZ_KV_VALUE", "").strip().lower()
+    if env_key or env_val:
+        ktype = env_key or "f16"
+        vtype = env_val or "f16"
+        kb = _KV_DTYPE_BYTES.get(ktype)
+        vb = _KV_DTYPE_BYTES.get(vtype)
+        if kb is None:
+            notes.append(f"Unsupported KV key dtype '{ktype}'; using f16 estimate.")
+            kb, ktype = 2.0, "f16"
+        if vb is None:
+            notes.append(f"Unsupported KV value dtype '{vtype}'; using f16 estimate.")
+            vb, vtype = 2.0, "f16"
+        return {
+            "key_type": ktype, "value_type": vtype,
+            "key_bytes": kb, "value_bytes": vb,
+            "source": "env", "confidence": "config", "notes": notes,
+        }
+
+    if isinstance(entry, dict):
+        launch_args = entry.get("launch_args") or []
+        ktype = vtype = None
+        i = 0
+        while i < len(launch_args) - 1:
+            arg = str(launch_args[i])
+            nxt = str(launch_args[i + 1])
+            if arg in ("--cache-type-k", "-ctk"):
+                ktype = nxt.strip().lower()
+            elif arg in ("--cache-type-v", "-ctv"):
+                vtype = nxt.strip().lower()
+            i += 1
+        if ktype or vtype:
+            ktype = ktype or "f16"
+            vtype = vtype or "f16"
+            kb = _KV_DTYPE_BYTES.get(ktype)
+            vb = _KV_DTYPE_BYTES.get(vtype)
+            if kb is None:
+                notes.append(f"Unsupported KV key dtype '{ktype}'; using f16 estimate.")
+                kb, ktype = 2.0, "f16"
+            if vb is None:
+                notes.append(f"Unsupported KV value dtype '{vtype}'; using f16 estimate.")
+                vb, vtype = 2.0, "f16"
+            return {
+                "key_type": ktype, "value_type": vtype,
+                "key_bytes": kb, "value_bytes": vb,
+                "source": "launch_args", "confidence": "config", "notes": notes,
+            }
+
+    return {
+        "key_type": "f16", "value_type": "f16",
+        "key_bytes": 2.0, "value_bytes": 2.0,
+        "source": "default", "confidence": "estimated-default", "notes": notes,
+    }
+
+
+def _estimate_kv_cache_bytes(
+    entry: dict, context_limit_tokens: int | None, kv_dtype: dict
+) -> dict:
+    """Estimate full-context KV cache allocation from GGUF metadata. Never raises.
+
+    Formula per token per layer:
+      head_count_kv * key_length * key_bytes + head_count_kv * value_length * value_bytes
+
+    Full allocation: context_limit_tokens * layers * (above)
+    """
+    _unknown: dict = {
+        "mib": None, "bytes": None,
+        "source": "gguf-metadata-formula",
+        "confidence": "unknown",
+        "estimated": True, "backend_confirmed": False,
+    }
+    if not isinstance(entry, dict):
+        return {**_unknown, "notes": ["No catalog entry available."]}
+
+    meta = entry.get("metadata") or {}
+    notes: list = []
+
+    layers   = meta.get("llama.block_count")
+    emb_len  = meta.get("llama.embedding_length")
+    head_cnt = meta.get("llama.attention.head_count")
+    head_kv  = meta.get("llama.attention.head_count_kv") or head_cnt
+    key_len  = meta.get("llama.attention.key_length")
+    val_len  = meta.get("llama.attention.value_length")
+
+    missing: list = []
+    if layers is None:
+        missing.append("llama.block_count")
+    if head_cnt is None:
+        missing.append("llama.attention.head_count")
+    if missing:
+        return {**_unknown, "missing_keys": missing,
+                "notes": [f"KV estimate unavailable: missing GGUF metadata {missing}"]}
+
+    # Derive per-head dimension if key/value lengths are absent
+    if key_len is None or val_len is None:
+        if emb_len is not None and head_cnt:
+            head_dim = emb_len / head_cnt
+            if key_len is None:
+                key_len = head_dim
+                notes.append(f"key_length derived from embedding_length/head_count ({head_dim:.0f})")
+            if val_len is None:
+                val_len = head_dim
+                notes.append(f"value_length derived from embedding_length/head_count ({head_dim:.0f})")
+        else:
+            deriv_missing: list = []
+            if key_len is None:
+                deriv_missing.append("llama.attention.key_length")
+            if val_len is None:
+                deriv_missing.append("llama.attention.value_length")
+            if emb_len is None:
+                deriv_missing.append("llama.embedding_length")
+            return {**_unknown, "missing_keys": deriv_missing,
+                    "notes": [f"KV estimate unavailable: cannot derive head_dim; missing {deriv_missing}"]}
+
+    if not context_limit_tokens or context_limit_tokens <= 0:
+        return {**_unknown, "notes": ["KV estimate unavailable: context_limit_tokens unknown."]}
+
+    key_bytes   = kv_dtype.get("key_bytes", 2.0)
+    value_bytes = kv_dtype.get("value_bytes", 2.0)
+
+    kv_bytes_per_token_per_layer = (
+        head_kv * key_len * key_bytes + head_kv * val_len * value_bytes
+    )
+    kv_alloc_bytes = context_limit_tokens * layers * kv_bytes_per_token_per_layer
+    kv_alloc_mib   = kv_alloc_bytes / (1024.0 * 1024.0)
+
+    notes.extend([
+        "Estimates full-context KV allocation.",
+        "Excludes scratch/work buffers.",
+        "May miss padding/alignment/fragmentation.",
+    ])
+
+    return {
+        "mib":              round(kv_alloc_mib, 2),
+        "bytes":            kv_alloc_bytes,
+        "source":           "gguf-metadata-formula",
+        "confidence":       "estimated-from-gguf-metadata",
+        "estimated":        True,
+        "backend_confirmed": False,
+        "formula": {
+            "layers":               layers,
+            "head_count":           head_cnt,
+            "head_count_kv":        head_kv,
+            "key_length":           key_len,
+            "value_length":         val_len,
+            "key_bytes":            key_bytes,
+            "value_bytes":          value_bytes,
+            "context_limit_tokens": context_limit_tokens,
+        },
+        "notes": notes,
+    }
+
+
 def _assemble_snapshot(
     gpus: list,
     backend_proc: dict,
@@ -720,98 +938,225 @@ def _assemble_snapshot(
     now: float,
     metrics_note: str = "",
     backend_metrics_summary: dict | None = None,
+    catalog_entry: dict | None = None,
+    catalog_entry_source: str = "unknown",
+    kv_dtype: dict | None = None,
 ) -> dict:
-    """Assemble full qz.vram.snapshot.v1 dict from collected data."""
-    host_observed           = len(gpus) > 0
-    # backend_metrics_available = true if Prometheus metrics OR props/slots gave useful data
-    _bm = backend_metrics_summary or {}
+    """Assemble full qz.vram.snapshot.v1 dict from collected data.
+
+    Components: model, kv_alloc, kv_used, scratch_buffer, other_residual.
+    Residual subtracts MODEL + KV_ALLOC only (not KV_USED, which is within KV_ALLOC).
+    Backend metrics beat catalog estimates; estimates are never marked backend_confirmed.
+    """
+    host_observed         = len(gpus) > 0
+    _bm                   = backend_metrics_summary or {}
     backend_metrics_avail = bool(metrics) or bool(_bm.get("available"))
 
-    # GPU totals
     total_used  = sum(g.get("used_mib", 0.0) for g in gpus)
     total_total = sum(g.get("total_mib", 0.0) for g in gpus)
     total_avail = max(0.0, total_total - total_used)
 
     backend_process_used = backend_proc.get("process_used_mib")
+    normalized_metrics   = _normalize_prometheus_metrics(metrics) if metrics else {}
 
-    # Components — all default to unknown unless metrics provide values
-    components: list[dict] = []
+    catalog_entry = catalog_entry or {}
+    kv_dtype      = kv_dtype or {}
 
-    # Normalize metrics via alias table
-    normalized_metrics = _normalize_prometheus_metrics(metrics) if metrics else {}
-
+    # ------------------------------------------------------------------
     # MODEL
-    model_mib    = None
-    model_src    = "unknown"
-    model_conf   = "unknown"
+    # ------------------------------------------------------------------
+    model_mib              = None
+    model_src              = "unknown"
+    model_conf             = "unknown"
+    model_estimated        = True
+    model_backend_confirmed = False
+    model_notes: list      = []
+
     if "model_size_bytes" in normalized_metrics:
         raw = normalized_metrics["model_size_bytes"]
         if raw > 0:
-            model_mib  = max(0.0, raw / (1024.0 * 1024.0))
-            model_src  = "backend-metrics"
-            model_conf = "backend-confirmed"
-    components.append({
-        "name": "model", "label": "MODEL",
-        "mib": model_mib, "source": model_src, "confidence": model_conf,
-    })
+            model_mib               = max(0.0, raw / (1024.0 * 1024.0))
+            model_src               = "backend-metrics"
+            model_conf              = "backend-confirmed"
+            model_estimated         = False
+            model_backend_confirmed = True
 
-    # KV cache
-    kv_mib     = None
-    kv_ratio   = normalized_metrics.get("kv_cache_usage_ratio")
-    kv_cells   = _safe_int(normalized_metrics.get("context_used_tokens"))
-    kv_src     = "backend-metrics" if (kv_ratio is not None or kv_cells is not None) else "unknown"
-    kv_conf    = "backend-confirmed" if kv_src == "backend-metrics" else "unknown"
+    if model_mib is None and catalog_entry:
+        size_bytes = catalog_entry.get("size_bytes")
+        if size_bytes and size_bytes > 0:
+            model_mib  = size_bytes / (1024.0 * 1024.0)
+            model_src  = "catalog.size_bytes"
+            model_conf = "estimated-from-gguf-size"
+            model_notes.append(
+                "GGUF file size; useful proxy for model weight footprint, not exact VRAM allocation."
+            )
+
+    model_comp: dict = {
+        "name": "model", "label": "MODEL",
+        "mib":               round(model_mib, 2) if model_mib is not None else None,
+        "source":            model_src,
+        "confidence":        model_conf,
+        "estimated":         model_estimated,
+        "backend_confirmed": model_backend_confirmed,
+    }
+    if model_notes:
+        model_comp["notes"] = model_notes
+
+    # ------------------------------------------------------------------
+    # KV_ALLOC — estimated reserved full-context KV allocation
+    # ------------------------------------------------------------------
+    kv_alloc_mib              = None
+    kv_alloc_src              = "unknown"
+    kv_alloc_conf             = "unknown"
+    kv_alloc_estimated        = True
+    kv_alloc_backend_confirmed = False
+    kv_alloc_formula          = None
+
     if "kv_cache_size_bytes" in normalized_metrics:
         raw = normalized_metrics["kv_cache_size_bytes"]
         if raw > 0:
-            kv_mib  = max(0.0, raw / (1024.0 * 1024.0))
-            kv_src  = "backend-metrics"
-            kv_conf = "backend-confirmed"
-    # Also try kv_cache_used_bytes for the used portion
-    if kv_mib is None and "kv_cache_used_bytes" in normalized_metrics:
+            kv_alloc_mib               = max(0.0, raw / (1024.0 * 1024.0))
+            kv_alloc_src               = "backend-metrics"
+            kv_alloc_conf              = "backend-confirmed"
+            kv_alloc_estimated         = False
+            kv_alloc_backend_confirmed = True
+
+    if kv_alloc_mib is None:
+        kv_est = _estimate_kv_cache_bytes(catalog_entry, context.get("limit_tokens"), kv_dtype)
+        if kv_est.get("mib") is not None:
+            kv_alloc_mib      = kv_est["mib"]
+            kv_alloc_src      = kv_est["source"]
+            kv_alloc_conf     = kv_est["confidence"]
+            kv_alloc_formula  = kv_est.get("formula")
+
+    kv_alloc_comp: dict = {
+        "name": "kv_alloc", "label": "KV_ALLOC",
+        "mib":               kv_alloc_mib,
+        "source":            kv_alloc_src,
+        "confidence":        kv_alloc_conf,
+        "estimated":         kv_alloc_estimated,
+        "backend_confirmed": kv_alloc_backend_confirmed,
+        "context_limit":     context.get("limit_tokens"),
+    }
+    if kv_alloc_formula:
+        kv_alloc_comp["formula"] = kv_alloc_formula
+
+    # ------------------------------------------------------------------
+    # KV_USED — estimated active context occupancy (within KV_ALLOC)
+    # Do NOT subtract KV_USED from residual; it is already within KV_ALLOC.
+    # ------------------------------------------------------------------
+    kv_used_mib  = None
+    kv_used_src  = "unknown"
+    kv_used_conf = "unknown"
+    kv_used_bc   = False
+
+    if "kv_cache_used_bytes" in normalized_metrics:
         raw = normalized_metrics["kv_cache_used_bytes"]
         if raw > 0:
-            kv_mib  = max(0.0, raw / (1024.0 * 1024.0))
-            kv_src  = "backend-metrics"
-            kv_conf = "backend-confirmed"
-    components.append({
-        "name": "kv_cache", "label": "KV",
-        "mib": kv_mib, "source": kv_src, "confidence": kv_conf,
-        "context_tokens_used":   kv_cells,
-        "context_limit":         context.get("limit_tokens"),
-        "context_used_pct":      round(kv_ratio * 100.0, 1) if kv_ratio is not None else None,
-    })
+            kv_used_mib  = max(0.0, raw / (1024.0 * 1024.0))
+            kv_used_src  = "backend-metrics"
+            kv_used_conf = "backend-confirmed"
+            kv_used_bc   = True
 
-    # Scratch / buffers — not separately exposed
-    components.append({
+    if kv_used_mib is None and kv_alloc_mib is not None:
+        used_tokens  = context.get("used_tokens")
+        limit_tokens = context.get("limit_tokens")
+        used_pct     = context.get("used_pct")
+        if used_tokens is not None and limit_tokens and limit_tokens > 0:
+            kv_used_mib  = round(kv_alloc_mib * used_tokens / limit_tokens, 2)
+            kv_used_src  = "kv_alloc_estimate × backend context occupancy"
+            kv_used_conf = "estimated-runtime-occupancy"
+        elif used_pct is not None:
+            kv_used_mib  = round(kv_alloc_mib * used_pct / 100.0, 2)
+            kv_used_src  = "kv_alloc_estimate × context used_pct"
+            kv_used_conf = "estimated-runtime-occupancy"
+
+    kv_used_comp: dict = {
+        "name": "kv_used", "label": "KV_USED",
+        "mib":                 kv_used_mib,
+        "source":              kv_used_src,
+        "confidence":          kv_used_conf,
+        "estimated":           True,
+        "backend_confirmed":   kv_used_bc,
+        "context_used_tokens": context.get("used_tokens"),
+        "context_used_pct":    context.get("used_pct"),
+        "context_limit":       context.get("limit_tokens"),
+    }
+
+    # ------------------------------------------------------------------
+    # SCRATCH — unknown unless explicit backend metric exists
+    # ------------------------------------------------------------------
+    scratch_comp: dict = {
         "name": "scratch_buffer", "label": "SCRATCH",
         "mib": None, "source": "unknown", "confidence": "unknown",
-    })
+        "estimated": True, "backend_confirmed": False,
+    }
 
-    # Residual = process_used (or total used) - sum of known components
-    known_sum = sum(c["mib"] for c in components if c.get("mib") is not None)
+    # ------------------------------------------------------------------
+    # OTHER / residual = process_used - MODEL - KV_ALLOC
+    # KV_USED is intentionally excluded (it is already within KV_ALLOC).
+    # ------------------------------------------------------------------
+    known_sum = sum(
+        c["mib"] for c in (model_comp, kv_alloc_comp) if c.get("mib") is not None
+    )
     residual_base = (
         backend_process_used if backend_process_used is not None
         else total_used if host_observed
         else None
     )
-    residual_mib = (
-        max(0.0, residual_base - known_sum) if residual_base is not None else None
-    )
-    components.append({
-        "name": "other_residual", "label": "OTHER",
-        "mib": residual_mib,
-        "source": "host_process_residual" if residual_mib is not None else "unknown",
-        "confidence": "host-observed-residual" if residual_mib is not None else "unknown",
-    })
 
+    residual_notes: list = []
+    if residual_base is not None:
+        raw_residual = residual_base - known_sum
+        if raw_residual < 0:
+            residual_mib  = 0.0
+            residual_conf = "derived-clamped"
+            residual_notes.append(
+                "Estimated components exceed measured process VRAM; residual clamped to 0."
+            )
+        else:
+            residual_mib  = raw_residual
+            residual_conf = "host-observed-residual"
+    else:
+        residual_mib  = None
+        residual_conf = "unknown"
+
+    other_comp: dict = {
+        "name": "other_residual", "label": "OTHER",
+        "mib":               round(residual_mib, 1) if residual_mib is not None else None,
+        "source":            "host_process_residual" if residual_mib is not None else "unknown",
+        "confidence":        residual_conf if residual_mib is not None else "unknown",
+        "estimated":         True,
+        "backend_confirmed": False,
+    }
+    if residual_notes:
+        other_comp["notes"] = residual_notes
+
+    components = [model_comp, kv_alloc_comp, kv_used_comp, scratch_comp, other_comp]
+
+    # ------------------------------------------------------------------
+    # Estimates/provenance block
+    # ------------------------------------------------------------------
+    estimates: dict = {
+        "schema":                    "qz.vram.estimates.v1",
+        "model_entry_source":        catalog_entry_source,
+        "model_size_source":         model_src,
+        "kv_formula_available":      kv_alloc_mib is not None and not kv_alloc_backend_confirmed,
+        "kv_dtype":                  kv_dtype if kv_dtype else None,
+        "known_allocated_mib":       round(known_sum, 2) if known_sum > 0 else None,
+        "known_allocated_confidence": "mixed-estimated",
+        "residual_basis":            "backend_process_used_mib - estimated MODEL - estimated KV_ALLOC",
+    }
+
+    # ------------------------------------------------------------------
     # Overall confidence
-    backend_confirmed = backend_metrics_avail and any(
+    # ------------------------------------------------------------------
+    backend_confirmed_flag = backend_metrics_avail and any(
         c.get("confidence") == "backend-confirmed" for c in components
     )
-    if backend_confirmed and host_observed:
+    if backend_confirmed_flag and host_observed:
         confidence = "mixed"
-    elif backend_confirmed:
+    elif backend_confirmed_flag:
         confidence = "backend-confirmed"
     elif host_observed:
         confidence = "host-observed"
@@ -838,7 +1183,6 @@ def _assemble_snapshot(
             "Backend process VRAM not isolated from host total; "
             "OTHER/residual equals total GPU VRAM used."
         )
-    # Include diagnostic notes from backend proc probe
     for n in (backend_proc.get("notes") or []):
         if n and n not in notes:
             notes.append(n)
@@ -849,7 +1193,7 @@ def _assemble_snapshot(
         "timestamp":                 now,
         "source":                    "proxy",
         "confidence":                confidence,
-        "backend_confirmed":         backend_confirmed,
+        "backend_confirmed":         backend_confirmed_flag,
         "host_observed":             host_observed,
         "backend_metrics_available": backend_metrics_avail,
         "notes":                     notes,
@@ -862,6 +1206,7 @@ def _assemble_snapshot(
             "unknown_or_residual_mib": round(residual_mib, 1) if residual_mib is not None else None,
         },
         "components": components,
+        "estimates":  estimates,
         "gpus":       gpus,
         "backend": {
             "container":         backend_proc.get("container", os.environ.get("QZ_CONTAINER", "")),
@@ -915,10 +1260,15 @@ def build_vram_snapshot(handler=None, *, now: float | None = None) -> dict:
         context = _build_context(
             handler=handler, metrics=metrics, props=props, slots=slots,
         )
+        catalog_entry, catalog_entry_source = _selected_model_catalog_entry(handler, model_id)
+        kv_dtype = _kv_dtype_config(handler=handler, entry=catalog_entry)
         return _assemble_snapshot(
             gpus, backend_proc, metrics, context,
             now=now, metrics_note=metrics_note,
             backend_metrics_summary=backend_metrics_summary,
+            catalog_entry=catalog_entry,
+            catalog_entry_source=catalog_entry_source,
+            kv_dtype=kv_dtype,
         )
     except Exception as exc:
         return {
