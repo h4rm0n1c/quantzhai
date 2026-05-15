@@ -226,6 +226,18 @@ def _format_stream_event(ev_type: str, payload: dict) -> str:
     return " ".join(parts)
 
 
+def _format_stream_terminal_event(payload: dict) -> str:
+    classification = str(payload.get("classification") or "unknown")
+    parts = [classification]
+    request_id = payload.get("request_id")
+    if request_id:
+        parts.append(f"request={request_id}")
+    action = payload.get("action")
+    if action:
+        parts.append(f"action={action}")
+    return " ".join(parts)
+
+
 def _capture_rows_from_config(payload: dict) -> List[Tuple[str, str]]:
     if not isinstance(payload, dict):
         return []
@@ -977,6 +989,12 @@ def _apply_telemetry_event(state: ThoughtState, event: dict, prefix_rows: List[T
 
     if ev_type in ("stream_started", "stream_completed", "stream_failed"):
         _append_backend(state, "stream", _format_stream_event(ev_type, payload))
+        return latest_ts
+
+    if ev_type == "stream_terminal_classified":
+        classification = str(payload.get("classification") or "")
+        if classification and classification != "ok":
+            _append_backend(state, "stream_terminal", _format_stream_terminal_event(payload))
         return latest_ts
 
     if ev_type == "deprecated_endpoint":

@@ -220,6 +220,7 @@ class QzThoughtsCliTests(unittest.TestCase):
             event(11, "tool_call_started", {"tool": "web_search", "public_item_type": "web_search_call", "execution": "proxy_local"}),
             event(12, "tool_call_completed", {"tool": "web_search", "public_item_type": "web_search_call", "execution": "proxy_local", "sources": 2, "upstream_items": 2}),
             event(13, "request_failed", {"method": "POST", "path": "/v1/responses", "phase": "upstream_stream", "error": "upstream boom"}),
+            event(14, "stream_terminal_classified", {"classification": "stream_terminal_timeout", "action": "terminal_fallback"}),
         ]
         telemetry_payload = {
             "schema": "qz.telemetry.recent.v1",
@@ -283,6 +284,25 @@ class QzThoughtsCliTests(unittest.TestCase):
         self.assertIn("tool      start web_search type=web_search_call exec=proxy_local", result.stdout)
         self.assertEqual(result.stdout.count("tool      done web_search type=web_search_call exec=proxy_local sources=2 upstream_items=2"), 1)
         self.assertIn("error     POST /v1/responses phase=upstream_stream upstream boom", result.stdout)
+        self.assertIn("stream_terminal stream_terminal_timeout request=req-1 action=terminal_fallback", result.stdout)
+
+    def test_stream_terminal_classified_ok_is_not_rendered(self):
+        ns = _load_qz_thoughts_namespace()
+        state = ns["ThoughtState"](path=Path("proxy-telemetry"))
+        feed = object.__new__(ns["TelemetryFeed"])
+        feed.state = state
+
+        feed._apply_event({
+            "seq": 1,
+            "type": "stream_terminal_classified",
+            "ts": 4102444801,
+            "payload": {
+                "classification": "ok",
+                "request_id": "req-ok",
+            },
+        })
+
+        self.assertNotIn("stream_terminal", [kind for kind, _ in state.backend])
 
     def test_reconnect_resets_stale_telemetry_sequence_floor(self):
         ns = _load_qz_thoughts_namespace()
