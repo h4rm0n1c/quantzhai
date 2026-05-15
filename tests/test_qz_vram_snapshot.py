@@ -1893,8 +1893,43 @@ class ConsistencyDiagnosticsTests(unittest.TestCase):
                 "key_info": {}, "value_info": {},
                 "formula_safe": True, "notes": []}
 
-    def test_overallocated_when_model_plus_kv_exceeds_process(self):
-        # model = 19 GiB, budget = 8 GiB, process = 21.9 GiB → MODEL+KV > process
+    def test_overallocated_when_kv_exceeds_process(self):
+        # KV_ALLOC > backend_process → calibrated model = 0, kv_alloc alone exceeds process
+        # Process = 5 GiB, KV_ALLOC = 8 GiB → 0 + 8192 > 5120 → overallocated
+        budget = {"mib": 8192.0, "source": "env.QZ_CACHE_RAM", "confidence": "estimated-from-runtime-cache-budget", "raw": "8192", "notes": []}
+        bp = {"process_used_mib": 5120.0, "notes": []}  # 5 GiB process VRAM
+        snap = _assemble_snapshot(
+            self._gpus(used=5120), bp, {}, self._ctx(), now=1.0,
+            catalog_entry=self._entry(), catalog_entry_source="model-router",
+            kv_dtype=self._kv_dtype_f16(), cache_budget=budget,
+        )
+        cons = snap["estimates"]["consistency"]
+        # model_runtime = max(0, 5120 - 8192) = 0; known = 0 + 8192 = 8192 > 5120
+        self.assertEqual(cons["status"], "overallocated")
+        self.assertGreater(cons.get("over_by_mib", 0), 0)
+        other = next(c for c in snap["components"] if c["name"] == "other_residual")
+        self.assertEqual(other["mib"], 0.0)  # clamped
+
+    def test_overallocated_when_no_calibration_catalog_exceeds_process(self):
+        # No kv_alloc → MODEL falls back to catalog (10 GiB) which exceeds process (5 GiB)
+        # No budget, no formula possible (no metadata), no backend metric
+        small_proc = 5 * 1024  # 5 GiB in MiB
+        big_catalog = {"architecture": "llama", "size_bytes": 10 * 1024 ** 3, "metadata": {}}
+        bp = {"process_used_mib": float(small_proc), "notes": []}
+        snap = _assemble_snapshot(
+            self._gpus(used=small_proc), bp, {}, self._ctx(), now=1.0,
+            catalog_entry=big_catalog, catalog_entry_source="model-router",
+            kv_dtype={"formula_safe": False, "key_type": "f16", "value_type": "f16",
+                      "key_bytes": None, "value_bytes": None, "key_info": {}, "value_info": {}, "notes": []},
+            cache_budget=None,
+        )
+        cons = snap["estimates"]["consistency"]
+        # kv_alloc = None (formula disabled, no budget) → no calibration
+        # MODEL = catalog = 10 GiB; kv_alloc = None → known = 10 GiB > 5 GiB → overallocated
+        self.assertEqual(cons["status"], "overallocated")
+
+    def test_calibrated_when_process_and_kv_known(self):
+        # Normal calibration: process = 21.9 GiB, KV = 8 GiB → MODEL_RUNTIME = 13.9 GiB
         budget = {"mib": 8192.0, "source": "env.QZ_CACHE_RAM", "confidence": "estimated-from-runtime-cache-budget", "raw": "8192", "notes": []}
         bp = {"process_used_mib": 21900.0, "notes": []}
         snap = _assemble_snapshot(
@@ -1903,29 +1938,31 @@ class ConsistencyDiagnosticsTests(unittest.TestCase):
             kv_dtype=self._kv_dtype_f16(), cache_budget=budget,
         )
         cons = snap["estimates"]["consistency"]
-        # 19*1024 + 8192 = 19456 + 8192 = 27648 > 21900 → overallocated
-        self.assertEqual(cons["status"], "overallocated")
-        self.assertGreater(cons.get("over_by_mib", 0), 0)
-        self.assertTrue(len(cons.get("notes", [])) > 0)
-        # Residual still clamped at 0
-        other = next(c for c in snap["components"] if c["name"] == "other_residual")
-        self.assertEqual(other["mib"], 0.0)
+        self.assertEqual(cons["status"], "calibrated")
+        self.assertTrue(cons.get("model_is_calibrated"))
+        self.assertIsNone(cons.get("over_by_mib"))
+        # MODEL_RUNTIME ≈ 21900 - 8192 = 13708 MiB
+        model_comp = next(c for c in snap["components"] if c["name"] == "model")
+        self.assertAlmostEqual(model_comp["mib"], 21900.0 - 8192.0, delta=1)
+        self.assertEqual(model_comp["label"], "MODEL_RUNTIME")
 
-    def test_plausible_when_estimates_fit(self):
-        # model = 1 GiB (small), budget = 1 GiB, process = 22 GiB → plausible
+    def test_plausible_when_no_calibration_catalog_fits(self):
+        # No kv_alloc → MODEL = catalog (1 GiB) < process (22 GiB) → plausible
         small_entry = {
             "architecture": "llama",
             "size_bytes": 1024 ** 3,   # 1 GiB
             "metadata": {},
         }
-        budget = {"mib": 1024.0, "source": "env.QZ_CACHE_RAM", "confidence": "estimated-from-runtime-cache-budget", "raw": "1024", "notes": []}
         bp = {"process_used_mib": 22000.0, "notes": []}
         snap = _assemble_snapshot(
             self._gpus(), bp, {}, self._ctx(), now=1.0,
             catalog_entry=small_entry, catalog_entry_source="model-router",
-            kv_dtype=self._kv_dtype_f16(), cache_budget=budget,
+            kv_dtype={"formula_safe": False, "key_type": "f16", "value_type": "f16",
+                      "key_bytes": None, "value_bytes": None, "key_info": {}, "value_info": {}, "notes": []},
+            cache_budget=None,
         )
         cons = snap["estimates"]["consistency"]
+        # kv_alloc = None, MODEL = 1 GiB < 22 GiB → plausible
         self.assertEqual(cons["status"], "plausible")
         self.assertIsNone(cons.get("over_by_mib"))
 
@@ -1947,6 +1984,190 @@ class ConsistencyDiagnosticsTests(unittest.TestCase):
             kv_dtype=self._kv_dtype_f16(), cache_budget=budget,
         )
         json.dumps(snap["estimates"])
+
+
+# ---------------------------------------------------------------------------
+# 34. MODEL_RUNTIME calibration and MODEL_FILE provenance
+# ---------------------------------------------------------------------------
+
+class ModelRuntimeCalibrationTests(unittest.TestCase):
+    def _gpus(self, used=22000):
+        return [{"index": "0", "name": "GPU", "util_pct": 50, "used_mib": used,
+                 "total_mib": 26000, "available_mib": max(0, 26000-used),
+                 "power_w": 200, "temp_c": 70, "pcie_gen": "4", "pcie_width": "16",
+                 "source": "nvidia-smi", "confidence": "host-observed"}]
+
+    def _ctx(self, limit=262144, used=None):
+        return {"limit_tokens": limit, "used_tokens": used, "used_pct": None,
+                "source": "env", "confidence": "config"}
+
+    def _entry(self):
+        return {
+            "architecture": "qwen3",
+            "size_bytes": 19 * 1024 ** 3,   # 19 GiB
+            "metadata": {
+                "general.architecture": "qwen3",
+                "qwen3.block_count": 36,
+                "qwen3.embedding_length": 4096,
+                "qwen3.attention.head_count": 32,
+                "qwen3.attention.head_count_kv": 8,
+                "qwen3.attention.key_length": 128,
+                "qwen3.attention.value_length": 128,
+            },
+        }
+
+    def _kv_dtype_f16(self):
+        return {"key_type": "f16", "value_type": "f16",
+                "key_bytes": 2.0, "value_bytes": 2.0,
+                "key_info": {}, "value_info": {},
+                "formula_safe": True, "notes": []}
+
+    def _budget(self, mib=8192.0):
+        return {"mib": mib, "source": "env.QZ_CACHE_RAM",
+                "confidence": "estimated-from-runtime-cache-budget", "raw": str(mib), "notes": []}
+
+    def _snap(self, process_mib=None, kv_budget=None, context_used=None, **kwargs):
+        bp = {"process_used_mib": process_mib, "notes": []} if process_mib is not None else {}
+        defaults = dict(
+            gpus=self._gpus(used=process_mib or 22000),
+            backend_proc=bp, metrics={},
+            context=self._ctx(used=context_used),
+            now=1.0,
+            catalog_entry=self._entry(),
+            catalog_entry_source="model-router",
+            kv_dtype=self._kv_dtype_f16(),
+            cache_budget=self._budget(kv_budget) if kv_budget else None,
+        )
+        defaults.update(kwargs)
+        return _assemble_snapshot(**defaults)
+
+    def test_calibrated_model_runtime_equals_process_minus_kv(self):
+        snap = self._snap(process_mib=21900.0, kv_budget=8192.0)
+        model = next(c for c in snap["components"] if c["name"] == "model")
+        self.assertAlmostEqual(model["mib"], 21900.0 - 8192.0, delta=1)
+        self.assertIn("calibrated", model["confidence"])
+        self.assertEqual(model["label"], "MODEL_RUNTIME")
+        self.assertTrue(model["estimated"])
+        self.assertFalse(model["backend_confirmed"])
+
+    def test_model_file_always_present_when_catalog_available(self):
+        # Even when MODEL_RUNTIME is used, MODEL_FILE is also in components
+        snap = self._snap(process_mib=21900.0, kv_budget=8192.0)
+        mf = next((c for c in snap["components"] if c["name"] == "model_file"), None)
+        self.assertIsNotNone(mf)
+        self.assertEqual(mf["label"], "MODEL_FILE")
+        self.assertAlmostEqual(mf["mib"], 19 * 1024, delta=1)
+        self.assertEqual(mf["confidence"], "estimated-from-gguf-size")
+        self.assertFalse(mf.get("subtractive", True))  # not subtractive
+
+    def test_calibrated_wins_over_catalog_when_process_and_kv_known(self):
+        # With process + kv_alloc known, MODEL uses calibration not catalog size
+        snap = self._snap(process_mib=21900.0, kv_budget=8192.0)
+        model = next(c for c in snap["components"] if c["name"] == "model")
+        self.assertAlmostEqual(model["mib"], 21900.0 - 8192.0, delta=1)
+        # NOT the catalog 19 GiB
+        self.assertAlmostEqual(model["mib"], 13708.0, delta=1)
+
+    def test_backend_model_size_beats_calibration(self):
+        # Backend metric wins over calibration
+        metrics = {"llama_model_size_bytes": 14 * 1024 ** 3}  # 14 GiB exact
+        bp = {"process_used_mib": 21900.0, "notes": []}
+        snap = _assemble_snapshot(
+            self._gpus(), bp, metrics, self._ctx(), now=1.0,
+            catalog_entry=self._entry(), catalog_entry_source="model-router",
+            kv_dtype=self._kv_dtype_f16(), cache_budget=self._budget(8192.0),
+        )
+        model = next(c for c in snap["components"] if c["name"] == "model")
+        self.assertAlmostEqual(model["mib"], 14 * 1024, delta=1)
+        self.assertEqual(model["confidence"], "backend-confirmed")
+        self.assertTrue(model["backend_confirmed"])
+
+    def test_no_calibration_without_kv_alloc(self):
+        # Without kv_alloc, MODEL must fall back to catalog
+        snap = self._snap(process_mib=21900.0, kv_budget=None)
+        # No budget, no formula (formula_safe=True so formula might run if metadata has correct fields)
+        # For this test use a kv_dtype with formula_safe=False to force no kv_alloc
+        bad_dtype = {"formula_safe": False, "key_type": "mystery", "value_type": "mystery",
+                     "key_bytes": None, "value_bytes": None, "key_info": {}, "value_info": {}, "notes": []}
+        snap = _assemble_snapshot(
+            self._gpus(), {"process_used_mib": 21900.0, "notes": []}, {}, self._ctx(),
+            now=1.0, catalog_entry=self._entry(), catalog_entry_source="model-router",
+            kv_dtype=bad_dtype, cache_budget=None,
+        )
+        model = next(c for c in snap["components"] if c["name"] == "model")
+        # kv_alloc is None → can't calibrate → falls back to catalog
+        self.assertEqual(model["confidence"], "estimated-from-gguf-size")
+        self.assertAlmostEqual(model["mib"], 19 * 1024, delta=1)
+
+    def test_residual_subtracts_model_runtime_not_model_file(self):
+        # Residual = process - MODEL_RUNTIME - KV_ALLOC ≈ 0 (not process - MODEL_FILE - KV_ALLOC)
+        snap = self._snap(process_mib=21900.0, kv_budget=8192.0)
+        other = next(c for c in snap["components"] if c["name"] == "other_residual")
+        # MODEL_RUNTIME = 13708, KV_ALLOC = 8192, process = 21900 → other ≈ 0
+        self.assertAlmostEqual(other["mib"], 0.0, delta=2)
+
+    def test_model_file_not_in_residual_calculation(self):
+        # If MODEL_FILE (19 GiB) were subtracted instead, residual would be negative
+        # But residual ≈ 0 means MODEL_RUNTIME is being used, not MODEL_FILE
+        snap = self._snap(process_mib=21900.0, kv_budget=8192.0)
+        other = next(c for c in snap["components"] if c["name"] == "other_residual")
+        # Confirm residual is not derived-clamped (which would happen if MODEL_FILE were used)
+        self.assertNotEqual(other.get("confidence"), "derived-clamped")
+
+    def test_consistency_calibrated_status(self):
+        snap = self._snap(process_mib=21900.0, kv_budget=8192.0)
+        cons = snap["estimates"]["consistency"]
+        self.assertEqual(cons["status"], "calibrated")
+        self.assertTrue(cons.get("model_is_calibrated"))
+        self.assertIsNone(cons.get("over_by_mib"))
+
+    def test_calibrated_model_clamps_at_zero_when_kv_exceeds_process(self):
+        # KV_ALLOC > backend_process → model_runtime = 0 (clamped)
+        snap = self._snap(process_mib=5120.0, kv_budget=8192.0)
+        model = next(c for c in snap["components"] if c["name"] == "model")
+        self.assertEqual(model["mib"], 0.0)
+        self.assertIn("clamped", " ".join(model.get("notes", [])))
+        # Consistency: kv_alloc alone exceeds process → overallocated
+        cons = snap["estimates"]["consistency"]
+        self.assertEqual(cons["status"], "overallocated")
+
+    def test_baseline_confidence_when_no_active_tokens(self):
+        snap = self._snap(process_mib=21900.0, kv_budget=8192.0, context_used=None)
+        model = next(c for c in snap["components"] if c["name"] == "model")
+        self.assertEqual(model["confidence"], "calibrated-from-host-observed-baseline")
+
+    def test_runtime_confidence_when_active_tokens(self):
+        snap = self._snap(process_mib=21900.0, kv_budget=8192.0, context_used=1000)
+        model = next(c for c in snap["components"] if c["name"] == "model")
+        self.assertEqual(model["confidence"], "calibrated-from-host-observed-runtime")
+
+    def test_model_file_in_estimates_block(self):
+        snap = self._snap(process_mib=21900.0, kv_budget=8192.0)
+        est = snap["estimates"]
+        self.assertAlmostEqual(est.get("model_file_mib"), 19 * 1024, delta=1)
+        self.assertEqual(est.get("model_file_source"), "catalog.size_bytes")
+        self.assertTrue(est.get("model_is_calibrated"))
+
+    def test_no_model_file_when_no_catalog(self):
+        snap = _assemble_snapshot(
+            self._gpus(), {}, {}, self._ctx(), now=1.0,
+            catalog_entry=None, catalog_entry_source="unknown",
+            kv_dtype=self._kv_dtype_f16(), cache_budget=None,
+        )
+        mf = next((c for c in snap["components"] if c["name"] == "model_file"), None)
+        self.assertIsNone(mf)
+
+    def test_all_fields_json_serialisable(self):
+        snap = self._snap(process_mib=21900.0, kv_budget=8192.0, context_used=500)
+        json.dumps(snap)
+
+    def test_estimates_model_is_calibrated_flag(self):
+        snap = self._snap(process_mib=21900.0, kv_budget=8192.0)
+        self.assertTrue(snap["estimates"]["model_is_calibrated"])
+
+    def test_estimates_model_is_calibrated_false_without_process(self):
+        snap = self._snap(process_mib=None, kv_budget=8192.0)
+        self.assertFalse(snap["estimates"]["model_is_calibrated"])
 
 
 if __name__ == "__main__":

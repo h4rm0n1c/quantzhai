@@ -189,6 +189,17 @@ to avoid false failures from SSE timing events crowding out `tool_sandbox_denied
   unknown) added to the estimates block. qz-top --once shows CACHE_BDG, KV_DTYPE
   with bit widths, and CONSIST status. Live COMP line shows OVER=X.XGiB if
   estimated MODEL + KV_ALLOC exceeds measured process VRAM.
+- #6 slice 6 follow-up 3 (done): MODEL_RUNTIME calibrated from measured backend
+  process VRAM minus KV_ALLOC when both are known. Priority: (1) backend metric
+  model_size_bytes (backend-confirmed), (2) process_used - kv_alloc (calibrated-
+  from-host-observed-baseline when idle, calibrated-from-host-observed-runtime
+  when context tokens active), (3) catalog.size_bytes fallback. MODEL_FILE
+  (catalog.size_bytes) is always retained as a separate non-subtractive provenance
+  component (subtractive=False). Residual only subtracts MODEL_RUNTIME + KV_ALLOC,
+  not MODEL_FILE. Consistency adds "calibrated" status when MODEL_RUNTIME is used.
+  With QZ_CACHE_RAM=8192 and process=21.9GiB: MODEL_RUNTIME≈13.9GiB, OTHER≈0,
+  OVER disappears, consistency=calibrated. GGUF file size (18.5GiB) remains
+  visible as MODEL_FILE for provenance but does not drive the residual.
 - Remaining qz-top telemetry work: expose exact backend allocator metrics
   (model_size_bytes, kv_cache_size_bytes from /metrics) to replace estimates
   with confirmed values; currently TurboQuant does not emit these.

@@ -8,20 +8,23 @@ Calls nvidia-smi (host-observed) and optionally the llama.cpp /metrics endpoint
 Source/confidence vocabulary:
   backend-confirmed            llama.cpp /metrics returned this value directly
   host-observed                nvidia-smi GPU total on this host
-  host-observed-residual       GPU total minus known components (conservative residual)
-  estimated-from-gguf-size             GGUF file size used as model weight proxy
-  estimated-from-gguf-metadata         GGUF metadata formula used to estimate KV allocation
-  estimated-from-runtime-cache-budget  KV_ALLOC from QZ_CACHE_RAM or --cache-ram
-  estimated-runtime-occupancy          KV_ALLOC scaled by context token occupancy ratio
-  derived-clamped                      residual clamped because estimates exceeded process VRAM
-  estimated                            derived from other observed values
-  config                               from QZ_CONTEXT env or model router
-  unknown                              no data source available
+  host-observed-residual                   GPU total minus known components
+  estimated-from-gguf-size                 GGUF file size used as model weight proxy (provenance)
+  estimated-from-gguf-metadata             GGUF metadata formula used to estimate KV allocation
+  estimated-from-runtime-cache-budget      KV_ALLOC from QZ_CACHE_RAM or --cache-ram
+  calibrated-from-host-observed-baseline   MODEL_RUNTIME from process VRAM minus KV_ALLOC (idle)
+  calibrated-from-host-observed-runtime    MODEL_RUNTIME from process VRAM minus KV_ALLOC (live)
+  estimated-runtime-occupancy              KV_ALLOC scaled by context token occupancy ratio
+  derived-clamped                          residual clamped because estimates exceeded process VRAM
+  estimated                                derived from other observed values
+  config                                   from QZ_CONTEXT env or model router
+  unknown                                  no data source available
 
 Updated in #6 slice 4: TurboQuant router requires ?model=<selected_backend_id>.
 Updated in #6 slice 6: provenance-based MODEL/KV_ALLOC/KV_USED split estimates.
 Updated in #6 slice 6 follow-up: architecture-aware GGUF metadata key lookup.
 Updated in #6 slice 6 follow-up 2: runtime cache budget preferred; quant registry.
+Updated in #6 slice 6 follow-up 3: MODEL_RUNTIME calibrated from measured process VRAM minus KV_ALLOC.
 """
 from __future__ import annotations
 
@@ -1226,47 +1229,7 @@ def _assemble_snapshot(
     kv_dtype      = kv_dtype or {}
 
     # ------------------------------------------------------------------
-    # MODEL
-    # ------------------------------------------------------------------
-    model_mib              = None
-    model_src              = "unknown"
-    model_conf             = "unknown"
-    model_estimated        = True
-    model_backend_confirmed = False
-    model_notes: list      = []
-
-    if "model_size_bytes" in normalized_metrics:
-        raw = normalized_metrics["model_size_bytes"]
-        if raw > 0:
-            model_mib               = max(0.0, raw / (1024.0 * 1024.0))
-            model_src               = "backend-metrics"
-            model_conf              = "backend-confirmed"
-            model_estimated         = False
-            model_backend_confirmed = True
-
-    if model_mib is None and catalog_entry:
-        size_bytes = catalog_entry.get("size_bytes")
-        if size_bytes and size_bytes > 0:
-            model_mib  = size_bytes / (1024.0 * 1024.0)
-            model_src  = "catalog.size_bytes"
-            model_conf = "estimated-from-gguf-size"
-            model_notes.append(
-                "GGUF file size; useful proxy for model weight footprint, not exact VRAM allocation."
-            )
-
-    model_comp: dict = {
-        "name": "model", "label": "MODEL",
-        "mib":               round(model_mib, 2) if model_mib is not None else None,
-        "source":            model_src,
-        "confidence":        model_conf,
-        "estimated":         model_estimated,
-        "backend_confirmed": model_backend_confirmed,
-    }
-    if model_notes:
-        model_comp["notes"] = model_notes
-
-    # ------------------------------------------------------------------
-    # KV_ALLOC — estimated reserved full-context KV allocation
+    # KV_ALLOC — resolved first because MODEL calibration depends on it.
     # Priority: backend metric > runtime cache budget > GGUF formula > unknown
     # ------------------------------------------------------------------
     kv_alloc_mib               = None
@@ -1275,7 +1238,7 @@ def _assemble_snapshot(
     kv_alloc_estimated         = True
     kv_alloc_backend_confirmed = False
     kv_alloc_formula           = None
-    kv_alloc_alt: dict         = {}   # alternate estimate when budget wins over formula
+    kv_alloc_alt: dict         = {}
     kv_est: dict               = {}
 
     # A. Backend metric (backend-confirmed)
@@ -1294,7 +1257,6 @@ def _assemble_snapshot(
         kv_alloc_mib  = cache_budget["mib"]
         kv_alloc_src  = cache_budget["source"]
         kv_alloc_conf = cache_budget["confidence"]
-        # Also attempt formula for comparison (record as alternate even if not primary)
         kv_est = _estimate_kv_cache_bytes(catalog_entry, context.get("limit_tokens"), kv_dtype)
         if kv_est.get("mib") is not None:
             formula_mib = kv_est["mib"]
@@ -1332,7 +1294,6 @@ def _assemble_snapshot(
         kv_alloc_comp["formula"] = kv_alloc_formula
     if kv_alloc_alt:
         kv_alloc_comp["alternate_estimates"] = kv_alloc_alt
-    # Propagate diagnostics when KV_ALLOC estimation failed
     if kv_alloc_mib is None and kv_est:
         if kv_est.get("architecture"):
             kv_alloc_comp["architecture"] = kv_est["architecture"]
@@ -1342,6 +1303,107 @@ def _assemble_snapshot(
             kv_alloc_comp["available_metadata_keys_sample"] = kv_est["available_metadata_keys_sample"]
         if kv_est.get("notes"):
             kv_alloc_comp["notes"] = kv_est["notes"]
+
+    # ------------------------------------------------------------------
+    # MODEL — resolved after KV_ALLOC so calibration can use kv_alloc_mib.
+    # Priority:
+    #   A. backend metric model_size_bytes (backend-confirmed)
+    #   B. calibrated from backend_process_used - kv_alloc (when both known)
+    #   C. catalog.size_bytes fallback (estimated-from-gguf-size)
+    # MODEL_FILE (catalog.size_bytes) is always retained as separate provenance.
+    # ------------------------------------------------------------------
+    model_mib               = None
+    model_src               = "unknown"
+    model_conf              = "unknown"
+    model_label             = "MODEL"
+    model_estimated         = True
+    model_backend_confirmed = False
+    model_is_calibrated     = False
+    model_notes: list       = []
+
+    # A. Backend metric (backend-confirmed; wins over all estimates)
+    if "model_size_bytes" in normalized_metrics:
+        raw = normalized_metrics["model_size_bytes"]
+        if raw > 0:
+            model_mib               = max(0.0, raw / (1024.0 * 1024.0))
+            model_src               = "backend-metrics"
+            model_conf              = "backend-confirmed"
+            model_label             = "MODEL"
+            model_estimated         = False
+            model_backend_confirmed = True
+
+    # B. Calibrated runtime: model = process_used - kv_alloc
+    #    Applies when backend_process_used and kv_alloc_mib are both known.
+    #    Result includes model weights + load-time GPU overhead; not exact allocator metric.
+    if model_mib is None and backend_process_used is not None and kv_alloc_mib is not None:
+        raw_model = backend_process_used - kv_alloc_mib
+        model_mib = max(0.0, raw_model)
+        model_src = "backend_process_used_mib - selected KV_ALLOC"
+        used_tokens = context.get("used_tokens")
+        if used_tokens is not None and used_tokens > 0:
+            model_conf  = "calibrated-from-host-observed-runtime"
+            model_notes = [
+                "Includes model weights plus load-time GPU overhead.",
+                "Uses measured backend process VRAM and selected KV_ALLOC estimate.",
+                "Runtime may include live request buffers.",
+                "Not an exact allocator metric.",
+            ]
+        else:
+            model_conf  = "calibrated-from-host-observed-baseline"
+            model_notes = [
+                "Includes model weights plus load-time GPU overhead.",
+                "Uses measured backend process VRAM and selected KV_ALLOC estimate.",
+                "Not an exact allocator metric.",
+            ]
+        if raw_model < 0:
+            model_notes.append("KV_ALLOC estimate exceeds measured process VRAM; model runtime clamped to 0.")
+        model_label          = "MODEL_RUNTIME"
+        model_is_calibrated  = True
+
+    # C. Catalog.size_bytes fallback (GGUF file size as model weight proxy)
+    if model_mib is None and catalog_entry:
+        size_bytes = catalog_entry.get("size_bytes")
+        if size_bytes and size_bytes > 0:
+            model_mib   = size_bytes / (1024.0 * 1024.0)
+            model_src   = "catalog.size_bytes"
+            model_conf  = "estimated-from-gguf-size"
+            model_label = "MODEL"
+            model_notes = ["GGUF file size; useful proxy for model weight footprint, not exact VRAM allocation."]
+
+    model_comp: dict = {
+        "name": "model", "label": model_label,
+        "mib":               round(model_mib, 2) if model_mib is not None else None,
+        "source":            model_src,
+        "confidence":        model_conf,
+        "estimated":         model_estimated,
+        "backend_confirmed": model_backend_confirmed,
+    }
+    if model_notes:
+        model_comp["notes"] = model_notes
+
+    # ------------------------------------------------------------------
+    # MODEL_FILE — provenance component; always added when catalog size known.
+    # Not subtractive: not used in residual calculation when model is calibrated.
+    # ------------------------------------------------------------------
+    model_file_comp: dict | None = None
+    if catalog_entry:
+        size_bytes = catalog_entry.get("size_bytes")
+        if size_bytes and size_bytes > 0:
+            mf_mib = size_bytes / (1024.0 * 1024.0)
+            model_file_comp = {
+                "name":              "model_file",
+                "label":             "MODEL_FILE",
+                "mib":               round(mf_mib, 2),
+                "source":            "catalog.size_bytes",
+                "confidence":        "estimated-from-gguf-size",
+                "estimated":         True,
+                "backend_confirmed": False,
+                "subtractive":       False,
+                "notes": [
+                    "GGUF file size retained as provenance.",
+                    "Not subtracted from residual when MODEL_RUNTIME calibration is available.",
+                ],
+            }
 
     # ------------------------------------------------------------------
     # KV_USED — estimated active context occupancy (within KV_ALLOC)
@@ -1434,7 +1496,11 @@ def _assemble_snapshot(
     if residual_notes:
         other_comp["notes"] = residual_notes
 
-    components = [model_comp, kv_alloc_comp, kv_used_comp, scratch_comp, other_comp]
+    # components: model always first, model_file second (provenance), then KV/scratch/other
+    components: list[dict] = [model_comp]
+    if model_file_comp is not None:
+        components.append(model_file_comp)
+    components.extend([kv_alloc_comp, kv_used_comp, scratch_comp, other_comp])
 
     # ------------------------------------------------------------------
     # Consistency diagnostics
@@ -1442,53 +1508,77 @@ def _assemble_snapshot(
     est_allocated = (model_comp.get("mib") or 0.0) + (kv_alloc_mib or 0.0)
     if backend_process_used is None:
         consistency: dict = {
-            "status":                  "unknown",
-            "backend_process_used_mib": None,
-            "estimated_allocated_mib":  round(est_allocated, 1) if est_allocated > 0 else None,
-            "residual_mib":            None,
-            "over_by_mib":             None,
-            "notes":                   ["backend_process_used_mib unknown; cannot assess consistency"],
+            "status":                   "unknown",
+            "backend_process_used_mib":  None,
+            "estimated_allocated_mib":   round(est_allocated, 1) if est_allocated > 0 else None,
+            "residual_mib":              None,
+            "over_by_mib":               None,
+            "model_is_calibrated":       model_is_calibrated,
+            "notes":                     ["backend_process_used_mib unknown; cannot assess consistency"],
         }
     else:
         residual_c = backend_process_used - est_allocated
-        if residual_c < 0:
+        if model_is_calibrated and residual_c >= 0:
             consistency = {
-                "status":                  "overallocated",
-                "backend_process_used_mib": round(backend_process_used, 1),
-                "estimated_allocated_mib":  round(est_allocated, 1),
-                "residual_mib":            0.0,
-                "over_by_mib":             round(-residual_c, 1),
+                "status":                   "calibrated",
+                "backend_process_used_mib":  round(backend_process_used, 1),
+                "estimated_allocated_mib":   round(est_allocated, 1),
+                "residual_mib":              round(residual_c, 1),
+                "over_by_mib":               None,
+                "model_is_calibrated":       True,
+                "notes": [
+                    "MODEL_RUNTIME calibrated from measured process VRAM minus KV_ALLOC. "
+                    "MODEL_FILE retained as provenance only.",
+                ],
+            }
+        elif residual_c < 0:
+            consistency = {
+                "status":                   "overallocated",
+                "backend_process_used_mib":  round(backend_process_used, 1),
+                "estimated_allocated_mib":   round(est_allocated, 1),
+                "residual_mib":              0.0,
+                "over_by_mib":               round(-residual_c, 1),
+                "model_is_calibrated":       model_is_calibrated,
                 "notes": [
                     "Estimated MODEL + KV_ALLOC exceeds measured backend process VRAM. "
                     "GGUF file size may overstate VRAM model weight footprint; "
                     "cache budget may be compressed or reserved; "
-                    "backend memory accounting may differ from component estimates."
+                    "or KV_ALLOC estimate itself exceeds process VRAM."
                 ],
             }
         else:
             consistency = {
-                "status":                  "plausible",
-                "backend_process_used_mib": round(backend_process_used, 1),
-                "estimated_allocated_mib":  round(est_allocated, 1),
-                "residual_mib":            round(residual_c, 1),
-                "over_by_mib":             None,
-                "notes":                   [],
+                "status":                   "plausible",
+                "backend_process_used_mib":  round(backend_process_used, 1),
+                "estimated_allocated_mib":   round(est_allocated, 1),
+                "residual_mib":              round(residual_c, 1),
+                "over_by_mib":               None,
+                "model_is_calibrated":       model_is_calibrated,
+                "notes":                     [],
             }
 
     # ------------------------------------------------------------------
     # Estimates/provenance block
     # ------------------------------------------------------------------
+    model_file_mib = model_file_comp["mib"] if model_file_comp else None
     estimates: dict = {
         "schema":                    "qz.vram.estimates.v1",
         "model_entry_source":        catalog_entry_source,
-        "model_size_source":         model_src,
+        "model_source":              model_src,
+        "model_is_calibrated":       model_is_calibrated,
+        "model_file_mib":            model_file_mib,
+        "model_file_source":         "catalog.size_bytes" if model_file_mib is not None else None,
         "kv_alloc_source":           kv_alloc_src,
         "kv_formula_available":      kv_alloc_mib is not None and not kv_alloc_backend_confirmed,
         "kv_dtype":                  kv_dtype if kv_dtype else None,
         "cache_budget":              cache_budget if cache_budget.get("mib") is not None else None,
         "known_allocated_mib":       round(known_sum, 2) if known_sum > 0 else None,
-        "known_allocated_confidence": "mixed-estimated",
-        "residual_basis":            "backend_process_used_mib - estimated MODEL - estimated KV_ALLOC",
+        "known_allocated_confidence": "calibrated" if model_is_calibrated else "mixed-estimated",
+        "residual_basis":            (
+            "backend_process_used_mib - MODEL_RUNTIME - KV_ALLOC (calibrated)"
+            if model_is_calibrated else
+            "backend_process_used_mib - estimated MODEL - estimated KV_ALLOC"
+        ),
         "consistency":               consistency,
     }
 
