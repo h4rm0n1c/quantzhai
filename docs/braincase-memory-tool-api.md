@@ -512,7 +512,15 @@ Deterministic gatekeeper as final judge — helpers accelerate, LLM reasons.
 model-visible memory by default — storage is internal until rendered.
 SQL-first design — SQL is behind helpers, not the API surface.
 One-shot write-and-forget — records have provenance, revision, and lifetime.
+Operational-fact persistence — recovery/backoff/runtime state is not BrainCaseDB.
 ```
+
+**Signal-map boundary:** The bidirectional signal map
+(`docs/codex-quantzhai-bidirectional-signal-map.md`) classifies signals as
+"safe to observe" or "safe to store in telemetry/captures." Neither classification
+means "store in BrainCaseDB." BrainCaseDB receives only explicit StateRecord writes.
+Operational signals (session_id, turn_id, request_id) may appear in BrainCaseDB
+only as SourceRef provenance attached to an actual stored StateRecord.
 
 ---
 

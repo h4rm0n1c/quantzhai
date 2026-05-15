@@ -18,10 +18,11 @@ Missing memory_domain means isolated.
 Capability detection from tools never grants durable memory access.
 QuantZhai-owned qz_* context stays internal and must not be injected into
 forwarded /v1/responses request bodies.
-Phase 1 SQLite stores parser-boundary identity/scoping facts only.
+BrainCaseDB stores explicit memory/state records only (not operational facts).
 SQLite is not a telemetry warehouse, config authority, or memory_domain registry.
-No clever memory, active memory tools, learned preferences, roleplay memory,
-HSM/archive memory, automatic promotion, or cross-domain sharing in Phase 1.
+Sessions/turns/requests are SourceRef/provenance only when attached to a StateRecord;
+they are not automatic operational logs.
+No automatic ingestion. No clever memory. No cross-domain sharing.
 ```
 
 ## Recently completed (2026-05-15 run — VRAM/recovery/docs)
@@ -97,9 +98,9 @@ Live stack smoke test (#35/PR#36)
 authority/docs cleanup (ongoing)
   -> [DONE] explicit memory_domain config plumbing
     -> [DONE] stream watchdog and foundation audit before SQLite
-      -> optional/non-fatal Phase 1 SQLite storage substrate  ← current P1
-      -> same-scope parser-boundary state facts, starting with repeated-read v1/v2
-        -> rendered state packets / LimbiCore recall later
+      -> [DONE] BrainCaseDB + StateRecord/write/render slices A–F
+      -> next: braincase.recall semantics / operator write exposure
+        -> rendered state packets / LimbiCore recall (future)
 ```
 
 ---
@@ -196,16 +197,18 @@ tests/test_qz_state_db.py
 tests/test_qz_request_state_integration.py
 ```
 
-Phase 1 tables:
+Historical / superseded — do NOT implement as BrainCaseDB tables:
 
 ```text
-sessions
-turns
-requests
-workspace_candidates
-resolved_workspaces
-session_workspace_bindings
-identity_conflicts
+The earlier "Phase 1 SQLite operational facts" plan listed:
+  sessions, turns, requests, workspace_candidates,
+  resolved_workspaces, session_workspace_bindings, identity_conflicts
+
+This framing is superseded by BrainCase doctrine.
+BrainCaseDB stores StateRecords and SourceRefs only.
+If sessions/turns/requests ever appear in BrainCaseDB, they must be
+SourceRef provenance attached to an actual stored StateRecord — never
+as automatic session/request logs.
 ```
 
 Must not implement:
@@ -311,7 +314,8 @@ Current rule:
 
 ```text
 Implement repeated-read v1 as advisory, stateless, and input-history-seeded.
-Do not implement persistent v2 until Phase 1 SQLite scope is available.
+Do not implement persistent v2 until BrainCase recall/write semantics are defined
+and a suitable persistence scope exists.
 ```
 
 V1 likely files:

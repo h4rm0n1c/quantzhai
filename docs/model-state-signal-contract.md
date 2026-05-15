@@ -597,7 +597,7 @@ Relevant State:
 - Domain: coding; Workspace: h4rm0n1c/quantzhai.
 - Parser helpers are internal and tested.
 - Do not inject qz_* context into forwarded /v1/responses bodies.
-- Phase 1 SQLite stores operational facts only.
+- BrainCaseDB stores explicit memory/state records only (not operational facts).
 ```
 
 Roleplay example:
@@ -837,19 +837,23 @@ How should roleplay worlds and Human State Machine artifact sets be named and is
 
 ---
 
-## Immediate effect on Phase 1 SQLite
+## BrainCase memory plane — current state (Slices A–F complete)
 
-This document does not change the immediate Phase 1 plan. The BrainCaseDB
-skeleton exists. The next step is Slice A: StateRecord JSON schema fixtures.
+This document does not change the BrainCase implementation. Slices A–F are
+complete. BrainCaseDB is an optional/non-fatal storage substrate with explicit
+write paths only — not automatic ingestion of observed runtime data.
 
-Phase 1 should proceed as a boring, optional/non-fatal storage substrate with
-explicit write paths only — not automatic ingestion of observed runtime data.
-See `docs/braincase-memory-tool-api.md` for the updated design.
+braincase.render is the first model-visible tool (QZ_BRAINCASE_TOOLS_ENABLED,
+default disabled). RenderPacket is the only model-visible memory output.
+recall/write/update/search/inspect remain unexposed.
 
-The contract adds one design constraint for future-proofing:
+See `docs/braincase-memory-tool-api.md` for the full design.
+
+The contract's design constraint for future-proofing remains:
 
 ```text
-If a table or event might later feed LimbiCore, store enough scope/provenance/visibility metadata to keep renderers safe.
+If a record or event might later feed a renderer, store enough
+scope/provenance/visibility metadata to keep renderers safe.
 ```
 
-That is all. No clever memory yet.
+That is all. No automatic ingestion. No operational-fact logging in BrainCaseDB.

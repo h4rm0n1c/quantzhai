@@ -53,8 +53,8 @@ Side channels:
   scripts/qz-thoughts         live SSE thought/activity monitor
   scripts/qz-top              GPU/VRAM/throughput monitor
   var/captures/               request-scoped debug captures
-  future: SQLite substrate     Phase 1 operational facts
-  future: LimbiCore renderers  model-facing state packets
+  BrainCaseDB (SQLite)         explicit memory/state records only (not operational facts)
+  LimbiCore renderers          model-facing state packets (future)
 ```
 
 ---
@@ -78,7 +78,7 @@ Grounded in:
 
 | Signal | Header / Field | Codex source | QZ parser | Scope | Stored? | Model-visible? | Status |
 |---|---|---|---|---|---|---|---|
-| `session_id` | `session_id` + `session-id` headers | `build_session_headers()` | `extract_codex_identity()` | session | planned (Phase 1 SQLite) | no | **implemented** |
+| `session_id` | `session_id` + `session-id` headers | `build_session_headers()` | `extract_codex_identity()` | session | as SourceRef provenance only | no | **implemented** |
 | `thread_id` | `thread_id` + `thread-id` headers | `build_session_headers()` | `extract_codex_identity()` | thread | planned | no | **implemented** |
 | `x-codex-window-id` | `x-codex-window-id` header, format `{thread_id}:{window_generation}` | `build_responses_identity_headers()` | `parse_codex_window_id()` | turn | planned | no | **implemented** |
 | `x-codex-installation-id` | `x-codex-installation-id` header + `client_metadata` body key | `build_responses_identity_headers()` | `extract_codex_identity()` | installation | planned | no | **implemented** |
@@ -244,7 +244,7 @@ for future storage.
 | `memory_domain` | explicit profile config; isolated fallback | request | **implemented** | no (internal only) |
 | `workspace_id` | resolved from turn metadata remote URL or repo root hash | turn | **implemented** | no |
 | `qz_session_id` | generated from `client_session_id` | session | **implemented** | no |
-| `qz_turn_id` | internal; grouped by `codex_turn_id` | turn | **planned** (Phase 1 SQLite) | no |
+| `qz_turn_id` | internal; grouped by `codex_turn_id` | turn | as SourceRef provenance only | no |
 | `qz_request_id` | generated per HTTP request | request | **implemented** | no (telemetry/captures) |
 | `continuation_hop_count` | counted in streaming loop | turn | **implemented** | hop budget signal |
 | `continuation_hop_budget` | `WEB_SEARCH_MAX_HOPS` limit | turn | **implemented** | injected near limit |
@@ -358,42 +358,55 @@ Captures are debug artifacts, not model memory.
 
 ---
 
-## QuantZhai → future SQLite/LimbiCore signals
+## QuantZhai → BrainCase memory tool plane
 
-Phase 1 SQLite stores operational facts only. Slices A–F complete.
+BrainCaseDB is the explicit memory/state storage substrate. Slices A–F complete.
 See `docs/codex-context-memory-contract.md` and `docs/braincase-memory-tool-api.md`.
 
-Slice F (braincase.render tool surface) is the first model-visible BrainCase tool.
+**BrainCaseDB stores:**
+
+```text
+StateRecords       — explicit memory/state records written through intentional write paths
+SourceRefs         — provenance links attached to stored StateRecords
+Record revisions   — retire/supersede chains for stored records
+Record links       — record-to-record relationships
+FTS / tag indexes  — search indexes over stored records
+```
+
+**BrainCaseDB does NOT store (by doctrine):**
+
+```text
+Sessions, turns, or requests merely because they were observed.
+Operational runtime facts accumulated automatically.
+Telemetry events or stream events.
+Recovery/backoff state.
+memory_domain registry entries.
+```
+
+Sessions/turns/requests may appear in BrainCaseDB ONLY as SourceRefs or provenance
+attached to an actual stored StateRecord — not as automatic logs.
+
+**BrainCase tool plane (Slice F):**
+
+Slice F: braincase.render is the first model-visible BrainCase tool.
 Feature flag: QZ_BRAINCASE_TOOLS_ENABLED (default: disabled).
 When enabled: braincase.render tool definition injected into body["tools"];
 harness policy text added to turn harness. RenderPacket is the only model-visible
 memory output. recall/write/update/search/inspect remain unexposed.
 
-Planned storage:
+**Historical note (superseded by BrainCase doctrine — do not implement as BrainCaseDB tables):**
 
-```text
-sessions            qz_session_id, client_session_id, client_thread_id,
-                    client_installation_id, originator, user_agent, identity_conflicts
+The earlier "Phase 1 SQLite operational facts" plan listed sessions/turns/requests
+as planned tables. That framing was superseded once BrainCaseDB doctrine was
+established. BrainCaseDB is for memory/state records, not operational fact logging.
 
-turns               qz_turn_id, qz_session_id, codex_turn_id,
-                    turn_started_at_unix_ms, codex_window_id, codex_window_generation
+If operational-signal persistence becomes needed in the future, it should use a
+separate store (not BrainCaseDB) or be explicitly designed as SourceRefs/provenance
+attached to specific StateRecords with a written design doc.
 
-requests            qz_request_id, qz_session_id, qz_turn_id, model, profile_id,
-                    backend_id, reasoning_effort, tools_count, tool_names, body_digest
-
-workspace_candidates  repo_root, repo_root_hash, remote_url, normalized_remote_url,
-                       latest_git_commit_hash, has_changes
-
-resolved_workspaces  workspace_id, workspace_kind, normalized_remote_url, repo_root_hash
-
-session_workspace_bindings  qz_session_id, workspace_id, source, confidence
-
-identity_conflicts  stored per request; does not crash proxy
-```
-
-**Hard rule:** Storage records are not automatically model-facing memory.
+**Hard rules:** Storage records are not automatically model-facing memory.
 Recall results are not automatically model-facing memory. Renderers decide what
-the model sees.
+the model sees. "Safe to observe" does not mean "store in BrainCaseDB".
 
 ---
 
@@ -469,8 +482,9 @@ Operator signals (implemented):
 ## Current gaps
 
 ```text
-1. No Phase 1 SQLite storage — identity, turn, workspace, and request facts
-   are parsed but not persisted across sessions.
+1. No BrainCase memory records yet — identity/turn/workspace facts are parsed
+   but not persisted. They may appear only as SourceRef provenance attached
+   to an explicit StateRecord (not as automatic operational logs).
 
 2. No repeated-read advisory signal — the proxy sees repeated reads but does
    not yet inject an advisory result.
@@ -509,9 +523,10 @@ Ranked by expected practical impact:
    stateless and input-history-seeded; no SQLite required; implementation plan
    exists in `docs/repeated-read-dedup-plan.md`.
 
-2. **Phase 1 SQLite storage (P1)** — unlocks per-session operational facts,
-   workspace binding, turn grouping, and the scope needed for repeated-read v2.
-   See `docs/codex-context-memory-contract.md` and `docs/current-task-hierarchy.md`.
+2. **BrainCase recall/write semantics (next #53 slice)** — defines how the LLM
+   reads and writes durable memory records. Operational signal persistence (if
+   needed) requires a separate runtime-state store design; it does not belong
+   in BrainCaseDB. See `docs/braincase-memory-tool-api.md`.
 
 3. **Compaction/stream-hang watchdog signal (#40)** — detects stalled
    compaction or stream hang and emits telemetry; enables recovery and user

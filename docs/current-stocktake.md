@@ -136,16 +136,16 @@ now track. Keep as historical planning record; do not implement from it directly
 ## 5. Recommended next work order
 
 ```
-A. #2   Phase 1 SQLite storage substrate
-        Foundational. Slice 1 skeleton landed. Unlocks #51 and #46 once useful.
-        Scope is narrow: sessions/turns/requests/workspace_candidates/
-        resolved_workspaces/session_workspace_bindings/identity_conflicts.
-        Optional/non-fatal. No model-visible memory. Not a telemetry warehouse,
-        config authority, or memory_domain registry. Follow
-        docs/foundation-audit-before-sqlite.md.
+A. #2   BrainCase memory/state records (next slice)
+        Slices A–F complete. BrainCaseDB exists; braincase.render is exposed.
+        Next: define braincase.recall semantics or operator write exposure.
+        BrainCaseDB stores StateRecords/SourceRefs only — NOT sessions/turns/
+        requests as operational logs. See docs/braincase-memory-tool-api.md.
 
 B. #51  Recovery/backoff state persistence
-        Direct follow-up to #47+#2. Implement after #2 exists.
+        IMPORTANT: BrainCaseDB is NOT the target. Recovery/backoff state is
+        operational runtime state and needs a separate persistence decision.
+        Do not implement into BrainCaseDB tables.
 
 C. #46  Remove qz-write-runtime-state
         Clean once startup telemetry or #2 replacement is established.
@@ -236,8 +236,8 @@ Signal/feedback subsystem design (#42)
 - Never label residual as scratch.
 - Never inject qz_* context into forwarded /v1/responses bodies.
 - memory_domain defaults to isolated; never infer it from model/profile/tool names.
-- Phase 1 SQLite stores parser-boundary identity/scoping facts only — no
-  model-visible memory, telemetry warehouse, or memory_domain registry.
+- BrainCaseDB stores explicit memory/state records only — not operational facts,
+  not telemetry, not a session/request log, not a memory_domain registry.
 
 ---
 
@@ -302,7 +302,9 @@ Or: define operator-reviewed write exposure via braincase.write.
 ### Prompt B: Recovery state persistence (#51, after #2)
 
 ```text
-Promote #47 in-memory recovery/backoff state to Phase 1 SQLite.
+Promote #47 in-memory recovery/backoff state to a persistent store.
+NOTE: BrainCaseDB is NOT the target. Recovery/backoff is operational runtime
+state; it needs a separate persistence decision, not BrainCaseDB tables.
 
 Read first:
 - docs/backend-service-recovery-semantics.md
