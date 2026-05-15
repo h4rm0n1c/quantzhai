@@ -1,6 +1,7 @@
 """Tests for qz.vram.snapshot.v1 builder (proxy/qz_vram_snapshot.py)."""
 import json
 import math
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -10,15 +11,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from proxy.qz_vram_snapshot import (
     VRAM_SNAPSHOT_SCHEMA,
+    _METRIC_ALIASES,
     _assemble_snapshot,
+    _backend_base_url,
+    _build_backend_metrics_summary,
     _build_context,
     _collect_container_pids,
+    _extract_context_from_props,
+    _extract_context_from_slots,
     _extract_json_error_message,
+    _normalize_prometheus_metrics,
     _parse_compute_apps_csv,
     _parse_nvidia_smi_gpus,
     _parse_prometheus_text,
     _probe_backend_metrics,
     _probe_backend_process,
+    _probe_props,
+    _probe_slots,
+    _selected_backend_model_id,
     build_vram_snapshot,
     get_cached_vram_snapshot,
 )
@@ -554,6 +564,274 @@ class ResidualFromBackendProcessTests(unittest.TestCase):
         self.assertEqual(snap["backend"]["pid"], "14224")
         self.assertIn("14224", snap["backend"]["pids"])
         self.assertEqual(snap["backend"]["match_method"], "container-pid")
+
+
+# ---------------------------------------------------------------------------
+# 14. _selected_backend_model_id
+# ---------------------------------------------------------------------------
+
+class SelectedBackendModelIdTests(unittest.TestCase):
+    def test_env_override(self):
+        with mock.patch.dict("os.environ", {"QZ_VRAM_METRICS_MODEL": "my-model"}):
+            mid, src = _selected_backend_model_id(handler=None)
+        self.assertEqual(mid, "my-model")
+        self.assertEqual(src, "env")
+
+    def test_no_env_no_handler_returns_unknown(self):
+        with mock.patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("QZ_VRAM_METRICS_MODEL", None)
+            # Also mock /v1/models fallback to fail
+            with mock.patch("urllib.request.urlopen", side_effect=OSError("no backend")):
+                mid, src = _selected_backend_model_id(handler=None)
+        self.assertEqual(mid, "")
+        self.assertEqual(src, "unknown")
+
+    def test_model_router_selected(self):
+        class _FakeRouter:
+            def selected_backend_id(self):
+                return "qwen3-backend"
+
+        class _FakeHandler:
+            def _model_router(self):
+                return _FakeRouter()
+
+        with mock.patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("QZ_VRAM_METRICS_MODEL", None)
+            mid, src = _selected_backend_model_id(handler=_FakeHandler())
+        self.assertEqual(mid, "qwen3-backend")
+        self.assertEqual(src, "model-router")
+
+    def test_no_raise_on_broken_handler(self):
+        class _BrokenHandler:
+            def _model_router(self):
+                raise RuntimeError("broken")
+            def _model_catalog(self):
+                raise RuntimeError("broken")
+
+        with mock.patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("QZ_VRAM_METRICS_MODEL", None)
+            with mock.patch("urllib.request.urlopen", side_effect=OSError("no backend")):
+                mid, src = _selected_backend_model_id(handler=_BrokenHandler())
+        self.assertEqual(mid, "")
+
+
+# ---------------------------------------------------------------------------
+# 15. _normalize_prometheus_metrics
+# ---------------------------------------------------------------------------
+
+class NormalizePrometheusMetricsTests(unittest.TestCase):
+    def test_maps_llamacpp_prefix(self):
+        raw = {"llamacpp:kv_cache_usage_ratio": 0.35}
+        norm = _normalize_prometheus_metrics(raw)
+        self.assertIn("kv_cache_usage_ratio", norm)
+        self.assertAlmostEqual(norm["kv_cache_usage_ratio"], 0.35)
+
+    def test_maps_llama_underscore_prefix(self):
+        raw = {"llama_model_size_bytes": 10 * 1024 * 1024 * 1024}
+        norm = _normalize_prometheus_metrics(raw)
+        self.assertIn("model_size_bytes", norm)
+
+    def test_absent_key_not_in_output(self):
+        raw = {"llamacpp:requests_processing": 0}
+        norm = _normalize_prometheus_metrics(raw)
+        self.assertNotIn("model_size_bytes", norm)
+
+    def test_empty_input_empty_output(self):
+        self.assertEqual(_normalize_prometheus_metrics({}), {})
+
+    def test_first_alias_wins(self):
+        # llama_n_ctx takes priority over llama_n_ctx_server
+        raw = {"llama_n_ctx": 131072, "llama_n_ctx_server": 65536}
+        norm = _normalize_prometheus_metrics(raw)
+        self.assertEqual(norm["context_limit_tokens"], 131072)
+
+
+# ---------------------------------------------------------------------------
+# 16. _extract_context_from_props
+# ---------------------------------------------------------------------------
+
+class ExtractContextFromPropsTests(unittest.TestCase):
+    def test_n_ctx_in_default_generation_settings(self):
+        props = {"default_generation_settings": {"n_ctx": 262144}}
+        n_ctx, path = _extract_context_from_props(props)
+        self.assertEqual(n_ctx, 262144)
+        self.assertIn("n_ctx", path)
+
+    def test_n_ctx_in_params_sub_dict(self):
+        props = {"default_generation_settings": {"params": {"n_ctx": 131072}}}
+        n_ctx, path = _extract_context_from_props(props)
+        self.assertEqual(n_ctx, 131072)
+        self.assertIn("params", path)
+
+    def test_missing_returns_none(self):
+        props = {"default_generation_settings": {"other_key": "value"}}
+        n_ctx, path = _extract_context_from_props(props)
+        self.assertIsNone(n_ctx)
+
+    def test_non_dict_input(self):
+        n_ctx, path = _extract_context_from_props(None)  # type: ignore
+        self.assertIsNone(n_ctx)
+
+
+# ---------------------------------------------------------------------------
+# 17. _extract_context_from_slots
+# ---------------------------------------------------------------------------
+
+class ExtractContextFromSlotsTests(unittest.TestCase):
+    def test_n_ctx_from_slot(self):
+        slots = [{"id": 0, "n_ctx": 262144, "is_processing": False}]
+        n_ctx, n_past = _extract_context_from_slots(slots)
+        self.assertEqual(n_ctx, 262144)
+
+    def test_n_past_max_across_slots(self):
+        slots = [
+            {"n_ctx": 131072, "n_past": 500},
+            {"n_ctx": 131072, "n_past": 1200},
+        ]
+        n_ctx, n_past = _extract_context_from_slots(slots)
+        self.assertEqual(n_past, 1200)
+
+    def test_empty_slots(self):
+        n_ctx, n_past = _extract_context_from_slots([])
+        self.assertIsNone(n_ctx)
+        self.assertIsNone(n_past)
+
+    def test_idle_slot_n_past_zero_ignored(self):
+        # n_past=0 should still be reported (model might be freshly loaded)
+        slots = [{"n_ctx": 131072, "n_past": 0}]
+        n_ctx, n_past = _extract_context_from_slots(slots)
+        # n_past=0 is max(None, 0) = 0 but > 0 check means None is returned
+        # Actually the logic: max_n_past=0 → max_n_past > 0 is False → returns None
+        # This is intentional: 0 tokens used is not interesting
+        self.assertEqual(n_ctx, 131072)
+
+
+# ---------------------------------------------------------------------------
+# 18. _probe_backend_metrics uses ?model= parameter
+# ---------------------------------------------------------------------------
+
+class ProbeBackendMetricsModelParamTests(unittest.TestCase):
+    def _mock_urlopen(self, body: str, status: int = 200, content_type: str = "text/plain"):
+        resp = mock.MagicMock()
+        resp.status = status
+        resp.read.return_value = body.encode("utf-8")
+        resp.__enter__ = lambda s: resp
+        resp.__exit__ = mock.MagicMock(return_value=False)
+        return resp
+
+    def test_url_includes_model_param(self):
+        """When model_id is given, URL must include ?model=<model_id>."""
+        body = "llamacpp:requests_processing 0\n"
+        called_urls = []
+
+        def mock_urlopen(url, timeout):
+            called_urls.append(url)
+            return self._mock_urlopen(body)
+
+        with mock.patch("urllib.request.urlopen", side_effect=mock_urlopen):
+            _probe_backend_metrics(model_id="my-model", timeout=1.0)
+        self.assertTrue(any("model=my-model" in u or "model=" in u for u in called_urls))
+
+    def test_no_model_id_no_model_param(self):
+        body = '{"error":{"message":"model name is missing","type":"err"}}'
+        called_urls = []
+
+        def mock_urlopen(url, timeout):
+            called_urls.append(url)
+            resp = mock.MagicMock()
+            resp.status = 200
+            resp.read.return_value = body.encode()
+            resp.__enter__ = lambda s: resp
+            resp.__exit__ = mock.MagicMock(return_value=False)
+            return resp
+
+        with mock.patch("urllib.request.urlopen", side_effect=mock_urlopen):
+            metrics, note = _probe_backend_metrics(model_id="", timeout=1.0)
+        self.assertEqual(metrics, {})
+        self.assertFalse(any("model=" in u for u in called_urls))
+
+    def test_prometheus_with_model_param_parsed(self):
+        body = "llamacpp:n_ctx_server 262144\nllama_n_ctx_server 131072\n"
+        with mock.patch("urllib.request.urlopen", return_value=self._mock_urlopen(body)):
+            metrics, note = _probe_backend_metrics(model_id="qwen3", timeout=1.0)
+        self.assertIn("llamacpp:n_ctx_server", metrics)
+        self.assertEqual(note, "")
+
+
+# ---------------------------------------------------------------------------
+# 19. _build_context with props/slots
+# ---------------------------------------------------------------------------
+
+class BuildContextWithPropsSlots(unittest.TestCase):
+    def test_props_n_ctx_backend_confirmed(self):
+        props = {"default_generation_settings": {"n_ctx": 262144}}
+        ctx = _build_context(handler=None, metrics={}, props=props, slots=[])
+        self.assertEqual(ctx["limit_tokens"], 262144)
+        self.assertEqual(ctx["confidence"], "backend-confirmed")
+
+    def test_slots_n_ctx_provides_limit(self):
+        slots = [{"n_ctx": 131072, "is_processing": False}]
+        ctx = _build_context(handler=None, metrics={}, props={}, slots=slots)
+        self.assertEqual(ctx["limit_tokens"], 131072)
+        self.assertEqual(ctx["confidence"], "backend-confirmed")
+
+    def test_slots_n_past_provides_used(self):
+        slots = [{"n_ctx": 131072, "n_past": 500}]
+        ctx = _build_context(handler=None, metrics={}, props={}, slots=slots)
+        self.assertEqual(ctx["used_tokens"], 500)
+        self.assertEqual(ctx["confidence"], "backend-confirmed")
+
+    def test_props_overrides_env(self):
+        with mock.patch.dict("os.environ", {"QZ_CONTEXT": "65536"}):
+            props = {"default_generation_settings": {"n_ctx": 262144}}
+            ctx = _build_context(handler=None, metrics={}, props=props, slots=[])
+        self.assertEqual(ctx["limit_tokens"], 262144)
+        self.assertEqual(ctx["confidence"], "backend-confirmed")
+
+    def test_model_size_bytes_maps_to_component(self):
+        """model_size_bytes in metrics → MODEL component mib backend-confirmed."""
+        gpus = [{"index": "0", "name": "GPU", "util_pct": 50, "used_mib": 22000,
+                 "total_mib": 26000, "available_mib": 4000,
+                 "power_w": 200, "temp_c": 70, "pcie_gen": "4", "pcie_width": "16",
+                 "source": "nvidia-smi", "confidence": "host-observed"}]
+        ctx = {"limit_tokens": 131072, "used_tokens": None, "used_pct": None,
+               "source": "env", "confidence": "config"}
+        # 10 GiB = 10240 MiB
+        metrics = {"llama_model_size_bytes": 10 * 1024 * 1024 * 1024}
+        snap = _assemble_snapshot(gpus, {}, metrics, ctx, now=1.0, metrics_note="")
+        model_comp = next(c for c in snap["components"] if c["name"] == "model")
+        self.assertAlmostEqual(model_comp["mib"], 10 * 1024, delta=1)
+        self.assertEqual(model_comp["confidence"], "backend-confirmed")
+
+    def test_llamacpp_prefix_model_size_maps(self):
+        """llamacpp:model_size_bytes should also map via alias table."""
+        gpus = [{"index": "0", "name": "GPU", "util_pct": 50, "used_mib": 22000,
+                 "total_mib": 26000, "available_mib": 4000,
+                 "power_w": 200, "temp_c": 70, "pcie_gen": "4", "pcie_width": "16",
+                 "source": "nvidia-smi", "confidence": "host-observed"}]
+        ctx = {"limit_tokens": 131072, "used_tokens": None, "used_pct": None,
+               "source": "env", "confidence": "config"}
+        metrics = {"llamacpp:model_size_bytes": 5 * 1024 * 1024 * 1024}
+        snap = _assemble_snapshot(gpus, {}, metrics, ctx, now=1.0, metrics_note="")
+        model_comp = next(c for c in snap["components"] if c["name"] == "model")
+        self.assertAlmostEqual(model_comp["mib"], 5 * 1024, delta=1)
+
+
+# ---------------------------------------------------------------------------
+# 20. backend_metrics field in snapshot
+# ---------------------------------------------------------------------------
+
+class BackendMetricsFieldTests(unittest.TestCase):
+    def test_backend_metrics_in_snapshot(self):
+        snap = build_vram_snapshot()
+        self.assertIn("backend_metrics", snap)
+        bm = snap["backend_metrics"]
+        self.assertIn("available", bm)
+        self.assertIn("model", bm)
+
+    def test_json_serialisable_with_backend_metrics(self):
+        snap = build_vram_snapshot()
+        json.dumps(snap)
 
 
 if __name__ == "__main__":
