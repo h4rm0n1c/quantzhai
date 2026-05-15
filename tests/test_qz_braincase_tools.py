@@ -1357,5 +1357,276 @@ class UpdatedHarnessPolicyTests(unittest.TestCase):
         self.assertIn("braincase.render", policy)
 
 
+# =============================================================================
+# SLICE G.1: tier-bounded retrieval and deterministic enum order tests
+# =============================================================================
+
+from proxy.qz_braincase_tools import (
+    RECALL_MODE_ORDER,
+    _recall_candidate_records,
+)
+
+
+def _make_record_g1(
+    record_id: str,
+    memory_domain: str,
+    tier: str,
+    claim: str = "",
+    importance: float = 0.5,
+    visibility: str = "renderable",
+    status: str = "active",
+) -> dict:
+    return {
+        "record_id": record_id,
+        "schema": "braincase/state-record@1",
+        "memory_domain": memory_domain,
+        "tier": tier,
+        "record_type": "constraint",
+        "claim": claim or f"Claim for {record_id}",
+        "summary": f"Summary for {record_id}",
+        "status": status,
+        "visibility": visibility,
+        "confidence": 1.0,
+        "importance": importance,
+        "retention": "project",
+        "created_at_ms": 1778803200000,
+        "updated_at_ms": 1778803200000,
+        "source_refs": [],
+        "tags": ["test"],
+        "supersedes": None,
+        "superseded_by": None,
+        "metadata": None,
+    }
+
+
+def _fresh_db_g1(td: str) -> BrainCaseDB:
+    db = BrainCaseDB(path=Path(td) / "state.sqlite3", enabled=True)
+    assert db.init()
+    return db
+
+
+class RecallTierBoundedRetrievalTests(unittest.TestCase):
+    """Verify that recall retrieves tier-bounded candidates before the limit."""
+
+    def test_query_tier_bounded_before_limit(self):
+        """In-mode record found even when many out-of-mode records match query."""
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db_g1(td)
+            shared_query_term = "turboquery_unique_g1_term"
+
+            # Seed 5 out-of-mode (episodic_memory not in task mode) renderable records
+            for i in range(5):
+                rec = _make_record_g1(
+                    f"rec_out_{i}", "coding", "episodic_memory",
+                    claim=shared_query_term, importance=0.9,
+                )
+                db.put_state_record(rec)
+
+            # Seed 1 in-mode (project_state IS in task mode) record with same query
+            in_mode = _make_record_g1(
+                "rec_in_mode", "coding", "project_state",
+                claim=shared_query_term, importance=0.5,
+            )
+            db.put_state_record(in_mode)
+
+            result = braincase_recall_tool(db, {
+                "purpose": "test",
+                "memory_domain": "coding",
+                "recall_mode": "task",
+                "query": shared_query_term,
+                "limit": 3,  # small limit — out-of-mode records must not fill it
+            })
+
+            # In-mode record must appear despite the limit
+            self.assertIn("rec_in_mode", result.get("source_record_ids", []),
+                          "In-mode record must not be starved by out-of-mode records")
+
+    def test_list_tier_bounded_before_limit(self):
+        """In-mode record found even when many out-of-mode records exist (no query)."""
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db_g1(td)
+
+            # Seed 10 out-of-mode (episodic_memory) records
+            for i in range(10):
+                rec = _make_record_g1(
+                    f"rec_out_{i}", "coding", "episodic_memory", importance=0.9,
+                )
+                db.put_state_record(rec)
+
+            # Seed 1 in-mode (project_state) record
+            in_mode = _make_record_g1(
+                "rec_in_mode_list", "coding", "project_state", importance=0.5,
+            )
+            db.put_state_record(in_mode)
+
+            result = braincase_recall_tool(db, {
+                "purpose": "test",
+                "memory_domain": "coding",
+                "recall_mode": "task",
+                "limit": 3,
+            })
+
+            self.assertIn("rec_in_mode_list", result.get("source_record_ids", []),
+                          "In-mode record must not be starved by out-of-mode records")
+
+    def test_candidates_deduped_across_tiers(self):
+        """Record appearing in multiple tiers (impossible by schema, but helper dedupes)."""
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db_g1(td)
+            rec = _make_record_g1("rec_dedup", "coding", "project_state")
+            db.put_state_record(rec)
+
+            # Call _recall_candidate_records directly with repeated tier
+            candidates = _recall_candidate_records(
+                db,
+                memory_domain="coding",
+                query=None,
+                effective_tiers=["project_state", "project_state"],
+                limit=20,
+            )
+            ids = [c["record_id"] for c in candidates]
+            self.assertEqual(len(ids), len(set(ids)), "Duplicate record IDs must be removed")
+
+    def test_result_still_render_packet_shaped(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db_g1(td)
+            result = braincase_recall_tool(db, {
+                "purpose": "test",
+                "memory_domain": "coding",
+                "recall_mode": "task",
+            })
+            for field in _RENDER_PACKET_REQUIRED_FIELDS:
+                self.assertIn(field, result)
+
+    def test_result_still_budget_bounded(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db_g1(td)
+            for i in range(10):
+                rec = _make_record_g1(
+                    f"rec_budget_{i}", "coding", "project_state",
+                    claim="A" * 200, importance=float(i) / 10,
+                )
+                db.put_state_record(rec)
+
+            result = braincase_recall_tool(db, {
+                "purpose": "test",
+                "memory_domain": "coding",
+                "recall_mode": "task",
+                "budget_tokens": 80,
+            })
+            rendered = result.get("rendered_text", "")
+            # budget_tokens=80 → char budget = max(80, 80*4) = 320
+            self.assertLessEqual(len(rendered), 320 + 50,
+                                 "rendered_text must stay within budget")
+
+    def test_recall_unknown_mode_still_warns(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db_g1(td)
+            result = braincase_recall_tool(db, {
+                "purpose": "test",
+                "memory_domain": "coding",
+                "recall_mode": "non_existent_mode",
+            })
+            self.assertIn("unknown_recall_mode", result.get("warnings", []))
+            self.assertEqual(result.get("source_record_ids", []), [])
+
+    def test_recall_empty_tier_intersection_still_warns(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db_g1(td)
+            result = braincase_recall_tool(db, {
+                "purpose": "test",
+                "memory_domain": "coding",
+                "recall_mode": "task",
+                "tiers": ["episodic_memory"],  # not in task mode
+            })
+            self.assertIn("tier_not_allowed_for_mode", result.get("warnings", []))
+
+
+class RecallEnumOrderTests(unittest.TestCase):
+    """Verify that the recall_mode enum has deterministic order."""
+
+    def test_recall_mode_order_constant_is_tuple(self):
+        self.assertIsInstance(RECALL_MODE_ORDER, tuple)
+
+    def test_recall_mode_order_matches_dict_keys(self):
+        self.assertEqual(list(RECALL_MODE_ORDER), list(RECALL_MODE_TIERS.keys()))
+
+    def test_recall_mode_enum_in_tool_def_is_deterministic(self):
+        enum = BRAINCASE_RECALL_TOOL_DEF["parameters"]["properties"]["recall_mode"]["enum"]
+        self.assertIsInstance(enum, list)
+        self.assertEqual(enum, list(RECALL_MODE_ORDER))
+
+    def test_recall_mode_enum_starts_with_task(self):
+        enum = BRAINCASE_RECALL_TOOL_DEF["parameters"]["properties"]["recall_mode"]["enum"]
+        self.assertEqual(enum[0], "task", "task mode should be first (default)")
+
+    def test_recall_mode_enum_contains_all_modes(self):
+        enum = BRAINCASE_RECALL_TOOL_DEF["parameters"]["properties"]["recall_mode"]["enum"]
+        for mode in ("task", "project", "procedure", "artifact", "open_loops"):
+            self.assertIn(mode, enum)
+
+    def test_recall_mode_enum_stable_across_calls(self):
+        """Enum should be identical across repeated calls — no frozenset non-determinism."""
+        e1 = BRAINCASE_RECALL_TOOL_DEF["parameters"]["properties"]["recall_mode"]["enum"]
+        e2 = BRAINCASE_RECALL_TOOL_DEF["parameters"]["properties"]["recall_mode"]["enum"]
+        self.assertEqual(e1, e2)
+
+
+class RecallPartialTierDroppedWarningTests(unittest.TestCase):
+    """Verify behaviour when some caller-supplied tiers are outside the mode."""
+
+    def _fresh_db(self, td):
+        db = BrainCaseDB(path=Path(td) / "state.sqlite3", enabled=True)
+        assert db.init()
+        return db
+
+    def test_partial_out_of_mode_tiers_warns(self):
+        """Mixed tiers (some in mode, some not) — packet includes dropped warning."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            result = braincase_recall_packet(
+                db,
+                purpose="test",
+                memory_domain="coding",
+                recall_mode="task",
+                tiers=["project_state", "episodic_memory"],  # episodic not in task
+            )
+            self.assertIn("tier_narrowing_dropped_out_of_mode", result.get("warnings", []),
+                          "Should warn that episodic_memory was dropped from task mode tiers")
+
+    def test_partial_out_of_mode_still_returns_valid_packet(self):
+        """Packet is still valid despite some tiers being dropped."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            result = braincase_recall_packet(
+                db,
+                purpose="test",
+                memory_domain="coding",
+                recall_mode="task",
+                tiers=["project_state", "episodic_memory"],
+            )
+            for field in _RENDER_PACKET_REQUIRED_FIELDS:
+                self.assertIn(field, result)
+
+    def test_all_in_mode_tiers_no_dropped_warning(self):
+        """No dropped warning when all caller tiers are within the mode."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            result = braincase_recall_packet(
+                db,
+                purpose="test",
+                memory_domain="coding",
+                recall_mode="task",
+                tiers=["project_state"],  # project_state IS in task mode
+            )
+            self.assertNotIn("tier_narrowing_dropped_out_of_mode", result.get("warnings", []))
+
+    def test_write_update_search_inspect_remain_unexposed(self):
+        names = [d.get("name") for d in get_braincase_tool_definitions(env=_ENABLED_ENV)]
+        for forbidden in ("braincase.write", "braincase.update",
+                          "braincase.search", "braincase.inspect"):
+            self.assertNotIn(forbidden, names)
+
+
 if __name__ == "__main__":
     unittest.main()

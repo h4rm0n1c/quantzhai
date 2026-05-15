@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Slice F/G: BrainCase harness/tool plane — braincase.render + braincase.recall.
+"""Slices F/G/G.1: BrainCase harness/tool plane — braincase.render + braincase.recall.
 
 Feature flag: QZ_BRAINCASE_TOOLS_ENABLED (default: disabled).
 
@@ -17,7 +17,7 @@ When enabled:
   - DB availability is checked at execution time; disabled DB returns a
     safe warning packet rather than failing the proxy request.
 
-braincase.recall semantics (Slice G):
+braincase.recall semantics (Slices G/G.1):
   Recall is tier-routed retrieval → scoped filtering → bounded RenderPacket.
   It is NOT a raw dump, not a search-all, not a cross-domain recall.
   Predefined recall modes control which memory tiers are searched.
@@ -83,7 +83,10 @@ RECALL_MODE_TIERS: dict[str, list[str]] = {
     ],
 }
 
+# Stable insertion order from RECALL_MODE_TIERS (Python 3.7+ dict preserves order).
 _VALID_RECALL_MODES: frozenset[str] = frozenset(RECALL_MODE_TIERS)
+# Deterministic sequence used for the tool schema enum.
+RECALL_MODE_ORDER: tuple[str, ...] = tuple(RECALL_MODE_TIERS.keys())
 
 
 def tiers_for_recall_mode(recall_mode: str) -> list[str] | None:
@@ -212,7 +215,7 @@ BRAINCASE_RECALL_TOOL_DEF: dict = {
                     "artifact: file/commit/doc references and episodic anchors. "
                     "open_loops: current unfinished work in working/project state."
                 ),
-                "enum": list(_VALID_RECALL_MODES),
+                "enum": list(RECALL_MODE_ORDER),
                 "default": "task",
             },
             "query": {
@@ -396,9 +399,9 @@ def braincase_recall_packet(
     Does not write records. No automatic ingestion occurs.
     """
     try:
-        from .qz_braincase_render import braincase_render_packet
+        from .qz_braincase_render import make_render_packet_id, render_pack
     except ImportError:
-        from qz_braincase_render import braincase_render_packet
+        from qz_braincase_render import make_render_packet_id, render_pack
 
     ts = now_ms if now_ms is not None else int(time.time() * 1000)
 
@@ -411,12 +414,21 @@ def braincase_recall_packet(
             ts=ts,
         )
 
-    # Validate memory_domain (braincase_render_packet also checks, but be explicit)
+    # Validate memory_domain
     if not memory_domain or not isinstance(memory_domain, str) or not memory_domain.strip():
         return _warning_packet(
             "memory_domain_required",
             purpose=purpose,
             memory_domain="",
+            ts=ts,
+        )
+
+    # Guard disabled DB before attempting any retrieval
+    if not db.enabled:
+        return _warning_packet(
+            "braincase_db_disabled",
+            purpose=purpose,
+            memory_domain=memory_domain,
             ts=ts,
         )
 
@@ -430,7 +442,10 @@ def braincase_recall_packet(
             ts=ts,
         )
 
-    # Resolve effective tiers (caller narrowing — no widening allowed)
+    # Resolve effective tiers (caller narrowing — no widening allowed).
+    # Out-of-mode tiers are dropped; a warning is appended to the final packet.
+    # If the intersection is empty, a warning packet is returned immediately.
+    dropped_out_of_mode: bool = False
     effective_tiers: list[str]
     if tiers is not None and isinstance(tiers, list):
         mode_tier_set = set(mode_tiers)
@@ -442,6 +457,8 @@ def braincase_recall_packet(
                 memory_domain=memory_domain,
                 ts=ts,
             )
+        if len(intersection) < len([t for t in tiers if isinstance(t, str)]):
+            dropped_out_of_mode = True
         effective_tiers = intersection
     else:
         effective_tiers = list(mode_tiers)
@@ -449,17 +466,29 @@ def braincase_recall_packet(
     budget_tokens = _clamp_budget(budget_tokens)
     limit = _clamp_limit(limit)
 
-    return braincase_render_packet(
+    # Tier-bounded retrieval: query/list each tier separately before the limit
+    # so in-mode records are never starved by out-of-mode results.
+    candidates = _recall_candidate_records(
         db,
-        purpose=purpose,
         memory_domain=memory_domain,
         query=query if isinstance(query, str) else None,
-        tiers=effective_tiers,
-        record_ids=None,
-        budget_tokens=budget_tokens,
+        effective_tiers=effective_tiers,
         limit=limit,
+    )
+
+    packet = render_pack(
+        candidates,
+        purpose=purpose,
+        memory_domain=memory_domain,
+        budget_tokens=budget_tokens,
+        tiers=effective_tiers,
         now_ms=ts,
     )
+
+    if dropped_out_of_mode:
+        packet["warnings"].append("tier_narrowing_dropped_out_of_mode")
+
+    return packet
 
 # ---------------------------------------------------------------------------
 # braincase.recall executor (Slice G)
@@ -497,6 +526,65 @@ def braincase_recall_tool(db: "BrainCaseDB", args: dict) -> dict:
         budget_tokens=_clamp_budget(args.get("budget_tokens", 600)),
         limit=_clamp_limit(args.get("limit", 12)),
     )
+
+# ---------------------------------------------------------------------------
+# Internal retrieval helper (Slice G.1)
+# ---------------------------------------------------------------------------
+
+def _recall_candidate_records(
+    db: "BrainCaseDB",
+    *,
+    memory_domain: str,
+    query: str | None,
+    effective_tiers: list[str],
+    limit: int,
+) -> list[dict]:
+    """Retrieve candidate StateRecords bounded to effective_tiers before the limit.
+
+    Queries each tier separately so the per-call limit is applied within
+    each tier, not across all tiers combined. Without this, a single
+    list/search call would return `limit` records across all tiers and
+    valid in-mode records beyond the limit would be silently starved.
+
+    Deduplicates by record_id (preserving first-seen occurrence).
+    Ranks by importance desc, updated_at_ms desc, created_at_ms desc.
+    Returns at most `limit` records.
+
+    Returns [] on DB error or disabled DB (callers should guard DB state first).
+    No writes. No automatic ingestion.
+    """
+    seen: dict[str, dict] = {}
+    per_tier_limit = max(limit, 1)
+
+    for tier in effective_tiers:
+        if query:
+            records = db.search_state_records(
+                query,
+                memory_domain=memory_domain,
+                tier=tier,
+                limit=per_tier_limit,
+            )
+        else:
+            records = db.list_state_records(
+                memory_domain=memory_domain,
+                tier=tier,
+                limit=per_tier_limit,
+            )
+        for rec in records:
+            rid = rec.get("record_id")
+            if rid and rid not in seen:
+                seen[rid] = rec
+
+    candidates = sorted(
+        seen.values(),
+        key=lambda r: (
+            -float(r.get("importance") or 0),
+            -int(r.get("updated_at_ms") or 0),
+            -int(r.get("created_at_ms") or 0),
+        ),
+    )
+    return candidates[:limit]
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers

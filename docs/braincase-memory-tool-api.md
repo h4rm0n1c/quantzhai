@@ -781,6 +781,33 @@ No raw StateRecords. No automatic ingestion.
 Tests: tests/test_qz_braincase_tools.py — 124 tests, 1966 total
 ```
 
+### Slice G.1: tier-bounded retrieval + deterministic enum order — COMPLETE
+
+```text
+Fixed in proxy/qz_braincase_tools.py:
+
+_recall_candidate_records(db, *, memory_domain, query, effective_tiers, limit)
+  New internal helper. Queries each effective tier separately (not all at once),
+  deduplicates by record_id, ranks by importance/updated_at/created_at desc,
+  returns at most limit records. Ensures in-mode records are never starved by
+  out-of-mode records that happen to match a shared limit.
+
+braincase_recall_packet() updated:
+  - Now calls _recall_candidate_records() + render_pack() directly instead of
+    delegating to braincase_render_packet(). No duplicate render logic.
+  - DB disabled check moved before retrieval (returns braincase_db_disabled warning).
+  - When caller-supplied tiers are partially out-of-mode (non-empty intersection):
+    the intersection is used AND "tier_narrowing_dropped_out_of_mode" warning is
+    appended to the returned packet (previously silently dropped).
+
+RECALL_MODE_ORDER constant added:
+  tuple(RECALL_MODE_TIERS.keys()) — stable insertion order.
+BRAINCASE_RECALL_TOOL_DEF enum now uses list(RECALL_MODE_ORDER) instead of
+  list(_VALID_RECALL_MODES) (frozenset — previously non-deterministic order).
+
+Tests: tests/test_qz_braincase_tools.py — 141 tests, 1983 total
+```
+
 ---
 
 ## Open questions

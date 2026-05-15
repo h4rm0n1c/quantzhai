@@ -505,6 +505,7 @@ Slice D.1: COMPLETE — conflict marker detection tightened
 Slice E:   COMPLETE — qz_braincase_render.py + render_pack/braincase_render_packet + 53 tests (1819 total)
 Slice F:   COMPLETE — qz_braincase_tools.py + braincase.render tool surface + 64 tests (1906 total)
 Slice G:   COMPLETE — braincase.recall semantics + tier routing + 124 tests (1966 total)
+Slice G.1: COMPLETE — tier-bounded retrieval + deterministic enum + 141 tests (1983 total)
 ```
 
 Slice G: what was done

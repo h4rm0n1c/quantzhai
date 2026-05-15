@@ -79,9 +79,9 @@ P4 config/var/script ownership cleanup
 Status:
 
 ```text
-Slices A–G (and C.1, D.1) complete.
-  Slice G: braincase.recall semantics defined and implemented.
-  5 recall modes with tier routing (task/project/procedure/artifact/open_loops).
+Slices A–G (and C.1, D.1, G.1) complete.
+  Slice G/G.1: recall semantics + tier-bounded retrieval + deterministic enum.
+  5 recall modes; retrieval bounded per-tier before limit; enum order stable.
   braincase.recall and braincase.render both exposed when QZ_BRAINCASE_TOOLS_ENABLED.
   RenderPacket is the only model-visible memory output.
   write/update/search/inspect remain unexposed.
