@@ -321,6 +321,74 @@ def control_plane_rows(cp: Optional[dict]) -> List[Tuple[str, str]]:
                     rows.append(("hint", h[:80]))
                     break
 
+    # Service status from service_status field (added in #47 slice 2)
+    ss = cp.get("service_status") or {}
+    if ss and ss.get("schema") == "qz.service.status.v1":
+        svc_parts = []
+        for key in ("proxy_state", "catalog_state", "backend_state", "model_state"):
+            val = str(ss.get(key) or "")
+            if val:
+                svc_parts.append(f"{key.replace('_state', '')}={val}")
+        adm = str(ss.get("request_admission") or "")
+        if adm and adm != "accepted":
+            svc_parts.append(f"admission={adm}")
+        if svc_parts:
+            rows.append(("service", "  ".join(svc_parts)))
+
+    # Recovery state from recovery field (added in #47 slice 4)
+    recovery = cp.get("recovery") or {}
+    if recovery:
+        rec_state = str(ss.get("recovery_state") or recovery.get("state") or "none")
+        op_action = str(ss.get("operator_action") or "")
+        runtime = recovery.get("runtime_state") or {}
+        active_req = int((recovery.get("active_requests") or {}).get("count") or 0)
+        jobs_d = recovery.get("jobs") or {}
+        job_count = int(jobs_d.get("count") or 0)
+        current_action = str(runtime.get("current_action") or "")
+        backoff_d = recovery.get("backoff") or {}
+
+        # Only add recovery row when interesting (not all-idle)
+        rec_parts = [f"recovery={rec_state}"]
+        if op_action:
+            rec_parts.append(f"action={op_action}")
+        if current_action:
+            rec_parts.append(f"running={current_action}")
+        if active_req > 0:
+            rec_parts.append(f"active_req={active_req}")
+        if job_count > 0:
+            rec_parts.append(f"jobs={job_count}")
+        if backoff_d.get("active") or backoff_d.get("manual_required"):
+            bk_act = str(backoff_d.get("action") or "")
+            if backoff_d.get("manual_required"):
+                rec_parts.append(f"manual_required={bk_act or 'true'}")
+            else:
+                rec_parts.append(f"backoff={bk_act or 'active'}")
+
+        interesting = (
+            rec_state not in ("none", "")
+            or op_action
+            or current_action
+            or active_req > 0
+            or job_count > 0
+            or backoff_d.get("active")
+            or backoff_d.get("manual_required")
+        )
+        if interesting:
+            rows.append(("recovery", "  ".join(rec_parts)))
+
+        # Latest async job
+        jobs_list = jobs_d.get("jobs") or []
+        if jobs_list:
+            lj = jobs_list[0] if isinstance(jobs_list[0], dict) else {}
+            lj_action = str(lj.get("action") or "")
+            lj_state = str(lj.get("state") or "")
+            lj_id = str(lj.get("request_id") or "")
+            lj_err = str(lj.get("error") or "")
+            job_row = f"{lj_action}  {lj_state}  {lj_id}"
+            if lj_err:
+                job_row += f"  error={lj_err[:50]}"
+            rows.append(("job", job_row))
+
     return rows
 
 
@@ -588,8 +656,13 @@ def _path_without_query(path: str) -> str:
 def _is_monitor_poll(path: str) -> bool:
     path = _path_without_query(path)
     return (
-        path in {"/health", "/ready", "/qz/status", "/qz/control-plane", "/qz/control-plane/status"}
+        path in {
+            "/health", "/ready", "/qz/status",
+            "/qz/control-plane", "/qz/control-plane/status",
+            "/qz/recovery", "/qz/recovery/status",
+        }
         or path.startswith("/qz/telemetry")
+        or path.startswith("/qz/recovery/jobs")
     )
 
 

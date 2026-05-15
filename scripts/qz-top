@@ -82,6 +82,35 @@ class BenchmarkSummary:
 
 
 @dataclass
+class ServiceRecoveryStatus:
+    proxy_state: str = ""
+    catalog_state: str = ""
+    backend_state: str = ""
+    model_state: str = ""
+    request_admission: str = ""
+    recovery_state: str = ""
+    operator_action: str = ""
+    recoverable: bool = False
+    retryable: bool = False
+    fatal: bool = False
+    last_error: str = ""
+    active_requests: int = 0
+    current_recovery_action: str = ""
+    current_recovery_request_id: str = ""
+    last_recovery_action: str = ""
+    last_recovery_error: str = ""
+    backoff_action: str = ""
+    backoff_active: bool = False
+    manual_required: bool = False
+    job_count: int = 0
+    latest_job_action: str = ""
+    latest_job_state: str = ""
+    latest_job_request_id: str = ""
+    latest_job_error: str = ""
+    operator_hint: str = ""
+
+
+@dataclass
 class ModelStatus:
     ready: bool = False
     profile: str = ""
@@ -241,6 +270,75 @@ def model_status_from_control_plane(cp: Optional[dict]) -> "ModelStatus":
     )
 
 
+def service_recovery_from_control_plane(cp: Optional[dict]) -> "ServiceRecoveryStatus":
+    """Parse service_status and recovery fields from /qz/control-plane. Never raises."""
+    if not isinstance(cp, dict):
+        return ServiceRecoveryStatus()
+    try:
+        ss = cp.get("service_status") or {}
+        recovery = cp.get("recovery") or {}
+        runtime = recovery.get("runtime_state") or {}
+        active_req_d = recovery.get("active_requests") or {}
+        jobs_d = recovery.get("jobs") or {}
+        backoff_d = recovery.get("backoff") or {}
+
+        # Operator hint: prefer service_status, fall back to recovery or top-level
+        hints = (
+            list(ss.get("operator_hints") or [])
+            or list(recovery.get("operator_hints") or [])
+            or list(cp.get("operator_hints") or [])
+        )
+        operator_hint = str(hints[0])[:120] if hints else ""
+
+        # Attempts dict for backoff info
+        attempts = runtime.get("attempts") or {}
+        backoff_action = str(backoff_d.get("action") or "")
+        backoff_active = bool(backoff_d.get("active", False))
+        manual_required = bool(backoff_d.get("manual_required", False))
+        # Also check per-action backoff in attempts
+        if not backoff_action:
+            for act, ainfo in attempts.items():
+                if isinstance(ainfo, dict) and ainfo.get("backoff_active"):
+                    backoff_action = act
+                    backoff_active = True
+                    manual_required = bool(ainfo.get("manual_required", False))
+                    break
+
+        # Latest job
+        jobs_list = jobs_d.get("jobs") or []
+        latest_job = jobs_list[0] if jobs_list else {}
+
+        return ServiceRecoveryStatus(
+            proxy_state=str(ss.get("proxy_state") or ""),
+            catalog_state=str(ss.get("catalog_state") or ""),
+            backend_state=str(ss.get("backend_state") or ""),
+            model_state=str(ss.get("model_state") or ""),
+            request_admission=str(ss.get("request_admission") or ""),
+            recovery_state=str(ss.get("recovery_state") or ""),
+            operator_action=str(ss.get("operator_action") or ""),
+            recoverable=bool(ss.get("recoverable", False)),
+            retryable=bool(ss.get("retryable", False)),
+            fatal=bool(ss.get("fatal", False)),
+            last_error=str(ss.get("last_error") or ""),
+            active_requests=int(active_req_d.get("count") or 0),
+            current_recovery_action=str(runtime.get("current_action") or ""),
+            current_recovery_request_id=str(runtime.get("current_request_id") or ""),
+            last_recovery_action=str(runtime.get("last_recovery_action") or ""),
+            last_recovery_error=str(runtime.get("last_recovery_error") or ""),
+            backoff_action=backoff_action,
+            backoff_active=backoff_active,
+            manual_required=manual_required,
+            job_count=int(jobs_d.get("count") or 0),
+            latest_job_action=str(latest_job.get("action") or ""),
+            latest_job_state=str(latest_job.get("state") or ""),
+            latest_job_request_id=str(latest_job.get("request_id") or ""),
+            latest_job_error=str(latest_job.get("error") or ""),
+            operator_hint=operator_hint,
+        )
+    except Exception:
+        return ServiceRecoveryStatus()
+
+
 def _path_without_query(path: str) -> str:
     return str(path or "").split("?", 1)[0]
 
@@ -248,8 +346,13 @@ def _path_without_query(path: str) -> str:
 def _is_monitor_poll(path: str) -> bool:
     path = _path_without_query(path)
     return (
-        path in {"/health", "/ready", "/qz/status", "/qz/control-plane", "/qz/control-plane/status"}
+        path in {
+            "/health", "/ready", "/qz/status",
+            "/qz/control-plane", "/qz/control-plane/status",
+            "/qz/recovery", "/qz/recovery/status",
+        }
         or path.startswith("/qz/telemetry")
+        or path.startswith("/qz/recovery/jobs")
     )
 
 
@@ -980,7 +1083,7 @@ class UI:
         self.draw_status_bar(1, 1, backend_ok, proxy_ok)
         self.add(2, 0, "─" * max(1, w - 1), self.dim)
 
-    def draw_profile(self, y: int, x: int, h: int, w: int, model_status: ModelStatus):
+    def draw_profile(self, y: int, x: int, h: int, w: int, model_status: ModelStatus, srs: Optional["ServiceRecoveryStatus"] = None):
         self.box(y, x, h, w, "PROFILE")
         labels = ["CTX", "NP", "SPLIT", "BATCH", "UBATCH", "CACHE", "REUSE", "KV"]
         values = [
@@ -1039,6 +1142,48 @@ class UI:
         if model_status.error:
             state_text += f" error={model_status.error}"
         self.add(y + 8, x + 12, clip(state_text, w - 14), state_attr)
+
+        # Service/recovery rows (rows 9 and 10 of the extended profile box)
+        if srs is not None and h >= 12:
+            svc_parts = []
+            if srs.proxy_state:
+                svc_parts.append(f"proxy={srs.proxy_state}")
+            if srs.catalog_state:
+                svc_parts.append(f"catalog={srs.catalog_state}")
+            if srs.backend_state:
+                svc_parts.append(f"backend={srs.backend_state}")
+            if srs.model_state:
+                svc_parts.append(f"model={srs.model_state}")
+            if srs.request_admission and srs.request_admission not in ("accepted", ""):
+                svc_parts.append(f"admission={srs.request_admission}")
+            svc_attr = self.white
+            if srs.fatal:
+                svc_attr = self.red | self.bold
+            elif srs.backend_state in ("unreachable", "failed", "unhealthy"):
+                svc_attr = self.yellow | self.bold
+            elif srs.model_state in ("failed", "mismatch"):
+                svc_attr = self.yellow | self.bold
+            self.add(y + 9, x + 2, "SERVICE", self.dim | self.bold)
+            self.add(y + 9, x + 12, clip("  ".join(svc_parts) or "—", w - 14), svc_attr)
+
+            rec_parts = [f"state={srs.recovery_state or 'none'}"]
+            if srs.operator_action:
+                rec_parts.append(f"action={srs.operator_action}")
+            if srs.current_recovery_action:
+                rec_parts.append(f"running={srs.current_recovery_action}")
+            rec_parts.append(f"active_req={srs.active_requests}")
+            rec_parts.append(f"jobs={srs.job_count}")
+            if srs.backoff_active:
+                rec_parts.append(f"backoff={srs.backoff_action or 'active'}")
+            if srs.manual_required:
+                rec_parts.append("manual_required")
+            rec_attr = self.white
+            if srs.recovery_state in ("failed", "manual_required"):
+                rec_attr = self.red | self.bold
+            elif srs.recovery_state in ("available", "in_progress", "throttled"):
+                rec_attr = self.yellow | self.bold
+            self.add(y + 10, x + 2, "RECOVERY", self.dim | self.bold)
+            self.add(y + 10, x + 12, clip("  ".join(rec_parts), w - 14), rec_attr)
 
     def draw_container(self, y: int, x: int, h: int, w: int):
         self.box(y, x, h, w, "CONTAINER")
@@ -1175,6 +1320,7 @@ class UI:
         gpus = parse_gpus()
 
         rates = Rates(recent=[])
+        cp = None
         # Prefer /qz/control-plane (proxy-owned summary); fall back to /qz/status.
         if proxy_ok:
             cp = control_plane_status()
@@ -1186,20 +1332,21 @@ class UI:
             rates = merge_telemetry(rates, telemetry_recent())
         else:
             model_status = ModelStatus()
+        srs = service_recovery_from_control_plane(cp)
         benchmark = latest_benchmark()
 
         self.draw_header(backend_ok, proxy_ok, gpus)
 
-        if h < 27 or w < 100:
-            self.add(4, 2, "Terminal too small. Need roughly 100x27.", self.red | self.bold)
+        if h < 29 or w < 100:
+            self.add(4, 2, "Terminal too small. Need roughly 100x29.", self.red | self.bold)
             self.stdscr.refresh()
             return
 
         full_w = w - 2
-        self.draw_profile(3, 0, 10, full_w, model_status)
-        self.draw_container(13, 0, 5, full_w)
-        self.draw_gpu(18, 0, 5 + min(2, len(gpus)), full_w, gpus)
-        throughput_y = 23 + min(2, len(gpus))
+        self.draw_profile(3, 0, 12, full_w, model_status, srs)
+        self.draw_container(15, 0, 5, full_w)
+        self.draw_gpu(20, 0, 5 + min(2, len(gpus)), full_w, gpus)
+        throughput_y = 25 + min(2, len(gpus))
         self.draw_throughput(throughput_y, 0, 9, full_w, rates)
         benchmark_h = 5 if benchmark is not None else 0
         if benchmark is not None:
@@ -1235,6 +1382,7 @@ def once():
     proxy = curl_health(os.environ.get("QZ_PROXY_HOST", "127.0.0.1"), os.environ.get("QZ_PROXY_PORT", "18180"))
     gpus = parse_gpus()
     rates = Rates(recent=[])
+    cp = None
     # Prefer /qz/control-plane (proxy-owned summary); fall back to /qz/status.
     if proxy:
         cp = control_plane_status()
@@ -1246,6 +1394,7 @@ def once():
         rates = merge_telemetry(rates, telemetry_recent())
     else:
         model_status = ModelStatus()
+    srs = service_recovery_from_control_plane(cp)
     benchmark = latest_benchmark()
 
     backend_light = "●" if backend else "○"
@@ -1277,6 +1426,41 @@ def once():
     print(f"  state    : {state}")
     if model_status.error:
         print(f"  error    : {model_status.error}")
+    # Service/recovery state (from /qz/control-plane service_status + recovery)
+    if srs.proxy_state or srs.backend_state or srs.model_state:
+        svc_parts = []
+        if srs.proxy_state:
+            svc_parts.append(f"proxy={srs.proxy_state}")
+        if srs.catalog_state:
+            svc_parts.append(f"catalog={srs.catalog_state}")
+        if srs.backend_state:
+            svc_parts.append(f"backend={srs.backend_state}")
+        if srs.model_state:
+            svc_parts.append(f"model={srs.model_state}")
+        if srs.request_admission:
+            svc_parts.append(f"admission={srs.request_admission}")
+        print(f"SERVICE  {'  '.join(svc_parts)}")
+    rec_parts = [f"state={srs.recovery_state or 'none'}"]
+    if srs.operator_action:
+        rec_parts.append(f"action={srs.operator_action}")
+    if srs.current_recovery_action:
+        rec_parts.append(f"running={srs.current_recovery_action}")
+    rec_parts.append(f"active_req={srs.active_requests}")
+    rec_parts.append(f"jobs={srs.job_count}")
+    if srs.backoff_active:
+        rec_parts.append(f"backoff={srs.backoff_action or 'active'}")
+    if srs.manual_required:
+        rec_parts.append("manual_required")
+    print(f"RECOVERY  {'  '.join(rec_parts)}")
+    if srs.operator_action and srs.operator_hint:
+        print(f"OPERATOR  action={srs.operator_action}  hint={srs.operator_hint}")
+    if srs.job_count > 0 and srs.latest_job_action:
+        job_line = f"JOB  latest={srs.latest_job_action}  {srs.latest_job_state}  {srs.latest_job_request_id}"
+        if srs.latest_job_error:
+            job_line += f"  error={srs.latest_job_error[:60]}"
+        print(job_line)
+    if srs.fatal and srs.last_error:
+        print(f"FATAL  {srs.last_error[:120]}")
     if gpus:
         baseline = update_vram_baseline(gpus, {})
         used, base, delta, available, total = vram_split_summary(gpus, baseline)

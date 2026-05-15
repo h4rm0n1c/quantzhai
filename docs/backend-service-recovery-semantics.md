@@ -654,7 +654,7 @@ Other actions (restart_backend, refresh_catalog, clear_failure) remain synchrono
 | `tests/test_qz_control_plane.py` | Control-plane test coverage |
 | `tests/test_qz_responses_error.py` | Responses error test coverage |
 | `#2` | Phase 1 SQLite substrate (prerequisite for durable recovery tracking) |
-| `#6` | Backend VRAM telemetry and monitor polish |
+| `#6` | Backend VRAM telemetry and monitor polish — slice 1 done: qz-top/qz-thoughts show service_status/recovery/jobs/active_requests |
 | `#45` (done) | Remove local qz-codex catalog fallback — completed; proxy is sole path |
 | `#46` | Replace qz-write-runtime-state launcher trace |
 | `#47` | This issue — normalize backend service status and recovery semantics |
