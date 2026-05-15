@@ -623,15 +623,36 @@ Tests: BrainCaseDBSliceC1Tests — 12 new tests (92 total in file), all passing
 Full suite: 1693 tests passing
 ```
 
-### Slice D: braincase.write and update
-
-After Slice C search works:
+### Slice D: braincase.write and update — COMPLETE
 
 ```text
-Implement write tool path with scope_resolve, dedup_check, conflict_check, source_link.
-Implement update (supersede, correct, retire, link).
-Tests: explicit write round-trips, dedup detection, conflict surfacing.
-Important: DB writes only through explicit tool path.
+New module: proxy/qz_braincase_write.py
+
+Helpers (deterministic accelerators — not policy monarchs):
+  scope_resolve()      — confirms memory_domain present and in allowed scope.
+                         Must not infer/create/normalize/grant domain values.
+  redaction_check()    — rejects forbidden raw fields before storage.
+                         Aligned with BrainCaseDB._FORBIDDEN_RECORD_FIELDS.
+  dedup_check()        — finds same normalized claim in same domain/tier.
+                         v1 exact match; hint only — does not block.
+  conflict_check()     — surfaces opposing constraint markers (crude substring, v1).
+                         Hint only — does not block.
+  source_link()        — stores supplied SourceRefs; reports missing refs as warnings.
+                         Missing refs warn, not error.
+
+Write/update entry points:
+  braincase_write_state_record(db, record, *, source_refs, allowed_memory_domains, ...)
+    -> {ok, record_id, stored, errors, warnings, dedup, conflicts, source_link}
+    Flow: redaction -> scope -> source_link -> dedup (hint) -> conflict (hint) -> put_state_record
+  braincase_update_state_record(db, record_id, operation, *, new_record, reason, ...)
+    -> {ok, record_id, operation, stored, errors, warnings, new_record_id?}
+    Supported: retire, supersede.
+    Deferred (returns unsupported result): correct, link.
+
+Tests: tests/test_qz_braincase_write.py — 51 tests, all passing
+Full suite: 1744 tests passing
+
+Not added: model-facing tools, HTTP routes, harness injection, RenderPackets, automatic ingestion.
 ```
 
 ### Slice E: braincase.render bounded packet builder

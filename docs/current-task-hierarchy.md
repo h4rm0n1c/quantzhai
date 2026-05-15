@@ -266,11 +266,21 @@ tests/test_qz_braincase_db.py — BrainCaseDBSliceC1Tests: 12 new tests (92 tota
 All 1693 tests passing.
 ```
 
-Blocked by for Slice D:
+Slice D acceptance (COMPLETE):
 
 ```text
-Slice C is complete. Slice D (explicit braincase.write/update tool path) may now start.
-No model-facing write API yet — Slice D designs the explicit write path.
+proxy/qz_braincase_write.py — new module:
+  scope_resolve, redaction_check, dedup_check, conflict_check, source_link
+  braincase_write_state_record, braincase_update_state_record (retire + supersede)
+tests/test_qz_braincase_write.py — 51 tests, all passing
+Full suite: 1744 tests passing
+```
+
+Blocked by for Slice E:
+
+```text
+Slice D is complete. Slice E (render packet builder) may now start.
+Or Slice D.1 for link/correct operations if preferred before render.
 ```
 
 Best resource:
@@ -465,20 +475,29 @@ cross-domain isolation tests
 
 ---
 
-## Next implementation prompt: BrainCase Slice D (explicit write/update tool path)
+## Next implementation prompt: BrainCase Slice E (render packet builder)
 
-**Slices A, B, and C are complete. Slice D may now start.**
+**Slices A through D (including C.1) are complete. Slice E may now start.**
 
-Read `docs/braincase-memory-tool-api.md` before starting Slice D.
+Read `docs/braincase-memory-tool-api.md` before starting Slice E.
 
 ```text
-Slice A: COMPLETE — schemas + fixtures + 44 tests
-Slice B: COMPLETE — BrainCaseDB schema v3 + put/get/list/retire/supersede + 33 new tests
-Slice C: COMPLETE — query_plan/search/inspect helpers + FTS5 + 36 new tests (80 total)
-Slice D: NEXT — explicit braincase.write/update tool path API design + implementation
-Slice E: braincase.render bounded packet builder
-Slice F: harness injection for memory tool-use policy
+Slice A:   COMPLETE — schemas + fixtures + 44 tests
+Slice B:   COMPLETE — BrainCaseDB schema v3 + put/get/list/retire/supersede + 33 new tests
+Slice C:   COMPLETE — query_plan/search/inspect + FTS5 + 36 new tests (80 total)
+Slice C.1: COMPLETE — rebuild_fts_index / backfill + 12 new tests (92 total)
+Slice D:   COMPLETE — qz_braincase_write.py helpers + write/update paths + 51 tests (1744 total)
+Slice E:   NEXT — braincase.render bounded packet builder
+Slice F:   harness injection for memory tool-use policy
 ```
+
+Slice E scope:
+- Implement render_pack and redaction_check for render pipeline.
+- braincase.render: produce bounded model-facing memory packet from stored records.
+- Render must enforce scope, tier, and token budget.
+- never_model_visible records excluded.
+- Tests: bounded packet assembly, redaction enforcement, cross-domain exclusion.
+- No automatic ingestion. Not a raw storage dump.
 
 Slice D scope:
 - Design the explicit write/update tool path (scope_resolve, dedup_check, conflict_check, source_link).

@@ -81,10 +81,11 @@ Agent rules:         AGENTS.md includes telemetry doctrine
 
 **#2** — Storage substrate. Slices A and B are complete (Slice A: schemas/fixtures;
 Slice B: BrainCaseDB schema v2 + put/get/list/retire/supersede methods). #2
-remains the storage substrate only. Slices A, B, C, and C.1 complete
-(schemas/fixtures; BrainCaseDB schema v3; search/inspect/FTS5; FTS reindex).
-Next work is Slice D (explicit write/update tool path). Unlocks #51 and #46
-once the explicit write API exists. See `docs/braincase-memory-tool-api.md`.
+remains the storage substrate only. Slices A–D (and C.1) complete
+(schemas/fixtures; BrainCaseDB v3; search/inspect/FTS5; FTS reindex; explicit
+write/update helpers in qz_braincase_write.py). Next work is Slice E (render
+packet builder). Unlocks #51 and #46 after Slice E. See
+`docs/braincase-memory-tool-api.md`.
 
 **#51** — Recovery backoff state is currently in-memory only. Should be persisted
 once #2 exists. Do not implement before #2.
@@ -270,7 +271,7 @@ Signal/feedback subsystem design (#42)
 
 ## 10. Suggested next agent prompts
 
-### Prompt A: BrainCase Slice D — explicit write/update tool path (#53)
+### Prompt A: BrainCase Slice E — render packet builder (#53)
 
 **Slices A, B, and C are complete. Slice D may now start.**
 

@@ -135,8 +135,9 @@ docs/progress-snapshot.md
 Current next engineering target:
 
 ```text
-P1 BrainCase — Slice D: explicit braincase.write/update tool path with deterministic helpers.
-Slices A (schemas/fixtures), B (BrainCaseDB schema v3), and C (search/inspect + FTS5) complete.
+P1 BrainCase — Slice E: render packet builder (braincase.render).
+Slices A–D (and C.1) complete: schemas/fixtures; BrainCaseDB v3; search/inspect/FTS5;
+FTS reindex; explicit write/update helpers (qz_braincase_write.py).
 See docs/braincase-memory-tool-api.md for the full slice plan.
 No model-facing tools until Slice F (harness injection). No automatic ingestion.
 ```
