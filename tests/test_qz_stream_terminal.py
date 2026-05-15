@@ -221,6 +221,12 @@ class ClassifyErrorTests(unittest.TestCase):
         self.assertEqual(result["classification"], "unrecoverable")
         self.assertFalse(result["recoverable"])
 
+    def test_error_terminal_without_answer_is_unrecoverable(self):
+        result = _classify(saw_error=True, saw_done=True)
+        self.assertEqual(result["classification"], "unrecoverable")
+        self.assertFalse(result["recoverable"])
+        self.assertTrue(result["terminal_event_seen"])
+
     def test_error_with_fallback_not_unrecoverable(self):
         result = _classify(saw_error=True, fallback_emitted=True)
         self.assertEqual(result["classification"], "fallback_emitted")

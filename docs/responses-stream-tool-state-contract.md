@@ -774,7 +774,7 @@ repair_emitted, output_timeout).
 | `stream_completed_without_visible_answer` | terminal seen, no visible answer |
 | `stream_terminal_missing` | activity seen but no terminal before close |
 | `protocol_drift_seen` | unknown/newer item-delta events but stream ok |
-| `unrecoverable` | error event, no terminal, no fallback |
+| `unrecoverable` | error event, no visible answer, no fallback |
 | `stream_no_output_timeout` | no visible output before the bounded stream watchdog deadline |
 
 `observation_from_event_type(event_type, payload)` maps individual SSE events
@@ -782,10 +782,25 @@ to partial observation dicts, including:
 - legacy `response.output_text.delta` shape
 - newer `response.output_item.content.delta` shape (protocol drift tolerance)
 - compact events: `response.compact.started`, `response.compact.failed`
+- error events: `response.failed`, `response.cancelled`, `response.incomplete`
 
 Telemetry: `stream_terminal_classified` emitted for non-ok outcomes.
 `ResponsesStreamRuntime._build_result` accepts `obs=StreamObservation` and
 classifies/emits at the end of each normal hop.
+
+Slice 3 wires the live `ResponsesStreamRuntime` stream loop to the same
+`observation_from_event_type()` + `accumulate()` mapping used by fixture
+classification tests. Each parsed upstream SSE event contributes to a per-hop
+observation accumulator before special-case stream handling runs. At hop exit,
+the runtime ORs in existing manual facts such as reasoning chars, visible
+output, completed tool calls, forwarded terminal state, and request id, then
+builds the final `StreamObservation` with `observation_from_dict()`.
+
+This means compact failure, protocol-drift deltas, and error terminal events
+are live runtime observations, not only fixture-theory classifications.
+`compact_failed`, `protocol_drift_seen`, and `unrecoverable` emit one
+`stream_terminal_classified` event. Normal `ok` streams do not emit that
+classification telemetry.
 
 Slice 2 adds `proxy/qz_stream_watchdog.py`, a pure timing/state helper for the
 bounded no-visible-output watchdog. `QZ_STREAM_NO_OUTPUT_TIMEOUT_S <= 0`

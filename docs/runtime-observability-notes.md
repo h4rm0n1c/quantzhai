@@ -175,7 +175,17 @@ to avoid false failures from SSE timing events crowding out `tool_sandbox_denied
   protocol_drift_seen / unrecoverable / stream_no_output_timeout. Telemetry:
   `stream_terminal_classified` emitted for non-ok outcomes. Also adds protocol
   drift tolerance for newer `response.output_item.content.delta` event shape.
-  Slice 2 (future): real-time watchdog to trigger `output_timeout`.
+- #40 slice 2 (done): the streamed Responses path has an opt-in no-visible-output
+  watchdog. `QZ_STREAM_NO_OUTPUT_TIMEOUT_S <= 0` keeps it disabled. When enabled,
+  it can recover a stream that starts (`response.created` / `response.in_progress`)
+  and then stalls before visible output by emitting a synthetic fallback and one
+  `stream_terminal_classified` event with `stream_no_output_timeout`.
+- #40 slice 3 (done): `ResponsesStreamRuntime` now accumulates live terminal
+  observations from every parsed upstream SSE event using the same
+  `observation_from_event_type()` mapping as the stream-terminal fixtures. Compact
+  failure events, newer protocol-drift content deltas, and response error events
+  are now live observations and produce exactly one non-ok
+  `stream_terminal_classified` telemetry event. Normal ok streams remain quiet.
 - `README.md` documents the new launcher and monitor entry points.
 
 ## qz.vram.snapshot.v1 component semantics

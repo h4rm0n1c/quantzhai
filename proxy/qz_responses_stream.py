@@ -28,7 +28,13 @@ try:
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS
     from .qz_telemetry import RequestTelemetryEmitter
     from .qz_file_signal import record_tool_call, seed_repeated_read_state
-    from .qz_stream_terminal import StreamObservation, classify_stream_terminal
+    from .qz_stream_terminal import (
+        StreamObservation,
+        accumulate,
+        classify_stream_terminal,
+        observation_from_dict,
+        observation_from_event_type,
+    )
     from .qz_stream_watchdog import (
         STREAM_NO_OUTPUT_TIMEOUT_S,
         StreamWatchdogState,
@@ -58,7 +64,13 @@ except ImportError:
     from qz_tool_web import WEB_SEARCH_MAX_HOPS
     from qz_telemetry import RequestTelemetryEmitter
     from qz_file_signal import record_tool_call, seed_repeated_read_state
-    from qz_stream_terminal import StreamObservation, classify_stream_terminal
+    from qz_stream_terminal import (
+        StreamObservation,
+        accumulate,
+        classify_stream_terminal,
+        observation_from_dict,
+        observation_from_event_type,
+    )
     from qz_stream_watchdog import (
         STREAM_NO_OUTPUT_TIMEOUT_S,
         StreamWatchdogState,
@@ -741,18 +753,21 @@ class ResponsesStreamRuntime:
         sent_terminal: bool,
         sent_done: bool,
         sequence: int,
+        stream_obs_acc: dict | None = None,
     ) -> dict:
         watchdog_state.triggered = True
-        timeout_obs = StreamObservation(
-            saw_reasoning=bool(reasoning_only_chars > 0),
-            saw_output_text=bool(visible_output_text_seen),
-            saw_assistant_item=bool(assistant_item_seen),
-            saw_tool_call=bool(completed_call is not None),
-            saw_response_completed=bool(sent_terminal),
-            saw_done=bool(sent_done),
-            output_timeout=True,
-            request_id=self.request_id,
+        timeout_acc = dict(stream_obs_acc or {"request_id": self.request_id})
+        self._merge_manual_stream_observation(
+            timeout_acc,
+            reasoning_only_chars=reasoning_only_chars,
+            visible_output_text_seen=visible_output_text_seen,
+            assistant_item_seen=assistant_item_seen,
+            completed_call=completed_call,
+            sent_terminal=sent_terminal,
+            sent_done=sent_done,
         )
+        timeout_acc["output_timeout"] = True
+        timeout_obs = observation_from_dict(timeout_acc)
         timeout_items, _sequence = self._emit_no_output_timeout_fallback(
             requested_model,
             summary_started,
@@ -779,6 +794,30 @@ class ResponsesStreamRuntime:
             fallback=True,
             obs=timeout_obs,
             emit_terminal_classified=False,
+        )
+
+    def _merge_manual_stream_observation(
+        self,
+        stream_obs_acc: dict,
+        *,
+        reasoning_only_chars: int,
+        visible_output_text_seen: bool,
+        assistant_item_seen: bool,
+        completed_call,
+        sent_terminal: bool,
+        sent_done: bool,
+    ) -> dict:
+        stream_obs_acc["request_id"] = self.request_id
+        return accumulate(
+            stream_obs_acc,
+            {
+                "saw_reasoning": bool(reasoning_only_chars > 0),
+                "saw_output_text": bool(visible_output_text_seen),
+                "saw_assistant_item": bool(assistant_item_seen),
+                "saw_tool_call": bool(completed_call is not None),
+                "saw_response_completed": bool(sent_terminal),
+                "saw_done": bool(sent_done),
+            },
         )
 
     @staticmethod
@@ -1009,6 +1048,7 @@ class ResponsesStreamRuntime:
                     assistant_item_seen = False
                     public_item_seen = False
                     max_output_index = -1
+                    stream_obs_acc = {"request_id": self.request_id}
                     watchdog_state = StreamWatchdogState(
                         timeout_secs=self.stream_no_output_timeout_s,
                         started_at=time.time(),
@@ -1036,6 +1076,7 @@ class ResponsesStreamRuntime:
                                     sent_terminal=sent_terminal,
                                     sent_done=sent_done,
                                     sequence=sequence,
+                                    stream_obs_acc=stream_obs_acc,
                                 )
                             raise
                         if not chunk:
@@ -1059,6 +1100,10 @@ class ResponsesStreamRuntime:
                         event_parsed_at = time.time()
                         event_started_at = None
                         watchdog_state.mark_event(event_parsed_at)
+                        accumulate(
+                            stream_obs_acc,
+                            observation_from_event_type(event_type, payload),
+                        )
                         if first_output_at is None and event_type not in {"response.created", "response.in_progress"}:
                             first_output_at = time.time()
                         if isinstance(payload, dict) and isinstance(payload.get("output_index"), int):
@@ -1111,6 +1156,7 @@ class ResponsesStreamRuntime:
                                 sent_terminal=sent_terminal,
                                 sent_done=sent_done,
                                 sequence=sequence,
+                                stream_obs_acc=stream_obs_acc,
                             )
 
                         completed = tool_call_state.observe(event_type, payload, event_received_at)
@@ -1675,15 +1721,16 @@ class ResponsesStreamRuntime:
                     sent_done = True
 
                 completed_at = time.time()
-                hop_obs = StreamObservation(
-                    saw_reasoning=bool(reasoning_only_chars > 0),
-                    saw_output_text=bool(visible_output_text_seen),
-                    saw_assistant_item=bool(assistant_item_seen),
-                    saw_tool_call=bool(completed_call is not None),
-                    saw_response_completed=bool(sent_terminal),
-                    saw_done=bool(sent_done),
-                    request_id=self.request_id,
+                self._merge_manual_stream_observation(
+                    stream_obs_acc,
+                    reasoning_only_chars=reasoning_only_chars,
+                    visible_output_text_seen=visible_output_text_seen,
+                    assistant_item_seen=assistant_item_seen,
+                    completed_call=completed_call,
+                    sent_terminal=sent_terminal,
+                    sent_done=sent_done,
                 )
+                hop_obs = observation_from_dict(stream_obs_acc)
                 return self._build_result(
                     requested_model,
                     started_at,

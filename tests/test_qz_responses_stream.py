@@ -236,6 +236,32 @@ def _final_message_stream(usage=None, text="searched."):
     ]
 
 
+def _failed_without_answer_stream():
+    return [
+        _sse_block("response.created", {
+            "response": {
+                "id": "resp_fake_failed",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "in_progress",
+                "model": "fake",
+                "output": [],
+            },
+        }),
+        _sse_block("response.failed", {
+            "response": {
+                "id": "resp_fake_failed",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "failed",
+                "model": "fake",
+                "output": [],
+                "error": {"message": "upstream failed"},
+            },
+        }),
+    ]
+
+
 def _reasoning_message_stream():
     return [
         _sse_block("response.created", {
@@ -857,6 +883,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         context_pressure_signal_threshold=None,
         empty_answer_repair_hops=None,
         empty_answer_repair_disable_tools=None,
+        return_result=False,
     ):
         chunks = []
         runtime = ResponsesStreamRuntime(
@@ -891,8 +918,11 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         }
         if metadata is not None:
             body["metadata"] = metadata
-        runtime.run(body, "test-model.gguf", apply_patch_output_style)
-        return b"".join(chunks).decode("utf-8")
+        result = runtime.run(body, "test-model.gguf", apply_patch_output_style)
+        stream_text = b"".join(chunks).decode("utf-8")
+        if return_result:
+            return result, stream_text
+        return stream_text
 
     def test_streaming_renormalization_preserves_disabled_system_prompt(self):
         requests = []
@@ -2255,6 +2285,114 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             self.assertIn("received_to_telemetry_ms", payload)
             self.assertIn("forwarded_chunks", payload)
             self.assertIn("forwarded_bytes", payload)
+
+    def test_live_protocol_drift_event_classifies_once(self):
+        telemetry = TelemetryBus()
+
+        def opener(body):
+            return FakeStream(_fixture_chunks("item_content_delta.raw"))
+
+        result, stream_text = self._run_runtime(
+            opener,
+            telemetry=telemetry,
+            request_id="req-protocol-drift-live",
+            return_result=True,
+        )
+        terminal = result.get("stream_terminal") or {}
+        terminal_events = [
+            event for event in telemetry.recent()
+            if event.get("type") == "stream_terminal_classified"
+        ]
+
+        self.assertIn("response.output_item.content.delta", stream_text)
+        self.assertEqual(terminal.get("classification"), "protocol_drift_seen")
+        self.assertTrue(terminal.get("visible_answer_seen"))
+        self.assertTrue(terminal.get("saw_output_text"))
+        self.assertEqual(len(terminal_events), 1)
+        self.assertEqual(
+            terminal_events[0].get("payload", {}).get("classification"),
+            "protocol_drift_seen",
+        )
+
+    def test_live_compact_failed_event_classifies_once_without_retry(self):
+        telemetry = TelemetryBus()
+        calls = []
+
+        def opener(body):
+            calls.append(json.loads(json.dumps(body)))
+            return FakeStream(_fixture_chunks("compact_failed.raw"))
+
+        result, stream_text = self._run_runtime(
+            opener,
+            telemetry=telemetry,
+            request_id="req-compact-failed-live",
+            return_result=True,
+        )
+        terminal = result.get("stream_terminal") or {}
+        terminal_events = [
+            event for event in telemetry.recent()
+            if event.get("type") == "stream_terminal_classified"
+        ]
+
+        self.assertEqual(len(calls), 1)
+        self.assertIn("response.compact.failed", stream_text)
+        self.assertEqual(terminal.get("classification"), "compact_failed")
+        self.assertTrue(terminal.get("saw_compact_failed"))
+        self.assertEqual(len(terminal_events), 1)
+        self.assertEqual(
+            terminal_events[0].get("payload", {}).get("classification"),
+            "compact_failed",
+        )
+
+    def test_live_failed_event_classifies_once_without_looping(self):
+        telemetry = TelemetryBus()
+        calls = []
+
+        def opener(body):
+            calls.append(json.loads(json.dumps(body)))
+            return FakeStream(_failed_without_answer_stream())
+
+        result, stream_text = self._run_runtime(
+            opener,
+            telemetry=telemetry,
+            request_id="req-failed-live",
+            return_result=True,
+        )
+        terminal = result.get("stream_terminal") or {}
+        terminal_events = [
+            event for event in telemetry.recent()
+            if event.get("type") == "stream_terminal_classified"
+        ]
+
+        self.assertEqual(len(calls), 1)
+        self.assertIn("response.failed", stream_text)
+        self.assertEqual(terminal.get("classification"), "unrecoverable")
+        self.assertTrue(terminal.get("saw_error"))
+        self.assertEqual(len(terminal_events), 1)
+        self.assertEqual(
+            terminal_events[0].get("payload", {}).get("classification"),
+            "unrecoverable",
+        )
+
+    def test_live_ok_stream_does_not_emit_terminal_classified(self):
+        telemetry = TelemetryBus()
+
+        def opener(body):
+            return FakeStream(_fixture_chunks("basic_message.raw"))
+
+        result, _stream_text = self._run_runtime(
+            opener,
+            telemetry=telemetry,
+            request_id="req-ok-live",
+            return_result=True,
+        )
+        terminal_events = [
+            event for event in telemetry.recent()
+            if event.get("type") == "stream_terminal_classified"
+        ]
+
+        self.assertEqual(result.get("stream_terminal", {}).get("classification"), "ok")
+        self.assertEqual(terminal_events, [])
 
     def test_golden_web_search_stream_replays_with_continuation(self):
         telemetry = TelemetryBus()

@@ -7,7 +7,8 @@ Pure logic — no I/O, no timers, no threads, no state mutation.
 Source/confidence vocabulary follows docs/patterns/provenance-telemetry.md.
 
 Slice 1: classification and fixture coverage.
-Slice 2 (future): real-time watchdog / timeout trigger.
+Slice 2: real-time no-output watchdog / timeout trigger.
+Slice 3: live stream loop observation accumulation.
 """
 from __future__ import annotations
 
@@ -30,7 +31,7 @@ class StreamObservation:
     saw_tool_call: bool = False          # completed function_call
     saw_response_completed: bool = False # response.completed event forwarded
     saw_done: bool = False               # [DONE] token forwarded
-    saw_error: bool = False              # response.failed / response.cancelled
+    saw_error: bool = False              # response.failed / response.cancelled / response.incomplete
     saw_compact_started: bool = False    # compact-handoff started signal
     saw_compact_failed: bool = False     # compact task failed / session stuck
     saw_protocol_drift_event: bool = False  # unknown/newer item-delta event accepted
@@ -92,15 +93,15 @@ def classify_stream_terminal(obs: StreamObservation) -> dict:
         )
 
     # --- error with no recovery path ---
-    if obs.saw_error and not terminal_seen and not visible_answer and not obs.fallback_emitted:
+    if obs.saw_error and not visible_answer and not obs.fallback_emitted:
         return _result(
             "unrecoverable",
             recoverable=False,
             fallback_required=True,
             visible_answer_seen=False,
-            terminal_event_seen=False,
+            terminal_event_seen=terminal_seen,
             obs=obs,
-            notes=["error event received without terminal event or visible answer"],
+            notes=["error event received without visible answer or fallback"],
         )
 
     # --- fallback explicitly emitted by proxy ---
