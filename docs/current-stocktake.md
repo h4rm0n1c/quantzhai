@@ -82,8 +82,9 @@ Agent rules:         AGENTS.md includes telemetry doctrine
 **#2** — Storage substrate. Slices A–D (and C.1) are complete. #2
 remains the storage substrate only. Details:
 (schemas/fixtures; BrainCaseDB v3; search/inspect/FTS5; FTS reindex; explicit
-write/update helpers in qz_braincase_write.py). Next work is Slice E (render
-packet builder). Unlocks #51 and #46 after Slice E. See
+write/update helpers in qz_braincase_write.py; internal render packet builder
+in qz_braincase_render.py). Next work is Slice F (harness/tool exposure).
+Unlocks #51 and #46 after Slice F. See
 `docs/braincase-memory-tool-api.md`.
 
 **#51** — Recovery backoff state is currently in-memory only. Should be persisted
@@ -270,31 +271,33 @@ Signal/feedback subsystem design (#42)
 
 ## 10. Suggested next agent prompts
 
-### Prompt A: BrainCase Slice E — render packet builder (#53)
+### Prompt A: BrainCase Slice F — harness/tool exposure (#53)
 
-**Slices A through D (and C.1) are complete. Slice E may now start.**
+**Slices A through E (and C.1, D.1) are complete. Slice F may now start.**
 
 Read `docs/braincase-memory-tool-api.md` before starting.
 
 ```text
 Slice A   COMPLETE: schemas + fixtures + 44 tests
-Slice B   COMPLETE: BrainCaseDB schema v3, 5 tables, put/get/list/retire/supersede
-Slice C   COMPLETE: query_plan/search/inspect + FTS5 + 36 new tests (80 total)
-Slice C.1 COMPLETE: rebuild_fts_index / FTS backfill + 12 tests (92 total)
-Slice D   COMPLETE: qz_braincase_write.py helpers + write/update paths + 51 tests (1744 total)
-Slice D.1 COMPLETE: conflict marker detection tightened (must_not vs must, do_not vs do)
+Slice B   COMPLETE: BrainCaseDB schema v3, put/get/list/retire/supersede
+Slice C   COMPLETE: query_plan/search/inspect + FTS5 (80 total)
+Slice C.1 COMPLETE: rebuild_fts_index / FTS backfill (92 total)
+Slice D   COMPLETE: qz_braincase_write.py helpers + write/update paths (1744 total)
+Slice D.1 COMPLETE: conflict marker detection tightened
+Slice E   COMPLETE: qz_braincase_render.py + render_pack/braincase_render_packet + 53 tests (1819 total)
 
 Read first:
-- docs/braincase-memory-tool-api.md       (architecture; Slice E spec)
-- proxy/qz_braincase_write.py             (Slice D helpers — Slice E builds on write path)
+- docs/braincase-memory-tool-api.md       (architecture; Slice F spec)
+- proxy/qz_braincase_render.py            (Slice E render builder — Slice F wires it)
+- proxy/qz_braincase_write.py             (write/update helpers)
 - proxy/qz_braincase_db.py               (storage layer)
 - AGENTS.md BrainCase Memory Tool Plane Doctrine
 
-Slice E goal: braincase.render — bounded model-facing memory packet builder.
-- render_pack: assemble bounded packet from stored StateRecords.
-- redaction_check for render: exclude never_model_visible records.
-- Enforce scope (memory_domain), tier filter, and token budget.
-- No model-facing tool wiring yet (Slice F).
+Slice F goal: wire render/write into harness and expose memory tool plane.
+- Add memory tool-use policy to harness/prompt stack.
+- Expose braincase.recall and braincase.render as LLM-visible tools.
+- Teach LLM when to use each tool (recall vs search vs write vs render).
+- visibility=renderable records become model-visible only through render path.
 - No automatic ingestion at any step.
 ```
 

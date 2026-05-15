@@ -643,11 +643,11 @@ goes beyond schema initialization.
 The memory architecture is tool-mediated, not DB-first. See
 `docs/braincase-memory-tool-api.md` for the full design.
 
-Slices A–D (and C.1) are complete: schemas/fixtures; BrainCaseDB schema v3;
-search/inspect/FTS5; FTS reindex; explicit write/update helpers in
-qz_braincase_write.py (scope_resolve, dedup_check, conflict_check, source_link,
-redaction_check, braincase_write_state_record, braincase_update_state_record).
-Next step is Slice E (render packet builder). No model-facing tools yet.
+Slices A–E (and C.1, D.1) are complete: schemas/fixtures; BrainCaseDB schema v3;
+search/inspect/FTS5; FTS reindex; write/update helpers (qz_braincase_write.py);
+internal render packet builder (qz_braincase_render.py — render_pack,
+braincase_render_packet). Next step is Slice F (harness/tool exposure).
+Renders are internal until Slice F. No model-facing tools yet.
 No automatic ingestion at any slice.
 
 Slice 1 status:

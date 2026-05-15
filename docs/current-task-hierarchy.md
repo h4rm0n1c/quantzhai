@@ -276,11 +276,21 @@ tests/test_qz_braincase_write.py — 51 tests, all passing
 Full suite: 1744 tests passing
 ```
 
-Blocked by for Slice E:
+Slice E acceptance (COMPLETE):
 
 ```text
-Slice D is complete. Slice E (render packet builder) may now start.
-Or Slice D.1 for link/correct operations if preferred before render.
+proxy/qz_braincase_render.py — new module:
+  render_budget_chars, make_render_packet_id, eligible_for_render,
+  render_record_line, render_pack, braincase_render_packet
+tests/test_qz_braincase_render.py — 53 tests, all passing
+Full suite: 1819 tests passing
+```
+
+Blocked by for Slice F:
+
+```text
+Slice E is complete. Slice F (harness/tool exposure) may now start.
+Renders exist internally; they are not yet wired to harness or model tools.
 ```
 
 Best resource:
@@ -475,37 +485,30 @@ cross-domain isolation tests
 
 ---
 
-## Next implementation prompt: BrainCase Slice E (render packet builder)
+## Next implementation prompt: BrainCase Slice F (harness/tool exposure)
 
-**Slices A through D (including C.1) are complete. Slice E may now start.**
+**Slices A through E (and C.1, D.1) are complete. Slice F may now start.**
 
-Read `docs/braincase-memory-tool-api.md` before starting Slice E.
+Read `docs/braincase-memory-tool-api.md` before starting Slice F.
 
 ```text
 Slice A:   COMPLETE — schemas + fixtures + 44 tests
-Slice B:   COMPLETE — BrainCaseDB schema v3 + put/get/list/retire/supersede + 33 new tests
-Slice C:   COMPLETE — query_plan/search/inspect + FTS5 + 36 new tests (80 total)
-Slice C.1: COMPLETE — rebuild_fts_index / backfill + 12 new tests (92 total)
-Slice D:   COMPLETE — qz_braincase_write.py helpers + write/update paths + 51 tests (1744 total)
-Slice E:   NEXT — braincase.render bounded packet builder
-Slice F:   harness injection for memory tool-use policy
+Slice B:   COMPLETE — BrainCaseDB schema v3 + put/get/list/retire/supersede
+Slice C:   COMPLETE — query_plan/search/inspect + FTS5 (80 total)
+Slice C.1: COMPLETE — rebuild_fts_index / FTS backfill (92 total)
+Slice D:   COMPLETE — qz_braincase_write.py helpers + write/update paths (1744 total)
+Slice D.1: COMPLETE — conflict marker detection tightened
+Slice E:   COMPLETE — qz_braincase_render.py + render_pack/braincase_render_packet + 53 tests (1819 total)
+Slice F:   NEXT — harness injection for memory tool-use policy
 ```
 
-Slice E scope:
-- Implement render_pack and redaction_check for render pipeline.
-- braincase.render: produce bounded model-facing memory packet from stored records.
-- Render must enforce scope, tier, and token budget.
-- never_model_visible records excluded.
-- Tests: bounded packet assembly, redaction enforcement, cross-domain exclusion.
-- No automatic ingestion. Not a raw storage dump.
-
-Slice D scope:
-- Design the explicit write/update tool path (scope_resolve, dedup_check, conflict_check, source_link).
-- braincase.write: explicit write of a durable StateRecord through helper-constrained path.
-- braincase.update: correct/supersede/retire/link existing records.
-- Tests: explicit write round-trips, dedup detection, conflict surfacing, scope validation.
-- No model-facing tool yet (tool-plane wiring is Slice F).
+Slice F scope:
+- Wire braincase_render_packet into the harness/prompt stack.
+- Define tool-use policy: when to use recall vs search vs inspect vs write.
+- Expose braincase.recall and braincase.render as model-visible tools (LLM tool plane).
+- Harness teaches when each tool should be called.
 - No automatic ingestion at any step.
+- visibility=renderable records become model-visible only through the render path.
 
 Full reference below for Slice C context:
 

@@ -655,14 +655,45 @@ Full suite: 1744 tests passing
 Not added: model-facing tools, HTTP routes, harness injection, RenderPackets, automatic ingestion.
 ```
 
-### Slice E: braincase.render bounded packet builder
-
-After Slice D write path works:
+### Slice E: braincase.render bounded packet builder — COMPLETE
 
 ```text
-Implement render_pack and redaction_check.
-Implement braincase.render tool.
-Tests: bounded packet assembly, redaction enforcement, cross-domain exclusion.
+New module: proxy/qz_braincase_render.py
+
+Functions:
+  render_budget_chars(budget_tokens) -> int
+    Conservative char budget: max(80, budget_tokens * 4). No tokenizer dep.
+  make_render_packet_id(now_ms, purpose, memory_domain) -> str
+    Deterministic packet ID.
+  eligible_for_render(record, memory_domain, tiers) -> (bool, reason | None)
+    Eligibility: status=active, visibility=renderable, domain match, tier match.
+    Excludes: internal, never_model_visible, superseded, retired, candidate.
+  render_record_line(record) -> str
+    Formats one record: [tier/type] claim / Summary / Source: record_id.
+    No metadata JSON, no forbidden fields.
+  render_pack(records, *, purpose, memory_domain, budget_tokens, tiers, ...) -> dict
+    Filters eligible records, ranks by importance desc / updated_at_ms desc,
+    assembles bounded text, returns RenderPacket dict.
+    Always includes at least one record even if budget is tight.
+    Adds budget_exhausted warning and increments omitted_count when records skip.
+  braincase_render_packet(db, *, purpose, memory_domain, query, tiers, record_ids, ...) -> dict
+    Retrieves records from DB (by record_ids, query, or list), calls render_pack.
+    Returns warning packet for missing domain or disabled DB.
+
+RenderPacket shape (matches docs/schemas/braincase/render-packet.schema.json):
+  {packet_id, schema="braincase/render-packet@1", purpose, memory_domain,
+   generated_at_ms, budget_tokens, rendered_text, source_record_ids,
+   omitted_count, warnings, metadata}
+
+Eligibility key point:
+  All Slice A fixtures use visibility="internal" and are NOT rendered by default.
+  Tests create in-memory copies with visibility="renderable". Fixture files unchanged.
+
+Tests: tests/test_qz_braincase_render.py — 53 tests, all passing
+Full suite: 1819 tests passing
+
+Not added: model-facing tool wiring, HTTP routes, harness injection, prompt injection,
+automatic ingestion, recall tool.
 ```
 
 ### Slice F: harness injection for memory tool-use policy

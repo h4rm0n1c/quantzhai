@@ -135,11 +135,11 @@ docs/progress-snapshot.md
 Current next engineering target:
 
 ```text
-P1 BrainCase — Slice E: render packet builder (braincase.render).
-Slices A–D (and C.1) complete: schemas/fixtures; BrainCaseDB v3; search/inspect/FTS5;
-FTS reindex; explicit write/update helpers (qz_braincase_write.py).
+P1 BrainCase — Slice F: harness/tool exposure (braincase.recall + braincase.render).
+Slices A–E (and C.1, D.1) complete: schemas/fixtures; BrainCaseDB v3; search/inspect/FTS5;
+FTS reindex; write/update helpers; internal render packet builder.
 See docs/braincase-memory-tool-api.md for the full slice plan.
-No model-facing tools until Slice F (harness injection). No automatic ingestion.
+Renders are internal until Slice F wires them. No automatic ingestion.
 ```
 
 Then:

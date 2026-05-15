@@ -31,7 +31,7 @@ docs/current-stocktake.md
 Current strategic direction:
 
 ```text
-P1 BrainCase memory tool API — Slice A fixtures (parked pending design)
+P1 BrainCase memory tool API — Slice F harness/tool exposure (next)
 P2 repeated-read v1 advisory signal
 P3 telemetry filter ergonomics / qz-live-smoke refinements
 P4 config/var/script ownership cleanup
@@ -79,9 +79,10 @@ P4 config/var/script ownership cleanup
 Status:
 
 ```text
-BrainCaseDB skeleton landed (proxy/qz_braincase_db.py). #2 parked pending
-BrainCase memory tool API design. See docs/braincase-memory-tool-api.md.
-Next step: Slice A — StateRecord JSON schema fixtures, no DB implementation.
+Slices A–E (and C.1, D.1) complete. Next step: Slice F harness/tool exposure.
+  Slice E: qz_braincase_render.py — render_pack / braincase_render_packet.
+  Renders are internal; not wired to model tools until Slice F.
+  See docs/braincase-memory-tool-api.md.
 ```
 
 Scope:
@@ -127,7 +128,7 @@ Still needed, but do not preempt the state spine unless a live breakage demands 
 ## Immediate next priorities
 
 1. **#40: Compaction/stream hang watchdog** — prevents client stuck states.
-2. **#2: BrainCase memory tool API — Slice A fixtures** (parked; see docs/braincase-memory-tool-api.md).
+2. **#2/#53: BrainCase memory tool API — Slice F harness wiring** (see docs/braincase-memory-tool-api.md).
 3. **#51: Promote recovery/backoff state to SQLite** (after #2).
 4. **Implement repeated-read v1 advisory signal** (can start any time).
 
