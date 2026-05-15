@@ -81,10 +81,10 @@ Agent rules:         AGENTS.md includes telemetry doctrine
 
 **#2** — Storage substrate. Slices A and B are complete (Slice A: schemas/fixtures;
 Slice B: BrainCaseDB schema v2 + put/get/list/retire/supersede methods). #2
-remains the storage substrate only — no model-facing tools, no automatic
-ingestion. Next work is Slice C (braincase.search + inspect helpers). Unlocks
-#51 and #46 once the explicit write API and Slice C search path exist. See
-`docs/braincase-memory-tool-api.md`.
+remains the storage substrate only. Slices A, B, and C complete
+(schemas/fixtures; BrainCaseDB schema v3; search/inspect helpers with FTS5).
+Next work is Slice D (explicit write/update tool path). Unlocks #51 and #46
+once the explicit write API exists. See `docs/braincase-memory-tool-api.md`.
 
 **#51** — Recovery backoff state is currently in-memory only. Should be persisted
 once #2 exists. Do not implement before #2.
@@ -270,30 +270,31 @@ Signal/feedback subsystem design (#42)
 
 ## 10. Suggested next agent prompts
 
-### Prompt A: BrainCase Slice C — braincase.search + inspect (#53)
+### Prompt A: BrainCase Slice D — explicit write/update tool path (#53)
 
-**Slices A and B are complete. Slice C may now start.**
+**Slices A, B, and C are complete. Slice D may now start.**
 
 Read `docs/braincase-memory-tool-api.md` before starting.
 
 ```text
 Slice A COMPLETE: schemas + fixtures + 44 tests
-Slice B COMPLETE: schema v2 + put/get/list/retire/supersede + 33 new tests (44 total)
+Slice B COMPLETE: schema v3 + put/get/list/retire/supersede + 33 new tests (44 total)
+Slice C COMPLETE: query_plan/search/inspect + FTS5 + 36 new tests (80 total)
 
 Read first:
-- docs/braincase-memory-tool-api.md       (architecture; Slice C spec)
-- proxy/qz_braincase_db.py                (Slice B methods — Slice C extends these)
-- docs/fixtures/braincase/state-records/  (fixture records for search tests)
+- docs/braincase-memory-tool-api.md       (architecture; Slice D spec)
+- proxy/qz_braincase_db.py                (Slice C methods — Slice D extends these)
 - AGENTS.md BrainCase Memory Tool Plane Doctrine
 
-Slice C goal: search helpers and inspect over stored fixture records.
-- Add FTS5 virtual table for claim/summary/tags (qz_braincase_state_records_fts).
-- Implement query_plan helper (exact/FTS/tag routing).
-- Implement search methods on BrainCaseDB (exact, fts, tag modes).
-- Implement inspect (fetch full record + source_ref by ID list).
-- No model-facing tool yet — search/inspect are internal helpers only.
+Slice D goal: explicit braincase.write/update tool path with deterministic helpers.
+- scope_resolve: confirm memory_domain + workspace scope.
+- dedup_check: detect near-duplicate records before write (returns hints, not block).
+- conflict_check: surface contradictions (returns refs, not block).
+- source_link: attach provenance.
+- braincase.write: explicit write of a durable StateRecord through helper-constrained path.
+- braincase.update: correct/supersede/retire/link records.
+- No model-facing tool yet (tool-plane wiring is Slice F).
 - No automatic ingestion at any step.
-- Tests using Slice B stored fixture records.
 ```
 
 ### Prompt B: Recovery state persistence (#51, after #2)

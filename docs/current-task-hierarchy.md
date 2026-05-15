@@ -249,12 +249,19 @@ tests/test_qz_braincase_db.py — BrainCaseDBSliceBTests: 33 new tests (44 total
 All 1645 tests passing.
 ```
 
-Blocked by for Slice C:
+Slice C acceptance (COMPLETE):
 
 ```text
-Slice B is complete. Slice C (braincase.search + inspect) may now start.
-FTS index design to be settled in Slice C.
-No model-facing tools yet.
+proxy/qz_braincase_db.py — schema v3, FTS5 table, query_plan/search/inspect helpers
+tests/test_qz_braincase_db.py — BrainCaseDBSliceCTests: 36 new tests (80 total)
+All 1681 tests passing.
+```
+
+Blocked by for Slice D:
+
+```text
+Slice C is complete. Slice D (explicit braincase.write/update tool path) may now start.
+No model-facing write API yet — Slice D designs the explicit write path.
 ```
 
 Best resource:
@@ -449,28 +456,28 @@ cross-domain isolation tests
 
 ---
 
-## Next implementation prompt: BrainCase Slice C (braincase.search + inspect)
+## Next implementation prompt: BrainCase Slice D (explicit write/update tool path)
 
-**Slices A and B are complete. Slice C may now start.**
+**Slices A, B, and C are complete. Slice D may now start.**
 
-Read `docs/braincase-memory-tool-api.md` before starting Slice C.
+Read `docs/braincase-memory-tool-api.md` before starting Slice D.
 
 ```text
 Slice A: COMPLETE — schemas + fixtures + 44 tests
-Slice B: COMPLETE — BrainCaseDB schema v2 + put/get/list/retire/supersede methods + 33 new tests
-Slice C: NEXT — braincase.search + inspect over stored fixture records
-Slice D: braincase.write/update with explicit tool path
+Slice B: COMPLETE — BrainCaseDB schema v3 + put/get/list/retire/supersede + 33 new tests
+Slice C: COMPLETE — query_plan/search/inspect helpers + FTS5 + 36 new tests (80 total)
+Slice D: NEXT — explicit braincase.write/update tool path API design + implementation
 Slice E: braincase.render bounded packet builder
 Slice F: harness injection for memory tool-use policy
 ```
 
-Slice C scope:
-- Implement search helpers (query_plan, FTS, exact, tag).
-- Implement inspect (fetch record + source_ref by ID).
-- Add FTS5 virtual table for claim/summary/tags (if not already added).
-- No model-facing tool yet — search/inspect are internal helpers only.
-- No automatic ingestion.
-- Tests against Slice B fixture records.
+Slice D scope:
+- Design the explicit write/update tool path (scope_resolve, dedup_check, conflict_check, source_link).
+- braincase.write: explicit write of a durable StateRecord through helper-constrained path.
+- braincase.update: correct/supersede/retire/link existing records.
+- Tests: explicit write round-trips, dedup detection, conflict surfacing, scope validation.
+- No model-facing tool yet (tool-plane wiring is Slice F).
+- No automatic ingestion at any step.
 
 Full reference below for Slice C context:
 

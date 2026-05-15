@@ -141,6 +141,7 @@ class BrainCaseDBTests(unittest.TestCase):
                     "path": str(db_path),
                     "available": True,
                     "schema_version": QZ_BRAINCASE_DB_SCHEMA_VERSION,
+                    "fts_available": db.fts_available,
                     "last_error": None,
                 },
             )
@@ -228,12 +229,12 @@ class BrainCaseDBSliceBTests(unittest.TestCase):
             }
             self.assertTrue(expected.issubset(tables), f"Missing tables: {expected - tables}")
 
-    # --- 2. schema version / user_version updated to 2 ---
+    # --- 2. schema version / user_version updated to 3 ---
 
-    def test_schema_version_is_2(self):
-        self.assertEqual(QZ_BRAINCASE_DB_SCHEMA_VERSION, 2)
+    def test_schema_version_is_3(self):
+        self.assertEqual(QZ_BRAINCASE_DB_SCHEMA_VERSION, 3)
 
-    def test_user_version_is_2(self):
+    def test_user_version_is_3(self):
         with tempfile.TemporaryDirectory() as td:
             db = self._fresh_db(td)
             db.close()
@@ -245,8 +246,8 @@ class BrainCaseDBSliceBTests(unittest.TestCase):
                 ).fetchone()[0]
             finally:
                 conn.close()
-            self.assertEqual(user_version, 2)
-            self.assertEqual(meta_version, "2")
+            self.assertEqual(user_version, 3)
+            self.assertEqual(meta_version, "3")
 
     # --- 3. put/get source ref round-trips fixture ---
 
@@ -755,6 +756,458 @@ class BrainCaseDBSliceBTests(unittest.TestCase):
                 conn.close()
             for t in tables:
                 self.assertNotIn("hsm", t.lower(), f"Unexpected HSM-specific table: {t}")
+            db.close()
+
+
+# ---------------------------------------------------------------------------
+# Slice C tests: search + inspect helpers
+# ---------------------------------------------------------------------------
+
+class BrainCaseDBSliceCTests(unittest.TestCase):
+    """Tests for search_state_records, inspect_state_records, and query_plan."""
+
+    def _fresh_db(self, td: str) -> BrainCaseDB:
+        db = BrainCaseDB(path=Path(td) / "state.sqlite3", enabled=True)
+        self.assertTrue(db.init())
+        return db
+
+    def _populated_db(self, td: str) -> BrainCaseDB:
+        db = self._fresh_db(td)
+        for ref in _load_source_refs():
+            db.put_source_ref(ref)
+        for rec in _load_state_records():
+            db.put_state_record(rec)
+        return db
+
+    # --- 1. query_plan: exact for quoted / path-like / issue-like ---
+
+    def test_query_plan_exact_for_quoted_string(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            plan = db.query_plan('"automatically ingest"')
+            self.assertEqual(plan["mode"], "exact")
+            self.assertEqual(plan["query"], "automatically ingest")
+            db.close()
+
+    def test_query_plan_exact_for_path_like(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            plan = db.query_plan("docs/braincase-memory-tool-api.md")
+            self.assertEqual(plan["mode"], "exact")
+            db.close()
+
+    def test_query_plan_exact_for_issue_reference(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            plan = db.query_plan("#53 Slice A")
+            self.assertEqual(plan["mode"], "exact")
+            db.close()
+
+    # --- 2. query_plan: tag for tag:<name> ---
+
+    def test_query_plan_tag_for_tag_prefix(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            plan = db.query_plan("tag:braincase")
+            self.assertEqual(plan["mode"], "tag")
+            self.assertEqual(plan["query"], "braincase")
+            db.close()
+
+    def test_query_plan_tag_strips_whitespace(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            plan = db.query_plan("tag: hsm ")
+            self.assertEqual(plan["mode"], "tag")
+            self.assertEqual(plan["query"], "hsm")
+            db.close()
+
+    # --- 3. query_plan: fts/default for normal text ---
+
+    def test_query_plan_fts_or_exact_for_normal_text(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            plan = db.query_plan("architecture correction")
+            # Either fts (if available) or exact (fallback) — both are valid
+            self.assertIn(plan["mode"], ("fts", "exact"))
+            self.assertEqual(plan["query"], "architecture correction")
+            db.close()
+
+    def test_query_plan_fts_available_flag(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            plan = db.query_plan("doctrine")
+            if db.fts_available:
+                self.assertEqual(plan["mode"], "fts")
+            else:
+                self.assertEqual(plan["mode"], "exact")
+            db.close()
+
+    def test_query_plan_explicit_mode_overrides_auto(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            self.assertEqual(db.query_plan("docs/foo", mode="fts")["mode"],
+                             "fts" if db.fts_available else "exact")
+            self.assertEqual(db.query_plan("tag:anything", mode="exact")["mode"], "exact")
+            self.assertEqual(db.query_plan("anything", mode="tag")["mode"], "tag")
+            db.close()
+
+    # --- 4. search exact finds fixture by phrase in claim ---
+
+    def test_search_exact_finds_by_claim_phrase(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            # rec_bc_001 claim contains "automatically ingest"
+            results = db.search_state_records("automatically ingest", mode="exact")
+            ids = [r["record_id"] for r in results]
+            self.assertIn("rec_bc_001", ids)
+            db.close()
+
+    # --- 5. search exact finds fixture by summary phrase ---
+
+    def test_search_exact_finds_by_summary_phrase(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            # rec_bc_002 summary contains "Search -> inspect -> reason"
+            results = db.search_state_records("Search -> inspect -> reason", mode="exact")
+            ids = [r["record_id"] for r in results]
+            self.assertIn("rec_bc_002", ids)
+            db.close()
+
+    # --- 6. search tag finds fixture by tag ---
+
+    def test_search_tag_finds_by_tag(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            # All coding fixtures have "braincase" tag
+            results = db.search_state_records("tag:braincase", limit=20)
+            ids = [r["record_id"] for r in results]
+            self.assertIn("rec_bc_001", ids)
+            self.assertIn("rec_bc_002", ids)
+            self.assertIn("rec_bc_003", ids)
+            db.close()
+
+    def test_search_tag_mode_explicit(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            results = db.search_state_records("hsm", mode="tag")
+            ids = [r["record_id"] for r in results]
+            self.assertIn("rec_bc_007", ids)
+            db.close()
+
+    # --- 7. search filters by memory_domain exactly ---
+
+    def test_search_filters_memory_domain(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            results = db.search_state_records("braincase", mode="tag", memory_domain="coding")
+            for r in results:
+                self.assertEqual(r["memory_domain"], "coding")
+            db.close()
+
+    # --- 8. search filters by tier exactly ---
+
+    def test_search_filters_tier(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            results = db.search_state_records("", mode="exact", tier="project_state", limit=20)
+            # Empty exact search with tier filter returns all project_state records
+            # (LIKE '%' matches everything)
+            for r in results:
+                self.assertEqual(r["tier"], "project_state")
+            # rec_bc_001 is project_state
+            ids = [r["record_id"] for r in results]
+            self.assertIn("rec_bc_001", ids)
+            db.close()
+
+    # --- 9. search does not return hsm records when memory_domain=coding ---
+
+    def test_search_no_hsm_when_domain_coding(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            results = db.search_state_records("braincase", mode="tag", memory_domain="coding")
+            for r in results:
+                self.assertNotEqual(r["memory_domain"], "hsm")
+                self.assertNotEqual(r["record_id"], "rec_bc_007")
+            db.close()
+
+    # --- 10. search returns hsm record only when memory_domain=hsm or no filter ---
+
+    def test_search_finds_hsm_with_hsm_domain_filter(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            results = db.search_state_records("configured", mode="exact", memory_domain="hsm")
+            ids = [r["record_id"] for r in results]
+            self.assertIn("rec_bc_007", ids)
+            for r in results:
+                self.assertEqual(r["memory_domain"], "hsm")
+            db.close()
+
+    def test_search_finds_hsm_with_no_domain_filter(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            results = db.search_state_records("tag:hsm", limit=20)
+            ids = [r["record_id"] for r in results]
+            self.assertIn("rec_bc_007", ids)
+            db.close()
+
+    # --- 11. fts search works if FTS5 available, else exact fallback ---
+
+    def test_fts_search_or_exact_fallback(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            # mode=fts: if FTS5 not available, query_plan falls back to exact
+            results = db.search_state_records("doctrine", mode="fts")
+            # Should return at least one record containing "doctrine" in claim/summary/tags
+            self.assertIsInstance(results, list)
+            # Every result should contain "doctrine" somewhere
+            for r in results:
+                text = r["claim"] + " " + r["summary"] + " " + " ".join(r["tags"])
+                self.assertIn("doctrine", text.lower())
+            db.close()
+
+    def test_fts_available_attribute_is_bool(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            self.assertIsInstance(db.fts_available, bool)
+            db.close()
+
+    def test_health_exposes_fts_available(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            health = db.health()
+            self.assertIn("fts_available", health)
+            self.assertEqual(health["fts_available"], db.fts_available)
+            db.close()
+
+    # --- 12. put_state_record updates FTS/index data on replace ---
+
+    def test_put_state_record_updates_fts_on_replace(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            records = _load_state_records()
+            # Use rec_bc_001 which has "automatically ingest" in its claim
+            rec = next(r for r in records if "automatically ingest" in r["claim"])
+            rec = dict(rec)  # copy so we can mutate
+            db.put_state_record(rec)
+
+            # Confirm original phrase is found
+            results_before = db.search_state_records(
+                "automatically ingest", mode="exact"
+            )
+            ids_before = [r["record_id"] for r in results_before]
+            self.assertIn(rec["record_id"], ids_before)
+
+            # Replace with updated claim
+            updated = dict(rec)
+            updated["claim"] = "Updated claim: explicit write paths only after Slice C."
+            db.put_state_record(updated)
+
+            # Original phrase no longer matches
+            results_after = db.search_state_records(
+                "automatically ingest", mode="exact"
+            )
+            ids_after = [r["record_id"] for r in results_after]
+            self.assertNotIn(rec["record_id"], ids_after)
+
+            # New phrase now matches
+            results_new = db.search_state_records(
+                "explicit write paths only after Slice C", mode="exact"
+            )
+            ids_new = [r["record_id"] for r in results_new]
+            self.assertIn(rec["record_id"], ids_new)
+            db.close()
+
+    # --- 13. inspect returns record plus source_refs ---
+
+    def test_inspect_returns_record_plus_source_refs(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            records = _load_state_records()
+            # Pick a record that has source_refs
+            rec = next(r for r in records if r.get("source_refs"))
+            results = db.inspect_state_records([rec["record_id"]], include_source_refs=True)
+            self.assertEqual(len(results), 1)
+            entry = results[0]
+            self.assertEqual(entry["record_id"], rec["record_id"])
+            self.assertIsNotNone(entry["record"])
+            self.assertIsNone(entry["error"])
+            # source_refs should be resolved SourceRef dicts
+            self.assertIsInstance(entry["source_refs"], list)
+            # All resolved source refs should have source_ref_id
+            for sref in entry["source_refs"]:
+                self.assertIn("source_ref_id", sref)
+                self.assertIn("locator", sref)
+            db.close()
+
+    def test_inspect_without_source_refs(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            records = _load_state_records()
+            results = db.inspect_state_records(
+                [records[0]["record_id"]], include_source_refs=False
+            )
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["source_refs"], [])
+            db.close()
+
+    # --- 14. inspect preserves requested order ---
+
+    def test_inspect_preserves_requested_order(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            records = _load_state_records()
+            # Request in reverse order
+            id1 = records[0]["record_id"]
+            id2 = records[1]["record_id"]
+            results = db.inspect_state_records([id2, id1])
+            self.assertEqual(len(results), 2)
+            self.assertEqual(results[0]["record_id"], id2)
+            self.assertEqual(results[1]["record_id"], id1)
+            db.close()
+
+    def test_inspect_single_record_returns_one_entry(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            records = _load_state_records()
+            results = db.inspect_state_records([records[2]["record_id"]])
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["record"]["record_id"], records[2]["record_id"])
+            db.close()
+
+    # --- 15. inspect on unknown ID handles gracefully ---
+
+    def test_inspect_unknown_id_returns_not_found_entry(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            results = db.inspect_state_records(["does_not_exist"])
+            self.assertEqual(len(results), 1)
+            entry = results[0]
+            self.assertEqual(entry["record_id"], "does_not_exist")
+            self.assertIsNone(entry["record"])
+            self.assertEqual(entry["error"], "not found")
+            self.assertEqual(entry["source_refs"], [])
+            db.close()
+
+    def test_inspect_mixed_known_unknown_ids(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            records = _load_state_records()
+            results = db.inspect_state_records([records[0]["record_id"], "missing_id"])
+            self.assertEqual(len(results), 2)
+            self.assertIsNotNone(results[0]["record"])
+            self.assertIsNone(results[1]["record"])
+            self.assertEqual(results[1]["error"], "not found")
+            db.close()
+
+    # --- 16. disabled DB search/inspect returns [] ---
+
+    def test_disabled_db_search_returns_empty(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = BrainCaseDB(path=Path(td) / "state.sqlite3", enabled=False)
+            self.assertEqual(db.search_state_records("anything"), [])
+            self.assertFalse(Path(td, "state.sqlite3").exists())
+
+    def test_disabled_db_inspect_returns_empty(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = BrainCaseDB(path=Path(td) / "state.sqlite3", enabled=False)
+            self.assertEqual(db.inspect_state_records(["rec_bc_001"]), [])
+
+    # --- 17. bad DB / search failure returns [] and sets last_error ---
+
+    def test_search_on_closed_db_returns_empty(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            db.close()
+            # After close, _conn is None; search should return [] gracefully
+            results = db.search_state_records("braincase")
+            # Either [] (can't connect) or degrades — must not raise
+            self.assertIsInstance(results, list)
+
+    # --- 18. no forbidden fields in search/inspect results ---
+
+    def test_search_results_contain_no_forbidden_fields(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            results = db.search_state_records("braincase", mode="tag", limit=20)
+            for rec in results:
+                for field in _FORBIDDEN_RECORD_FIELDS:
+                    self.assertNotIn(field, rec,
+                                     f"Forbidden field '{field}' found in search result")
+            db.close()
+
+    def test_inspect_results_contain_no_forbidden_fields(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            records = _load_state_records()
+            results = db.inspect_state_records(
+                [r["record_id"] for r in records[:3]], include_source_refs=True
+            )
+            for entry in results:
+                if entry["record"] is not None:
+                    for field in _FORBIDDEN_RECORD_FIELDS:
+                        self.assertNotIn(field, entry["record"])
+                for sref in entry.get("source_refs") or []:
+                    for field in _FORBIDDEN_RECORD_FIELDS:
+                        self.assertNotIn(field, sref)
+            db.close()
+
+    # --- 19. no model-facing RenderPacket creation ---
+
+    def test_inspect_result_has_no_rendered_text(self):
+        """inspect_state_records must not produce RenderPackets or rendered_text."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            records = _load_state_records()
+            results = db.inspect_state_records(
+                [r["record_id"] for r in records], include_source_refs=True
+            )
+            for entry in results:
+                self.assertNotIn("rendered_text", entry)
+                self.assertNotIn("packet_id", entry)
+                self.assertNotIn("budget_tokens", entry)
+                if entry["record"] is not None:
+                    self.assertNotIn("rendered_text", entry["record"])
+            db.close()
+
+    def test_search_result_has_no_rendered_text(self):
+        """search_state_records must not produce model-facing output."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            results = db.search_state_records("braincase", mode="tag", limit=20)
+            for rec in results:
+                self.assertNotIn("rendered_text", rec)
+                self.assertNotIn("packet_id", rec)
+            db.close()
+
+    # --- FTS5 specific: init creates FTS table ---
+
+    def test_init_creates_fts_table_if_available(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            db.close()
+            if not db.fts_available:
+                self.skipTest("FTS5 not available in this SQLite build")
+            conn = sqlite3.connect(Path(td) / "state.sqlite3")
+            try:
+                tables = {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type IN ('table','shadow')"
+                    ).fetchall()
+                }
+            finally:
+                conn.close()
+            self.assertIn("qz_braincase_state_records_fts", tables)
+
+    def test_fts_search_finds_correct_record(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            if not db.fts_available:
+                self.skipTest("FTS5 not available in this SQLite build")
+            # "gatekeeper" appears in rec_bc_005 claim (architecture correction episode)
+            results = db.search_state_records("gatekeeper", mode="fts")
+            ids = [r["record_id"] for r in results]
+            self.assertIn("rec_bc_005", ids)
             db.close()
 
 

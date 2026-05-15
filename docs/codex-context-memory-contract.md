@@ -643,10 +643,10 @@ goes beyond schema initialization.
 The memory architecture is tool-mediated, not DB-first. See
 `docs/braincase-memory-tool-api.md` for the full design.
 
-Slices A and B are complete: schemas/fixtures exist and BrainCaseDB can store
-fixture-shaped StateRecords/SourceRefs (schema v2, put/get/list/retire/supersede).
-Next step is Slice C (search + inspect helpers). No model-facing tools yet.
-No automatic ingestion at any slice.
+Slices A, B, and C are complete: schemas/fixtures exist; BrainCaseDB stores
+fixture-shaped StateRecords/SourceRefs (schema v3); search/inspect helpers
+with FTS5 are test-backed. Next step is Slice D (explicit write/update tool
+path). No model-facing tools yet. No automatic ingestion at any slice.
 
 Slice 1 status:
 

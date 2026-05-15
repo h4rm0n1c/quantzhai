@@ -135,10 +135,10 @@ docs/progress-snapshot.md
 Current next engineering target:
 
 ```text
-P1 BrainCase — Slice C: braincase.search + inspect helpers over stored records.
-Slices A (schemas/fixtures) and B (BrainCaseDB schema v2 + put/get/list/retire/supersede) complete.
+P1 BrainCase — Slice D: explicit braincase.write/update tool path with deterministic helpers.
+Slices A (schemas/fixtures), B (BrainCaseDB schema v3), and C (search/inspect + FTS5) complete.
 See docs/braincase-memory-tool-api.md for the full slice plan.
-No model-facing tools until Slice C helpers are test-backed. No automatic ingestion.
+No model-facing tools until Slice F (harness injection). No automatic ingestion.
 ```
 
 Then:

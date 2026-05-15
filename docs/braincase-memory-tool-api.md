@@ -570,15 +570,33 @@ Key invariants enforced by tests:
   RenderPackets cannot be stored as StateRecords
 ```
 
-### Slice C: braincase.search and inspect over fixture records
-
-After Slice B schema exists:
+### Slice C: braincase.search and inspect over fixture records — COMPLETE
 
 ```text
-Implement search helpers (query_plan, FTS, exact, tag).
-Implement inspect (fetch record + source_ref).
-Tests against Slice B fixture records.
-No model-visible output yet.
+Added to proxy/qz_braincase_db.py:
+  QZ_BRAINCASE_DB_SCHEMA_VERSION = 3 (FTS5 table added)
+  fts_available property (bool; False if FTS5 unavailable)
+  health() now includes fts_available
+  qz_braincase_state_records_fts — FTS5 virtual table (optional, graceful fallback)
+  put_state_record now syncs FTS index on write
+  query_plan(query, mode="auto") -> dict  — routing: auto/exact/fts/tag
+  search_state_records(query, *, memory_domain, tier, mode, limit) -> list[dict]
+  inspect_state_records(record_ids, *, include_source_refs) -> list[dict]
+  _search_exact, _search_fts, _search_by_tag, _rows_to_records helpers
+
+Search modes:
+  exact  — LIKE on claim/summary/tags_json
+  fts    — FTS5 MATCH (fallback to exact if FTS5 unavailable or query fails)
+  tag    — exact JSON tag match on tags_json
+  auto   — tag: prefix -> tag; quoted/path/issue-ref -> exact; else fts or exact
+
+Inspect result shape:
+  {"record_id": str, "record": dict|None, "source_refs": list, "error": str|None}
+
+Tests: BrainCaseDBSliceCTests — 36 new tests (80 total in file), all passing
+Full suite: 1681 tests passing
+
+Not added: model-facing tools, HTTP routes, RenderPackets, automatic ingestion.
 ```
 
 ### Slice D: braincase.write and update

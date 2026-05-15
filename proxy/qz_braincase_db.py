@@ -3,8 +3,10 @@
 
 BrainCaseDB is the low-level storage case — not a policy layer.
 
-Slice 1 added DB availability and schema metadata plumbing.
-Slice 2 adds explicit StateRecord and SourceRef storage for Slice A fixture-shaped records.
+Slice 1: DB availability and schema metadata plumbing.
+Slice 2: Explicit StateRecord and SourceRef storage for Slice A fixture-shaped records.
+Slice 3: Internal search (exact/fts/tag) and inspect helpers over stored records.
+         No model-facing tools. No automatic ingestion. No runtime integration.
 
 Hard rules:
 - BrainCaseDB does not auto-ingest observed runtime/request data.
@@ -12,6 +14,7 @@ Hard rules:
 - memory_domain is the configured value supplied by the caller; BrainCaseDB stores
   it as-is and must not infer, create, normalize, or grant domain values.
 - BrainCaseDB is not a telemetry warehouse, request log, or memory_domain registry.
+- search/inspect helpers are internal plumbing — not model-facing tools.
 
 Forbidden fields (rejected by put_* methods if present in input dicts):
   raw_prompt, raw_request_body, request_body, full_log, telemetry_event, stream_event
@@ -20,12 +23,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import time
 from pathlib import Path
 from typing import Any
 
-QZ_BRAINCASE_DB_SCHEMA_VERSION = 2
+QZ_BRAINCASE_DB_SCHEMA_VERSION = 3
 QZ_STATE_DB_ENABLED_ENV = "QZ_STATE_DB_ENABLED"
 QZ_STATE_DB_PATH_ENV = "QZ_STATE_DB_PATH"
 
@@ -37,6 +41,9 @@ _FORBIDDEN_RECORD_FIELDS = frozenset({
     "telemetry_event",
     "stream_event",
 })
+
+# Patterns that indicate explicit / path-like / issue-like queries, routing to exact mode.
+_EXACT_PATTERNS = re.compile(r'#\d+|^[./]')
 
 
 def default_db_path(root: str | Path | None = None) -> Path:
@@ -57,6 +64,9 @@ class BrainCaseDB:
 
     All public methods return False/None/[] rather than raising on error.
     Failures are recorded in last_error.
+
+    search/inspect methods are internal helpers — not model-facing tools.
+    They must not produce RenderPackets or inject content into prompts.
     """
 
     def __init__(self, path: str | Path | None = None, enabled: bool = False):
@@ -65,6 +75,11 @@ class BrainCaseDB:
         self.available = False
         self.last_error: str | None = None
         self._conn: sqlite3.Connection | None = None
+        self._fts_available: bool = False
+
+    @property
+    def fts_available(self) -> bool:
+        return self._fts_available
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> "BrainCaseDB":
@@ -120,6 +135,7 @@ class BrainCaseDB:
             "path": str(self.path),
             "available": self.available,
             "schema_version": schema_version,
+            "fts_available": self._fts_available,
             "last_error": self.last_error,
         }
 
@@ -223,6 +239,7 @@ class BrainCaseDB:
         Does not mutate the input dict.
         memory_domain is stored exactly as supplied — never inferred or normalized.
         source_refs entries are stored in qz_braincase_record_sources.
+        FTS index is updated if available.
         """
         if not self.enabled:
             return False
@@ -281,6 +298,21 @@ class BrainCaseDB:
                 )
             self._conn.commit()
             self.last_error = None
+            # Sync FTS index if available (best-effort; failure does not undo the record write)
+            if self._fts_available:
+                try:
+                    tags_text = " ".join(str(t) for t in tags)
+                    self._conn.execute(
+                        "DELETE FROM qz_braincase_state_records_fts WHERE record_id = ?",
+                        (record_id,),
+                    )
+                    self._conn.execute(
+                        "INSERT INTO qz_braincase_state_records_fts(record_id, claim, summary, tags) VALUES (?, ?, ?, ?)",
+                        (record_id, record["claim"], record["summary"], tags_text),
+                    )
+                    self._conn.commit()
+                except Exception:
+                    self._fts_available = False
             return True
         except Exception as exc:
             self.last_error = f"{type(exc).__name__}: {exc}"
@@ -344,18 +376,7 @@ class BrainCaseDB:
                 f"SELECT * FROM qz_braincase_state_records {where} ORDER BY created_at_ms DESC LIMIT ?",
                 params + [limit],
             ).fetchall()
-            results = []
-            for row in rows:
-                rid = row["record_id"]
-                sref_ids = [
-                    r[0]
-                    for r in self._conn.execute(
-                        "SELECT source_ref_id FROM qz_braincase_record_sources WHERE record_id = ?",
-                        (rid,),
-                    ).fetchall()
-                ]
-                results.append(self._row_to_state_record(row, sref_ids))
-            return results
+            return self._rows_to_records(rows)
         except Exception as exc:
             self.last_error = f"{type(exc).__name__}: {exc}"
             return []
@@ -461,6 +482,142 @@ class BrainCaseDB:
         except Exception as exc:
             self.last_error = f"{type(exc).__name__}: {exc}"
             return False
+
+    # ------------------------------------------------------------------
+    # Slice C: query planning
+    # ------------------------------------------------------------------
+
+    def query_plan(self, query: str, *, mode: str = "auto") -> dict:
+        """Choose search mode for a given query string.
+
+        Returns {"mode": "exact"|"fts"|"tag", "query": str}.
+        Does not perform any DB operations.
+
+        Routing rules (mode="auto"):
+          tag:<name>         -> tag mode
+          "quoted string"    -> exact mode (strips outer quotes)
+          #<number>          -> exact mode (issue/PR reference)
+          path/like/query    -> exact mode (contains '/' without http prefix)
+          ./relative/path    -> exact mode
+          otherwise          -> fts if available, else exact
+        """
+        if mode == "exact":
+            return {"mode": "exact", "query": query}
+        if mode == "tag":
+            tag = query[4:].strip() if query.startswith("tag:") else query
+            return {"mode": "tag", "query": tag}
+        if mode == "fts":
+            effective = "fts" if self._fts_available else "exact"
+            return {"mode": effective, "query": query}
+
+        # mode == "auto"
+        if query.startswith("tag:"):
+            return {"mode": "tag", "query": query[4:].strip()}
+        if query.startswith('"') and query.endswith('"') and len(query) > 1:
+            return {"mode": "exact", "query": query[1:-1]}
+        if _EXACT_PATTERNS.search(query):
+            return {"mode": "exact", "query": query}
+        if "/" in query and not query.startswith("http"):
+            return {"mode": "exact", "query": query}
+        if self._fts_available:
+            return {"mode": "fts", "query": query}
+        return {"mode": "exact", "query": query}
+
+    # ------------------------------------------------------------------
+    # Slice C: search helpers
+    # ------------------------------------------------------------------
+
+    def search_state_records(
+        self,
+        query: str,
+        *,
+        memory_domain: str | None = None,
+        tier: str | None = None,
+        mode: str = "auto",
+        limit: int = 10,
+    ) -> list[dict]:
+        """Search stored StateRecords using exact, FTS, or tag mode.
+
+        Returns [] on disabled DB or error.
+        memory_domain is matched exactly — never inferred or expanded.
+        No cross-domain access occurs automatically.
+
+        This is an internal search helper, not a model-facing tool.
+        Results are plain StateRecord dicts. No RenderPacket is produced.
+        """
+        if not self.enabled:
+            return []
+        if self._conn is None or not self.available:
+            if self._conn is None and not self.init():
+                return []
+        try:
+            assert self._conn is not None
+            plan = self.query_plan(query, mode=mode)
+            effective_mode = plan["mode"]
+            effective_query = plan["query"]
+            if effective_mode == "tag":
+                return self._search_by_tag(effective_query, memory_domain, tier, limit)
+            if effective_mode == "fts" and self._fts_available:
+                return self._search_fts(effective_query, memory_domain, tier, limit)
+            return self._search_exact(effective_query, memory_domain, tier, limit)
+        except Exception as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            return []
+
+    # ------------------------------------------------------------------
+    # Slice C: inspect helper
+    # ------------------------------------------------------------------
+
+    def inspect_state_records(
+        self,
+        record_ids: list[str],
+        *,
+        include_source_refs: bool = True,
+    ) -> list[dict]:
+        """Fetch selected records plus their SourceRefs, preserving requested order.
+
+        Returns [] on disabled DB or error.
+        Unknown IDs return an entry with record=None and error="not found".
+        Never crosses memory_domain automatically.
+        Never produces model-facing rendered text or RenderPackets.
+
+        Each result entry shape:
+          {"record_id": str, "record": dict | None, "source_refs": list, "error": str | None}
+        """
+        if not self.enabled:
+            return []
+        if self._conn is None or not self.available:
+            if self._conn is None and not self.init():
+                return []
+        try:
+            assert self._conn is not None
+            results = []
+            for rid in record_ids:
+                rec = self.get_state_record(rid)
+                if rec is None:
+                    results.append({
+                        "record_id": rid,
+                        "record": None,
+                        "source_refs": [],
+                        "error": "not found",
+                    })
+                    continue
+                source_refs: list[dict] = []
+                if include_source_refs:
+                    for sref_id in rec.get("source_refs") or []:
+                        sref = self.get_source_ref(sref_id)
+                        if sref is not None:
+                            source_refs.append(sref)
+                results.append({
+                    "record_id": rid,
+                    "record": rec,
+                    "source_refs": source_refs,
+                    "error": None,
+                })
+            return results
+        except Exception as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            return []
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -569,6 +726,121 @@ class BrainCaseDB:
             """
         )
         self._conn.commit()
+        # Slice 3: optional FTS5 virtual table for claim/summary/tags search.
+        # Degrades gracefully if FTS5 is not available in this SQLite build.
+        try:
+            self._conn.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS qz_braincase_state_records_fts
+                USING fts5(record_id UNINDEXED, claim, summary, tags)
+                """
+            )
+            # Verify the table is queryable
+            self._conn.execute("SELECT record_id FROM qz_braincase_state_records_fts LIMIT 0")
+            self._conn.commit()
+            self._fts_available = True
+        except Exception:
+            self._fts_available = False
+
+    def _search_exact(
+        self,
+        query: str,
+        memory_domain: str | None,
+        tier: str | None,
+        limit: int,
+    ) -> list[dict]:
+        assert self._conn is not None
+        text_pat = f"%{query}%"
+        tag_pat = f'%"{query}"%'
+        clauses: list[str] = ["(claim LIKE ? OR summary LIKE ? OR tags_json LIKE ?)"]
+        params: list[Any] = [text_pat, text_pat, tag_pat]
+        if memory_domain is not None:
+            clauses.append("memory_domain = ?")
+            params.append(memory_domain)
+        if tier is not None:
+            clauses.append("tier = ?")
+            params.append(tier)
+        where = "WHERE " + " AND ".join(clauses)
+        rows = self._conn.execute(
+            f"SELECT * FROM qz_braincase_state_records {where} ORDER BY importance DESC LIMIT ?",
+            params + [limit],
+        ).fetchall()
+        return self._rows_to_records(rows)
+
+    def _search_fts(
+        self,
+        query: str,
+        memory_domain: str | None,
+        tier: str | None,
+        limit: int,
+    ) -> list[dict]:
+        assert self._conn is not None
+        try:
+            fts_rows = self._conn.execute(
+                "SELECT record_id FROM qz_braincase_state_records_fts WHERE qz_braincase_state_records_fts MATCH ?",
+                (query,),
+            ).fetchall()
+        except Exception:
+            # FTS query failed (e.g. bad query syntax); fall back to exact
+            return self._search_exact(query, memory_domain, tier, limit)
+        if not fts_rows:
+            return []
+        fts_ids = [r[0] for r in fts_rows]
+        placeholders = ",".join("?" * len(fts_ids))
+        clauses: list[str] = [f"record_id IN ({placeholders})"]
+        params: list[Any] = list(fts_ids)
+        if memory_domain is not None:
+            clauses.append("memory_domain = ?")
+            params.append(memory_domain)
+        if tier is not None:
+            clauses.append("tier = ?")
+            params.append(tier)
+        where = "WHERE " + " AND ".join(clauses)
+        rows = self._conn.execute(
+            f"SELECT * FROM qz_braincase_state_records {where} ORDER BY importance DESC LIMIT ?",
+            params + [limit],
+        ).fetchall()
+        return self._rows_to_records(rows)
+
+    def _search_by_tag(
+        self,
+        tag: str,
+        memory_domain: str | None,
+        tier: str | None,
+        limit: int,
+    ) -> list[dict]:
+        assert self._conn is not None
+        # Match exact JSON-encoded tag value: "tag" appears with surrounding quotes in the JSON array.
+        tag_pat = f'%"{tag}"%'
+        clauses: list[str] = ["tags_json LIKE ?"]
+        params: list[Any] = [tag_pat]
+        if memory_domain is not None:
+            clauses.append("memory_domain = ?")
+            params.append(memory_domain)
+        if tier is not None:
+            clauses.append("tier = ?")
+            params.append(tier)
+        where = "WHERE " + " AND ".join(clauses)
+        rows = self._conn.execute(
+            f"SELECT * FROM qz_braincase_state_records {where} ORDER BY importance DESC LIMIT ?",
+            params + [limit],
+        ).fetchall()
+        return self._rows_to_records(rows)
+
+    def _rows_to_records(self, rows: list) -> list[dict]:
+        assert self._conn is not None
+        results = []
+        for row in rows:
+            rid = row["record_id"]
+            sref_ids = [
+                r[0]
+                for r in self._conn.execute(
+                    "SELECT source_ref_id FROM qz_braincase_record_sources WHERE record_id = ?",
+                    (rid,),
+                ).fetchall()
+            ]
+            results.append(self._row_to_state_record(row, sref_ids))
+        return results
 
     def _row_to_source_ref(self, row: sqlite3.Row) -> dict:
         meta_json = row["metadata_json"]
