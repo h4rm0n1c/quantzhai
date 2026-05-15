@@ -135,10 +135,10 @@ docs/progress-snapshot.md
 Current next engineering target:
 
 ```text
-P1 BrainCase — Slice B: BrainCaseDB schema (state_records, source_refs, record_links).
-Slice A (schemas + fixtures + 44 tests) is complete.
+P1 BrainCase — Slice C: braincase.search + inspect helpers over stored records.
+Slices A (schemas/fixtures) and B (BrainCaseDB schema v2 + put/get/list/retire/supersede) complete.
 See docs/braincase-memory-tool-api.md for the full slice plan.
-Record shape is defined by docs/schemas/braincase/. Do not add automatic ingestion.
+No model-facing tools until Slice C helpers are test-backed. No automatic ingestion.
 ```
 
 Then:

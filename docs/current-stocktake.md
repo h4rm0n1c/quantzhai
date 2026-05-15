@@ -79,13 +79,12 @@ Agent rules:         AGENTS.md includes telemetry doctrine
 
 ### Notes on each
 
-**#2** — The foundational next state work. Slice 1 added the optional/non-fatal
-SQLite storage skeleton (BrainCaseDB) only. #2 remains parked pending BrainCase
-Slice B (BrainCaseDB schema). Slice A (StateRecord/SourceRef/RenderPacket schemas
-and fixtures) is complete — see `docs/braincase-memory-tool-api.md`. The memory
-architecture is tool-mediated, not DB-first. All write paths must be explicit.
-Unlocks #51 and #46 once the explicit write API and at least one stored-fact
-type exist.
+**#2** — Storage substrate. Slices A and B are complete (Slice A: schemas/fixtures;
+Slice B: BrainCaseDB schema v2 + put/get/list/retire/supersede methods). #2
+remains the storage substrate only — no model-facing tools, no automatic
+ingestion. Next work is Slice C (braincase.search + inspect helpers). Unlocks
+#51 and #46 once the explicit write API and Slice C search path exist. See
+`docs/braincase-memory-tool-api.md`.
 
 **#51** — Recovery backoff state is currently in-memory only. Should be persisted
 once #2 exists. Do not implement before #2.
@@ -271,30 +270,30 @@ Signal/feedback subsystem design (#42)
 
 ## 10. Suggested next agent prompts
 
-### Prompt A: BrainCase Slice B — BrainCaseDB schema (#2, #53)
+### Prompt A: BrainCase Slice C — braincase.search + inspect (#53)
 
-**Slice A is complete. Slice B may now start.**
+**Slices A and B are complete. Slice C may now start.**
 
 Read `docs/braincase-memory-tool-api.md` before starting.
 
 ```text
-Slice A COMPLETE: schemas + fixtures + 44 tests in tests/test_braincase_schema_fixtures.py
+Slice A COMPLETE: schemas + fixtures + 44 tests
+Slice B COMPLETE: schema v2 + put/get/list/retire/supersede + 33 new tests (44 total)
 
 Read first:
-- docs/braincase-memory-tool-api.md       (architecture; Slice B spec)
-- docs/schemas/braincase/state-record.schema.json   (record shape to implement)
-- docs/schemas/braincase/source-ref.schema.json
-- docs/fixtures/braincase/state-records/  (fixture records = test data for Slice B)
+- docs/braincase-memory-tool-api.md       (architecture; Slice C spec)
+- proxy/qz_braincase_db.py                (Slice B methods — Slice C extends these)
+- docs/fixtures/braincase/state-records/  (fixture records for search tests)
 - AGENTS.md BrainCase Memory Tool Plane Doctrine
-- AGENTS.md BrainCaseDB / Memory Storage Doctrine
-- proxy/qz_braincase_db.py
 
-Slice B goal: BrainCaseDB schema.
-Tables: state_records, source_refs, record_links, record_revisions.
-Indexes: FTS on claim/summary, timeline on created_at, tag index.
-No automatic ingestion — only explicit write paths.
-Tests: insert/query/supersede/retire round-trips on fixture records.
-Do not add automatic ingestion at any step.
+Slice C goal: search helpers and inspect over stored fixture records.
+- Add FTS5 virtual table for claim/summary/tags (qz_braincase_state_records_fts).
+- Implement query_plan helper (exact/FTS/tag routing).
+- Implement search methods on BrainCaseDB (exact, fts, tag modes).
+- Implement inspect (fetch full record + source_ref by ID list).
+- No model-facing tool yet — search/inspect are internal helpers only.
+- No automatic ingestion at any step.
+- Tests using Slice B stored fixture records.
 ```
 
 ### Prompt B: Recovery state persistence (#51, after #2)

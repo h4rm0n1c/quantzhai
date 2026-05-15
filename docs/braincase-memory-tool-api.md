@@ -540,15 +540,34 @@ Key schema decisions:
 - HSM fixture uses memory_domain="hsm" as a configured example, not a built-in domain
 ```
 
-### Slice B: BrainCaseDB schema for state records
-
-After Slice A fixtures define the record shape:
+### Slice B: BrainCaseDB schema for state records — COMPLETE
 
 ```text
-Tables: state_records, source_refs, record_links, record_revisions, candidates.
-Indexes: FTS on body text, timeline on created_at, tag index.
-No automatic ingestion — only explicit write paths.
-Tests: insert/query/supersede/retire round-trips on fixture records.
+Tables added to proxy/qz_braincase_db.py:
+  qz_braincase_source_refs         — SourceRef storage
+  qz_braincase_state_records       — StateRecord storage (memory_domain stored as-is)
+  qz_braincase_record_sources      — record <-> source_ref join table
+  qz_braincase_record_revisions    — retire/supersede revision log
+  qz_braincase_record_links        — record-to-record links
+
+Schema version bumped: QZ_BRAINCASE_DB_SCHEMA_VERSION = 2
+
+Methods added to BrainCaseDB:
+  put_source_ref / get_source_ref
+  put_state_record / get_state_record
+  list_state_records(memory_domain, tier, limit)
+  retire_state_record / supersede_state_record
+
+Tests added to tests/test_qz_braincase_db.py:
+  BrainCaseDBSliceBTests — 33 new tests (44 total in file)
+
+Key invariants enforced by tests:
+  memory_domain stored as-is; no enum; no registry table
+  HSM fixture stored as plain string; no special HSM treatment
+  Forbidden fields (raw_prompt, raw_request_body, etc.) rejected by put_* methods
+  Input dicts never mutated
+  Disabled DB returns False/None/[] without creating any file
+  RenderPackets cannot be stored as StateRecords
 ```
 
 ### Slice C: braincase.search and inspect over fixture records

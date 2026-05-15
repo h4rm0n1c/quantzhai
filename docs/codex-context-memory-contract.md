@@ -643,8 +643,10 @@ goes beyond schema initialization.
 The memory architecture is tool-mediated, not DB-first. See
 `docs/braincase-memory-tool-api.md` for the full design.
 
-#2 is parked. The substrate skeleton (BrainCaseDB) exists; the next step is
-Slice A (StateRecord JSON schema fixtures), not automatic parser-fact ingestion.
+Slices A and B are complete: schemas/fixtures exist and BrainCaseDB can store
+fixture-shaped StateRecords/SourceRefs (schema v2, put/get/list/retire/supersede).
+Next step is Slice C (search + inspect helpers). No model-facing tools yet.
+No automatic ingestion at any slice.
 
 Slice 1 status:
 

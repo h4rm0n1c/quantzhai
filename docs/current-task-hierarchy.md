@@ -241,11 +241,20 @@ docs/fixtures/braincase/render-packets/          — 1 render packet fixture
 tests/test_braincase_schema_fixtures.py          — 44 tests, all passing
 ```
 
-Blocked by for Slice B:
+Slice B acceptance (COMPLETE):
 
 ```text
-Slice A is complete. Slice B (BrainCaseDB schema) may now start.
-Do not add automatic ingestion in Slice B. Write paths remain explicit.
+proxy/qz_braincase_db.py — schema v2, 5 new tables, 7 new methods
+tests/test_qz_braincase_db.py — BrainCaseDBSliceBTests: 33 new tests (44 total)
+All 1645 tests passing.
+```
+
+Blocked by for Slice C:
+
+```text
+Slice B is complete. Slice C (braincase.search + inspect) may now start.
+FTS index design to be settled in Slice C.
+No model-facing tools yet.
 ```
 
 Best resource:
@@ -440,25 +449,30 @@ cross-domain isolation tests
 
 ---
 
-## Next implementation prompt: BrainCase Slice B (BrainCaseDB schema)
+## Next implementation prompt: BrainCase Slice C (braincase.search + inspect)
 
-**Slice A is complete. Slice B may now start.**
+**Slices A and B are complete. Slice C may now start.**
 
-Read `docs/braincase-memory-tool-api.md` before starting Slice B.
+Read `docs/braincase-memory-tool-api.md` before starting Slice C.
 
 ```text
-Slice A: COMPLETE — schemas + fixtures + 44 tests passing
-Slice B: NEXT — BrainCaseDB schema for state_records, source_refs, record_links, revisions
-Slice C: braincase.search + inspect over fixture records
+Slice A: COMPLETE — schemas + fixtures + 44 tests
+Slice B: COMPLETE — BrainCaseDB schema v2 + put/get/list/retire/supersede methods + 33 new tests
+Slice C: NEXT — braincase.search + inspect over stored fixture records
 Slice D: braincase.write/update with explicit tool path
 Slice E: braincase.render bounded packet builder
 Slice F: harness injection for memory tool-use policy
 ```
 
-Do not add automatic ingestion in Slice B. Write paths must remain explicit.
-Record shape is defined by Slice A schemas and fixtures — use them as the source of truth.
+Slice C scope:
+- Implement search helpers (query_plan, FTS, exact, tag).
+- Implement inspect (fetch record + source_ref by ID).
+- Add FTS5 virtual table for claim/summary/tags (if not already added).
+- No model-facing tool yet — search/inspect are internal helpers only.
+- No automatic ingestion.
+- Tests against Slice B fixture records.
 
-Full reference below for Slice B context:
+Full reference below for Slice C context:
 
 ```text
 PARKED REFERENCE — do not implement until memory-write API design exists.
