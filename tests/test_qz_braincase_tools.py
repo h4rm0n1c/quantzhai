@@ -1635,7 +1635,7 @@ class RecallPartialTierDroppedWarningTests(unittest.TestCase):
 from proxy.qz_braincase_tools import (
     BraincaseRenderProxyToolExecutor,
     BraincaseRecallProxyToolExecutor,
-    make_braincase_tool_executors,
+    make_braincase_tool_executors,  # production factory — not redefined below
 )
 from proxy.qz_proxy_tools import (
     ProxyLocalToolRegistry,
@@ -1690,7 +1690,11 @@ def _make_renderable(record_id="rec_disp_001", memory_domain="coding",
 
 
 class BraincaseExecutorPresenceTests(unittest.TestCase):
-    """Executors absent when disabled, present when enabled."""
+    """Executors absent when disabled, present when enabled.
+
+    All tests use the production make_braincase_tool_executors(env=...) directly.
+    No local shadow — env= parameter was added to the production factory in Slice G.3.
+    """
 
     def test_executors_absent_when_disabled(self):
         executors = make_braincase_tool_executors(env=_DISABLED_ENV)
@@ -1699,23 +1703,20 @@ class BraincaseExecutorPresenceTests(unittest.TestCase):
         self.assertNotIn("braincase.recall", names)
 
     def test_executors_present_when_enabled(self):
-        with patch.dict(os.environ, _ENABLED_ENV):
-            executors = make_braincase_tool_executors()
+        executors = make_braincase_tool_executors(env=_ENABLED_ENV)
         names = [e.function_name for e in executors]
         self.assertIn("braincase.render", names)
         self.assertIn("braincase.recall", names)
 
     def test_no_write_update_search_inspect_executors(self):
-        with patch.dict(os.environ, _ENABLED_ENV):
-            executors = make_braincase_tool_executors()
+        executors = make_braincase_tool_executors(env=_ENABLED_ENV)
         names = [e.function_name for e in executors]
         for forbidden in ("braincase.write", "braincase.update",
                           "braincase.search", "braincase.inspect"):
             self.assertNotIn(forbidden, names)
 
     def test_exactly_render_and_recall_when_enabled(self):
-        with patch.dict(os.environ, _ENABLED_ENV):
-            executors = make_braincase_tool_executors()
+        executors = make_braincase_tool_executors(env=_ENABLED_ENV)
         names = set(e.function_name for e in executors)
         self.assertEqual(names, {"braincase.render", "braincase.recall"})
 
@@ -1723,20 +1724,13 @@ class BraincaseExecutorPresenceTests(unittest.TestCase):
         executors = make_braincase_tool_executors(env=_DISABLED_ENV)
         self.assertEqual(executors, [])
 
-    def _env_executors(self):
-        """make_braincase_tool_executors with explicit env dict (for isolation)."""
-        pass
-
-
-# Override make_braincase_tool_executors to accept env for tests
-def make_braincase_tool_executors(db=None, env=None):
-    from proxy.qz_braincase_tools import is_braincase_tools_enabled, BraincaseRenderProxyToolExecutor, BraincaseRecallProxyToolExecutor
-    if not is_braincase_tools_enabled(env):
-        return []
-    return [
-        BraincaseRenderProxyToolExecutor(db=db),
-        BraincaseRecallProxyToolExecutor(db=db),
-    ]
+    def test_production_factory_not_shadowed(self):
+        """Verify make_braincase_tool_executors is the production implementation."""
+        import inspect
+        from proxy import qz_braincase_tools as _m
+        self.assertIs(make_braincase_tool_executors, _m.make_braincase_tool_executors,
+                      "make_braincase_tool_executors must be the production function, "
+                      "not a test-local shadow")
 
 
 class RegistryDispatchTests(unittest.TestCase):
@@ -1793,6 +1787,59 @@ class RegistryDispatchTests(unittest.TestCase):
         web_call = {"type": "function_call", "name": "web_search", "call_id": "wsc_01",
                     "id": "wsc_01", "arguments": '{"query":"test"}'}
         self.assertTrue(reg.is_proxy_local_call(web_call))
+
+    def test_continuation_path_render_with_seeded_record(self):
+        """Full continuation path: decision -> execute -> ToolContinuationResult shape."""
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_bc_db(td)
+            rec = _make_renderable("rec_cont_001", "coding", "project_state",
+                                   claim="continuation regression test record")
+            db.put_state_record(rec)
+            reg = self._registry(db=db)
+            call = _make_function_call(
+                "braincase.render",
+                {"purpose": "regression", "memory_domain": "coding"},
+            )
+            decision = reg.completed_call_decision(call, "custom")
+            self.assertEqual(decision.kind, "proxy_local")
+            ctx = ProxyToolExecutionContext(request_id="req-regression")
+            result = reg.continuation_result(decision, ctx)
+            # Shape assertions
+            self.assertIsInstance(result, ToolContinuationResult)
+            self.assertEqual(result.public_item.get("type"), "function_call_output")
+            self.assertEqual(len(result.upstream_items), 2)
+            upstream_types = {item.get("type") for item in result.upstream_items}
+            self.assertIn("function_call", upstream_types)
+            self.assertIn("function_call_output", upstream_types)
+            # Output must be valid RenderPacket JSON
+            output = json.loads(result.public_item["output"])
+            self.assertEqual(output.get("schema"), "braincase/render-packet@1")
+            self.assertIn("rendered_text", output)
+            self.assertIn("source_record_ids", output)
+            self.assertNotIn("record", output)
+            self.assertNotIn("state_records", output)
+            self.assertIn("rec_cont_001", output.get("source_record_ids", []))
+
+    def test_continuation_path_recall_with_seeded_record(self):
+        """Full continuation path for recall: decision -> execute -> RenderPacket."""
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_bc_db(td)
+            rec = _make_renderable("rec_recall_cont_001", "coding", "project_state",
+                                   claim="recall continuation regression")
+            db.put_state_record(rec)
+            reg = self._registry(db=db)
+            call = _make_function_call(
+                "braincase.recall",
+                {"purpose": "regression", "memory_domain": "coding", "recall_mode": "task"},
+            )
+            decision = reg.completed_call_decision(call, "custom")
+            self.assertEqual(decision.kind, "proxy_local")
+            ctx = ProxyToolExecutionContext(request_id="req-recall-regression")
+            result = reg.continuation_result(decision, ctx)
+            output = json.loads(result.public_item["output"])
+            self.assertEqual(output.get("schema"), "braincase/render-packet@1")
+            self.assertIn("rec_recall_cont_001", output.get("source_record_ids", []))
+            self.assertNotIn("record", output)
 
 
 class BraincaseRenderDispatchTests(unittest.TestCase):

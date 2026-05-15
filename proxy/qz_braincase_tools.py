@@ -777,8 +777,14 @@ class BraincaseRecallProxyToolExecutor(_BraincaseBaseExecutor):
         return self._make_result(call, packet)
 
 
-def make_braincase_tool_executors(db: "BrainCaseDB | None" = None) -> list:
+def make_braincase_tool_executors(
+    db: "BrainCaseDB | None" = None,
+    env: "dict | None" = None,
+) -> list:
     """Return BrainCase proxy-local executors when QZ_BRAINCASE_TOOLS_ENABLED is set.
+
+    env: optional dict to check instead of os.environ (useful for tests).
+         Omit or pass None to use os.environ (production default).
 
     Returns [] when disabled (default). When enabled, returns executors for
     braincase.render and braincase.recall.
@@ -786,7 +792,7 @@ def make_braincase_tool_executors(db: "BrainCaseDB | None" = None) -> list:
     write/update/search/inspect are never included.
     No automatic ingestion. No raw StateRecord exposure.
     """
-    if not is_braincase_tools_enabled():
+    if not is_braincase_tools_enabled(env):
         return []
     return [
         BraincaseRenderProxyToolExecutor(db=db),
