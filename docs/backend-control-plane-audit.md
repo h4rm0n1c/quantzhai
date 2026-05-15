@@ -234,17 +234,14 @@ Slice 2 also:
   --model MODEL` before `exec codex`. Timeout via `QZ_CODEX_READY_TIMEOUT`
   (default 60s).
 
-**Step 4 (done — slice 3):** Gate `qz-codex-common` local catalog fallback behind
-an explicit opt-in flag. `qz_prepare_codex_home()` now:
-- Calls `POST /qz/models/refresh` as the normal path.
-- If that fails and `QZ_CODEX_ALLOW_LOCAL_CATALOG_FALLBACK=1`, runs the old
-  direct Python scan (offline/dev use only).
-- If that fails without the flag: prints a proxy-owned error message that is
-  remote-friendly (does not assume local Docker/llama.cpp), then returns 1 so
-  `qz-codex` exits with a clear error.
-`qz-codex` no longer silently owns catalog generation when a proxy is expected.
-Remote `qz-codex` users without a local backend now get a clear error rather than
-a silent partial failure.
+**Step 4 (done — slice 3, completed under #45):** `qz_prepare_codex_home()` now:
+- Calls `POST /qz/models/refresh` as the sole path for catalog generation.
+- If that fails: prints a proxy-owned error message that is remote-friendly
+  (does not assume local Docker/llama.cpp), then returns 1.
+- `QZ_CODEX_ALLOW_LOCAL_CATALOG_FALLBACK` and the direct local scan path
+  (`python3 proxy/qz_model_catalog.py scan` + `proxy/qz_codex_catalog.py`)
+  have been removed under #45. The proxy `/qz/models/refresh` is the sole path.
+`qz-codex` does not own catalog generation. A reachable QuantZhai proxy is required.
 
 **Step 5 (done — slice 4):** Enrich `POST /qz/models/refresh` response with
 structured catalog/status metadata under schema `qz.codex.catalog.refresh.v1`.
@@ -421,8 +418,8 @@ catalog_ready, models count, backend_reachable, first operator hint). This helps
 remote users understand whether the proxy is up but catalog generation failed,
 vs. the proxy being unreachable entirely.
 
-The catalog_updated == true requirement and `QZ_CODEX_ALLOW_LOCAL_CATALOG_FALLBACK`
-opt-in are unchanged.
+The catalog_updated == true requirement is enforced.
+`QZ_CODEX_ALLOW_LOCAL_CATALOG_FALLBACK` and the local scan fallback were removed under #45.
 
 **Step 14 (done — slice 12):** Audited and downgraded runtime-state JSON.
 
@@ -499,8 +496,8 @@ scripts/qz-write-runtime-state — launcher trace writer; docstring updated; rem
 ### What was deliberately split into follow-up issues
 
 ```text
-#45: Remove legacy qz-codex local catalog fallback (QZ_CODEX_ALLOW_LOCAL_CATALOG_FALLBACK)
-     — explicit opt-in only since slice 3; remove once proxy artifact generation is fully trusted.
+#45 (done): Remove legacy qz-codex local catalog fallback (QZ_CODEX_ALLOW_LOCAL_CATALOG_FALLBACK)
+     — removed; proxy /qz/models/refresh is now the sole catalog path.
 #46: Replace qz-write-runtime-state launcher trace with startup telemetry / Phase 1 SQLite
      — depends on #2 (Phase 1 SQLite) or proxy startup event telemetry.
 #2:  Phase 1 SQLite operational substrate

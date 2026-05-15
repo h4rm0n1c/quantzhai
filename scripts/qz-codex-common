@@ -18,14 +18,10 @@ qz_prepare_codex_home() {
     cp "$QZ_ROOT/config/example/codex-config.toml" "$QZ_ROOT/var/codex-home/config.toml"
   fi
 
-  # Ask the proxy to refresh its model inventory and regenerate the Codex
-  # catalog file. The proxy is the authority for model/catalog state.
-  #
-  # If the proxy refresh fails and QZ_CODEX_ALLOW_LOCAL_CATALOG_FALLBACK=1,
-  # the legacy direct-scan fallback runs (offline/dev use only).
-  #
-  # Without the fallback flag, a proxy failure is a clear operational error:
-  # qz-codex should not silently own catalog generation when a proxy is expected.
+  # The proxy is the sole authority for model/catalog state.
+  # POST /qz/models/refresh triggers the proxy to rescan models and regenerate
+  # the Codex catalog file. qz-codex requires a reachable QuantZhai proxy;
+  # there is no local scan fallback.
   local proxy_url="http://$QZ_PROXY_HOST:$QZ_PROXY_PORT"
   local _refresh_body
   if _refresh_body=$(curl -fsS -X POST "$proxy_url/qz/models/refresh" 2>/dev/null); then
@@ -79,25 +75,21 @@ except Exception:
     fi
     : # proxy owns catalog; continue
   else
-    local _fallback="${QZ_CODEX_ALLOW_LOCAL_CATALOG_FALLBACK:-0}"
-    case "${_fallback,,}" in
-      1|true|yes|on) ;;
-      *)
-        printf 'qz-codex: proxy catalog refresh failed.\n' >&2
-        printf '\n' >&2
-        printf '  qz-codex expects the QuantZhai proxy to own model/catalog state.\n' >&2
-        printf '  POST %s/qz/models/refresh did not succeed.\n' "$proxy_url" >&2
-        printf '\n' >&2
-        printf '  Solutions:\n' >&2
-        printf '    Start the proxy:  scripts/qz-proxy\n' >&2
-        printf '    Start the stack:  scripts/qz-up\n' >&2
-        printf '\n' >&2
-        printf '  qz-codex does not need to run on the same machine as llama.cpp,\n' >&2
-        printf '  but it does need a reachable QuantZhai proxy at:\n' >&2
-        printf '    %s\n' "$proxy_url" >&2
-        printf '\n' >&2
-        # Show compact control-plane facts to help diagnose the issue.
-        python3 - "$QZ_PROXY_HOST" "$QZ_PROXY_PORT" <<'PY' >&2 2>/dev/null || true
+    printf 'qz-codex: proxy catalog refresh failed.\n' >&2
+    printf '\n' >&2
+    printf '  qz-codex requires a reachable QuantZhai proxy to own model/catalog state.\n' >&2
+    printf '  POST %s/qz/models/refresh did not succeed.\n' "$proxy_url" >&2
+    printf '\n' >&2
+    printf '  Solutions:\n' >&2
+    printf '    Start the proxy:  scripts/qz-proxy\n' >&2
+    printf '    Start the stack:  scripts/qz-up\n' >&2
+    printf '\n' >&2
+    printf '  qz-codex does not need to run on the same machine as llama.cpp,\n' >&2
+    printf '  but it does need a reachable QuantZhai proxy at:\n' >&2
+    printf '    %s\n' "$proxy_url" >&2
+    printf '\n' >&2
+    # Show compact control-plane facts to help diagnose the issue.
+    python3 - "$QZ_PROXY_HOST" "$QZ_PROXY_PORT" <<'PY' >&2 2>/dev/null || true
 import json, sys, urllib.request
 host, port = sys.argv[1], sys.argv[2]
 url = "http://{}:{}/qz/control-plane".format(host, port)
@@ -118,18 +110,8 @@ try:
 except Exception as e:
     print("  /qz/control-plane: unreachable ({})".format(e))
 PY
-        printf '\n' >&2
-        printf '  For offline/dev use without a proxy, set:\n' >&2
-        printf '    QZ_CODEX_ALLOW_LOCAL_CATALOG_FALLBACK=1\n' >&2
-        return 1
-        ;;
-    esac
-    python3 "$QZ_ROOT/proxy/qz_model_catalog.py" scan >/dev/null
-    local catalog_dst="$QZ_ROOT/var/codex-home/model-catalogs/qwenzhai-models.json"
-    python3 "$QZ_ROOT/proxy/qz_codex_catalog.py" \
-      "$QZ_MODEL_INVENTORY_CACHE" \
-      "$catalog_dst" \
-      "$QZ_ROOT/var/codex-home/config.toml"
+    printf '\n' >&2
+    return 1
   fi
 
   export CODEX_HOME="$QZ_ROOT/var/codex-home"

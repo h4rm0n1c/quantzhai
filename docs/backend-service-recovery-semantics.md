@@ -629,6 +629,6 @@ Two-step smoke flow available with `--allow-restart-and-reload`:
 | `tests/test_qz_responses_error.py` | Responses error test coverage |
 | `#2` | Phase 1 SQLite substrate (prerequisite for durable recovery tracking) |
 | `#6` | Backend VRAM telemetry and monitor polish |
-| `#45` | Remove local qz-codex catalog fallback |
+| `#45` (done) | Remove local qz-codex catalog fallback — completed; proxy is sole path |
 | `#46` | Replace qz-write-runtime-state launcher trace |
 | `#47` | This issue — normalize backend service status and recovery semantics |
