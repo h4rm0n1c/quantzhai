@@ -504,25 +504,24 @@ Slice D:   COMPLETE — qz_braincase_write.py helpers + write/update paths (1744
 Slice D.1: COMPLETE — conflict marker detection tightened
 Slice E:   COMPLETE — qz_braincase_render.py + render_pack/braincase_render_packet + 53 tests (1819 total)
 Slice F:   COMPLETE — qz_braincase_tools.py + braincase.render tool surface + 64 tests (1906 total)
+Slice G:   COMPLETE — braincase.recall semantics + tier routing + 124 tests (1966 total)
 ```
 
-Slice F: what was done
-- New module: proxy/qz_braincase_tools.py
-- Feature flag: QZ_BRAINCASE_TOOLS_ENABLED (default: disabled)
-- Exposed tool: braincase.render only
-- Not exposed: braincase.recall, write, update, search, inspect
-- Harness policy: BRAINCASE_HARNESS_POLICY injected via normalize_responses_input_for_qwen
-- Tool definition: BRAINCASE_RENDER_TOOL_DEF injected into body["tools"] when enabled
-- Executor: braincase_render_tool(db, args) -> RenderPacket dict
-- Disabled DB returns warning packet; missing args return warning packets
-- No automatic ingestion. No forwarded body mutation when disabled.
-- Tests: tests/test_qz_braincase_tools.py — 64 tests, all passing
+Slice G: what was done
+- RECALL_MODE_TIERS dict: 5 predefined modes (task/project/procedure/artifact/open_loops)
+- tiers_for_recall_mode() → returns bounded tier list or None for unknown modes
+- BRAINCASE_RECALL_TOOL_DEF: recall_mode enum, required purpose/memory_domain
+- braincase_recall_packet(): validates mode, resolves tiers (intersection-only narrowing),
+  calls braincase_render_packet() — no raw records, no duplicate render logic
+- braincase_recall_tool(): executor dispatching to braincase_recall_packet()
+- BRAINCASE_HARNESS_POLICY: updated for both render and recall
+- get_braincase_tool_definitions(): now returns [render_def, recall_def] when enabled
+- Unknown mode → warning packet; empty tier intersection → warning packet; no fallback to all memory
+- No automatic ingestion. No raw StateRecords. Disabled DB → safe warning.
+- Tests: 124 tests in test_qz_braincase_tools.py, all passing
 
-Next slice should do one of:
-- Define recall semantics (tier routing, budget, RenderPacket output, what differs from dump)
-  Do not expose recall as a broad unscoped dump — define semantics first.
-- Define operator-reviewed write exposure via braincase.write
-- No automatic ingestion at any step.
+Next slice: operator-reviewed write exposure (braincase.write) or recall policy polish.
+No automatic ingestion at any step.
 
 Full reference below for Slice C context:
 

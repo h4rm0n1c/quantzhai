@@ -647,10 +647,11 @@ Slices A–F (and C.1, D.1) are complete: schemas/fixtures; BrainCaseDB schema v
 search/inspect/FTS5; FTS reindex; write/update helpers (qz_braincase_write.py);
 internal render packet builder (qz_braincase_render.py — render_pack,
 braincase_render_packet); braincase.render tool surface (qz_braincase_tools.py).
-Slice F: braincase.render is the first model-visible tool.
+Slices F+G: braincase.render and braincase.recall are exposed.
 Feature flag: QZ_BRAINCASE_TOOLS_ENABLED (default: disabled).
-RenderPacket is the only model-visible memory output.
-recall/write/update/search/inspect remain unexposed until semantics are defined.
+braincase.recall uses predefined recall modes (task/project/procedure/artifact/open_loops)
+with tier routing and returns RenderPackets only.
+write/update/search/inspect remain unexposed.
 No automatic ingestion at any slice.
 
 Slice 1 status:

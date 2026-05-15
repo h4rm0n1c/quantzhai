@@ -135,13 +135,12 @@ docs/progress-snapshot.md
 Current next engineering target:
 
 ```text
-P1 BrainCase — Slice F COMPLETE.
-braincase.render is the first model-visible tool (QZ_BRAINCASE_TOOLS_ENABLED, default disabled).
-Slices A–F (and C.1, D.1) complete: schemas/fixtures; BrainCaseDB v3; search/inspect/FTS5;
-FTS reindex; write/update helpers; internal render packet builder; braincase.render tool surface.
+P1 BrainCase — Slices A–G (and C.1, D.1) complete.
+Slice G: braincase.recall semantics (5 recall modes + tier routing).
+braincase.render and braincase.recall both exposed when QZ_BRAINCASE_TOOLS_ENABLED (default disabled).
 RenderPacket is the only model-visible memory output.
-recall/write/update/search/inspect remain internal.
-Next: define recall semantics or operator-reviewed write exposure.
+write/update/search/inspect remain internal.
+Next: operator-reviewed write exposure or recall policy polish.
 No automatic ingestion.
 See docs/braincase-memory-tool-api.md for the full slice plan.
 ```
@@ -171,7 +170,7 @@ Key source files (proxy/):
   qz_braincase_db.py       — BrainCaseDB storage layer
   qz_braincase_write.py    — explicit write/update helpers
   qz_braincase_render.py   — internal RenderPacket builder
-  qz_braincase_tools.py    — braincase.render tool surface (Slice F)
+  qz_braincase_tools.py    — braincase.render + recall tool surface (Slices F+G)
 ```
 
 Focus:
@@ -186,8 +185,8 @@ Slice A (StateRecord JSON schema fixtures) must come before Slice B (DB schema).
 Raw captures remain debug artifacts.
 Do not inject qz_session_id/qz_workspace_id/qz_memory_domain into forwarded request bodies.
 memory_domain is config-owned; BrainCaseDB must not infer or grant domain values.
-braincase.render is the only model-visible tool (Slice F). QZ_BRAINCASE_TOOLS_ENABLED flag.
-recall/write/update/search/inspect remain internal until semantics are defined.
+braincase.render + braincase.recall exposed (Slices F+G). QZ_BRAINCASE_TOOLS_ENABLED flag.
+write/update/search/inspect remain internal until operator exposure is defined.
 ```
 
 ### I want to work on repeated-read signals

@@ -79,14 +79,14 @@ P4 config/var/script ownership cleanup
 Status:
 
 ```text
-Slices A–F (and C.1, D.1) complete.
-  Slice F: qz_braincase_tools.py — braincase.render tool surface.
-  Feature flag: QZ_BRAINCASE_TOOLS_ENABLED (default: disabled).
-  braincase.render is the first model-visible BrainCase tool.
+Slices A–G (and C.1, D.1) complete.
+  Slice G: braincase.recall semantics defined and implemented.
+  5 recall modes with tier routing (task/project/procedure/artifact/open_loops).
+  braincase.recall and braincase.render both exposed when QZ_BRAINCASE_TOOLS_ENABLED.
   RenderPacket is the only model-visible memory output.
-  recall/write/update/search/inspect remain unexposed.
+  write/update/search/inspect remain unexposed.
   No automatic ingestion.
-  Next: define recall semantics or operator-reviewed write exposure.
+  Next: operator-reviewed write exposure or recall policy polish.
   See docs/braincase-memory-tool-api.md.
 ```
 

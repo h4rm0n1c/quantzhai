@@ -711,39 +711,74 @@ automatic ingestion, recall tool.
 New module: proxy/qz_braincase_tools.py
 
 Feature flag: QZ_BRAINCASE_TOOLS_ENABLED (default: disabled)
-Default behaviour:
-  - No tool definition is injected.
-  - No harness policy text is added to the turn harness.
-  - No runtime behaviour changes.
-  - Forwarded /v1/responses bodies are not mutated.
-
 When enabled:
-  - BRAINCASE_RENDER_TOOL_DEF injected into body["tools"] via
-    inject_braincase_tools_to_body().
-  - BRAINCASE_HARNESS_POLICY added to turn harness via
-    get_braincase_harness_policy() inside normalize_responses_input_for_qwen().
-  - braincase_render_tool(db, args) dispatches to braincase_render_packet().
-  - Disabled DB returns a safe warning packet (braincase_db_disabled).
-  - Missing purpose or memory_domain returns safe warning packets.
+  - braincase.render and braincase.recall injected into body["tools"].
+  - BRAINCASE_HARNESS_POLICY added to turn harness.
+  - Executors dispatch to braincase_render_packet() / braincase_recall_packet().
+  - Disabled DB returns safe warning packets.
 
-Wiring in proxy/qz_request_normalization.py:
-  - get_braincase_harness_policy() extends harness_blocks in
-    normalize_responses_input_for_qwen() before turn injection.
-  - inject_braincase_tools_to_body() adds braincase.render to body["tools"]
-    in the same function (before normalize_tools_for_llamacpp is called).
-
-Exposed: braincase.render only.
+Exposed at Slice F: braincase.render only.
 Not exposed: braincase.recall, write, update, search, inspect.
-  These remain internal until future slices define semantics and
-  operator exposure policies.
 
 RenderPacket is the only model-visible memory output.
-Raw StateRecords remain internal.
 No automatic ingestion.
-No broad recall/memory dump.
 
-Tests: tests/test_qz_braincase_tools.py — 64 tests, all passing
-Full suite: 1906 tests passing
+Tests: tests/test_qz_braincase_tools.py — 64 tests, 1906 total
+```
+
+### Slice G: braincase.recall semantics — COMPLETE
+
+```text
+Added to proxy/qz_braincase_tools.py:
+
+RECALL_MODE_TIERS — bounded tier lists per recall mode:
+  task:       working_state, project_state, preference_constraint_memory, procedural_memory
+  project:    project_state, preference_constraint_memory, procedural_memory, artifact_memory
+  procedure:  procedural_memory, preference_constraint_memory
+  artifact:   artifact_memory, episodic_memory
+  open_loops: working_state, project_state
+
+tiers_for_recall_mode(mode) -> list[str] | None
+  Returns mode's tier list, or None for unknown modes.
+  Unknown modes return None so callers return a safe warning packet
+  rather than defaulting to all memory.
+
+braincase_recall_packet(db, *, purpose, memory_domain, query, tiers,
+                        recall_mode, budget_tokens, limit, now_ms) -> dict
+  Internal entry point. Validates mode, resolves effective tiers (caller
+  narrowing: intersection only, no widening), calls braincase_render_packet().
+  Returns warning packet for unknown mode, empty intersection, or disabled DB.
+
+Tier narrowing rules:
+  - Caller-supplied tiers narrow the mode's default tiers (intersection).
+  - Out-of-mode tiers are dropped silently; the intersection is used.
+  - If intersection is empty (all caller tiers outside mode) → warning packet
+    with "tier_not_allowed_for_mode". No silent fallback to mode defaults.
+  - Caller tiers cannot widen beyond the mode's allowed tiers.
+
+BRAINCASE_RECALL_TOOL_DEF — function tool definition:
+  name: braincase.recall
+  required: purpose, memory_domain
+  optional: recall_mode (enum, default "task"), query, tiers, budget_tokens, limit
+  description: says to use render for exact records, recall for scoped memory
+
+braincase_recall_tool(db, args) -> dict — executor (never raises)
+
+BRAINCASE_HARNESS_POLICY updated:
+  Now covers both braincase.render and braincase.recall.
+  render: use when exact record_ids or narrow query known.
+  recall: use for scoped task/project memory; choose recall_mode.
+  write/update/search/inspect: not yet exposed.
+
+get_braincase_tool_definitions() now returns [render_def, recall_def] when enabled.
+
+Exposed: braincase.render, braincase.recall.
+Not exposed: braincase.write, braincase.update, braincase.search, braincase.inspect.
+
+RenderPacket is the only model-visible memory output.
+No raw StateRecords. No automatic ingestion.
+
+Tests: tests/test_qz_braincase_tools.py — 124 tests, 1966 total
 ```
 
 ---
@@ -752,9 +787,8 @@ Full suite: 1906 tests passing
 
 ```text
 1. RESOLVED: Slice A fixtures live in docs/schemas/braincase/ and docs/fixtures/braincase/.
-2. DEFERRED: Should braincase.recall return raw records or pre-rendered summaries?
-   (blocked until Slice G defines recall semantics)
-3. Does render always require a separate call, or can recall/inspect render on request?
+2. RESOLVED: braincase.recall returns RenderPacket only (no raw records). Slice G defines modes.
+3. RESOLVED: recall and render are separate calls; render for exact IDs, recall for scoped mode.
 4. What is the right lifetime for working_state — ephemeral in-memory, or short-lived BrainCaseDB rows?
 5. RESOLVED: artifact_memory source refs use SourceRef with locator (file path, URL, commit hash,
    capture path as appropriate). See docs/fixtures/braincase/source-refs/ for examples.

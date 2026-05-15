@@ -1,11 +1,10 @@
-"""Tests for proxy/qz_braincase_tools.py — Slice F BrainCase tool surface.
+"""Tests for proxy/qz_braincase_tools.py — Slices F+G BrainCase tool surface.
 
-Coverage:
+Slice F coverage (render):
   1.  braincase.render tool definition present when QZ_BRAINCASE_TOOLS_ENABLED=true
   2.  braincase.render tool definition absent when disabled
-  3.  No braincase.recall tool definition
-  4.  No braincase.write/update/search/inspect tool definitions
-  5.  Harness policy says render first and recall not exposed yet
+  3.  No braincase.write/update/search/inspect tool definitions
+  4.  Harness policy mentions both render and recall, warns against broad dump
   6.  Tool args schema requires purpose and memory_domain
   7.  Tool args schema includes budget_tokens and limit with bounds
   8.  braincase_render_tool returns RenderPacket-shaped dict
@@ -40,13 +39,18 @@ from unittest.mock import patch
 from proxy.qz_braincase_db import BrainCaseDB
 from proxy.qz_braincase_tools import (
     BRAINCASE_HARNESS_POLICY,
+    BRAINCASE_RECALL_TOOL_DEF,
     BRAINCASE_RENDER_TOOL_DEF,
     QZ_BRAINCASE_TOOLS_ENABLED_ENV,
+    RECALL_MODE_TIERS,
+    braincase_recall_packet,
+    braincase_recall_tool,
     braincase_render_tool,
     get_braincase_harness_policy,
     get_braincase_tool_definitions,
     inject_braincase_tools_to_body,
     is_braincase_tools_enabled,
+    tiers_for_recall_mode,
 )
 
 # ---------------------------------------------------------------------------
@@ -130,7 +134,7 @@ class ToolDefinitionPresenceTests(unittest.TestCase):
         """braincase.render definition present when flag is enabled."""
         defs = get_braincase_tool_definitions(env=_ENABLED_ENV)
         self.assertIsInstance(defs, list)
-        self.assertEqual(len(defs), 1)
+        self.assertGreaterEqual(len(defs), 1)
         names = [d["name"] for d in defs]
         self.assertIn("braincase.render", names)
 
@@ -163,11 +167,9 @@ class ForbiddenToolNamesTests(unittest.TestCase):
     def _all_tool_names(self, env):
         return [d.get("name") for d in get_braincase_tool_definitions(env=env)]
 
-    def test_no_braincase_recall(self):
-        """braincase.recall must not be exposed."""
-        for env in (_ENABLED_ENV, _DISABLED_ENV):
-            with self.subTest(env=env):
-                self.assertNotIn("braincase.recall", self._all_tool_names(env))
+    def test_no_braincase_recall_when_disabled(self):
+        """braincase.recall must not be exposed when flag is disabled."""
+        self.assertNotIn("braincase.recall", self._all_tool_names(_DISABLED_ENV))
 
     def test_no_braincase_write(self):
         """braincase.write must not be exposed."""
@@ -212,16 +214,20 @@ class HarnessPolicyTests(unittest.TestCase):
         self.assertIsNone(policy)
 
     def test_policy_mentions_render(self):
-        """Policy text should mention braincase.render as the only tool."""
+        """Policy text should mention braincase.render."""
         policy = get_braincase_harness_policy(env=_ENABLED_ENV)
         self.assertIn("braincase.render", policy)
 
-    def test_policy_says_recall_not_exposed(self):
-        """Policy text should explicitly say recall is not yet exposed."""
+    def test_policy_mentions_recall(self):
+        """Policy text should mention braincase.recall (now exposed in Slice G)."""
         policy = get_braincase_harness_policy(env=_ENABLED_ENV)
-        self.assertIn("recall", policy.lower())
-        # Should indicate it's not exposed
-        self.assertIn("not yet exposed", policy.lower())
+        self.assertIn("braincase.recall", policy)
+
+    def test_policy_says_write_update_not_exposed(self):
+        """Policy text should say write/update/search/inspect are not yet exposed."""
+        policy = get_braincase_harness_policy(env=_ENABLED_ENV)
+        lower = policy.lower()
+        self.assertIn("not yet exposed", lower)
 
     def test_policy_mentions_memory_domain_requirement(self):
         """Policy should state that memory_domain must be supplied explicitly."""
@@ -648,12 +654,12 @@ class InjectBraincaseToolsTests(unittest.TestCase):
         self.assertIn("exec_command", names)
         self.assertIn("braincase.render", names)
 
-    def test_inject_does_not_expose_recall_write_update(self):
-        """inject_braincase_tools_to_body never adds recall/write/update/search/inspect."""
+    def test_inject_does_not_expose_write_update_search_inspect(self):
+        """inject_braincase_tools_to_body never adds write/update/search/inspect."""
         body = {"tools": []}
         inject_braincase_tools_to_body(body, env=_ENABLED_ENV)
         names = [t.get("name") for t in body["tools"]]
-        for forbidden in ("braincase.recall", "braincase.write", "braincase.update",
+        for forbidden in ("braincase.write", "braincase.update",
                           "braincase.search", "braincase.inspect"):
             self.assertNotIn(forbidden, names)
 
@@ -713,7 +719,7 @@ class NormalizeInputFlagDisabledTests(unittest.TestCase):
         names = [t.get("name") for t in result.get("tools", [])]
         self.assertNotIn("braincase.render", names)
 
-    def test_normalize_injects_braincase_tool_when_enabled(self):
+    def test_normalize_injects_braincase_tools_when_enabled(self):
         from proxy.qz_request_normalization import normalize_responses_input_for_qwen
 
         body = {
@@ -727,6 +733,7 @@ class NormalizeInputFlagDisabledTests(unittest.TestCase):
 
         names = [t.get("name") for t in result.get("tools", [])]
         self.assertIn("braincase.render", names)
+        self.assertIn("braincase.recall", names)
 
 
 # ---------------------------------------------------------------------------
@@ -748,6 +755,606 @@ class BraincaseToolsMutationRegressionTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(result.returncode, 0, f"Mutation regression failed:\n{result.stderr}")
+
+
+# =============================================================================
+# SLICE G: braincase.recall tests
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Tool definition: recall presence and schema
+# ---------------------------------------------------------------------------
+
+class RecallToolPresenceTests(unittest.TestCase):
+
+    def _names(self, env):
+        return [d.get("name") for d in get_braincase_tool_definitions(env=env)]
+
+    def test_recall_absent_when_disabled(self):
+        """braincase.recall not returned when flag is disabled."""
+        self.assertNotIn("braincase.recall", self._names(_DISABLED_ENV))
+
+    def test_recall_present_when_enabled(self):
+        """braincase.recall returned when flag is enabled."""
+        self.assertIn("braincase.recall", self._names(_ENABLED_ENV))
+
+    def test_render_still_present_when_enabled(self):
+        """braincase.render still returned alongside recall when enabled."""
+        self.assertIn("braincase.render", self._names(_ENABLED_ENV))
+
+    def test_write_update_search_inspect_still_absent(self):
+        """write/update/search/inspect never appear regardless of flag."""
+        for env in (_ENABLED_ENV, _DISABLED_ENV):
+            names = self._names(env)
+            for forbidden in ("braincase.write", "braincase.update",
+                              "braincase.search", "braincase.inspect"):
+                self.assertNotIn(forbidden, names, f"{forbidden} must not be exposed")
+
+    def test_enabled_returns_exactly_render_and_recall(self):
+        """Exactly render + recall are returned when enabled — no extras."""
+        names = set(self._names(_ENABLED_ENV))
+        self.assertEqual(names, {"braincase.render", "braincase.recall"})
+
+
+class RecallToolSchemaTests(unittest.TestCase):
+
+    def setUp(self):
+        self.td = BRAINCASE_RECALL_TOOL_DEF
+
+    def test_type_is_function(self):
+        self.assertEqual(self.td["type"], "function")
+
+    def test_name_is_braincase_recall(self):
+        self.assertEqual(self.td["name"], "braincase.recall")
+
+    def test_has_description(self):
+        self.assertIsInstance(self.td.get("description"), str)
+        self.assertGreater(len(self.td["description"]), 30)
+
+    def test_description_no_raw_state_records(self):
+        desc = self.td["description"].lower()
+        self.assertIn("raw", desc)
+
+    def test_description_no_ingestion(self):
+        desc = self.td["description"].lower()
+        self.assertIn("ingest", desc)
+
+    def test_description_mentions_render_packet(self):
+        desc = self.td["description"].lower()
+        self.assertTrue("renderpacket" in desc or "render packet" in desc)
+
+    def test_description_says_use_render_for_exact(self):
+        desc = self.td["description"].lower()
+        self.assertIn("braincase.render", desc)
+
+    def test_required_purpose_and_memory_domain(self):
+        required = self.td["parameters"]["required"]
+        self.assertIn("purpose", required)
+        self.assertIn("memory_domain", required)
+
+    def test_optional_recall_mode(self):
+        props = self.td["parameters"]["properties"]
+        self.assertIn("recall_mode", props)
+        # recall_mode is optional (not in required)
+        self.assertNotIn("recall_mode", self.td["parameters"]["required"])
+
+    def test_recall_mode_has_enum(self):
+        props = self.td["parameters"]["properties"]
+        rm = props["recall_mode"]
+        self.assertIn("enum", rm)
+        modes = rm["enum"]
+        for expected in ("task", "project", "procedure", "artifact", "open_loops"):
+            self.assertIn(expected, modes)
+
+    def test_optional_query_tiers(self):
+        props = self.td["parameters"]["properties"]
+        self.assertIn("query", props)
+        self.assertIn("tiers", props)
+
+    def test_budget_tokens_has_bounds(self):
+        props = self.td["parameters"]["properties"]
+        bt = props["budget_tokens"]
+        self.assertIn("minimum", bt)
+        self.assertIn("maximum", bt)
+        self.assertLessEqual(bt["minimum"], 80)
+        self.assertGreaterEqual(bt["maximum"], 600)
+
+    def test_limit_has_bounds(self):
+        props = self.td["parameters"]["properties"]
+        lim = props["limit"]
+        self.assertIn("minimum", lim)
+        self.assertIn("maximum", lim)
+
+
+# ---------------------------------------------------------------------------
+# tiers_for_recall_mode
+# ---------------------------------------------------------------------------
+
+class TiersForRecallModeTests(unittest.TestCase):
+
+    def test_task_returns_bounded_tiers(self):
+        tiers = tiers_for_recall_mode("task")
+        self.assertIsInstance(tiers, list)
+        self.assertGreater(len(tiers), 0)
+        for t in ("working_state", "project_state"):
+            self.assertIn(t, tiers)
+
+    def test_project_returns_bounded_tiers(self):
+        tiers = tiers_for_recall_mode("project")
+        self.assertIsInstance(tiers, list)
+        self.assertIn("project_state", tiers)
+
+    def test_procedure_returns_bounded_tiers(self):
+        tiers = tiers_for_recall_mode("procedure")
+        self.assertIsInstance(tiers, list)
+        self.assertIn("procedural_memory", tiers)
+
+    def test_artifact_returns_bounded_tiers(self):
+        tiers = tiers_for_recall_mode("artifact")
+        self.assertIsInstance(tiers, list)
+        self.assertIn("artifact_memory", tiers)
+
+    def test_open_loops_returns_bounded_tiers(self):
+        tiers = tiers_for_recall_mode("open_loops")
+        self.assertIsInstance(tiers, list)
+        self.assertIn("working_state", tiers)
+
+    def test_unknown_mode_returns_none(self):
+        self.assertIsNone(tiers_for_recall_mode("all_memory"))
+        self.assertIsNone(tiers_for_recall_mode(""))
+        self.assertIsNone(tiers_for_recall_mode("dump"))
+
+    def test_no_mode_means_all_tiers(self):
+        """Verify that no single mode covers all possible tiers (modes are bounded)."""
+        all_known = {"working_state", "project_state", "session_state",
+                     "semantic_memory", "procedural_memory", "episodic_memory",
+                     "artifact_memory", "perceptual_index", "preference_constraint_memory"}
+        for mode, tiers in RECALL_MODE_TIERS.items():
+            self.assertLess(len(tiers), len(all_known),
+                            f"Mode {mode!r} should not cover all possible tiers")
+
+    def test_all_modes_present_in_constant(self):
+        for mode in ("task", "project", "procedure", "artifact", "open_loops"):
+            self.assertIn(mode, RECALL_MODE_TIERS)
+
+
+# ---------------------------------------------------------------------------
+# braincase_recall_packet tier narrowing
+# ---------------------------------------------------------------------------
+
+class RecallTierNarrowingTests(unittest.TestCase):
+
+    def _fresh_db(self, td):
+        from pathlib import Path
+        db = BrainCaseDB(path=Path(td) / "state.sqlite3", enabled=True)
+        assert db.init()
+        return db
+
+    def test_caller_tiers_narrow_mode_tiers(self):
+        """Caller-supplied tiers that are in the mode narrow the result."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            result = braincase_recall_packet(
+                db,
+                purpose="test",
+                memory_domain="coding",
+                recall_mode="task",
+                tiers=["project_state"],
+            )
+            # Should succeed (project_state is in task mode)
+            self.assertNotIn("tier_not_allowed_for_mode", result.get("warnings", []))
+            self.assertNotIn("unknown_recall_mode", result.get("warnings", []))
+
+    def test_out_of_mode_tiers_returns_warning(self):
+        """Caller-supplied tiers entirely outside the mode return a warning packet."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            result = braincase_recall_packet(
+                db,
+                purpose="test",
+                memory_domain="coding",
+                recall_mode="task",
+                tiers=["episodic_memory"],  # not in task mode
+            )
+            self.assertIn("tier_not_allowed_for_mode", result.get("warnings", []))
+
+    def test_mixed_tiers_uses_intersection(self):
+        """Mixed caller tiers (some in mode, some not) use the intersection."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            result = braincase_recall_packet(
+                db,
+                purpose="test",
+                memory_domain="coding",
+                recall_mode="task",
+                tiers=["project_state", "episodic_memory"],  # episodic not in task
+            )
+            # project_state IS in task mode, so intersection is ["project_state"]
+            # Should succeed without tier_not_allowed warning
+            self.assertNotIn("tier_not_allowed_for_mode", result.get("warnings", []))
+
+    def test_none_tiers_uses_mode_defaults(self):
+        """No caller tiers uses the full mode tier list."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            result = braincase_recall_packet(
+                db,
+                purpose="test",
+                memory_domain="coding",
+                recall_mode="task",
+                tiers=None,
+            )
+            self.assertNotIn("tier_not_allowed_for_mode", result.get("warnings", []))
+            self.assertNotIn("unknown_recall_mode", result.get("warnings", []))
+
+
+# ---------------------------------------------------------------------------
+# braincase_recall_tool executor
+# ---------------------------------------------------------------------------
+
+class RecallToolExecutorTests(unittest.TestCase):
+
+    def _fresh_db(self, td):
+        from pathlib import Path
+        db = BrainCaseDB(path=Path(td) / "state.sqlite3", enabled=True)
+        assert db.init()
+        return db
+
+    def _make_record(self, record_id="rec_recall_001", memory_domain="coding",
+                     tier="project_state"):
+        return {
+            "record_id": record_id,
+            "schema": "braincase/state-record@1",
+            "memory_domain": memory_domain,
+            "tier": tier,
+            "record_type": "constraint",
+            "claim": f"Constraint for {memory_domain} recall test.",
+            "summary": "Test summary.",
+            "status": "active",
+            "visibility": "renderable",
+            "confidence": 1.0,
+            "importance": 0.8,
+            "retention": "project",
+            "created_at_ms": 1778803200000,
+            "updated_at_ms": 1778803200000,
+            "source_refs": [],
+            "tags": ["test"],
+            "supersedes": None,
+            "superseded_by": None,
+            "metadata": None,
+        }
+
+    def test_returns_render_packet_shape(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            result = braincase_recall_tool(db, {
+                "purpose": "task_continuity",
+                "memory_domain": "coding",
+            })
+            for field in _RENDER_PACKET_REQUIRED_FIELDS:
+                self.assertIn(field, result)
+
+    def test_result_schema_is_render_packet(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            result = braincase_recall_tool(db, {
+                "purpose": "task_continuity",
+                "memory_domain": "coding",
+            })
+            self.assertEqual(result.get("schema"), "braincase/render-packet@1")
+
+    def test_no_raw_state_records_in_result(self):
+        """Tool result must not contain raw StateRecord objects."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            rec = self._make_record()
+            db.put_state_record(rec)
+            result = braincase_recall_tool(db, {
+                "purpose": "task_continuity",
+                "memory_domain": "coding",
+            })
+            self.assertNotIn("record", result)
+            self.assertNotIn("records", result)
+            self.assertNotIn("state_records", result)
+            for rid in result.get("source_record_ids", []):
+                self.assertIsInstance(rid, str)
+
+    def test_no_forbidden_fields_in_result(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            result = braincase_recall_tool(db, {
+                "purpose": "task_continuity",
+                "memory_domain": "coding",
+            })
+            for field in _FORBIDDEN_OUTPUT_FIELDS:
+                self.assertNotIn(field, result)
+
+    def test_recall_respects_memory_domain(self):
+        """Records from another domain are not returned."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            rec_coding = self._make_record("rec_coding", "coding", "project_state")
+            rec_hsm = self._make_record("rec_hsm", "hsm", "project_state")
+            db.put_state_record(rec_coding)
+            db.put_state_record(rec_hsm)
+            result = braincase_recall_tool(db, {
+                "purpose": "test",
+                "memory_domain": "coding",
+            })
+            source_ids = result.get("source_record_ids", [])
+            if source_ids:
+                self.assertIn("rec_coding", source_ids)
+                self.assertNotIn("rec_hsm", source_ids)
+
+    def test_recall_does_not_cross_into_hsm(self):
+        """Recall with memory_domain=coding must not return hsm records."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            hsm_rec = self._make_record("rec_hsm_only", "hsm", "project_state")
+            db.put_state_record(hsm_rec)
+            result = braincase_recall_tool(db, {
+                "purpose": "test",
+                "memory_domain": "coding",
+            })
+            self.assertNotIn("rec_hsm_only", result.get("source_record_ids", []))
+
+    def test_hsm_recall_only_when_memory_domain_hsm(self):
+        """Recall returns hsm records only when memory_domain=hsm."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            hsm_rec = self._make_record("rec_hsm_explicit", "hsm", "project_state")
+            db.put_state_record(hsm_rec)
+            result = braincase_recall_tool(db, {
+                "purpose": "test",
+                "memory_domain": "hsm",
+            })
+            source_ids = result.get("source_record_ids", [])
+            if source_ids:
+                self.assertIn("rec_hsm_explicit", source_ids)
+
+    def test_recall_respects_budget_hard_bound(self):
+        """budget_tokens is reflected in the result and respected by render."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            result = braincase_recall_tool(db, {
+                "purpose": "test",
+                "memory_domain": "coding",
+                "budget_tokens": 80,
+            })
+            self.assertEqual(result.get("budget_tokens"), 80)
+            if result.get("rendered_text"):
+                self.assertLessEqual(len(result["rendered_text"]), 80 * 4 + 50)
+
+    def test_recall_with_query_uses_search(self):
+        """Recall with a query uses search-backed retrieval."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            rec = self._make_record("rec_query_test", "coding", "project_state")
+            rec["claim"] = "unique_search_term_xyz_recall_test"
+            db.put_state_record(rec)
+            result = braincase_recall_tool(db, {
+                "purpose": "test",
+                "memory_domain": "coding",
+                "query": "unique_search_term_xyz_recall_test",
+            })
+            # No error in warnings
+            self.assertNotIn("purpose_required", result.get("warnings", []))
+            self.assertNotIn("memory_domain_required", result.get("warnings", []))
+
+    def test_recall_without_query_uses_list(self):
+        """Recall without a query uses list-backed retrieval filtered by mode tiers."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            rec = self._make_record("rec_list_test", "coding", "project_state")
+            db.put_state_record(rec)
+            result = braincase_recall_tool(db, {
+                "purpose": "test",
+                "memory_domain": "coding",
+                "recall_mode": "task",
+            })
+            self.assertNotIn("unknown_recall_mode", result.get("warnings", []))
+            # project_state is in task mode, so record may appear
+            self.assertIn("source_record_ids", result)
+
+    def test_recall_excludes_internal_records(self):
+        """Records with visibility=internal are excluded from render output."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            rec = self._make_record("rec_internal", "coding", "project_state")
+            rec["visibility"] = "internal"
+            db.put_state_record(rec)
+            result = braincase_recall_tool(db, {
+                "purpose": "test",
+                "memory_domain": "coding",
+            })
+            self.assertNotIn("rec_internal", result.get("source_record_ids", []))
+
+    def test_recall_default_mode_is_task(self):
+        """Omitting recall_mode defaults to 'task'."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            result = braincase_recall_tool(db, {
+                "purpose": "task_continuity",
+                "memory_domain": "coding",
+            })
+            self.assertNotIn("unknown_recall_mode", result.get("warnings", []))
+
+
+# ---------------------------------------------------------------------------
+# Recall arg validation
+# ---------------------------------------------------------------------------
+
+class RecallArgValidationTests(unittest.TestCase):
+
+    def _fresh_db(self, td):
+        from pathlib import Path
+        db = BrainCaseDB(path=Path(td) / "state.sqlite3", enabled=True)
+        assert db.init()
+        return db
+
+    def test_missing_memory_domain_returns_warning(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            result = braincase_recall_tool(db, {"purpose": "test"})
+            warnings = result.get("warnings", [])
+            self.assertTrue(any("memory_domain" in w for w in warnings))
+            for field in _RENDER_PACKET_REQUIRED_FIELDS:
+                self.assertIn(field, result)
+
+    def test_missing_purpose_returns_warning(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            result = braincase_recall_tool(db, {"memory_domain": "coding"})
+            warnings = result.get("warnings", [])
+            self.assertTrue(any("purpose" in w for w in warnings))
+            for field in _RENDER_PACKET_REQUIRED_FIELDS:
+                self.assertIn(field, result)
+
+    def test_unknown_recall_mode_returns_warning(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            result = braincase_recall_tool(db, {
+                "purpose": "test",
+                "memory_domain": "coding",
+                "recall_mode": "dump_everything",
+            })
+            self.assertIn("unknown_recall_mode", result.get("warnings", []))
+            for field in _RENDER_PACKET_REQUIRED_FIELDS:
+                self.assertIn(field, result)
+
+    def test_unknown_mode_does_not_return_all_memory(self):
+        """Unknown recall_mode must never fall back to returning all memory."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            result = braincase_recall_tool(db, {
+                "purpose": "test",
+                "memory_domain": "coding",
+                "recall_mode": "all_memory",
+            })
+            self.assertIn("unknown_recall_mode", result.get("warnings", []))
+            # source_record_ids should be empty (warning packet)
+            self.assertEqual(result.get("source_record_ids", []), [])
+
+    def test_disabled_db_returns_warning(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = BrainCaseDB(path=Path(td) / "state.sqlite3", enabled=False)
+            result = braincase_recall_tool(db, {
+                "purpose": "test",
+                "memory_domain": "coding",
+            })
+            self.assertTrue(any("disabled" in w for w in result.get("warnings", [])))
+            for field in _RENDER_PACKET_REQUIRED_FIELDS:
+                self.assertIn(field, result)
+
+    def test_disabled_db_no_exception(self):
+        """Disabled DB must not raise."""
+        with tempfile.TemporaryDirectory() as td:
+            db = BrainCaseDB(path=Path(td) / "x.sqlite3", enabled=False)
+            try:
+                braincase_recall_tool(db, {"purpose": "p", "memory_domain": "coding"})
+            except Exception as exc:
+                self.fail(f"braincase_recall_tool raised unexpectedly: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# No writes, no automatic ingestion
+# ---------------------------------------------------------------------------
+
+class RecallNoWriteNoIngestionTests(unittest.TestCase):
+
+    def _fresh_db(self, td):
+        from pathlib import Path
+        db = BrainCaseDB(path=Path(td) / "state.sqlite3", enabled=True)
+        assert db.init()
+        return db
+
+    def test_recall_does_not_write_records(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            before = db.list_state_records(memory_domain="coding", limit=100)
+            braincase_recall_tool(db, {"purpose": "test", "memory_domain": "coding"})
+            after = db.list_state_records(memory_domain="coding", limit=100)
+            self.assertEqual(len(before), len(after))
+
+    def test_no_automatic_ingestion_on_recall(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            for _ in range(3):
+                braincase_recall_tool(db, {"purpose": "test", "memory_domain": "coding"})
+            records = db.list_state_records(memory_domain="coding", limit=100)
+            self.assertEqual(len(records), 0)
+
+
+# ---------------------------------------------------------------------------
+# Body injection: render+recall together
+# ---------------------------------------------------------------------------
+
+class RecallBodyInjectionTests(unittest.TestCase):
+
+    def test_inject_adds_recall_when_enabled(self):
+        body = {"tools": []}
+        inject_braincase_tools_to_body(body, env=_ENABLED_ENV)
+        names = [t.get("name") for t in body["tools"]]
+        self.assertIn("braincase.recall", names)
+
+    def test_inject_adds_render_and_recall_together(self):
+        body = {"tools": []}
+        inject_braincase_tools_to_body(body, env=_ENABLED_ENV)
+        names = [t.get("name") for t in body["tools"]]
+        self.assertIn("braincase.render", names)
+        self.assertIn("braincase.recall", names)
+
+    def test_inject_noop_for_recall_when_disabled(self):
+        body = {"tools": []}
+        inject_braincase_tools_to_body(body, env=_DISABLED_ENV)
+        names = [t.get("name") for t in body["tools"]]
+        self.assertNotIn("braincase.recall", names)
+
+    def test_forwarded_body_unchanged_when_disabled(self):
+        original = [{"type": "function", "name": "exec_command", "parameters": {}}]
+        body = {"tools": list(original)}
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(QZ_BRAINCASE_TOOLS_ENABLED_ENV, None)
+            inject_braincase_tools_to_body(body)
+        self.assertEqual(body["tools"], original)
+
+    def test_forwarded_body_includes_recall_when_enabled(self):
+        body = {"tools": []}
+        with patch.dict(os.environ, {QZ_BRAINCASE_TOOLS_ENABLED_ENV: "true"}):
+            inject_braincase_tools_to_body(body)
+        names = [t.get("name") for t in body["tools"]]
+        self.assertIn("braincase.recall", names)
+
+
+# ---------------------------------------------------------------------------
+# Updated harness policy content checks
+# ---------------------------------------------------------------------------
+
+class UpdatedHarnessPolicyTests(unittest.TestCase):
+
+    def test_policy_mentions_recall_modes(self):
+        policy = get_braincase_harness_policy(env=_ENABLED_ENV)
+        lower = policy.lower()
+        for mode in ("task", "project", "procedure", "artifact", "open_loops"):
+            self.assertIn(mode, lower, f"Policy should mention recall_mode {mode!r}")
+
+    def test_policy_warns_no_broad_dump(self):
+        policy = get_braincase_harness_policy(env=_ENABLED_ENV)
+        lower = policy.lower()
+        self.assertTrue("broad" in lower or "dump" in lower)
+
+    def test_policy_says_write_update_search_inspect_not_exposed(self):
+        policy = get_braincase_harness_policy(env=_ENABLED_ENV)
+        lower = policy.lower()
+        self.assertIn("not yet exposed", lower)
+        for word in ("write", "update", "search", "inspect"):
+            self.assertIn(word, lower)
+
+    def test_policy_tells_when_to_use_recall_vs_render(self):
+        policy = get_braincase_harness_policy(env=_ENABLED_ENV)
+        # Both tools should be mentioned with guidance
+        self.assertIn("braincase.recall", policy)
+        self.assertIn("braincase.render", policy)
 
 
 if __name__ == "__main__":

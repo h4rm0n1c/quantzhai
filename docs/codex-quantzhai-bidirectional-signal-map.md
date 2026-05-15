@@ -388,11 +388,12 @@ attached to an actual stored StateRecord — not as automatic logs.
 
 **BrainCase tool plane (Slice F):**
 
-Slice F: braincase.render is the first model-visible BrainCase tool.
+Slices F+G: braincase.render and braincase.recall are the exposed BrainCase tools.
 Feature flag: QZ_BRAINCASE_TOOLS_ENABLED (default: disabled).
-When enabled: braincase.render tool definition injected into body["tools"];
-harness policy text added to turn harness. RenderPacket is the only model-visible
-memory output. recall/write/update/search/inspect remain unexposed.
+When enabled: both tool definitions injected into body["tools"];
+harness policy added to turn harness. RenderPacket is the only model-visible
+memory output. write/update/search/inspect remain unexposed.
+braincase.recall uses predefined recall modes with tier routing.
 
 **Historical note (superseded by BrainCase doctrine — do not implement as BrainCaseDB tables):**
 

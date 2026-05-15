@@ -288,14 +288,12 @@ Slice D   COMPLETE: qz_braincase_write.py helpers + write/update paths (1744 tot
 Slice D.1 COMPLETE: conflict marker detection tightened
 Slice E   COMPLETE: qz_braincase_render.py + render_pack/braincase_render_packet + 53 tests (1819 total)
 Slice F   COMPLETE: qz_braincase_tools.py + braincase.render tool surface + 64 tests (1906 total)
-            Feature flag: QZ_BRAINCASE_TOOLS_ENABLED (default: disabled)
-            braincase.render is the only exposed tool.
-            recall/write/update/search/inspect remain internal.
+Slice G   COMPLETE: braincase.recall semantics + 5 recall modes + tier routing (1966 total)
+            Exposed: braincase.render + braincase.recall when QZ_BRAINCASE_TOOLS_ENABLED.
+            write/update/search/inspect remain unexposed.
             No automatic ingestion.
 
-Next slice: define braincase.recall semantics (tier routing, budget, RenderPacket output)
-before exposing it — do not expose as a vague broad memory dump.
-Or: define operator-reviewed write exposure via braincase.write.
+Next slice: operator-reviewed write exposure (braincase.write) or recall policy polish.
 - No automatic ingestion at any step.
 ```
 
