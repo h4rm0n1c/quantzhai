@@ -808,6 +808,44 @@ BRAINCASE_RECALL_TOOL_DEF enum now uses list(RECALL_MODE_ORDER) instead of
 Tests: tests/test_qz_braincase_tools.py — 141 tests, 1983 total
 ```
 
+### Slice G.2: proxy-local tool dispatch — COMPLETE
+
+```text
+Added to proxy/qz_braincase_tools.py:
+
+_BraincaseBaseExecutor — duck-typed base class (no inheritance from
+  ProxyLocalToolExecutor to avoid circular imports with qz_proxy_tools.py).
+  Implements is_call, started_public_item, _parse_args, _get_db, _make_result.
+  _get_db() uses injected db or BrainCaseDB.from_env() at first call.
+  _make_result() wraps a RenderPacket into a ToolContinuationResult with:
+    public_item: function_call_output containing RenderPacket JSON
+    upstream_items: (function_call, function_call_output) for continuation hop
+
+BraincaseRenderProxyToolExecutor(function_name="braincase.render")
+  lifecycle: proxy_local, continuation_hops=1, telemetry_name=braincase_render
+BraincaseRecallProxyToolExecutor(function_name="braincase.recall")
+  lifecycle: proxy_local, continuation_hops=1, telemetry_name=braincase_recall
+
+make_braincase_tool_executors(db=None) → list
+  Returns [] when QZ_BRAINCASE_TOOLS_ENABLED is not set (default).
+  Returns [render_executor, recall_executor] when enabled.
+  write/update/search/inspect never included.
+
+Modified proxy/qz_proxy_tools.py:
+  make_proxy_local_tool_registry(web_runtime, db=None) now calls
+  make_braincase_tool_executors(db=db) when the flag is enabled.
+  Existing web_search/apply_patch behaviour unchanged.
+
+Feature flag: QZ_BRAINCASE_TOOLS_ENABLED (default: disabled).
+DB disabled returns braincase_db_disabled warning packet, no exception.
+No automatic ingestion. No raw StateRecords. No write/update/search/inspect.
+
+function_call_output shape:
+  {"type": "function_call_output", "call_id": ..., "output": "<RenderPacket JSON>"}
+
+Tests: tests/test_qz_braincase_tools.py — 176 tests, 2018 total
+```
+
 ---
 
 ## Open questions

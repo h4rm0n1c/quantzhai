@@ -37,12 +37,21 @@ This module does NOT:
 """
 from __future__ import annotations
 
+import json
 import os
 import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from proxy.qz_braincase_db import BrainCaseDB
+    from proxy.qz_proxy_tools import ProxyToolExecutionContext
+
+try:
+    from .qz_tools import ToolLifecycleSpec
+    from .qz_tool_lifecycle import ToolContinuationResult
+except ImportError:
+    from qz_tools import ToolLifecycleSpec
+    from qz_tool_lifecycle import ToolContinuationResult
 
 QZ_BRAINCASE_TOOLS_ENABLED_ENV = "QZ_BRAINCASE_TOOLS_ENABLED"
 
@@ -627,6 +636,163 @@ def _warning_packet(
         "warnings": [warning],
         "metadata": None,
     }
+
+# ---------------------------------------------------------------------------
+# Proxy-local tool executors (Slice G.2)
+# ---------------------------------------------------------------------------
+
+class _BraincaseBaseExecutor:
+    """Duck-typed ProxyLocalToolExecutor for BrainCase tools.
+
+    Implements the same interface as ProxyLocalToolExecutor without inheriting
+    from it to avoid a circular import with qz_proxy_tools.py.
+
+    Does not expose write/update/search/inspect.
+    Does not add automatic ingestion.
+    Does not expose raw StateRecords.
+    """
+    function_name: str = ""
+    lifecycle: "ToolLifecycleSpec | None" = None
+
+    def __init__(self, db: "BrainCaseDB | None" = None) -> None:
+        self._db = db  # None → created from env at first execute call
+
+    def _get_db(self) -> "BrainCaseDB":
+        if self._db is not None:
+            return self._db
+        try:
+            from .qz_braincase_db import BrainCaseDB
+        except ImportError:
+            from qz_braincase_db import BrainCaseDB
+        db = BrainCaseDB.from_env()
+        db.init()
+        return db
+
+    @staticmethod
+    def _parse_args(call: dict) -> dict:
+        """Parse function_call arguments JSON string into a dict."""
+        raw = call.get("arguments")
+        if isinstance(raw, str) and raw.strip():
+            try:
+                parsed = json.loads(raw)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                pass
+        elif isinstance(raw, dict):
+            return raw
+        return {}
+
+    def is_call(self, call: dict) -> bool:
+        return (
+            isinstance(call, dict)
+            and call.get("type") == "function_call"
+            and call.get("name") == self.function_name
+        )
+
+    def started_public_item(self, call: dict, public_index: int) -> dict:
+        """Return an in-progress function_call_output placeholder for SSE events."""
+        call_id = call.get("call_id") or call.get("id") or f"{self.function_name}_{public_index}"
+        item_id = call.get("id") or call_id
+        return {
+            "id": item_id,
+            "type": "function_call_output",
+            "call_id": call_id,
+            "output": "",
+            "status": "in_progress",
+        }
+
+    def _make_result(self, call: dict, packet: dict) -> "ToolContinuationResult":
+        """Wrap a RenderPacket dict into a ToolContinuationResult.
+
+        public_item: the function_call_output emitted to the Codex client.
+        upstream_items: (function_call, function_call_output) sent to the backend
+            on the next continuation hop so the model sees the result.
+        """
+        call_id = call.get("call_id") or call.get("id") or ""
+        item_id = call.get("id") or call_id
+        output = json.dumps(packet, ensure_ascii=False)
+        output_item: dict = {
+            "id": item_id,
+            "type": "function_call_output",
+            "call_id": call_id,
+            "output": output,
+            "status": "completed",
+        }
+        return ToolContinuationResult(
+            public_item=output_item,
+            upstream_items=(call, output_item),
+        )
+
+    def execute(
+        self,
+        call: dict,
+        context: "ProxyToolExecutionContext",
+    ) -> "ToolContinuationResult":
+        raise NotImplementedError
+
+
+class BraincaseRenderProxyToolExecutor(_BraincaseBaseExecutor):
+    """Proxy-local executor for braincase.render tool calls."""
+
+    function_name = "braincase.render"
+    lifecycle = ToolLifecycleSpec(
+        name="braincase.render",
+        execution="proxy_local",
+        public_item_type="function_call_output",
+        telemetry_name="braincase_render",
+        continuation_hops=1,
+    )
+
+    def execute(
+        self,
+        call: dict,
+        context: "ProxyToolExecutionContext",
+    ) -> "ToolContinuationResult":
+        db = self._get_db()
+        args = self._parse_args(call)
+        packet = braincase_render_tool(db, args)
+        return self._make_result(call, packet)
+
+
+class BraincaseRecallProxyToolExecutor(_BraincaseBaseExecutor):
+    """Proxy-local executor for braincase.recall tool calls."""
+
+    function_name = "braincase.recall"
+    lifecycle = ToolLifecycleSpec(
+        name="braincase.recall",
+        execution="proxy_local",
+        public_item_type="function_call_output",
+        telemetry_name="braincase_recall",
+        continuation_hops=1,
+    )
+
+    def execute(
+        self,
+        call: dict,
+        context: "ProxyToolExecutionContext",
+    ) -> "ToolContinuationResult":
+        db = self._get_db()
+        args = self._parse_args(call)
+        packet = braincase_recall_tool(db, args)
+        return self._make_result(call, packet)
+
+
+def make_braincase_tool_executors(db: "BrainCaseDB | None" = None) -> list:
+    """Return BrainCase proxy-local executors when QZ_BRAINCASE_TOOLS_ENABLED is set.
+
+    Returns [] when disabled (default). When enabled, returns executors for
+    braincase.render and braincase.recall.
+
+    write/update/search/inspect are never included.
+    No automatic ingestion. No raw StateRecord exposure.
+    """
+    if not is_braincase_tools_enabled():
+        return []
+    return [
+        BraincaseRenderProxyToolExecutor(db=db),
+        BraincaseRecallProxyToolExecutor(db=db),
+    ]
+
 
 # ---------------------------------------------------------------------------
 # Body injection helper

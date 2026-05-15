@@ -135,8 +135,9 @@ docs/progress-snapshot.md
 Current next engineering target:
 
 ```text
-P1 BrainCase — Slices A–G (and C.1, D.1) complete.
-Slice G: braincase.recall semantics (5 recall modes + tier routing).
+P1 BrainCase — Slices A–G.2 (and C.1, D.1) complete.
+Slice G.2: braincase.render + braincase.recall wired into proxy-local tool dispatch.
+Tool calls return function_call_output with RenderPacket JSON.
 braincase.render and braincase.recall both exposed when QZ_BRAINCASE_TOOLS_ENABLED (default disabled).
 RenderPacket is the only model-visible memory output.
 write/update/search/inspect remain internal.

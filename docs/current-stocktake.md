@@ -290,6 +290,7 @@ Slice E   COMPLETE: qz_braincase_render.py + render_pack/braincase_render_packet
 Slice F   COMPLETE: qz_braincase_tools.py + braincase.render tool surface + 64 tests (1906 total)
 Slice G   COMPLETE: braincase.recall semantics + 5 recall modes + tier routing (1966 total)
 Slice G.1 COMPLETE: tier-bounded retrieval + deterministic enum order (1983 total)
+Slice G.2 COMPLETE: proxy-local dispatch for braincase.render+recall (2018 total)
             Exposed: braincase.render + braincase.recall when QZ_BRAINCASE_TOOLS_ENABLED.
             write/update/search/inspect remain unexposed.
             No automatic ingestion.

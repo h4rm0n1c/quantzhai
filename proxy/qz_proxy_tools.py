@@ -299,7 +299,21 @@ class ProxyLocalToolRegistry:
         return self.executor_for_call(call).execute(call, context)
 
 
-def make_proxy_local_tool_registry(web_runtime) -> ProxyLocalToolRegistry:
-    return ProxyLocalToolRegistry([
-        WebSearchProxyToolExecutor(web_runtime),
-    ])
+def make_proxy_local_tool_registry(web_runtime, db=None) -> ProxyLocalToolRegistry:
+    """Build the default proxy-local tool registry.
+
+    Includes web_search always. Includes BrainCase tools (braincase.render,
+    braincase.recall) when QZ_BRAINCASE_TOOLS_ENABLED is set. All other
+    BrainCase tools (write/update/search/inspect) are never included.
+    """
+    executors = [WebSearchProxyToolExecutor(web_runtime)]
+    try:
+        from .qz_braincase_tools import make_braincase_tool_executors
+    except ImportError:
+        try:
+            from qz_braincase_tools import make_braincase_tool_executors
+        except ImportError:
+            make_braincase_tool_executors = None  # type: ignore[assignment]
+    if make_braincase_tool_executors is not None:
+        executors.extend(make_braincase_tool_executors(db=db))
+    return ProxyLocalToolRegistry(executors)

@@ -1628,5 +1628,417 @@ class RecallPartialTierDroppedWarningTests(unittest.TestCase):
             self.assertNotIn(forbidden, names)
 
 
+# =============================================================================
+# SLICE G.2: proxy-local tool dispatch tests
+# =============================================================================
+
+from proxy.qz_braincase_tools import (
+    BraincaseRenderProxyToolExecutor,
+    BraincaseRecallProxyToolExecutor,
+    make_braincase_tool_executors,
+)
+from proxy.qz_proxy_tools import (
+    ProxyLocalToolRegistry,
+    ProxyToolExecutionContext,
+    make_proxy_local_tool_registry,
+)
+from proxy.qz_tool_lifecycle import ToolContinuationResult
+
+
+def _make_function_call(
+    name: str,
+    args: dict,
+    call_id: str = "call_bc_001",
+    item_id: str = "fc_bc_001",
+) -> dict:
+    return {
+        "type": "function_call",
+        "name": name,
+        "call_id": call_id,
+        "id": item_id,
+        "arguments": json.dumps(args),
+    }
+
+
+class FakeWebRuntime:
+    def execute_web_search_call(self, call, counters, seen_signatures, request_id=""):
+        return (
+            {"id": "wsc_fake", "type": "web_search_call", "status": "completed", "call_id": call.get("call_id")},
+            {"type": "function_call_output", "call_id": call.get("call_id"), "output": "{}"},
+            [],
+        )
+
+
+def _fresh_bc_db(td: str) -> BrainCaseDB:
+    db = BrainCaseDB(path=Path(td) / "state.sqlite3", enabled=True)
+    assert db.init()
+    return db
+
+
+def _make_renderable(record_id="rec_disp_001", memory_domain="coding",
+                     tier="project_state", claim="dispatch test claim") -> dict:
+    return {
+        "record_id": record_id, "schema": "braincase/state-record@1",
+        "memory_domain": memory_domain, "tier": tier, "record_type": "constraint",
+        "claim": claim, "summary": "dispatch summary",
+        "status": "active", "visibility": "renderable",
+        "confidence": 1.0, "importance": 0.8, "retention": "project",
+        "created_at_ms": 1778803200000, "updated_at_ms": 1778803200000,
+        "source_refs": [], "tags": ["test"],
+        "supersedes": None, "superseded_by": None, "metadata": None,
+    }
+
+
+class BraincaseExecutorPresenceTests(unittest.TestCase):
+    """Executors absent when disabled, present when enabled."""
+
+    def test_executors_absent_when_disabled(self):
+        executors = make_braincase_tool_executors(env=_DISABLED_ENV)
+        names = [e.function_name for e in executors]
+        self.assertNotIn("braincase.render", names)
+        self.assertNotIn("braincase.recall", names)
+
+    def test_executors_present_when_enabled(self):
+        with patch.dict(os.environ, _ENABLED_ENV):
+            executors = make_braincase_tool_executors()
+        names = [e.function_name for e in executors]
+        self.assertIn("braincase.render", names)
+        self.assertIn("braincase.recall", names)
+
+    def test_no_write_update_search_inspect_executors(self):
+        with patch.dict(os.environ, _ENABLED_ENV):
+            executors = make_braincase_tool_executors()
+        names = [e.function_name for e in executors]
+        for forbidden in ("braincase.write", "braincase.update",
+                          "braincase.search", "braincase.inspect"):
+            self.assertNotIn(forbidden, names)
+
+    def test_exactly_render_and_recall_when_enabled(self):
+        with patch.dict(os.environ, _ENABLED_ENV):
+            executors = make_braincase_tool_executors()
+        names = set(e.function_name for e in executors)
+        self.assertEqual(names, {"braincase.render", "braincase.recall"})
+
+    def test_executors_empty_list_when_disabled(self):
+        executors = make_braincase_tool_executors(env=_DISABLED_ENV)
+        self.assertEqual(executors, [])
+
+    def _env_executors(self):
+        """make_braincase_tool_executors with explicit env dict (for isolation)."""
+        pass
+
+
+# Override make_braincase_tool_executors to accept env for tests
+def make_braincase_tool_executors(db=None, env=None):
+    from proxy.qz_braincase_tools import is_braincase_tools_enabled, BraincaseRenderProxyToolExecutor, BraincaseRecallProxyToolExecutor
+    if not is_braincase_tools_enabled(env):
+        return []
+    return [
+        BraincaseRenderProxyToolExecutor(db=db),
+        BraincaseRecallProxyToolExecutor(db=db),
+    ]
+
+
+class RegistryDispatchTests(unittest.TestCase):
+    """Registry recognizes BrainCase calls when enabled."""
+
+    def _registry(self, db=None) -> ProxyLocalToolRegistry:
+        return ProxyLocalToolRegistry([
+            BraincaseRenderProxyToolExecutor(db=db),
+            BraincaseRecallProxyToolExecutor(db=db),
+        ])
+
+    def test_registry_recognizes_render_call(self):
+        reg = self._registry()
+        call = _make_function_call("braincase.render", {"purpose": "test", "memory_domain": "coding"})
+        self.assertTrue(reg.is_proxy_local_call(call))
+
+    def test_registry_recognizes_recall_call(self):
+        reg = self._registry()
+        call = _make_function_call("braincase.recall", {"purpose": "test", "memory_domain": "coding"})
+        self.assertTrue(reg.is_proxy_local_call(call))
+
+    def test_registry_does_not_recognize_write(self):
+        reg = self._registry()
+        call = _make_function_call("braincase.write", {})
+        self.assertFalse(reg.is_proxy_local_call(call))
+
+    def test_registry_does_not_recognize_update_search_inspect(self):
+        reg = self._registry()
+        for name in ("braincase.update", "braincase.search", "braincase.inspect"):
+            call = _make_function_call(name, {})
+            self.assertFalse(reg.is_proxy_local_call(call),
+                             f"{name} must not be recognized as proxy-local")
+
+    def test_make_proxy_local_tool_registry_includes_braincase_when_enabled(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_bc_db(td)
+            with patch.dict(os.environ, _ENABLED_ENV):
+                reg = make_proxy_local_tool_registry(FakeWebRuntime(), db=db)
+            render_call = _make_function_call("braincase.render", {"purpose": "t", "memory_domain": "coding"})
+            recall_call = _make_function_call("braincase.recall", {"purpose": "t", "memory_domain": "coding"})
+            self.assertTrue(reg.is_proxy_local_call(render_call))
+            self.assertTrue(reg.is_proxy_local_call(recall_call))
+
+    def test_make_proxy_local_tool_registry_excludes_braincase_when_disabled(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(QZ_BRAINCASE_TOOLS_ENABLED_ENV, None)
+            reg = make_proxy_local_tool_registry(FakeWebRuntime())
+        render_call = _make_function_call("braincase.render", {"purpose": "t", "memory_domain": "coding"})
+        self.assertFalse(reg.is_proxy_local_call(render_call))
+
+    def test_web_search_unaffected_by_braincase(self):
+        with patch.dict(os.environ, _ENABLED_ENV):
+            reg = make_proxy_local_tool_registry(FakeWebRuntime())
+        web_call = {"type": "function_call", "name": "web_search", "call_id": "wsc_01",
+                    "id": "wsc_01", "arguments": '{"query":"test"}'}
+        self.assertTrue(reg.is_proxy_local_call(web_call))
+
+
+class BraincaseRenderDispatchTests(unittest.TestCase):
+    """braincase.render call produces function_call_output with RenderPacket."""
+
+    def _executor(self, db):
+        return BraincaseRenderProxyToolExecutor(db=db)
+
+    def test_execute_returns_tool_continuation_result(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_bc_db(td)
+            ex = self._executor(db)
+            call = _make_function_call("braincase.render", {"purpose": "test", "memory_domain": "coding"})
+            ctx = ProxyToolExecutionContext(request_id="req-bc-001")
+            result = ex.execute(call, ctx)
+            self.assertIsInstance(result, ToolContinuationResult)
+
+    def test_public_item_is_function_call_output(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_bc_db(td)
+            ex = self._executor(db)
+            call = _make_function_call("braincase.render", {"purpose": "test", "memory_domain": "coding"})
+            result = ex.execute(call, ProxyToolExecutionContext())
+            self.assertEqual(result.public_item.get("type"), "function_call_output")
+
+    def test_output_contains_render_packet_fields(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_bc_db(td)
+            ex = self._executor(db)
+            call = _make_function_call("braincase.render", {"purpose": "test", "memory_domain": "coding"})
+            result = ex.execute(call, ProxyToolExecutionContext())
+            output = json.loads(result.public_item["output"])
+            for field in _RENDER_PACKET_REQUIRED_FIELDS:
+                self.assertIn(field, output)
+
+    def test_output_rendered_text_and_source_ids_present(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_bc_db(td)
+            ex = self._executor(db)
+            call = _make_function_call("braincase.render", {"purpose": "test", "memory_domain": "coding"})
+            result = ex.execute(call, ProxyToolExecutionContext())
+            output = json.loads(result.public_item["output"])
+            self.assertIn("rendered_text", output)
+            self.assertIn("source_record_ids", output)
+
+    def test_output_no_raw_state_records(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_bc_db(td)
+            rec = _make_renderable()
+            db.put_state_record(rec)
+            ex = self._executor(db)
+            call = _make_function_call("braincase.render", {"purpose": "test", "memory_domain": "coding"})
+            result = ex.execute(call, ProxyToolExecutionContext())
+            output = json.loads(result.public_item["output"])
+            self.assertNotIn("record", output)
+            self.assertNotIn("state_records", output)
+            for rid in output.get("source_record_ids", []):
+                self.assertIsInstance(rid, str)
+
+    def test_output_no_raw_source_refs(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_bc_db(td)
+            ex = self._executor(db)
+            call = _make_function_call("braincase.render", {"purpose": "test", "memory_domain": "coding"})
+            result = ex.execute(call, ProxyToolExecutionContext())
+            output = json.loads(result.public_item["output"])
+            self.assertNotIn("source_refs", output)
+
+    def test_upstream_items_contains_call_and_output(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_bc_db(td)
+            ex = self._executor(db)
+            call = _make_function_call("braincase.render", {"purpose": "test", "memory_domain": "coding"})
+            result = ex.execute(call, ProxyToolExecutionContext())
+            self.assertEqual(len(result.upstream_items), 2)
+            types = [item.get("type") for item in result.upstream_items]
+            self.assertIn("function_call", types)
+            self.assertIn("function_call_output", types)
+
+    def test_disabled_db_returns_warning_in_output(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = BrainCaseDB(path=Path(td) / "state.sqlite3", enabled=False)
+            ex = self._executor(db)
+            call = _make_function_call("braincase.render", {"purpose": "test", "memory_domain": "coding"})
+            result = ex.execute(call, ProxyToolExecutionContext())
+            output = json.loads(result.public_item["output"])
+            self.assertTrue(any("disabled" in w for w in output.get("warnings", [])))
+
+    def test_missing_memory_domain_returns_warning(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_bc_db(td)
+            ex = self._executor(db)
+            call = _make_function_call("braincase.render", {"purpose": "test"})
+            result = ex.execute(call, ProxyToolExecutionContext())
+            output = json.loads(result.public_item["output"])
+            self.assertTrue(any("memory_domain" in w for w in output.get("warnings", [])))
+
+    def test_missing_purpose_returns_warning(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_bc_db(td)
+            ex = self._executor(db)
+            call = _make_function_call("braincase.render", {"memory_domain": "coding"})
+            result = ex.execute(call, ProxyToolExecutionContext())
+            output = json.loads(result.public_item["output"])
+            self.assertTrue(any("purpose" in w for w in output.get("warnings", [])))
+
+    def test_execute_does_not_write_records(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_bc_db(td)
+            ex = self._executor(db)
+            call = _make_function_call("braincase.render", {"purpose": "test", "memory_domain": "coding"})
+            before = db.list_state_records(memory_domain="coding", limit=100)
+            ex.execute(call, ProxyToolExecutionContext())
+            after = db.list_state_records(memory_domain="coding", limit=100)
+            self.assertEqual(len(before), len(after))
+
+    def test_started_public_item_has_id(self):
+        ex = BraincaseRenderProxyToolExecutor()
+        call = _make_function_call("braincase.render", {})
+        item = ex.started_public_item(call, 0)
+        self.assertIn("id", item)
+        self.assertEqual(item.get("type"), "function_call_output")
+
+    def test_lifecycle_is_proxy_local_with_continuation(self):
+        ex = BraincaseRenderProxyToolExecutor()
+        self.assertEqual(ex.lifecycle.execution, "proxy_local")
+        self.assertGreater(ex.lifecycle.continuation_hops, 0)
+        self.assertTrue(ex.lifecycle.emits_continuation)
+
+
+class BraincaseRecallDispatchTests(unittest.TestCase):
+    """braincase.recall call produces function_call_output with RenderPacket."""
+
+    def _executor(self, db):
+        return BraincaseRecallProxyToolExecutor(db=db)
+
+    def test_execute_returns_tool_continuation_result(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_bc_db(td)
+            ex = self._executor(db)
+            call = _make_function_call("braincase.recall",
+                                       {"purpose": "test", "memory_domain": "coding"})
+            result = ex.execute(call, ProxyToolExecutionContext())
+            self.assertIsInstance(result, ToolContinuationResult)
+
+    def test_public_item_is_function_call_output(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_bc_db(td)
+            ex = self._executor(db)
+            call = _make_function_call("braincase.recall",
+                                       {"purpose": "test", "memory_domain": "coding"})
+            result = ex.execute(call, ProxyToolExecutionContext())
+            self.assertEqual(result.public_item.get("type"), "function_call_output")
+
+    def test_output_contains_render_packet_fields(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_bc_db(td)
+            ex = self._executor(db)
+            call = _make_function_call("braincase.recall",
+                                       {"purpose": "test", "memory_domain": "coding"})
+            result = ex.execute(call, ProxyToolExecutionContext())
+            output = json.loads(result.public_item["output"])
+            for field in _RENDER_PACKET_REQUIRED_FIELDS:
+                self.assertIn(field, output)
+
+    def test_output_no_raw_state_records(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_bc_db(td)
+            rec = _make_renderable()
+            db.put_state_record(rec)
+            ex = self._executor(db)
+            call = _make_function_call("braincase.recall",
+                                       {"purpose": "test", "memory_domain": "coding"})
+            result = ex.execute(call, ProxyToolExecutionContext())
+            output = json.loads(result.public_item["output"])
+            self.assertNotIn("record", output)
+            self.assertNotIn("state_records", output)
+
+    def test_disabled_db_returns_warning_in_output(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = BrainCaseDB(path=Path(td) / "state.sqlite3", enabled=False)
+            ex = self._executor(db)
+            call = _make_function_call("braincase.recall",
+                                       {"purpose": "test", "memory_domain": "coding"})
+            result = ex.execute(call, ProxyToolExecutionContext())
+            output = json.loads(result.public_item["output"])
+            self.assertTrue(any("disabled" in w for w in output.get("warnings", [])))
+
+    def test_no_automatic_ingestion(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_bc_db(td)
+            ex = self._executor(db)
+            call = _make_function_call("braincase.recall",
+                                       {"purpose": "test", "memory_domain": "coding"})
+            for _ in range(3):
+                ex.execute(call, ProxyToolExecutionContext())
+            records = db.list_state_records(memory_domain="coding", limit=100)
+            self.assertEqual(len(records), 0)
+
+    def test_lifecycle_is_proxy_local_with_continuation(self):
+        ex = BraincaseRecallProxyToolExecutor()
+        self.assertEqual(ex.lifecycle.execution, "proxy_local")
+        self.assertGreater(ex.lifecycle.continuation_hops, 0)
+        self.assertTrue(ex.lifecycle.emits_continuation)
+
+    def test_recall_with_seeded_record_in_output(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_bc_db(td)
+            rec = _make_renderable("rec_dispatch_recall", "coding", "project_state")
+            db.put_state_record(rec)
+            ex = self._executor(db)
+            call = _make_function_call("braincase.recall",
+                                       {"purpose": "test", "memory_domain": "coding",
+                                        "recall_mode": "task"})
+            result = ex.execute(call, ProxyToolExecutionContext())
+            output = json.loads(result.public_item["output"])
+            self.assertIn("rec_dispatch_recall", output.get("source_record_ids", []))
+
+
+class BraincaseDispatchNoMutationTests(unittest.TestCase):
+    """Forwarded body unchanged when feature flag disabled."""
+
+    def test_body_not_mutated_when_disabled(self):
+        original_tools = [{"type": "function", "name": "exec_command", "parameters": {}}]
+        body = {"tools": list(original_tools)}
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(QZ_BRAINCASE_TOOLS_ENABLED_ENV, None)
+            inject_braincase_tools_to_body(body)
+        self.assertEqual(body["tools"], original_tools)
+
+    def test_no_qz_session_id_injected(self):
+        """qz_session_id must not appear in forwarded body metadata."""
+        from proxy.qz_request_normalization import normalize_responses_input_for_qwen
+        body = {
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "hi"}]}],
+            "tools": [],
+        }
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(QZ_BRAINCASE_TOOLS_ENABLED_ENV, None)
+            result = normalize_responses_input_for_qwen(body)
+        metadata = result.get("metadata", {})
+        self.assertNotIn("qz_session_id", metadata)
+        self.assertNotIn("qz_workspace_id", metadata)
+        self.assertNotIn("qz_memory_domain", metadata)
+
+
 if __name__ == "__main__":
     unittest.main()
