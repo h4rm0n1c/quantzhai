@@ -1,29 +1,31 @@
 # QuantZhai Progress Snapshot
 
-Last updated: 2026-05-14 (post-stabilisation pass).
+Last updated: 2026-05-15 (post-VRAM/recovery stabilisation).
+
+See `docs/current-stocktake.md` for the full point-in-time state summary.
 
 This is a periodic high-level progress note. Use it when someone asks "where are
 we overall?" without rereading every roadmap.
 
 ## Overall
 
-Current estimate: **91% through stabilisation for the local Codex + Qwen goal**.
+Current estimate: **93% through stabilisation for the local Codex + Qwen goal**.
 
-The stabilisation run landed qz.profiles.v1 active config, memory_domain
-plumbing, simplified reasoning-effort prompts, sandbox/tool-failure telemetry
-with harness guidance, and a maintained live stack smoke script. The stack is
-more testable and observable than before, and the agent guidance is tighter.
+The 2026-05-15 run added: VRAM telemetry panel live in qz-top with provenance
+labels (#6, closed), full backend recovery system (#47-#50, closed), control-plane
+audit (#44, closed), telemetry doctrine (docs/patterns/provenance-telemetry.md).
 
-The current risk is no longer configuration or profile correctness — it is the
-state substrate: SQLite Phase 1 has not been implemented, so no durable
-operational facts are stored yet. memory_domain is now wired from explicit profile
-config and falls back to isolated only when missing or invalid. Everything else
-now depends on getting the SQLite substrate in cleanly.
+The 2026-05-14 run added: qz.profiles.v1, memory_domain plumbing, simplified
+prompts, sandbox/tool-failure telemetry, live stack smoke.
+
+The current risk remains the state substrate: SQLite Phase 1 has not been
+implemented. The VRAM and recovery work is complete from QuantZhai's side.
 
 Control sheet:
 
 ```text
 docs/current-task-hierarchy.md
+docs/current-stocktake.md
 ```
 
 Current strategic direction:
@@ -37,8 +39,8 @@ P4 config/var/script ownership cleanup
 
 ## Area estimates
 
-- **Core usable stack:** 92%
-  Known-good local flow exists. Suite is green at 545 tests.
+- **Core usable stack:** 93%
+  Known-good local flow exists. Suite is green at 1442 tests.
   Live smoke (`scripts/qz-live-smoke`) validates the end-to-end path reliably.
 - **Config/model/profile correctness:** 89%
   qz.profiles.v1 is the active format. memory_domain is wired from profile
@@ -50,10 +52,11 @@ P4 config/var/script ownership cleanup
   Sandbox/tool-failure telemetry landed (Slice 1 escalation, Slice 2 native
   tool-output classifier, harness guidance). Repeated-read signalling is planned
   but not yet implemented.
-- **Observability/status:** 78%
-  Shared telemetry exists. sandbox/tool failure events are classified and rendered
-  in qz-thoughts. VRAM backend allocation telemetry and some first-status
-  correctness checks remain open.
+- **Observability/status:** 90%
+  VRAM telemetry live in qz-top (#6 closed). Provenance-labelled panel with
+  calibrated MODEL_RUNTIME, MODEL_FILE provenance, KV_ALLOC from runtime budget.
+  Recovery system fully operational. Compaction/stream hang watchdog (#40) and
+  backend allocator metrics (#52, upstream-blocked) remain.
 - **LLM signal system:** 72%
   Reasoning-effort prompts simplified. Hop/context pressure signals, compaction
   bridge, and profile eval work are delivered. Repeated-read v1 plan is approved;
@@ -120,10 +123,10 @@ Still needed, but do not preempt the state spine unless a live breakage demands 
 
 ## Immediate next priorities
 
-1. **Implement optional/non-fatal Phase 1 SQLite operational substrate.**
-2. **Implement repeated-read v1 advisory signal (can start any time).**
-3. **Continue config/var/script ownership cleanup after the state substrate is safe.**
-4. **Add backend VRAM allocation telemetry and remaining monitor polish.**
+1. **#40: Compaction/stream hang watchdog** — prevents client stuck states.
+2. **#2: Implement optional/non-fatal Phase 1 SQLite operational substrate.**
+3. **#51: Promote recovery/backoff state to SQLite** (after #2).
+4. **Implement repeated-read v1 advisory signal** (can start any time).
 
 ## Remaining big rocks
 
@@ -136,10 +139,15 @@ Still needed, but do not preempt the state spine unless a live breakage demands 
 7. ~~Simplified reasoning-effort prompts~~ — done (PR #30).
 8. ~~Sandbox/tool-failure telemetry and harness guidance~~ — done (PRs #31–#34).
 9. ~~Live stack smoke script~~ — done (PR #36).
-10. Streaming reliability — mostly improved; long-running TUI and edge cases remain.
-11. LLM signal system — in progress; repeated-read v1 is next practical signal.
-12. Phase 1 SQLite substrate — next.
-13. Split proxy into a conventional Python package — later.
-14. Add backend adapter boundary — later.
-15. Later: MCP/app bridge, search packet mode, redaction, run grouping, rendered
+10. ~~Backend control-plane audit~~ — done (#44).
+11. ~~Backend service/recovery system~~ — done (#47-#50); six trigger actions operational.
+12. ~~VRAM telemetry~~ — done (#6 closed); provenance-labelled panel live.
+13. Compaction/stream hang watchdog — next (#40).
+14. Streaming reliability — mostly improved; long-running TUI and edge cases remain.
+15. LLM signal system — in progress; repeated-read v1 is next practical signal.
+16. Phase 1 SQLite substrate — high priority (#2).
+17. Recovery/backoff state persistence (#51) — after #2.
+18. Split proxy into a conventional Python package — later.
+19. Add backend adapter boundary — later.
+20. Later: MCP/app bridge, search packet mode, redaction, run grouping, rendered
     state packets, roleplay/HSM-specific renderers.

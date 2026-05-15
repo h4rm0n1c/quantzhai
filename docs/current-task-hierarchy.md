@@ -1,7 +1,9 @@
 # QuantZhai Current Task Hierarchy
 
-Date: 2026-05-14
-Status: active control sheet — post-stabilisation pass.
+Date: 2026-05-15
+Status: active control sheet — post-VRAM/recovery stabilisation.
+
+See `docs/current-stocktake.md` for the full point-in-time state summary.
 
 This document turns the current planning docs into an execution order. It does
 not replace the architecture contracts. If this file conflicts with
@@ -21,7 +23,28 @@ No clever memory, active memory tools, learned preferences, roleplay memory,
 HSM/archive memory, automatic promotion, or cross-domain sharing in Phase 1.
 ```
 
-## Recently completed (2026-05-14 stabilisation run)
+## Recently completed (2026-05-15 run — VRAM/recovery/docs)
+
+```text
+VRAM telemetry (#6, now closed)
+  - provenance-labelled component panel live in qz-top
+  - MODEL_RUNTIME calibrated from process_used − KV_ALLOC
+  - MODEL_FILE (GGUF size) retained as non-subtractive provenance
+  - KV_ALLOC from QZ_CACHE_RAM (runtime budget) > GGUF formula > unknown
+  - Quant registry with documented effective bytes/element (35+ types)
+  - docs/patterns/provenance-telemetry.md: doctrine locked
+  - AGENTS.md: telemetry/status doctrine added
+  - #52 opened: upstream-blocked follow-up for allocator metrics
+
+Backend control-plane and recovery (#44, #47-#50, #45, now closed)
+  - /qz/control-plane is the live status authority
+  - Full recovery trigger/plan/backoff/async-job API (six actions)
+  - recovery_state.py: in-memory backoff/attempt counts (to be SQLite later)
+  - #51 opened: SQLite persistence of recovery state (blocked by #2)
+  - Legacy catalog fallback removed (#45)
+```
+
+## Recently completed (2026-05-14 run — profiles/sandbox/smoke)
 
 ```text
 qz.profiles.v1 active config + split default/example profiles (#26/PR#27)
@@ -297,14 +320,16 @@ Codex/Claude, after tests are strong.
 
 ---
 
-## P5: Observability polish and backend VRAM telemetry
+## P5: Observability polish — VRAM DONE; remaining items
 
-Goal: finish monitor truth and remove remaining fake certainty.
+VRAM telemetry (#6) is closed. The panel is live and provenance-labelled.
+See docs/patterns/provenance-telemetry.md for doctrine.
 
-Known remaining work:
+Remaining observability work:
 
 ```text
-backend/proxy VRAM snapshot telemetry for qz-top USED/BASE/cache/buffer split
+#40  compaction/stream hang watchdog (PROMOTED to top of recommended order)
+#52  backend allocator metrics (upstream-blocked; QuantZhai already wired)
 first-status correctness tests
 long-running TUI validation
 profile prompt/config ownership review
@@ -314,13 +339,8 @@ fixed profile-eval prompt set in benchmark harness
 Blocked by:
 
 ```text
-No hard blocker. Lower priority than P1/P2 unless runtime diagnosis becomes hard.
-```
-
-Best resource:
-
-```text
-Cheap/free agents for audit, Codex for implementation.
+#40: not blocked. Implement any time.
+#52: blocked by TurboQuant emitting allocator metrics; no QuantZhai action.
 ```
 
 ---

@@ -8,10 +8,11 @@ Read these first for current implementation authority:
 
 1. [Current architecture authority map](current-architecture-authority.md)
 2. [Current task hierarchy](current-task-hierarchy.md)
-3. [Codex context and memory contract](codex-context-memory-contract.md)
-4. [Model state signal contract](model-state-signal-contract.md)
+3. [Current stocktake](current-stocktake.md) — point-in-time state summary, open issue classification, recommended next order
+4. [Codex context and memory contract](codex-context-memory-contract.md)
+5. [Model state signal contract](model-state-signal-contract.md)
 
-The authority map tells agents which documents are current, which documents are historical inputs, and which stale assumptions must not be used for new work. The task hierarchy turns that authority map into the current execution order.
+The authority map tells agents which documents are current, which documents are historical inputs, and which stale assumptions must not be used for new work. The task hierarchy turns that authority map into the current execution order. The stocktake gives a quick "where are we now" for agents starting fresh.
 
 Current hard rules:
 
@@ -51,6 +52,7 @@ No clever memory, active memory tools, learned preferences, roleplay memory, HSM
 | --- | --- | --- |
 | Current authority | [Current architecture authority map](current-architecture-authority.md) | Final conflict resolver for current architecture, stale assumptions, and Phase 1 SQLite boundary. |
 | Current execution | [Current task hierarchy](current-task-hierarchy.md) | Active blocker/task order, resource plan, and first implementation prompts. |
+| Current stocktake | [Current stocktake](current-stocktake.md) | Point-in-time state summary, open issue classification, dependency map, recommended next work order. |
 | Project overview | [README](../README.md) | Main setup, architecture, quick start, configuration, troubleshooting, and repo hygiene. |
 | Agent workflow | [AGENTS](../AGENTS.md) | Instructions for Codex/agent contributors working in this tree. |
 | Master plan | [Master stabilisation plan](master-stabilisation-plan.md) | Broader stabilisation work map. Use current-authority and Codex context docs for state/memory terminology. |
@@ -320,6 +322,7 @@ docs/quantzhai-caveman-profile.md
 docs/qz-caveman-codex-model-instructions-v2.md
 docs/repeated-read-dedup-plan.md
 docs/responses-stream-tool-state-contract.md
+docs/current-stocktake.md
 docs/runtime-observability-notes.md
 docs/patterns/provenance-telemetry.md
 docs/search-roadmap.md
