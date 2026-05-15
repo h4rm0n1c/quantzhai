@@ -11,8 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from proxy.qz_stream_watchdog import (
     StreamWatchdogState,
+    build_terminal_timeout_telemetry_payload,
     build_timeout_telemetry_payload,
     should_trigger_no_output_timeout,
+    should_trigger_terminal_timeout,
 )
 from proxy.qz_stream_terminal import (
     STREAM_TERMINAL_SCHEMA,
@@ -139,6 +141,38 @@ class SuppressionTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 3b. Terminal-after-output timeout
+# ---------------------------------------------------------------------------
+
+class TerminalTimeoutTests(unittest.TestCase):
+    def test_triggers_after_visible_output_deadline_without_terminal(self):
+        state = _state(timeout_secs=0.0, terminal_timeout_secs=5.0, started_at=0.0)
+        state.mark_visible_output(10.0)
+        self.assertTrue(should_trigger_terminal_timeout(state, now=16.0))
+
+    def test_does_not_trigger_before_visible_output(self):
+        state = _state(timeout_secs=0.0, terminal_timeout_secs=5.0, started_at=0.0)
+        state.mark_event(10.0)
+        self.assertFalse(should_trigger_terminal_timeout(state, now=99.0))
+
+    def test_does_not_trigger_after_terminal(self):
+        state = _state(timeout_secs=0.0, terminal_timeout_secs=5.0, started_at=0.0)
+        state.mark_visible_output(10.0)
+        state.mark_terminal(12.0)
+        self.assertFalse(should_trigger_terminal_timeout(state, now=99.0))
+
+    def test_does_not_trigger_when_disabled(self):
+        state = _state(timeout_secs=0.0, terminal_timeout_secs=0.0, started_at=0.0)
+        state.mark_visible_output(10.0)
+        self.assertFalse(should_trigger_terminal_timeout(state, now=99.0))
+
+    def test_terminal_elapsed_secs_uses_first_visible_output(self):
+        state = _state(timeout_secs=0.0, terminal_timeout_secs=5.0, started_at=0.0)
+        state.mark_visible_output(10.0)
+        self.assertAlmostEqual(state.terminal_elapsed_secs(16.0), 6.0)
+
+
+# ---------------------------------------------------------------------------
 # 4. elapsed_secs
 # ---------------------------------------------------------------------------
 
@@ -223,6 +257,38 @@ class BuildTimeoutTelemetryPayloadTests(unittest.TestCase):
         self.assertEqual(payload["schema"], STREAM_TERMINAL_SCHEMA)
 
 
+class BuildTerminalTimeoutTelemetryPayloadTests(unittest.TestCase):
+    def _base(self):
+        obs = _obs(saw_output_text=True, terminal_timeout=True, request_id="req-term")
+        terminal = classify_stream_terminal(obs)
+        state = _state(timeout_secs=0.0, terminal_timeout_secs=5.0, started_at=0.0)
+        state.mark_visible_output(10.0)
+        return obs, terminal, state
+
+    def test_classification_and_signal_fields(self):
+        obs, terminal, state = self._base()
+        payload = build_terminal_timeout_telemetry_payload(
+            state, terminal, now=16.0, request_id="req-term"
+        )
+        self.assertEqual(payload["classification"], "stream_terminal_timeout")
+        self.assertEqual(payload["signal_id"], "stream.terminal_timeout")
+        self.assertEqual(payload["source"], "qz_stream_watchdog")
+        self.assertEqual(payload["channel"], "telemetry")
+        self.assertEqual(payload["visibility"], "operator")
+        self.assertEqual(payload["action"], "terminal_fallback")
+
+    def test_timing_and_observation_fields(self):
+        obs, terminal, state = self._base()
+        payload = build_terminal_timeout_telemetry_payload(state, terminal, now=16.0)
+        self.assertEqual(payload["timeout_secs"], 5.0)
+        self.assertAlmostEqual(payload["elapsed_secs"], 6.0, places=1)
+        self.assertTrue(payload["saw_output_text"])
+        self.assertFalse(payload["saw_response_completed"])
+        self.assertFalse(payload["saw_done"])
+        self.assertTrue(payload["fallback_required"])
+        self.assertTrue(payload["recoverable"])
+
+
 # ---------------------------------------------------------------------------
 # 6. Integration with classify_stream_terminal
 # ---------------------------------------------------------------------------
@@ -266,7 +332,15 @@ class WatchdogClassificationIntegrationTests(unittest.TestCase):
 class WatchdogStreamRuntimeTests(unittest.TestCase):
     """Tests that watchdog integrates with the blocking stream read seam."""
 
-    def _make_runtime(self, timeout_s: float, events: list, *, stall_after_eof=False, telemetry=None):
+    def _make_runtime(
+        self,
+        timeout_s: float,
+        events: list,
+        *,
+        terminal_timeout_s: float = 0.0,
+        stall_after_eof=False,
+        telemetry=None,
+    ):
         from proxy.qz_responses_stream import ResponsesStreamRuntime
 
         # Collect written chunks
@@ -303,6 +377,7 @@ class WatchdogStreamRuntimeTests(unittest.TestCase):
             telemetry=telemetry,
             request_id="watchdog-test",
             stream_no_output_timeout_s=timeout_s,
+            stream_terminal_timeout_s=terminal_timeout_s,
         )
         return runtime, written
 
@@ -334,6 +409,21 @@ class WatchdogStreamRuntimeTests(unittest.TestCase):
         lines.append(b"event: response.reasoning_text.delta\n")
         lines.append(f"data: {json.dumps(payload)}\n".encode())
         lines.append(b"\n")
+        return lines
+
+    def _visible_output_hang_events(self):
+        """Visible output appears, then the upstream read stalls before terminal."""
+        import json
+        lines = []
+        events = [
+            ("response.created", {"response": {"id": "term-hang", "object": "response", "created_at": 0, "status": "in_progress", "model": "f", "output": []}, "type": "response.created", "sequence_number": 1}),
+            ("response.output_item.added", {"output_index": 0, "item": {"id": "msg_term", "type": "message", "status": "in_progress", "role": "assistant", "content": []}, "type": "response.output_item.added", "sequence_number": 2}),
+            ("response.output_text.delta", {"item_id": "msg_term", "output_index": 0, "content_index": 0, "delta": "hello", "type": "response.output_text.delta", "sequence_number": 3}),
+        ]
+        for etype, payload in events:
+            lines.append(f"event: {etype}\n".encode())
+            lines.append(f"data: {json.dumps(payload)}\n".encode())
+            lines.append(b"\n")
         return lines
 
     def test_disabled_watchdog_does_not_fire(self):
@@ -405,6 +495,40 @@ class WatchdogStreamRuntimeTests(unittest.TestCase):
         self.assertTrue(terminal.get("fallback_emitted"))
         self.assertFalse(terminal.get("saw_output_text"))
         self.assertEqual(len(terminal_classified), 1)
+
+    def test_terminal_timeout_fires_after_visible_output_stalls(self):
+        """A read timeout after visible output emits terminal fallback, not no-output fallback."""
+        from proxy.qz_telemetry import TelemetryBus
+
+        telemetry = TelemetryBus()
+        runtime, written = self._make_runtime(
+            timeout_s=0.0,
+            terminal_timeout_s=2.0,
+            events=self._visible_output_hang_events(),
+            stall_after_eof=True,
+            telemetry=telemetry,
+        )
+
+        result = runtime.run({"model": "fixture", "input": []}, "fixture")
+        combined = b"".join(written)
+        terminal = result.get("stream_terminal") or {}
+        terminal_classified = [
+            event for event in telemetry.recent()
+            if event.get("type") == "stream_terminal_classified"
+        ]
+
+        self.assertTrue(result["fallback"])
+        self.assertEqual(terminal.get("classification"), "stream_terminal_timeout")
+        self.assertTrue(terminal.get("saw_output_text"))
+        self.assertTrue(terminal.get("terminal_timeout"))
+        self.assertIn(b"hello", combined)
+        self.assertIn(b"event: response.completed", combined)
+        self.assertTrue(combined.endswith(b"data: [DONE]\n\n"))
+        self.assertEqual(len(terminal_classified), 1)
+        self.assertEqual(
+            terminal_classified[0].get("payload", {}).get("signal_id"),
+            "stream.terminal_timeout",
+        )
 
     def test_watchdog_timeout_path_reachable(self):
         """Verify the timeout fallback path produces the right structure.
@@ -557,6 +681,69 @@ class WatchdogStreamRuntimeTests(unittest.TestCase):
             for event in terminal_classified
         ))
         self.assertEqual(streams[0].timeout_calls, [1.0, None])
+
+    def test_terminal_timeout_is_armed_after_visible_output_when_enabled(self):
+        """After visible output, the no-output timeout is restored and terminal timeout is armed."""
+        from proxy.qz_responses_stream import ResponsesStreamRuntime
+        from proxy.qz_telemetry import TelemetryBus
+
+        lines = self._visible_output_hang_events()
+
+        class FakeStream:
+            def __init__(self, stream_lines):
+                self._lines = list(stream_lines)
+                self._idx = 0
+                self.timeout = None
+                self.timeout_calls = []
+
+            def gettimeout(self):
+                return self.timeout
+
+            def settimeout(self, timeout):
+                self.timeout = timeout
+                self.timeout_calls.append(timeout)
+
+            def readline(self):
+                if self._idx >= len(self._lines):
+                    if self.timeout is not None:
+                        raise TimeoutError("simulated terminal read timeout")
+                    return b""
+                line = self._lines[self._idx]
+                self._idx += 1
+                return line
+
+            def close(self):
+                pass
+
+        streams = []
+        telemetry = TelemetryBus()
+
+        def stream_opener(body):
+            stream = FakeStream(lines)
+            streams.append(stream)
+            return stream
+
+        written = []
+        runtime = ResponsesStreamRuntime(
+            upstream="http://localhost:1",
+            authorization="Bearer test",
+            reasoning_stream_format="native",
+            web_runtime=None,
+            chunk_writer=written.append,
+            stream_opener=stream_opener,
+            capture_enabled=False,
+            telemetry=telemetry,
+            request_id="watchdog-terminal-timeout-test",
+            stream_no_output_timeout_s=1.0,
+            stream_terminal_timeout_s=2.0,
+        )
+
+        result = runtime.run({"model": "fixture", "input": []}, "fixture")
+        terminal = result.get("stream_terminal") or {}
+
+        self.assertTrue(result["fallback"])
+        self.assertEqual(terminal.get("classification"), "stream_terminal_timeout")
+        self.assertEqual(streams[0].timeout_calls, [1.0, None, 2.0, None])
 
 
 # ---------------------------------------------------------------------------

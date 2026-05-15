@@ -37,9 +37,12 @@ try:
     )
     from .qz_stream_watchdog import (
         STREAM_NO_OUTPUT_TIMEOUT_S,
+        STREAM_TERMINAL_TIMEOUT_S,
         StreamWatchdogState,
+        build_terminal_timeout_telemetry_payload,
         build_timeout_telemetry_payload,
         should_trigger_no_output_timeout,
+        should_trigger_terminal_timeout,
     )
 except ImportError:
     from qz_responses import (
@@ -73,9 +76,12 @@ except ImportError:
     )
     from qz_stream_watchdog import (
         STREAM_NO_OUTPUT_TIMEOUT_S,
+        STREAM_TERMINAL_TIMEOUT_S,
         StreamWatchdogState,
+        build_terminal_timeout_telemetry_payload,
         build_timeout_telemetry_payload,
         should_trigger_no_output_timeout,
+        should_trigger_terminal_timeout,
     )
 
 
@@ -258,6 +264,7 @@ class ResponsesStreamRuntime:
         empty_answer_repair_hops: int | None = None,
         empty_answer_repair_disable_tools: bool | None = None,
         stream_no_output_timeout_s: float | None = None,
+        stream_terminal_timeout_s: float | None = None,
     ):
         self.upstream = upstream.rstrip("/")
         self.authorization = authorization or "Bearer local"
@@ -316,6 +323,11 @@ class ResponsesStreamRuntime:
             if stream_no_output_timeout_s is None
             else float(stream_no_output_timeout_s)
         )
+        self.stream_terminal_timeout_s = (
+            STREAM_TERMINAL_TIMEOUT_S
+            if stream_terminal_timeout_s is None
+            else float(stream_terminal_timeout_s)
+        )
 
     def _open_upstream_stream(self, body: dict):
         data = json.dumps(body).encode("utf-8")
@@ -331,11 +343,13 @@ class ResponsesStreamRuntime:
         )
         return urllib.request.urlopen(req, timeout=900)
 
-    def _configure_stream_read_timeout(self, resp):
-        """Apply the no-output watchdog timeout to the upstream socket if possible."""
-        if self.stream_no_output_timeout_s <= 0:
+    def _configure_stream_read_timeout(self, resp, timeout_secs: float | None = None):
+        """Apply a watchdog read timeout to the upstream socket if possible."""
+        if timeout_secs is None:
+            timeout_secs = self.stream_no_output_timeout_s
+        if timeout_secs <= 0:
             return None
-        timeout = max(0.001, float(self.stream_no_output_timeout_s))
+        timeout = max(0.001, float(timeout_secs))
         targets = [resp]
         fp = getattr(resp, "fp", None)
         if fp is not None:
@@ -796,6 +810,77 @@ class ResponsesStreamRuntime:
             emit_terminal_classified=False,
         )
 
+    def _emit_terminal_timeout_completion(
+        self,
+        requested_model: str,
+        summary_started: set,
+        final_usage,
+        output: list,
+    ) -> None:
+        """Close a partial visible-output stream without replaying the answer."""
+        self._emit_completed(requested_model, output, summary_started, usage=final_usage)
+
+    def _finish_terminal_timeout_after_output(
+        self,
+        requested_model: str,
+        started_at: float,
+        first_output_at: float | None,
+        final_usage,
+        public_trace: list,
+        summary_started: set,
+        watchdog_state: "StreamWatchdogState",
+        timeout_at: float,
+        *,
+        reasoning_only_chars: int,
+        visible_output_text_seen: bool,
+        assistant_item_seen: bool,
+        completed_call,
+        sent_terminal: bool,
+        sent_done: bool,
+        sequence: int,
+        stream_obs_acc: dict | None = None,
+    ) -> dict:
+        watchdog_state.triggered = True
+        timeout_acc = dict(stream_obs_acc or {"request_id": self.request_id})
+        self._merge_manual_stream_observation(
+            timeout_acc,
+            reasoning_only_chars=reasoning_only_chars,
+            visible_output_text_seen=visible_output_text_seen,
+            assistant_item_seen=assistant_item_seen,
+            completed_call=completed_call,
+            sent_terminal=sent_terminal,
+            sent_done=sent_done,
+        )
+        timeout_acc["terminal_timeout"] = True
+        timeout_acc["fallback_emitted"] = True
+        timeout_obs = observation_from_dict(timeout_acc)
+        terminal = classify_stream_terminal(timeout_obs)
+        payload = build_terminal_timeout_telemetry_payload(
+            watchdog_state, terminal, timeout_at, request_id=self.request_id
+        )
+        self._emit("stream_terminal_classified", payload)
+        self._emit_terminal_timeout_completion(
+            requested_model,
+            summary_started,
+            final_usage,
+            public_trace,
+        )
+        self._emit_stream_completed(
+            requested_model, len(public_trace), started_at, fallback=True
+        )
+        completed_at = time.time()
+        return self._build_result(
+            requested_model,
+            started_at,
+            first_output_at,
+            completed_at,
+            final_usage,
+            len(public_trace),
+            fallback=True,
+            obs=timeout_obs,
+            emit_terminal_classified=False,
+        )
+
     def _merge_manual_stream_observation(
         self,
         stream_obs_acc: dict,
@@ -825,6 +910,12 @@ class ResponsesStreamRuntime:
         exc_now = getattr(exc, "now", None)
         if isinstance(exc_now, (int, float)):
             return float(exc_now)
+        if (
+            state.terminal_timeout_secs > 0
+            and state.first_visible_output_at is not None
+            and state.first_terminal_at is None
+        ):
+            return state.first_visible_output_at + state.terminal_timeout_secs
         if state.timeout_secs > 0:
             reference = state.first_event_at if state.first_event_at is not None else state.started_at
             return reference + state.timeout_secs
@@ -1021,14 +1112,39 @@ class ResponsesStreamRuntime:
                 hop_body = normalize_tools_for_llamacpp(hop_body)
                 resp = None
                 raw_log = None
+                read_timeout_handle = None
+                def restore_read_timeout_once():
+                    nonlocal read_timeout_handle
+                    if read_timeout_handle is not None:
+                        self._restore_stream_read_timeout(read_timeout_handle)
+                        read_timeout_handle = None
+
                 try:
                     resp = self.stream_opener(hop_body)
-                    read_timeout_handle = self._configure_stream_read_timeout(resp)
-                    def restore_read_timeout_once():
+                    read_timeout_handle = self._configure_stream_read_timeout(
+                        resp,
+                        self.stream_no_output_timeout_s,
+                    )
+                    def set_stream_read_timeout(timeout_secs):
                         nonlocal read_timeout_handle
-                        if read_timeout_handle is not None:
-                            self._restore_stream_read_timeout(read_timeout_handle)
-                            read_timeout_handle = None
+                        restore_read_timeout_once()
+                        if timeout_secs > 0:
+                            read_timeout_handle = self._configure_stream_read_timeout(
+                                resp,
+                                timeout_secs,
+                            )
+
+                    def sync_terminal_read_timeout(now):
+                        if watchdog_state.first_terminal_at is not None:
+                            restore_read_timeout_once()
+                            return
+                        if watchdog_state.first_visible_output_at is None:
+                            return
+                        if self.stream_terminal_timeout_s <= 0:
+                            restore_read_timeout_once()
+                            return
+                        deadline = watchdog_state.first_visible_output_at + self.stream_terminal_timeout_s
+                        set_stream_read_timeout(max(0.001, deadline - now))
 
                     raw_log = self._open_raw_log()
                     tool_call_state = StreamToolCallState()
@@ -1052,6 +1168,7 @@ class ResponsesStreamRuntime:
                     watchdog_state = StreamWatchdogState(
                         timeout_secs=self.stream_no_output_timeout_s,
                         started_at=time.time(),
+                        terminal_timeout_secs=self.stream_terminal_timeout_s,
                     )
 
                     while True:
@@ -1061,6 +1178,25 @@ class ResponsesStreamRuntime:
                             timeout_at = self._timeout_check_time(exc, watchdog_state)
                             if should_trigger_no_output_timeout(watchdog_state, timeout_at):
                                 return self._finish_no_output_timeout(
+                                    requested_model,
+                                    started_at,
+                                    first_output_at,
+                                    final_usage,
+                                    public_trace,
+                                    summary_started,
+                                    watchdog_state,
+                                    timeout_at,
+                                    reasoning_only_chars=reasoning_only_chars,
+                                    visible_output_text_seen=visible_output_text_seen,
+                                    assistant_item_seen=assistant_item_seen,
+                                    completed_call=completed_call,
+                                    sent_terminal=sent_terminal,
+                                    sent_done=sent_done,
+                                    sequence=sequence,
+                                    stream_obs_acc=stream_obs_acc,
+                                )
+                            if should_trigger_terminal_timeout(watchdog_state, timeout_at):
+                                return self._finish_terminal_timeout_after_output(
                                     requested_model,
                                     started_at,
                                     first_output_at,
@@ -1117,7 +1253,6 @@ class ResponsesStreamRuntime:
                             if delta_text.strip():
                                 visible_output_text_seen = True
                                 watchdog_state.mark_visible_output(event_parsed_at)
-                                restore_read_timeout_once()
                         if event_type in {
                             "response.output_item.added",
                             "response.output_item.done",
@@ -1126,7 +1261,6 @@ class ResponsesStreamRuntime:
                             if event_type == "response.output_item.done" and _is_completed_assistant_message_item(item):
                                 assistant_item_seen = True
                                 watchdog_state.mark_visible_output(event_parsed_at)
-                                restore_read_timeout_once()
                             if event_type == "response.output_item.done" and _is_valid_public_output_item(item):
                                 public_item_seen = True
                         if event_type == "response.completed":
@@ -1158,6 +1292,26 @@ class ResponsesStreamRuntime:
                                 sequence=sequence,
                                 stream_obs_acc=stream_obs_acc,
                             )
+                        if should_trigger_terminal_timeout(watchdog_state, event_parsed_at):
+                            return self._finish_terminal_timeout_after_output(
+                                requested_model,
+                                started_at,
+                                first_output_at,
+                                final_usage,
+                                public_trace,
+                                summary_started,
+                                watchdog_state,
+                                event_parsed_at,
+                                reasoning_only_chars=reasoning_only_chars,
+                                visible_output_text_seen=visible_output_text_seen,
+                                assistant_item_seen=assistant_item_seen,
+                                completed_call=completed_call,
+                                sent_terminal=sent_terminal,
+                                sent_done=sent_done,
+                                sequence=sequence,
+                                stream_obs_acc=stream_obs_acc,
+                            )
+                        sync_terminal_read_timeout(event_parsed_at)
 
                         completed = tool_call_state.observe(event_type, payload, event_received_at)
                         if is_function_call_stream_event(event_type, payload):
@@ -1659,6 +1813,7 @@ class ResponsesStreamRuntime:
                 finally:
                     if raw_log is not None:
                         raw_log.close()
+                    restore_read_timeout_once()
                     if resp is not None:
                         resp.close()
 

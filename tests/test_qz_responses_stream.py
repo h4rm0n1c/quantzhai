@@ -36,6 +36,13 @@ class FakeStream:
         self.closed = True
 
 
+class TimeoutAfterChunksStream(FakeStream):
+    def readline(self):
+        if not self._lines:
+            raise TimeoutError("simulated upstream read timeout")
+        return self._lines.pop(0)
+
+
 def _fixture_chunks(name):
     return [FIXTURE_DIR.joinpath(name).read_bytes()]
 
@@ -258,6 +265,37 @@ def _failed_without_answer_stream():
                 "output": [],
                 "error": {"message": "upstream failed"},
             },
+        }),
+    ]
+
+
+def _visible_output_without_terminal_stream():
+    return [
+        _sse_block("response.created", {
+            "response": {
+                "id": "resp_fake_terminal_timeout",
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "in_progress",
+                "model": "fake",
+                "output": [],
+            },
+        }),
+        _sse_block("response.output_item.added", {
+            "output_index": 0,
+            "item": {
+                "id": "msg_terminal_timeout",
+                "type": "message",
+                "status": "in_progress",
+                "role": "assistant",
+                "content": [],
+            },
+        }),
+        _sse_block("response.output_text.delta", {
+            "item_id": "msg_terminal_timeout",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "hello",
         }),
     ]
 
@@ -883,6 +921,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         context_pressure_signal_threshold=None,
         empty_answer_repair_hops=None,
         empty_answer_repair_disable_tools=None,
+        stream_terminal_timeout_s=None,
         return_result=False,
     ):
         chunks = []
@@ -906,6 +945,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             context_pressure_signal_threshold=context_pressure_signal_threshold,
             empty_answer_repair_hops=empty_answer_repair_hops,
             empty_answer_repair_disable_tools=empty_answer_repair_disable_tools,
+            stream_terminal_timeout_s=stream_terminal_timeout_s,
         )
         body = {
             "model": "test-model.gguf",
@@ -2393,6 +2433,63 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
 
         self.assertEqual(result.get("stream_terminal", {}).get("classification"), "ok")
         self.assertEqual(terminal_events, [])
+
+    def test_live_terminal_timeout_preserves_partial_output_and_emits_once(self):
+        telemetry = TelemetryBus()
+        calls = []
+
+        def opener(body):
+            calls.append(json.loads(json.dumps(body)))
+            return TimeoutAfterChunksStream(_visible_output_without_terminal_stream())
+
+        result, stream_text = self._run_runtime(
+            opener,
+            telemetry=telemetry,
+            request_id="req-terminal-timeout-live",
+            stream_terminal_timeout_s=2.0,
+            return_result=True,
+        )
+        terminal = result.get("stream_terminal") or {}
+        terminal_events = [
+            event for event in telemetry.recent()
+            if event.get("type") == "stream_terminal_classified"
+        ]
+
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(result["fallback"])
+        self.assertEqual(terminal.get("classification"), "stream_terminal_timeout")
+        self.assertTrue(terminal.get("saw_output_text"))
+        self.assertTrue(terminal.get("terminal_timeout"))
+        self.assertIn("hello", stream_text)
+        self.assertIn("event: response.completed", stream_text)
+        self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
+        self.assertEqual(len(terminal_events), 1)
+        payload = terminal_events[0].get("payload", {})
+        self.assertEqual(payload.get("classification"), "stream_terminal_timeout")
+        self.assertEqual(payload.get("signal_id"), "stream.terminal_timeout")
+        self.assertEqual(payload.get("action"), "terminal_fallback")
+
+    def test_live_terminal_timeout_does_not_duplicate_partial_output(self):
+        telemetry = TelemetryBus()
+
+        def opener(body):
+            return TimeoutAfterChunksStream(_visible_output_without_terminal_stream())
+
+        _result, stream_text = self._run_runtime(
+            opener,
+            telemetry=telemetry,
+            request_id="req-terminal-timeout-no-duplicate",
+            stream_terminal_timeout_s=2.0,
+            return_result=True,
+        )
+        events = _parse_sse_events(stream_text)
+        text_deltas = [
+            payload.get("delta")
+            for event_type, payload in events
+            if event_type == "response.output_text.delta" and isinstance(payload, dict)
+        ]
+
+        self.assertEqual(text_deltas, ["hello"])
 
     def test_golden_web_search_stream_replays_with_continuation(self):
         telemetry = TelemetryBus()

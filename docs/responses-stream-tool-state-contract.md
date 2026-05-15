@@ -761,7 +761,7 @@ Added: `proxy/qz_stream_terminal.py` — pure stream outcome classifier.
 `StreamObservation` captures boolean stream facts (saw_reasoning, saw_output_text,
 saw_assistant_item, saw_tool_call, saw_response_completed, saw_done, saw_error,
 saw_compact_started, saw_compact_failed, saw_protocol_drift_event, fallback_emitted,
-repair_emitted, output_timeout).
+repair_emitted, output_timeout, terminal_timeout).
 
 `classify_stream_terminal(obs)` returns `qz.stream.terminal.v1`:
 
@@ -776,6 +776,7 @@ repair_emitted, output_timeout).
 | `protocol_drift_seen` | unknown/newer item-delta events but stream ok |
 | `unrecoverable` | error event, no visible answer, no fallback |
 | `stream_no_output_timeout` | no visible output before the bounded stream watchdog deadline |
+| `stream_terminal_timeout` | visible output was seen, but no terminal event arrived before the bounded terminal deadline |
 
 `observation_from_event_type(event_type, payload)` maps individual SSE events
 to partial observation dicts, including:
@@ -816,6 +817,25 @@ event, `ResponsesStreamRuntime` emits a synthetic fallback message,
 `stream_terminal_classified` payload with `classification:
 stream_no_output_timeout`. Terminal events are marked before watchdog checks so
 a late `response.completed` suppresses the timeout path.
+
+Slice 4 adds a separate terminal-after-output watchdog controlled by
+`QZ_STREAM_TERMINAL_TIMEOUT_S`. The default is `0`, disabled. This does not
+change `QZ_STREAM_NO_OUTPUT_TIMEOUT_S` behavior. When enabled, the runtime
+restores the no-output read timeout after the first visible output and arms a
+terminal read timeout for the remaining terminal deadline. If visible output has
+already reached the client but no `response.completed` or `[DONE]` arrives
+before that deadline, the runtime classifies the hop as
+`stream_terminal_timeout`.
+
+`stream_terminal_timeout` is distinct from `stream_no_output_timeout`:
+no-output timeout means no visible answer ever appeared; terminal timeout means
+partial visible output was already forwarded and must be preserved. The terminal
+timeout path does not replay the partial answer as a new assistant message. It
+emits a safe synthetic `response.completed`, `[DONE]`,
+`stream_completed(fallback=True)`, and exactly one `stream_terminal_classified`
+payload with `signal_id: stream.terminal_timeout`, `source:
+qz_stream_watchdog`, and `action: terminal_fallback`. No compaction retry,
+backend restart, or recovery loop is added.
 
 ## Related Docs
 

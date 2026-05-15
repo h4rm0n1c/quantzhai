@@ -248,10 +248,26 @@ class ClassifyTimeoutTests(unittest.TestCase):
         self.assertTrue(result["recoverable"])
         self.assertTrue(result["fallback_required"])
 
+    def test_terminal_timeout_classification(self):
+        result = _classify(saw_output_text=True, terminal_timeout=True)
+        self.assertEqual(result["classification"], "stream_terminal_timeout")
+        self.assertTrue(result["recoverable"])
+        self.assertTrue(result["fallback_required"])
+        self.assertTrue(result["visible_answer_seen"])
+        self.assertFalse(result["terminal_event_seen"])
+
     def test_output_timeout_trumps_compact_failed(self):
         # timeout is highest priority
         result = _classify(output_timeout=True, saw_compact_failed=True)
         self.assertEqual(result["classification"], "stream_no_output_timeout")
+
+    def test_output_timeout_trumps_terminal_timeout(self):
+        result = _classify(output_timeout=True, terminal_timeout=True, saw_output_text=True)
+        self.assertEqual(result["classification"], "stream_no_output_timeout")
+
+    def test_terminal_timeout_trumps_compact_failed(self):
+        result = _classify(terminal_timeout=True, saw_output_text=True, saw_compact_failed=True)
+        self.assertEqual(result["classification"], "stream_terminal_timeout")
 
 
 # ---------------------------------------------------------------------------

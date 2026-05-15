@@ -9,6 +9,7 @@ Source/confidence vocabulary follows docs/patterns/provenance-telemetry.md.
 Slice 1: classification and fixture coverage.
 Slice 2: real-time no-output watchdog / timeout trigger.
 Slice 3: live stream loop observation accumulation.
+Slice 4: terminal-after-output timeout classification.
 """
 from __future__ import annotations
 
@@ -40,8 +41,9 @@ class StreamObservation:
     fallback_emitted: bool = False       # proxy emitted a synthetic fallback message
     repair_emitted: bool = False         # empty-answer repair hop triggered
 
-    # --- timeout flag (reserved; set by watchdog in slice 2) ---
+    # --- timeout flags (set by watchdog paths) ---
     output_timeout: bool = False         # stream produced no output within deadline
+    terminal_timeout: bool = False       # visible output arrived but terminal never did
 
     # --- context ---
     request_id: str = ""
@@ -52,7 +54,8 @@ def classify_stream_terminal(obs: StreamObservation) -> dict:
 
     Rules (in priority order):
 
-    output_timeout            → stream_no_output_timeout  (watchdog-triggered)
+    output_timeout            → stream_no_output_timeout  (no visible output)
+    terminal_timeout          → stream_terminal_timeout   (visible output, no terminal)
     compact_failed            → compact_failed
     error + no recovery       → unrecoverable
     fallback_emitted          → fallback_emitted
@@ -78,6 +81,18 @@ def classify_stream_terminal(obs: StreamObservation) -> dict:
             terminal_event_seen=terminal_seen,
             obs=obs,
             notes=["stream produced no output before timeout deadline; watchdog-triggered"],
+        )
+
+    # --- terminal-after-output timeout ---
+    if obs.terminal_timeout:
+        return _result(
+            "stream_terminal_timeout",
+            recoverable=True,
+            fallback_required=True,
+            visible_answer_seen=True,
+            terminal_event_seen=False,
+            obs=obs,
+            notes=["visible output was seen but terminal event did not arrive before timeout"],
         )
 
     # --- compact failure ---
@@ -204,13 +219,18 @@ def _result(
         "terminal_event_seen": terminal_event_seen,
         "saw_reasoning":       obs.saw_reasoning,
         "saw_output_text":     obs.saw_output_text,
+        "saw_assistant_item":  obs.saw_assistant_item,
         "saw_tool_call":       obs.saw_tool_call,
         "saw_response_completed": obs.saw_response_completed,
         "saw_done":            obs.saw_done,
         "saw_error":           obs.saw_error,
+        "saw_compact_started": obs.saw_compact_started,
         "saw_compact_failed":  obs.saw_compact_failed,
+        "saw_protocol_drift_event": obs.saw_protocol_drift_event,
         "fallback_emitted":    obs.fallback_emitted,
         "repair_emitted":      obs.repair_emitted,
+        "output_timeout":      obs.output_timeout,
+        "terminal_timeout":    obs.terminal_timeout,
         "request_id":          obs.request_id,
         "notes":               list(notes or []),
     }
@@ -322,5 +342,6 @@ def observation_from_dict(d: dict) -> StreamObservation:
         fallback_emitted=bool(d.get("fallback_emitted")),
         repair_emitted=bool(d.get("repair_emitted")),
         output_timeout=bool(d.get("output_timeout")),
+        terminal_timeout=bool(d.get("terminal_timeout")),
         request_id=str(d.get("request_id") or ""),
     )

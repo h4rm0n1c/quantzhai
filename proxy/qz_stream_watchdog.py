@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded stream no-output watchdog for #40 slice 2.
+"""Bounded stream watchdog helpers for #40.
 
 Pure logic — no I/O, no threads, no sleeps.
 Accepts injected time values so tests remain deterministic.
@@ -7,6 +7,8 @@ Accepts injected time values so tests remain deterministic.
 Configuration:
   QZ_STREAM_NO_OUTPUT_TIMEOUT_S — seconds before no-output timeout fires.
   Default 0 = disabled. Set to a positive value (e.g. 120) to enable.
+  QZ_STREAM_TERMINAL_TIMEOUT_S — seconds after first visible output before
+  terminal-after-output timeout fires. Default 0 = disabled.
   Consistent with QZ_REASONING_ONLY_TIMEOUT_S and QZ_PRIVATE_TOOL_CALL_TIMEOUT_S
   defaults in qz_responses_stream.py.
 
@@ -24,6 +26,10 @@ STREAM_NO_OUTPUT_TIMEOUT_S: float = float(
     os.environ.get("QZ_STREAM_NO_OUTPUT_TIMEOUT_S", "0")
 )
 
+STREAM_TERMINAL_TIMEOUT_S: float = float(
+    os.environ.get("QZ_STREAM_TERMINAL_TIMEOUT_S", "0")
+)
+
 
 @dataclass
 class StreamWatchdogState:
@@ -33,8 +39,9 @@ class StreamWatchdogState:
     No threads, no background workers.
     """
 
-    timeout_secs: float          # ≤0 means watchdog is disabled for this hop
+    timeout_secs: float          # ≤0 means no-output watchdog is disabled
     started_at: float            # time() when the upstream connection was opened
+    terminal_timeout_secs: float = 0.0  # ≤0 means terminal watchdog is disabled
 
     first_event_at: float | None = None
     first_visible_output_at: float | None = None  # output_text or public assistant item
@@ -65,6 +72,12 @@ class StreamWatchdogState:
         reference = self.first_event_at if self.first_event_at is not None else self.started_at
         return max(0.0, now - reference)
 
+    def terminal_elapsed_secs(self, now: float) -> float:
+        """Elapsed seconds since first visible output."""
+        if self.first_visible_output_at is None:
+            return 0.0
+        return max(0.0, now - self.first_visible_output_at)
+
 
 def should_trigger_no_output_timeout(state: StreamWatchdogState, now: float) -> bool:
     """Return True if the no-output watchdog should fire now.
@@ -85,6 +98,27 @@ def should_trigger_no_output_timeout(state: StreamWatchdogState, now: float) -> 
     if state.first_terminal_at is not None:
         return False
     return state.elapsed_secs(now) >= state.timeout_secs
+
+
+def should_trigger_terminal_timeout(state: StreamWatchdogState, now: float) -> bool:
+    """Return True if terminal-after-output watchdog should fire now.
+
+    Definition: fires when terminal_timeout_secs > 0, visible output has been
+    seen, no terminal event has been forwarded, and elapsed time since first
+    visible output is >= terminal_timeout_secs.
+
+    This is intentionally separate from should_trigger_no_output_timeout:
+    - no-output timeout means no visible answer ever appeared
+    - terminal timeout means visible output appeared but the terminal event did
+      not arrive before the deadline
+    """
+    if state.terminal_timeout_secs <= 0 or state.triggered:
+        return False
+    if state.first_visible_output_at is None:
+        return False
+    if state.first_terminal_at is not None:
+        return False
+    return state.terminal_elapsed_secs(now) >= state.terminal_timeout_secs
 
 
 def build_timeout_telemetry_payload(
@@ -127,6 +161,48 @@ def build_timeout_telemetry_payload(
         # Observation booleans
         "saw_reasoning":          terminal.get("saw_reasoning", False),
         "saw_output_text":        terminal.get("saw_output_text", False),
+        "saw_tool_call":          terminal.get("saw_tool_call", False),
+        "saw_response_completed": terminal.get("saw_response_completed", False),
+        "saw_done":               terminal.get("saw_done", False),
+        "saw_error":              terminal.get("saw_error", False),
+        "saw_compact_failed":     terminal.get("saw_compact_failed", False),
+        "fallback_emitted":       terminal.get("fallback_emitted", False),
+        "repair_emitted":         terminal.get("repair_emitted", False),
+        "notes":                  list(terminal.get("notes", [])),
+    }
+
+
+def build_terminal_timeout_telemetry_payload(
+    state: StreamWatchdogState,
+    terminal: dict,
+    now: float,
+    request_id: str = "",
+) -> dict:
+    """Build signal-compatible telemetry for stream_terminal_timeout."""
+    return {
+        # Core classification
+        "schema":                 terminal.get("schema", "qz.stream.terminal.v1"),
+        "classification":         "stream_terminal_timeout",
+        # Signal-compatible fields (future #42 SignalDecision wrapping)
+        "signal_id":              "stream.terminal_timeout",
+        "source":                 "qz_stream_watchdog",
+        "channel":                "telemetry",
+        "visibility":             "operator",
+        "action":                 "terminal_fallback",
+        # Timing
+        "timeout_secs":           state.terminal_timeout_secs,
+        "elapsed_secs":           round(state.terminal_elapsed_secs(now), 3),
+        # Context
+        "request_id":             request_id or terminal.get("request_id", ""),
+        # Classification outcome
+        "recoverable":            terminal.get("recoverable", True),
+        "fallback_required":      terminal.get("fallback_required", True),
+        "visible_answer_seen":    terminal.get("visible_answer_seen", True),
+        "terminal_event_seen":    terminal.get("terminal_event_seen", False),
+        # Observation booleans
+        "saw_reasoning":          terminal.get("saw_reasoning", False),
+        "saw_output_text":        terminal.get("saw_output_text", False),
+        "saw_assistant_item":     terminal.get("saw_assistant_item", False),
         "saw_tool_call":          terminal.get("saw_tool_call", False),
         "saw_response_completed": terminal.get("saw_response_completed", False),
         "saw_done":               terminal.get("saw_done", False),
