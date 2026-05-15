@@ -45,6 +45,7 @@ try:
     from .qz_recovery_state import RECOVERY_STATE
     from .qz_active_requests import ACTIVE_REQUESTS
     from .qz_recovery_jobs import RECOVERY_JOBS
+    from .qz_vram_snapshot import get_cached_vram_snapshot
     from .qz_search_policy import resolve_search_policy_selection
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import (
@@ -91,6 +92,7 @@ except ImportError:
     from qz_recovery_state import RECOVERY_STATE
     from qz_active_requests import ACTIVE_REQUESTS
     from qz_recovery_jobs import RECOVERY_JOBS
+    from qz_vram_snapshot import get_cached_vram_snapshot
     from qz_search_policy import resolve_search_policy_selection
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import (
@@ -453,6 +455,10 @@ class RequestRouter:
                 runtime = None
             payload = self.handler.telemetry.recent_payload(limit=limit, runtime=runtime)
             payload["schema"] = TELEMETRY_RECENT_SCHEMA
+            try:
+                payload["vram"] = get_cached_vram_snapshot(handler=self.handler)
+            except Exception:
+                pass
             self.handler._send_json(200, payload)
             return
 

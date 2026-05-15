@@ -168,6 +168,26 @@ def curl_health(host: str, port: str) -> bool:
     return "status" in out or out.strip() == "OK" or out.strip() == "ok"
 
 
+def fetch_vram_snapshot(cp: Optional[dict]) -> Optional[dict]:
+    """Extract vram snapshot from control-plane, or return None."""
+    if not isinstance(cp, dict):
+        return None
+    v = cp.get("vram")
+    if isinstance(v, dict) and v.get("schema") == "qz.vram.snapshot.v1":
+        return v
+    return None
+
+
+def _mib_str(mib) -> str:
+    """Format MiB value as human string, or '?' if None."""
+    if mib is None:
+        return "?"
+    try:
+        return human_bytes_from_mib(float(mib), compact=True)
+    except Exception:
+        return "?"
+
+
 def proxy_base_url() -> str:
     host = os.environ.get("QZ_PROXY_HOST", "127.0.0.1")
     port = os.environ.get("QZ_PROXY_PORT", "18180")
@@ -1209,8 +1229,13 @@ class UI:
         else:
             self.add(y + 2, x + 2, clip(line, w - 4), self.red | self.bold)
 
-    def draw_gpu(self, y: int, x: int, h: int, w: int, gpus: List[GpuRow]):
-        self.box(y, x, h, w, "GPU")
+    def draw_gpu(self, y: int, x: int, h: int, w: int, gpus: List[GpuRow], vram_snap: Optional[dict] = None):
+        src_label = ""
+        if isinstance(vram_snap, dict):
+            src  = vram_snap.get("source", "?")
+            conf = vram_snap.get("confidence", "?")
+            src_label = f" {src}/{conf}"
+        self.box(y, x, h, w, f"GPU{src_label}")
         update_vram_baseline(gpus, self.vram_baseline)
         self.add(y + 1, x + 2, f"{'ID':<5} {'NAME':<24} {'UTIL':>5}  {'USED':>8} {'BASE':>8} {'DELTA':>8} {'FREE':>8} {'TOTAL':>8} {'POWER':>7} {'TEMP':>5} {'PCIE':>8}", self.dim | self.bold)
         rows = gpus[: max(0, h - 4)]
@@ -1333,6 +1358,7 @@ class UI:
         else:
             model_status = ModelStatus()
         srs = service_recovery_from_control_plane(cp)
+        vram_snap = fetch_vram_snapshot(cp)
         benchmark = latest_benchmark()
 
         self.draw_header(backend_ok, proxy_ok, gpus)
@@ -1345,7 +1371,7 @@ class UI:
         full_w = w - 2
         self.draw_profile(3, 0, 12, full_w, model_status, srs)
         self.draw_container(15, 0, 5, full_w)
-        self.draw_gpu(20, 0, 5 + min(2, len(gpus)), full_w, gpus)
+        self.draw_gpu(20, 0, 5 + min(2, len(gpus)), full_w, gpus, vram_snap=vram_snap)
         throughput_y = 25 + min(2, len(gpus))
         self.draw_throughput(throughput_y, 0, 9, full_w, rates)
         benchmark_h = 5 if benchmark is not None else 0
@@ -1395,6 +1421,7 @@ def once():
     else:
         model_status = ModelStatus()
     srs = service_recovery_from_control_plane(cp)
+    vram_snap = fetch_vram_snapshot(cp)
     benchmark = latest_benchmark()
 
     backend_light = "●" if backend else "○"
@@ -1489,6 +1516,50 @@ def once():
             f"pwr={power:.1f}W temp={temp:.0f}C PCIe=-"
         )
     print()
+    # VRAM SNAPSHOT section (proxy-owned, authoritative source labelling)
+    print("VRAM SNAPSHOT")
+    if isinstance(vram_snap, dict) and vram_snap.get("schema") == "qz.vram.snapshot.v1":
+        vs = vram_snap
+        totals = vs.get("totals") or {}
+        ctx    = vs.get("context") or {}
+        comps  = vs.get("components") or []
+        print(
+            f"  source={vs.get('source','?')}  "
+            f"confidence={vs.get('confidence','?')}  "
+            f"backend_confirmed={vs.get('backend_confirmed',False)}  "
+            f"host_observed={vs.get('host_observed',False)}"
+        )
+        u_str = _mib_str(totals.get("used_mib"))
+        a_str = _mib_str(totals.get("available_mib"))
+        t_str = _mib_str(totals.get("total_mib"))
+        bp_str = _mib_str(totals.get("backend_process_used_mib"))
+        print(f"  TOTAL  used={u_str}  avail={a_str}  total={t_str}  backend_proc={bp_str}")
+        # Context window
+        ctx_lim  = ctx.get("limit_tokens")
+        ctx_used = ctx.get("used_tokens")
+        ctx_pct  = ctx.get("used_pct")
+        ctx_src  = ctx.get("source", "unknown")
+        ctx_str  = f"{ctx_used if ctx_used is not None else '?'}/{ctx_lim if ctx_lim else '?'}"
+        if ctx_pct is not None:
+            ctx_str += f" ({ctx_pct}%)"
+        print(f"  CTX    {ctx_str}  source={ctx_src}")
+        # Components table
+        for comp in comps:
+            mib_s = _mib_str(comp.get("mib"))
+            conf  = comp.get("confidence", "unknown")
+            src_s = comp.get("source", "unknown")
+            label = comp.get("label", comp.get("name", "?")).upper()
+            extra = ""
+            if comp.get("context_used_pct") is not None:
+                extra = f"  kv={comp['context_used_pct']}%"
+            elif comp.get("context_limit"):
+                extra = f"  ctx_limit={comp['context_limit']}"
+            print(f"  {label:<8} {mib_s:<12} conf={conf}  src={src_s}{extra}")
+        # Notes
+        for note in (vs.get("notes") or []):
+            print(f"  note: {note}")
+    else:
+        print(f"  vram snapshot unavailable (proxy not reachable or no data)")
     print("LIVE THROUGHPUT")
     print(f"  prompt   latest={tps_str(rates.prompt_latest)} t/s  max={tps_str(rates.prompt_max)} t/s  tokens={human_si(rates.prompt_tokens, precision=1)}  time={human_duration_ms(rates.prompt_ms)}")
     print(f"  generate latest={tps_str(rates.gen_latest)} t/s  max={tps_str(rates.gen_max)} t/s  tokens={human_si(rates.gen_tokens, precision=1)}  time={human_duration_ms(rates.gen_ms)}")

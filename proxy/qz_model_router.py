@@ -13,6 +13,7 @@ try:
     )
     from .qz_prompt_policy import assemble_instruction_stack
     from .qz_runtime_io import read_json, runtime_state_path, write_json
+    from .qz_vram_snapshot import get_cached_vram_snapshot
 except ImportError:
     from qz_reasoning_policy import (
         apply_reasoning_policy,
@@ -22,6 +23,7 @@ except ImportError:
     )
     from qz_prompt_policy import assemble_instruction_stack
     from qz_runtime_io import read_json, runtime_state_path, write_json
+    from qz_vram_snapshot import get_cached_vram_snapshot
 
 
 STATUS_SNAPSHOT_SCHEMA = "qz.status.snapshot.v1"
@@ -1291,6 +1293,10 @@ class ModelRouter:
         if self.handler.path in ("/qz/status",):
             snapshot = self.status_snapshot()
             self._emit("status_snapshot", self.status_summary(self.handler.path, snapshot=snapshot))
+            try:
+                snapshot["vram"] = get_cached_vram_snapshot(handler=self.handler)
+            except Exception:
+                pass
             self.handler._send_json(200, snapshot)
             return True
         return False

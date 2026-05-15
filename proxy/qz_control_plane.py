@@ -25,12 +25,14 @@ try:
     from .qz_recovery_state import RECOVERY_STATE
     from .qz_active_requests import ACTIVE_REQUESTS
     from .qz_recovery_jobs import RECOVERY_JOBS
+    from .qz_vram_snapshot import get_cached_vram_snapshot
 except ImportError:
     from qz_service_status import build_service_status
     from qz_recovery_status import build_recovery_status
     from qz_recovery_state import RECOVERY_STATE
     from qz_active_requests import ACTIVE_REQUESTS
     from qz_recovery_jobs import RECOVERY_JOBS
+    from qz_vram_snapshot import get_cached_vram_snapshot
 from typing import Any
 
 QZ_CONTROL_PLANE_SCHEMA = "qz.control_plane.status.v1"
@@ -230,4 +232,9 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
         active_requests=ar_snapshot,
         recovery_jobs=jobs_snapshot,
     )
+    # Additive: proxy-owned VRAM snapshot (TTL-cached to avoid per-request nvidia-smi).
+    try:
+        payload["vram"] = get_cached_vram_snapshot(handler=handler)
+    except Exception:
+        pass
     return payload
