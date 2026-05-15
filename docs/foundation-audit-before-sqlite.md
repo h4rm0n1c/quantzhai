@@ -18,7 +18,7 @@ docs/signal-feedback-subsystem-plan.md
 
 ## 1. Executive summary
 
-QuantZhai is ready to start #2 only as a narrow Phase 1 operational substrate.
+QuantZhai is ready to start #2 only as a narrow Phase 1 SQLite storage substrate.
 It is not ready for broad runtime-signal persistence or model-visible memory.
 
 Recommended outcome: **B. Start #2 only after this audit is indexed and #2 is
@@ -287,7 +287,8 @@ Pre-#2 minimum:
 ```text
 1. Treat qz_codex_metadata.extract_codex_request_context() as the only
    SQLite input parser for identity/workspace/memory facts.
-2. Keep #2 writes optional/non-fatal and scoped to bounded operational facts.
+2. Keep #2 writes optional/non-fatal and scoped to bounded parser-boundary
+   identity/scoping facts.
 3. Add no model-visible feedback from #2.
 ```
 
@@ -364,7 +365,7 @@ Suggested comment for #2:
 
 ```text
 Foundation audit before #2: Phase 1 remains safe to start only as a
-parser-boundary operational substrate. The DB should consume
+parser-boundary SQLite storage substrate. The DB should consume
 extract_codex_request_context() from qz_codex_metadata.py, store bounded
 sessions/turns/requests/workspace/identity-conflict facts, and remain
 optional/non-fatal. Do not make the first SQLite slice a generic runtime signal
@@ -394,12 +395,12 @@ Suggested narrow follow-up from #42, if desired:
 Title: Normalize runtime signal routing after SQLite substrate
 
 Body:
-After #2 creates the operational substrate, audit one or two runtime signal
-families for qz_feedback adoption without changing stream behaviour. Start with
-bounded cases such as empty-answer repair lifecycle and stream terminal
-classification. Keep operator telemetry, Codex-visible feedback, and future
-SQLite persistence decisions separate. Do not migrate every stream signal or
-create a broad framework rewrite.
+After #2 creates the optional SQLite storage substrate, audit one or two
+runtime signal families for qz_feedback adoption without changing stream
+behaviour. Start with bounded cases such as empty-answer repair lifecycle and
+stream terminal classification. Keep operator telemetry, Codex-visible
+feedback, and future SQLite persistence decisions separate. Do not migrate
+every stream signal or create a broad framework rewrite.
 ```
 
 Do not create `Add generic SignalDecision core types`: `qz_feedback.py` already
@@ -425,7 +426,9 @@ semantics, recovery behaviour, and terminal classifications.
 
 2. **#2 slice 1: optional DB open and schema**
    Add a minimal DB module with `schema_version`/`PRAGMA user_version`,
-   `QZ_STATE_DB_PATH`, optional/non-fatal open, and tests.
+   `QZ_STATE_DB_PATH`, optional/non-fatal open, and tests. This is storage
+   plumbing for future state/memory experiments, not a telemetry warehouse or
+   memory_domain registry.
 
 3. **#2 slice 2: parser-boundary request facts**
    Persist `CodexRequestContext` facts and bounded request/body metadata

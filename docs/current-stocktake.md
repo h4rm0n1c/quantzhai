@@ -13,9 +13,10 @@ This document is a point-in-time snapshot for agents picking up after the
 ## 1. Current operational state
 
 The local Codex + Qwen stack is usable, observable, and has a working recovery
-system. VRAM telemetry is live in qz-top with provenance labels. The state
-substrate (SQLite) has not been implemented. A foundation audit now constrains
-#2 to parser-boundary operational facts and defers runtime signal unification.
+system. VRAM telemetry is live in qz-top with provenance labels. The first
+optional SQLite storage substrate skeleton exists and remains disabled by
+default. A foundation audit constrains #2 to parser-boundary identity/scoping
+facts and defers runtime signal unification.
 
 ```text
 Full test suite:     1442 tests passing
@@ -66,7 +67,7 @@ Agent rules:         AGENTS.md includes telemetry doctrine
 
 | # | Title | Classification |
 |---|---|---|
-| #2 | Add optional Phase 1 SQLite operational substrate | **next-actionable** (foundational, constrained by audit) |
+| #2 | Add optional Phase 1 SQLite storage substrate | **in-progress** (slice 1 skeleton landed; constrained by audit) |
 | #51 | Promote recovery/backoff runtime state to SQLite | **blocked-by-#2** |
 | #46 | Replace qz-write-runtime-state launcher trace | **blocked-by-#2** (or startup-telemetry) |
 | #37 | Architectural seam extraction plan | **architectural/refactor** (small targeted seams only) |
@@ -78,10 +79,12 @@ Agent rules:         AGENTS.md includes telemetry doctrine
 
 ### Notes on each
 
-**#2** — The foundational next state work. Unblocked since memory_domain plumbing
-landed and the foundation audit completed. Scope is narrow: optional/non-fatal,
-parser-boundary only, no model-visible memory, and no broad runtime signal
-persistence in the first slice. Unlocks #51 and #46.
+**#2** — The foundational next state work. Slice 1 added the optional/non-fatal
+SQLite storage skeleton only. Next slices remain narrow: parser-boundary
+identity/scoping facts, no model-visible memory, and no broad runtime signal
+persistence. SQLite may record which configured memory_domain applied to stored
+facts, but it is not the memory_domain registry or policy authority. Unlocks #51
+and #46 after the scoped substrate is useful enough.
 
 **#51** — Recovery backoff state is currently in-memory only. Should be persisted
 once #2 exists. Do not implement before #2.
@@ -130,11 +133,12 @@ now track. Keep as historical planning record; do not implement from it directly
 ## 5. Recommended next work order
 
 ```
-A. #2   Phase 1 SQLite substrate
-        Foundational. Unblocked. Unlocks #51 and #46.
+A. #2   Phase 1 SQLite storage substrate
+        Foundational. Slice 1 skeleton landed. Unlocks #51 and #46 once useful.
         Scope is narrow: sessions/turns/requests/workspace_candidates/
         resolved_workspaces/session_workspace_bindings/identity_conflicts.
-        Optional/non-fatal. No model-visible memory. Follow
+        Optional/non-fatal. No model-visible memory. Not a telemetry warehouse,
+        config authority, or memory_domain registry. Follow
         docs/foundation-audit-before-sqlite.md.
 
 B. #51  Recovery/backoff state persistence
@@ -229,7 +233,8 @@ Signal/feedback subsystem design (#42)
 - Never label residual as scratch.
 - Never inject qz_* context into forwarded /v1/responses bodies.
 - memory_domain defaults to isolated; never infer it from model/profile/tool names.
-- Phase 1 SQLite stores operational facts only — no model-visible memory.
+- Phase 1 SQLite stores parser-boundary identity/scoping facts only — no
+  model-visible memory, telemetry warehouse, or memory_domain registry.
 
 ---
 
@@ -265,24 +270,28 @@ Signal/feedback subsystem design (#42)
 
 ## 10. Suggested next agent prompts
 
-### Prompt A: Phase 1 SQLite (#2)
+### Prompt A: Phase 1 SQLite slice 2 (#2)
 
 ```text
-Implement the Phase 1 SQLite operational substrate described in #2.
+Implement parser-boundary fact storage on top of the optional SQLite substrate.
 
 Read first:
 - docs/foundation-audit-before-sqlite.md
 - docs/current-architecture-authority.md
 - docs/codex-context-memory-contract.md
 - docs/current-task-hierarchy.md
+- proxy/qz_operational_db.py
 - proxy/qz_codex_metadata.py
 
-Goal: optional/non-fatal SQLite storage for parser-derived operational facts.
+Goal: optional/non-fatal SQLite storage for parser-derived identity/scoping facts.
 Store sessions, turns, requests, workspace candidates, resolved workspaces,
 session_workspace_bindings, identity_conflicts.
+Record which configured memory_domain applied to stored facts, but do not infer
+or create domains and do not treat SQLite as the memory_domain registry.
 DB failure must not break proxy request handling.
-Do not implement model-visible memory, broad runtime signal history, or change
-forwarded request bodies.
+Do not implement model-visible memory, broad runtime signal history, stream
+telemetry persistence, recovery/backoff persistence, or change forwarded request
+bodies.
 ```
 
 ### Prompt B: Recovery state persistence (#51, after #2)

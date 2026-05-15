@@ -621,14 +621,18 @@ avoid cross-scope memory reads
 
 ## SQLite Phase 1 schema direction
 
-Phase 1 should store identity and operational facts only. It must not implement
-learned preferences, profile-private memory, HSM memory, or promotion.
+Phase 1 should store parser-boundary identity/scoping facts only. It is the
+first optional SQLite storage substrate for future memory/state experiments, not
+a runtime telemetry store or policy authority. It must not implement learned
+preferences, profile-private memory, HSM memory, or promotion.
 
 Slice 1 status:
 
 ```text
 proxy/qz_operational_db.py exists as the optional/non-fatal SQLite substrate
 skeleton.
+The module name keeps "operational" for now; in this context it means
+non-model-visible storage plumbing, not an event warehouse.
 QZ_STATE_DB_ENABLED defaults to disabled.
 QZ_STATE_DB_PATH defaults to var/qz-state.sqlite3 when enabled.
 Schema version metadata and PRAGMA user_version are initialized.
@@ -636,6 +640,16 @@ No sessions, turns, requests, workspace facts, runtime signal history, stream
 telemetry, recovery/backoff state, or model-visible memory are persisted yet.
 DB open/write failure is degraded into health().last_error and must not break
 proxy request handling.
+```
+
+Memory-domain authority:
+
+```text
+memory_domain definitions remain config-owned.
+SQLite may later record which configured memory_domain applied to stored facts.
+SQLite is not the memory_domain registry.
+SQLite is not policy authority.
+SQLite must not infer, create, normalize, or grant memory domains.
 ```
 
 ### sessions

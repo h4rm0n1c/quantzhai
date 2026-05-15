@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Optional SQLite substrate for QuantZhai operational state.
+"""Optional SQLite storage substrate for QuantZhai state/memory experiments.
 
-Slice 1 only owns DB availability and schema metadata. It intentionally does
-not store request bodies, telemetry events, stream state, recovery state, or
-model-visible memory.
+Slice 1 only owns DB availability and schema metadata. "Operational" here means
+non-model-visible storage plumbing for future parser-boundary scoping facts. It
+is not a runtime telemetry warehouse, recovery-state store, config authority, or
+memory_domain registry.
 """
 from __future__ import annotations
 
@@ -32,7 +33,7 @@ def _env_enabled(value: str | None) -> bool:
 
 
 class OperationalDB:
-    """Small non-fatal wrapper around the optional SQLite state DB."""
+    """Small non-fatal wrapper around the optional SQLite storage substrate."""
 
     def __init__(self, path: str | Path | None = None, enabled: bool = False):
         self.path = Path(path) if path is not None else default_db_path()

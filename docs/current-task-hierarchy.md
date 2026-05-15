@@ -18,7 +18,8 @@ Missing memory_domain means isolated.
 Capability detection from tools never grants durable memory access.
 QuantZhai-owned qz_* context stays internal and must not be injected into
 forwarded /v1/responses request bodies.
-Phase 1 SQLite stores operational facts only.
+Phase 1 SQLite stores parser-boundary identity/scoping facts only.
+SQLite is not a telemetry warehouse, config authority, or memory_domain registry.
 No clever memory, active memory tools, learned preferences, roleplay memory,
 HSM/archive memory, automatic promotion, or cross-domain sharing in Phase 1.
 ```
@@ -96,8 +97,8 @@ Live stack smoke test (#35/PR#36)
 authority/docs cleanup (ongoing)
   -> [DONE] explicit memory_domain config plumbing
     -> [DONE] stream watchdog and foundation audit before SQLite
-      -> optional/non-fatal Phase 1 SQLite operational substrate  ← current P1
-      -> same-scope operational signals, starting with repeated-read v1/v2
+      -> optional/non-fatal Phase 1 SQLite storage substrate  ← current P1
+      -> same-scope parser-boundary state facts, starting with repeated-read v1/v2
         -> rendered state packets / LimbiCore recall later
 ```
 
@@ -126,16 +127,18 @@ codex-context-memory-contract.md, and this file, then know what to do next.
 
 ---
 
-## P1: Phase 1 SQLite operational substrate
+## P1: Phase 1 SQLite storage substrate
 
-Goal: store parser-derived operational facts safely without changing model-visible
-behaviour.
+Goal: add the optional SQLite storage substrate for parser-derived
+identity/scoping facts without changing model-visible behaviour.
 
 Current slice status:
 
 ```text
-Slice 1 landed: optional/non-fatal SQLite substrate skeleton only.
+Slice 1 landed: optional/non-fatal SQLite storage substrate skeleton only.
 Module: proxy/qz_operational_db.py
+Name note: "operational" here means non-model-visible storage plumbing, not a
+runtime telemetry warehouse.
 Env: QZ_STATE_DB_ENABLED, QZ_STATE_DB_PATH
 Default: disabled; enabling is explicit via QZ_STATE_DB_ENABLED.
 Schema: version metadata only, PRAGMA user_version = 1.
@@ -149,9 +152,18 @@ Scope:
 Optional/non-fatal DB open.
 Parser-boundary only.
 Consume extract_codex_request_context().
-Store structured facts and summaries, not giant raw request bodies.
+Store parser-boundary scoping facts and summaries, not giant raw request bodies.
 DB write failure logs/telemeters but does not break proxy responses.
 Follow docs/foundation-audit-before-sqlite.md.
+```
+
+Memory-domain authority:
+
+```text
+memory_domain definitions stay in config/profile policy.
+SQLite may later record which configured memory_domain applied to a stored fact.
+SQLite is not the memory_domain registry or policy authority.
+SQLite must not infer or create domains.
 ```
 
 Substrate file:
@@ -404,10 +416,10 @@ cross-domain isolation tests
 
 ---
 
-## First implementation prompt: P1 SQLite (current target)
+## Next implementation prompt: P1 SQLite slice 2
 
 ```text
-Implement the Phase 1 SQLite operational substrate for QuantZhai.
+Implement parser-boundary fact storage on top of the optional SQLite substrate.
 
 Read first:
 - docs/foundation-audit-before-sqlite.md
@@ -415,22 +427,25 @@ Read first:
 - docs/codex-context-memory-contract.md
 - docs/model-state-signal-contract.md
 - docs/current-task-hierarchy.md
+- proxy/qz_operational_db.py
 - proxy/qz_codex_metadata.py
 
 Goal:
-- add optional/non-fatal SQLite storage for parser-derived operational facts
-- consume extract_codex_request_context()
+- consume extract_codex_request_context(); do not add another parser
 - store sessions, turns, requests, workspace candidates, resolved workspaces,
   session workspace bindings, and identity conflicts
 - store structured metadata/digests/summaries, not giant raw request bodies
 - DB open/write failures must not break proxy request handling
+- record which configured memory_domain applied to stored facts, but do not
+  infer/create domains or treat SQLite as the memory_domain registry
 - do not change model-visible behaviour
-- do not persist broad runtime signal history in the first slice
+- do not persist broad runtime signal history, stream telemetry, or recovery
+  backoff state
 - do not implement learned preferences, durable memory, profile-private memory,
   HSM/archive memory, promotion, recall, renderers, or repeated-read v2
 
-Add tests for DB open, inserts, workspace resolution, unknown workspace,
-identity conflict storage, and non-fatal DB failure.
+Add tests for inserts, workspace resolution, unknown workspace, identity
+conflict storage, request-body non-mutation, and non-fatal DB failure.
 
 Keep the patch boring.
 ```

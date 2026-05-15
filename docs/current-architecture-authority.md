@@ -41,11 +41,14 @@ LimbiCore stores scoped StateRecords with provenance, then renders small purpose
 Current rule:
 
 ```text
-SQLite stores operational facts.
+SQLite stores parser-boundary identity/scoping facts for future state/memory
+experiments.
 Renderers decide model-facing packets.
 Storage records are not automatically model-facing memory.
 Recall results are not automatically model-facing memory.
 No clever memory, active memory tools, or model-visible durable memory in Phase 1.
+SQLite is not a runtime telemetry warehouse, config authority, recovery-state
+store in slice 1, or memory_domain registry.
 ```
 
 ---
@@ -157,7 +160,8 @@ Do not share coding workspace facts into roleplay/private/HSM memory.
 
 ## SQLite Phase 1 boundary
 
-Phase 1 SQLite should store structured operational facts only:
+Phase 1 SQLite should store structured parser-boundary identity/scoping facts
+only:
 
 ```text
 sessions
@@ -181,13 +185,20 @@ automatic promotion
 cross-domain sharing
 repeated-read v2 behaviour changes
 forwarded qz_* request-body metadata injection
+memory_domain registry or inference
+runtime telemetry/event warehouse
+slice-1 recovery/backoff persistence
 ```
+
+memory_domain definitions remain config-owned. SQLite may later record which
+configured memory_domain applied to a stored fact, but it must not infer, create,
+normalize, or grant memory domains and is not policy authority.
 
 Recommended next implementation step:
 
 ```text
-Phase 1 SQLite substrate, optional/non-fatal, parser-boundary only, constrained
-by docs/foundation-audit-before-sqlite.md.
+Phase 1 SQLite storage substrate, optional/non-fatal, parser-boundary only,
+constrained by docs/foundation-audit-before-sqlite.md.
 ```
 
 The DB should consume `extract_codex_request_context()` internally. It should not
