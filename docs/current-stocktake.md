@@ -67,7 +67,7 @@ Agent rules:         AGENTS.md includes telemetry doctrine
 
 | # | Title | Classification |
 |---|---|---|
-| #2 | Add optional Phase 1 SQLite storage substrate | **in-progress** (slice 1 skeleton landed; constrained by audit) |
+| #2 | Add optional Phase 1 SQLite storage substrate | **parked** (slice 1 skeleton landed; waiting for StateRecord/memory-write design) |
 | #51 | Promote recovery/backoff runtime state to SQLite | **blocked-by-#2** |
 | #46 | Replace qz-write-runtime-state launcher trace | **blocked-by-#2** (or startup-telemetry) |
 | #37 | Architectural seam extraction plan | **architectural/refactor** (small targeted seams only) |
@@ -80,11 +80,13 @@ Agent rules:         AGENTS.md includes telemetry doctrine
 ### Notes on each
 
 **#2** — The foundational next state work. Slice 1 added the optional/non-fatal
-SQLite storage skeleton only. Next slices remain narrow: parser-boundary
-identity/scoping facts, no model-visible memory, and no broad runtime signal
-persistence. SQLite may record which configured memory_domain applied to stored
-facts, but it is not the memory_domain registry or policy authority. Unlocks #51
-and #46 after the scoped substrate is useful enough.
+SQLite storage skeleton (BrainCaseDB) only. **#2 is now parked** pending
+StateRecord / memory-write API design. The next implementation slice is not
+automatic parser-fact ingestion. BrainCaseDB must not store data merely because
+QuantZhai observed it — all write paths must be explicit. Sessions, turns, and
+requests are provenance/scoping references for actual stored memory/state
+records; do not preempt the design with automatic request logging. Unlocks #51
+and #46 once the explicit write API and at least one stored-fact type exist.
 
 **#51** — Recovery backoff state is currently in-memory only. Should be persisted
 once #2 exists. Do not implement before #2.
@@ -270,24 +272,35 @@ Signal/feedback subsystem design (#42)
 
 ## 10. Suggested next agent prompts
 
-### Prompt A: Phase 1 SQLite slice 2 (#2)
+### Prompt A: Phase 1 SQLite slice 2 (#2) — PARKED
+
+**#2 is parked. Do not start this prompt until StateRecord / memory-write API
+design is ready.**
+
+The substrate skeleton (BrainCaseDB) exists. The next step is not automatic
+parser-fact ingestion. Sessions, turns, and requests listed below are
+provenance/scoping references for actual stored memory/state records — they
+must not be logged automatically for every observed request.
+
+When the explicit memory/state write API design exists, replace this block with
+a concrete implementation prompt.
 
 ```text
-Implement parser-boundary fact storage on top of the optional SQLite substrate.
+PARKED REFERENCE — do not implement until explicit memory/state write API design exists.
 
 Read first:
-- docs/foundation-audit-before-sqlite.md
+- docs/foundation-audit-before-sqlite.md  (parser-boundary = provenance support, not request log)
 - docs/current-architecture-authority.md
-- docs/codex-context-memory-contract.md
-- docs/current-task-hierarchy.md
+- docs/codex-context-memory-contract.md   (see BrainCaseDB write doctrine)
+- docs/current-task-hierarchy.md          (see #2 parked status)
 - proxy/qz_braincase_db.py
 - proxy/qz_codex_metadata.py
 
-Goal: optional/non-fatal SQLite storage for parser-derived identity/scoping facts.
-Store sessions, turns, requests, workspace candidates, resolved workspaces,
-session_workspace_bindings, identity_conflicts.
-Record which configured memory_domain applied to stored facts, but do not infer
-or create domains and do not treat SQLite as the memory_domain registry.
+Goal (when design is ready): optional/non-fatal SQLite storage for explicit
+memory/state records, with provenance/scoping references (sessions, turns,
+requests, workspace candidates, resolved workspaces, session_workspace_bindings,
+identity_conflicts) attached only to actual stored state/memory facts.
+Do not log automatically. Do not store raw prompts or request bodies.
 DB failure must not break proxy request handling.
 Do not implement model-visible memory, broad runtime signal history, stream
 telemetry persistence, recovery/backoff persistence, or change forwarded request

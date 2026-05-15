@@ -144,6 +144,14 @@ Default: disabled; enabling is explicit via QZ_STATE_DB_ENABLED.
 Schema: version metadata only, PRAGMA user_version = 1.
 No parser facts, runtime signal history, stream telemetry, recovery/backoff
 state, or model-visible memory are persisted yet.
+
+#2 PARKED — waiting for StateRecord / memory-write API design.
+Next implementation slice is NOT automatic parser-fact ingestion.
+BrainCaseDB must not store data merely because QuantZhai observed it.
+All write paths must be explicit (StateRecord, promotion, user-approved save,
+or provenance attached to an actual stored memory/state record).
+Do not proceed with sessions/turns/requests tables until the explicit
+memory/state write API design is settled.
 ```
 
 Scope:
@@ -418,22 +426,25 @@ cross-domain isolation tests
 
 ## Next implementation prompt: P1 SQLite slice 2
 
+**PARKED — do not start until StateRecord / memory-write API design is ready.**
+
+The substrate skeleton (BrainCaseDB) exists. The next implementation slice is
+not automatic parser-fact ingestion. Before any write paths are added, the
+explicit memory/state write API must be designed. Sessions, turns, and requests
+are provenance/scoping references for actual stored memory/state records — they
+must not be logged automatically for every observed request.
+
+When the design is ready, replace this block with the implementation prompt.
+Until then, the prompt below is reference-only and must not be executed as-is.
+
 ```text
-Implement parser-boundary fact storage on top of the optional SQLite substrate.
+PARKED REFERENCE — do not implement until memory-write API design exists.
 
-Read first:
-- docs/foundation-audit-before-sqlite.md
-- docs/current-architecture-authority.md
-- docs/codex-context-memory-contract.md
-- docs/model-state-signal-contract.md
-- docs/current-task-hierarchy.md
-- proxy/qz_braincase_db.py
-- proxy/qz_codex_metadata.py
-
-Goal:
+Previous slice 2 intent (for design reference only):
 - consume extract_codex_request_context(); do not add another parser
 - store sessions, turns, requests, workspace candidates, resolved workspaces,
-  session workspace bindings, and identity conflicts
+  session workspace bindings, and identity conflicts as provenance/scoping
+  references attached to explicit memory/state records — not as a request log
 - store structured metadata/digests/summaries, not giant raw request bodies
 - DB open/write failures must not break proxy request handling
 - record which configured memory_domain applied to stored facts, but do not

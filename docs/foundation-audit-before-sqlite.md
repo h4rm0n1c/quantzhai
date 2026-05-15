@@ -21,24 +21,38 @@ docs/signal-feedback-subsystem-plan.md
 QuantZhai is ready to start #2 only as a narrow Phase 1 SQLite storage substrate.
 It is not ready for broad runtime-signal persistence or model-visible memory.
 
-Recommended outcome: **B. Start #2 only after this audit is indexed and #2 is
-kept to the parser-boundary/state-store scope already documented.** No runtime
-code cleanup is required before #2 if the first SQLite slice stores only:
+**Update (post BrainCaseDB rename, 2026-05-15):** The substrate skeleton
+(BrainCaseDB) has landed. #2 is now parked pending StateRecord / memory-write
+API design. The next implementation slice is NOT automatic parser-fact
+ingestion. The parser-boundary storage language in this audit must be read as
+provenance/scoping support attached to explicit memory/state records — not as
+a mandate to log every observed request, turn, or session automatically.
+
+BrainCaseDB must not store data merely because QuantZhai observed it. All
+BrainCaseDB write paths must be explicit. Do not add sessions/turns/requests
+tables until the explicit memory/state write API design is settled.
+
+Earlier recommended outcome was: **B. Start #2 only after this audit is indexed
+and #2 is kept to the parser-boundary/state-store scope already documented.**
+That scope is now further constrained: the tables below (sessions, turns,
+requests, etc.) are provenance/scoping references only — they must be attached
+to actual stored StateRecord-like facts, not logged automatically.
 
 ```text
-sessions
-turns
-requests
-workspace_candidates
-resolved_workspaces
+sessions              — provenance/scoping for stored facts, not a request log
+turns                 — provenance/scoping for stored facts, not a turn log
+requests              — provenance/scoping for stored facts, not a request diary
+workspace_candidates  — identity evidence for stored facts
+resolved_workspaces   — resolved identity for stored facts
 session_workspace_bindings
 identity_conflicts
-bounded request/body metadata summaries
+bounded request/body metadata summaries (no raw prompts/bodies)
 ```
 
-Do not make SQLite a sink for every telemetry event in the first slice. Runtime
-signals should be classified for future persistence, but only persisted when an
-owning policy path exists.
+Do not make SQLite a sink for every telemetry event or every observed request.
+Runtime signals should be classified for future persistence, but only persisted
+when an owning policy path exists. BrainCaseDB waits for explicit memory/state
+write design before any of the above tables are created.
 
 The main architectural risk is not SQLite itself. The risk is bolting storage
 onto modules that already mix detection, decision, rendering, routing, and
@@ -364,14 +378,19 @@ summary below and confirming the issue scope.
 Suggested comment for #2:
 
 ```text
-Foundation audit before #2: Phase 1 remains safe to start only as a
-parser-boundary SQLite storage substrate. The DB should consume
-extract_codex_request_context() from qz_codex_metadata.py, store bounded
-sessions/turns/requests/workspace/identity-conflict facts, and remain
-optional/non-fatal. Do not make the first SQLite slice a generic runtime signal
-store or model-visible memory path. Runtime stream/tool/recovery signals can be
-classified as future_sqlite_fact candidates, but should wait for owning policy
-seams.
+BrainCaseDB skeleton exists (proxy/qz_braincase_db.py), but #2 should not
+proceed into automatic request/session/turn logging.
+
+Next BrainCaseDB work must define StateRecord or equivalent explicit
+memory/state write API first. Parser-boundary facts (sessions, turns, requests,
+workspace candidates, identity conflicts) are provenance/scoping references
+only — they must be attached to actual stored memory/state records, not logged
+automatically for every observed request.
+
+BrainCaseDB must not store data merely because QuantZhai observed it.
+All write paths must be explicit.
+
+#2 is parked until the explicit memory/state write API design is ready.
 
 Audit doc: docs/foundation-audit-before-sqlite.md
 ```

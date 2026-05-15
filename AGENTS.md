@@ -176,6 +176,30 @@ Key rules:
 - Unknown quant dtype must not silently become f16. Set `formula_safe=false`
   and surface the unknown type in notes.
 
+## BrainCaseDB / Memory Storage Doctrine
+
+BrainCaseDB (`proxy/qz_braincase_db.py`) is the low-level SQLite state/memory
+storage substrate. It is a storage case, not a policy layer.
+
+Hard rules for any agent touching BrainCaseDB or planning SQLite work:
+
+- **BrainCaseDB is not a telemetry warehouse.** Do not write telemetry events to it.
+- **BrainCaseDB is not a request log.** Do not automatically store every request, turn, or session.
+- **BrainCaseDB is not a runtime event store.** Do not write stream events, tool calls, recovery state, or backoff data to it.
+- **BrainCaseDB is not a memory_domain registry.** memory_domain definitions remain config-owned.
+- **Do not add automatic ingestion.** BrainCaseDB records may only be written through an explicit memory/state write path: manual/user-approved save, future promotion pipeline, future memory extractor, future StateRecord creation, explicit test fixture, or narrow provenance/scoping support attached to an actual stored memory/state record.
+- **Store only explicit memory/state records or provenance needed by those records.** Parser-boundary identity/scoping facts are allowed only when needed to scope or prove provenance for an actual stored state/memory record.
+- SQLite may record which configured memory_domain applied to a stored record, but must not infer, create, normalize, or grant domains.
+
+Do not automatically ingest: every request, every turn, every session, every
+stream event, telemetry events, tool calls, tool output bodies, recovery state,
+backoff state, raw prompts, or raw request bodies.
+
+Before adding any BrainCaseDB write path, confirm there is an explicit
+memory/state record the write is scoping or supporting. If no such record
+exists yet, wait for the StateRecord/memory-write API design. Do not preempt
+that design with automatic parser-fact ingestion.
+
 ## Contract-First Fixes
 
 QuantZhai bugs often come from blurred ownership between config, model catalog, profile aliases, backend routing, prompt policy, runtime state, SSE streaming, telemetry, monitors, and generated Codex metadata.

@@ -6,6 +6,9 @@ Slice 1 only owns DB availability and schema metadata. It stores
 parser-boundary identity/scoping facts. It is not a runtime telemetry
 warehouse, recovery-state store, config authority, or memory_domain registry.
 
+BrainCaseDB does not auto-ingest observed runtime/request data.
+Callers must use an explicit future memory/state write API.
+
 memory_domain definitions remain config-owned. BrainCaseDB may record which
 configured memory_domain applied to a stored fact, but it must not infer,
 create, normalize, or grant memory domains.

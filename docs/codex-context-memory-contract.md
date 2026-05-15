@@ -626,6 +626,23 @@ first optional SQLite storage substrate for future memory/state experiments, not
 a runtime telemetry store or policy authority. It must not implement learned
 preferences, profile-private memory, HSM memory, or promotion.
 
+**BrainCaseDB write doctrine (hard rule for all agents):**
+
+BrainCaseDB must not store data merely because QuantZhai observed it.
+Records may only be written through an explicit memory/state write path.
+Sessions, turns, and requests described in the schema tables below are
+provenance/scoping references only — they exist to scope or prove provenance
+for an actual stored state/memory record (such as a future StateRecord).
+They must not be logged automatically for every observed request.
+
+Do not store raw prompts or raw request bodies. Do not implement automatic
+ingestion of stream events, tool calls, telemetry events, or recovery state.
+Wait for the StateRecord / memory-write API design before any BrainCaseDB
+write path goes beyond schema initialization.
+
+#2 is parked pending that design. The substrate skeleton (BrainCaseDB) exists;
+the next step is not automatic parser-fact ingestion.
+
 Slice 1 status:
 
 ```text
