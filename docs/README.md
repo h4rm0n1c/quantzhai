@@ -135,11 +135,15 @@ docs/progress-snapshot.md
 Current next engineering target:
 
 ```text
-P1 BrainCase — Slice F: harness/tool exposure (braincase.render first; recall semantics must be defined before exposure).
-Slices A–E (and C.1, D.1) complete: schemas/fixtures; BrainCaseDB v3; search/inspect/FTS5;
-FTS reindex; write/update helpers; internal render packet builder.
+P1 BrainCase — Slice F COMPLETE.
+braincase.render is the first model-visible tool (QZ_BRAINCASE_TOOLS_ENABLED, default disabled).
+Slices A–F (and C.1, D.1) complete: schemas/fixtures; BrainCaseDB v3; search/inspect/FTS5;
+FTS reindex; write/update helpers; internal render packet builder; braincase.render tool surface.
+RenderPacket is the only model-visible memory output.
+recall/write/update/search/inspect remain internal.
+Next: define recall semantics or operator-reviewed write exposure.
+No automatic ingestion.
 See docs/braincase-memory-tool-api.md for the full slice plan.
-Renders are internal until Slice F wires them. No automatic ingestion.
 ```
 
 Then:
@@ -154,7 +158,7 @@ P3 telemetry filter ergonomics / qz-live-smoke refinements.
 Read:
 
 ```text
-docs/braincase-memory-tool-api.md      — tool plane design, memory tiers, helpers, slices
+docs/braincase-memory-tool-api.md      — tool plane design, memory tiers, helpers, slices A–F
 docs/model-state-signal-contract.md    — StateRecord envelope and scope model
 AGENTS.md BrainCase Memory Tool Plane Doctrine
 AGENTS.md BrainCaseDB / Memory Storage Doctrine
@@ -162,6 +166,12 @@ docs/current-architecture-authority.md
 docs/current-task-hierarchy.md
 docs/codex-context-memory-contract.md
 docs/foundation-audit-before-sqlite.md
+
+Key source files (proxy/):
+  qz_braincase_db.py       — BrainCaseDB storage layer
+  qz_braincase_write.py    — explicit write/update helpers
+  qz_braincase_render.py   — internal RenderPacket builder
+  qz_braincase_tools.py    — braincase.render tool surface (Slice F)
 ```
 
 Focus:
@@ -176,6 +186,8 @@ Slice A (StateRecord JSON schema fixtures) must come before Slice B (DB schema).
 Raw captures remain debug artifacts.
 Do not inject qz_session_id/qz_workspace_id/qz_memory_domain into forwarded request bodies.
 memory_domain is config-owned; BrainCaseDB must not infer or grant domain values.
+braincase.render is the only model-visible tool (Slice F). QZ_BRAINCASE_TOOLS_ENABLED flag.
+recall/write/update/search/inspect remain internal until semantics are defined.
 ```
 
 ### I want to work on repeated-read signals

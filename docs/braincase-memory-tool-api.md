@@ -697,14 +697,45 @@ Not added: model-facing tool wiring, HTTP routes, harness injection, prompt inje
 automatic ingestion, recall tool.
 ```
 
-### Slice F: harness injection for memory tool-use policy
-
-After Slice E render works:
+### Slice F: braincase.render tool surface — COMPLETE
 
 ```text
-Add memory tool-use policy to the harness/prompt stack.
-Teach the LLM when to use recall vs search vs inspect vs write.
-Tests: harness policy injection, tool-use guidance.
+New module: proxy/qz_braincase_tools.py
+
+Feature flag: QZ_BRAINCASE_TOOLS_ENABLED (default: disabled)
+Default behaviour:
+  - No tool definition is injected.
+  - No harness policy text is added to the turn harness.
+  - No runtime behaviour changes.
+  - Forwarded /v1/responses bodies are not mutated.
+
+When enabled:
+  - BRAINCASE_RENDER_TOOL_DEF injected into body["tools"] via
+    inject_braincase_tools_to_body().
+  - BRAINCASE_HARNESS_POLICY added to turn harness via
+    get_braincase_harness_policy() inside normalize_responses_input_for_qwen().
+  - braincase_render_tool(db, args) dispatches to braincase_render_packet().
+  - Disabled DB returns a safe warning packet (braincase_db_disabled).
+  - Missing purpose or memory_domain returns safe warning packets.
+
+Wiring in proxy/qz_request_normalization.py:
+  - get_braincase_harness_policy() extends harness_blocks in
+    normalize_responses_input_for_qwen() before turn injection.
+  - inject_braincase_tools_to_body() adds braincase.render to body["tools"]
+    in the same function (before normalize_tools_for_llamacpp is called).
+
+Exposed: braincase.render only.
+Not exposed: braincase.recall, write, update, search, inspect.
+  These remain internal until future slices define semantics and
+  operator exposure policies.
+
+RenderPacket is the only model-visible memory output.
+Raw StateRecords remain internal.
+No automatic ingestion.
+No broad recall/memory dump.
+
+Tests: tests/test_qz_braincase_tools.py — 64 tests, all passing
+Full suite: 1906 tests passing
 ```
 
 ---
@@ -713,12 +744,15 @@ Tests: harness policy injection, tool-use guidance.
 
 ```text
 1. RESOLVED: Slice A fixtures live in docs/schemas/braincase/ and docs/fixtures/braincase/.
-2. Should braincase.recall return raw records or pre-rendered summaries?
+2. DEFERRED: Should braincase.recall return raw records or pre-rendered summaries?
+   (blocked until Slice G defines recall semantics)
 3. Does render always require a separate call, or can recall/inspect render on request?
 4. What is the right lifetime for working_state — ephemeral in-memory, or short-lived BrainCaseDB rows?
 5. RESOLVED: artifact_memory source refs use SourceRef with locator (file path, URL, commit hash,
    capture path as appropriate). See docs/fixtures/braincase/source-refs/ for examples.
-6. What is the harness injection mechanism — system prompt prefix, or injected tool response?
+6. RESOLVED: Harness injection mechanism: braincase policy text appended to harness_blocks
+   in normalize_responses_input_for_qwen() (same as model-profile turn harnesses).
+   Tool definition is injected into body["tools"] in the same function.
 7. Does HSM work need a separate BrainCaseDB instance, or does memory_domain=hsm isolation suffice?
    (Current working assumption: memory_domain isolation suffices; use memory_domain="hsm".)
 8. Should braincase.search expose SQL mode directly, or keep SQL fully behind query_plan?

@@ -487,9 +487,9 @@ cross-domain isolation tests
 
 ## Next implementation prompt: BrainCase Slice F (harness/tool exposure)
 
-**Slices A through E (and C.1, D.1) are complete. Slice F may now start.**
+**Slices A through F (and C.1, D.1) are complete.**
 
-Read `docs/braincase-memory-tool-api.md` before starting Slice F.
+Read `docs/braincase-memory-tool-api.md` for full Slice F details.
 
 ```text
 Slice A:   COMPLETE — schemas + fixtures + 44 tests
@@ -499,19 +499,26 @@ Slice C.1: COMPLETE — rebuild_fts_index / FTS backfill (92 total)
 Slice D:   COMPLETE — qz_braincase_write.py helpers + write/update paths (1744 total)
 Slice D.1: COMPLETE — conflict marker detection tightened
 Slice E:   COMPLETE — qz_braincase_render.py + render_pack/braincase_render_packet + 53 tests (1819 total)
-Slice F:   NEXT — harness injection for memory tool-use policy
+Slice F:   COMPLETE — qz_braincase_tools.py + braincase.render tool surface + 64 tests (1906 total)
 ```
 
-Slice F scope:
-- Wire braincase_render_packet into the harness/prompt stack.
-- Expose braincase.render as the first model-visible tool.
-- Define recall semantics BEFORE exposing braincase.recall:
-    what tiers are searched, what budget applies, whether it returns
-    RenderPackets only, and how it differs from a vague memory dump.
+Slice F: what was done
+- New module: proxy/qz_braincase_tools.py
+- Feature flag: QZ_BRAINCASE_TOOLS_ENABLED (default: disabled)
+- Exposed tool: braincase.render only
+- Not exposed: braincase.recall, write, update, search, inspect
+- Harness policy: BRAINCASE_HARNESS_POLICY injected via normalize_responses_input_for_qwen
+- Tool definition: BRAINCASE_RENDER_TOOL_DEF injected into body["tools"] when enabled
+- Executor: braincase_render_tool(db, args) -> RenderPacket dict
+- Disabled DB returns warning packet; missing args return warning packets
+- No automatic ingestion. No forwarded body mutation when disabled.
+- Tests: tests/test_qz_braincase_tools.py — 64 tests, all passing
+
+Next slice should do one of:
+- Define recall semantics (tier routing, budget, RenderPacket output, what differs from dump)
   Do not expose recall as a broad unscoped dump — define semantics first.
-- Harness teaches when each tool should be called.
+- Define operator-reviewed write exposure via braincase.write
 - No automatic ingestion at any step.
-- visibility=renderable records become model-visible only through the render path.
 
 Full reference below for Slice C context:
 

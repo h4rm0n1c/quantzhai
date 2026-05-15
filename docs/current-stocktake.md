@@ -79,13 +79,15 @@ Agent rules:         AGENTS.md includes telemetry doctrine
 
 ### Notes on each
 
-**#2** — Storage substrate. Slices A–D (and C.1) are complete. #2
+**#2** — Storage substrate. Slices A–F (and C.1, D.1) are complete. #2
 remains the storage substrate only. Details:
 (schemas/fixtures; BrainCaseDB v3; search/inspect/FTS5; FTS reindex; explicit
 write/update helpers in qz_braincase_write.py; internal render packet builder
-in qz_braincase_render.py). Next work is Slice F (harness/tool exposure).
-Unlocks #51 and #46 after Slice F. See
-`docs/braincase-memory-tool-api.md`.
+in qz_braincase_render.py; braincase.render tool surface in qz_braincase_tools.py).
+Slice F done: braincase.render is the first model-visible tool
+(QZ_BRAINCASE_TOOLS_ENABLED, default disabled). Next slice: define recall semantics
+or operator-reviewed write exposure. Unlocks #51 and #46 when more slices land.
+See `docs/braincase-memory-tool-api.md`.
 
 **#51** — Recovery backoff state is currently in-memory only. Should be persisted
 once #2 exists. Do not implement before #2.
@@ -285,21 +287,15 @@ Slice C.1 COMPLETE: rebuild_fts_index / FTS backfill (92 total)
 Slice D   COMPLETE: qz_braincase_write.py helpers + write/update paths (1744 total)
 Slice D.1 COMPLETE: conflict marker detection tightened
 Slice E   COMPLETE: qz_braincase_render.py + render_pack/braincase_render_packet + 53 tests (1819 total)
+Slice F   COMPLETE: qz_braincase_tools.py + braincase.render tool surface + 64 tests (1906 total)
+            Feature flag: QZ_BRAINCASE_TOOLS_ENABLED (default: disabled)
+            braincase.render is the only exposed tool.
+            recall/write/update/search/inspect remain internal.
+            No automatic ingestion.
 
-Read first:
-- docs/braincase-memory-tool-api.md       (architecture; Slice F spec)
-- proxy/qz_braincase_render.py            (Slice E render builder — Slice F wires it)
-- proxy/qz_braincase_write.py             (write/update helpers)
-- proxy/qz_braincase_db.py               (storage layer)
-- AGENTS.md BrainCase Memory Tool Plane Doctrine
-
-Slice F goal: wire render into harness; expose minimal safe tool surface.
-- Add memory tool-use policy to harness/prompt stack.
-- Expose braincase.render as first LLM-visible tool.
-- Define braincase.recall semantics (tier routing, budget, RenderPacket output)
-  before exposing it — do not expose as a vague broad memory dump.
-- Teach LLM when to use each tool (search vs render vs write).
-- visibility=renderable records become model-visible only through render path.
+Next slice: define braincase.recall semantics (tier routing, budget, RenderPacket output)
+before exposing it — do not expose as a vague broad memory dump.
+Or: define operator-reviewed write exposure via braincase.write.
 - No automatic ingestion at any step.
 ```
 

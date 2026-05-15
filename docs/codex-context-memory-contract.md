@@ -643,11 +643,14 @@ goes beyond schema initialization.
 The memory architecture is tool-mediated, not DB-first. See
 `docs/braincase-memory-tool-api.md` for the full design.
 
-Slices A–E (and C.1, D.1) are complete: schemas/fixtures; BrainCaseDB schema v3;
+Slices A–F (and C.1, D.1) are complete: schemas/fixtures; BrainCaseDB schema v3;
 search/inspect/FTS5; FTS reindex; write/update helpers (qz_braincase_write.py);
 internal render packet builder (qz_braincase_render.py — render_pack,
-braincase_render_packet). Next step is Slice F (harness/tool exposure).
-Renders are internal until Slice F. No model-facing tools yet.
+braincase_render_packet); braincase.render tool surface (qz_braincase_tools.py).
+Slice F: braincase.render is the first model-visible tool.
+Feature flag: QZ_BRAINCASE_TOOLS_ENABLED (default: disabled).
+RenderPacket is the only model-visible memory output.
+recall/write/update/search/inspect remain unexposed until semantics are defined.
 No automatic ingestion at any slice.
 
 Slice 1 status:

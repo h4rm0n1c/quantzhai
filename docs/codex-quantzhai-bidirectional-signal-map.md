@@ -360,8 +360,14 @@ Captures are debug artifacts, not model memory.
 
 ## QuantZhai → future SQLite/LimbiCore signals
 
-Phase 1 SQLite stores operational facts only. Implementation is planned but not
-yet started. See `docs/codex-context-memory-contract.md` for schema direction.
+Phase 1 SQLite stores operational facts only. Slices A–F complete.
+See `docs/codex-context-memory-contract.md` and `docs/braincase-memory-tool-api.md`.
+
+Slice F (braincase.render tool surface) is the first model-visible BrainCase tool.
+Feature flag: QZ_BRAINCASE_TOOLS_ENABLED (default: disabled).
+When enabled: braincase.render tool definition injected into body["tools"];
+harness policy text added to turn harness. RenderPacket is the only model-visible
+memory output. recall/write/update/search/inspect remain unexposed.
 
 Planned storage:
 

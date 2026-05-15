@@ -5,10 +5,24 @@ try:
     from .qz_prompt_policy import assemble_instruction_stack, selected_turn_harnesses
     from .qz_proxy_tools import DEFAULT_TOOL_REGISTRY
     from .qz_tool_lifecycle import ToolHistoryReplayFilter
+    from .qz_braincase_tools import (
+        get_braincase_harness_policy,
+        inject_braincase_tools_to_body,
+    )
 except ImportError:
     from qz_prompt_policy import assemble_instruction_stack, selected_turn_harnesses
     from qz_proxy_tools import DEFAULT_TOOL_REGISTRY
     from qz_tool_lifecycle import ToolHistoryReplayFilter
+    try:
+        from qz_braincase_tools import (
+            get_braincase_harness_policy,
+            inject_braincase_tools_to_body,
+        )
+    except ImportError:
+        def get_braincase_harness_policy(env=None):  # type: ignore[misc]
+            return None
+        def inject_braincase_tools_to_body(body, *, env=None):  # type: ignore[misc]
+            return body
 
 
 CHECKPOINT_MARKER = "CONTEXT CHECKPOINT COMPACTION"
@@ -346,8 +360,15 @@ def normalize_responses_input_for_qwen(body: dict, selected_model: dict | None =
         body.pop("instructions", None)
 
     harness_blocks, turn_harness_report = selected_turn_harnesses(selected_model)
+
+    # Extend harness with BrainCase tool-use policy when QZ_BRAINCASE_TOOLS_ENABLED is set.
+    # No-op by default (flag disabled). Does not add automatic ingestion.
+    bc_policy = get_braincase_harness_policy()
+    if bc_policy:
+        harness_blocks = list(harness_blocks) + [bc_policy]
+
     _strip_turn_harnesses(clean_input, harness_blocks=harness_blocks)
-    if not turn_harness_report["available"]:
+    if not turn_harness_report["available"] and not bc_policy:
         turn_harness_report["applied"] = False
         turn_harness_report["skipped_reason"] = "not_configured"
     elif not harness_blocks:
@@ -367,6 +388,10 @@ def normalize_responses_input_for_qwen(body: dict, selected_model: dict | None =
     metadata["qz_prompt_policy"] = prompt_policy_report
     metadata["qz_turn_harness"] = turn_harness_report
     body["metadata"] = metadata
+
+    # Inject BrainCase tool definitions into body["tools"] when enabled.
+    # No-op by default (flag disabled). Does not change forwarded body when disabled.
+    inject_braincase_tools_to_body(body)
 
     body["input"] = clean_input
     return body

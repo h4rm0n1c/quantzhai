@@ -79,9 +79,14 @@ P4 config/var/script ownership cleanup
 Status:
 
 ```text
-Slices A–E (and C.1, D.1) complete. Next step: Slice F harness/tool exposure.
-  Slice E: qz_braincase_render.py — render_pack / braincase_render_packet.
-  Renders are internal; not wired to model tools until Slice F.
+Slices A–F (and C.1, D.1) complete.
+  Slice F: qz_braincase_tools.py — braincase.render tool surface.
+  Feature flag: QZ_BRAINCASE_TOOLS_ENABLED (default: disabled).
+  braincase.render is the first model-visible BrainCase tool.
+  RenderPacket is the only model-visible memory output.
+  recall/write/update/search/inspect remain unexposed.
+  No automatic ingestion.
+  Next: define recall semantics or operator-reviewed write exposure.
   See docs/braincase-memory-tool-api.md.
 ```
 
