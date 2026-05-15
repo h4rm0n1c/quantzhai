@@ -22,6 +22,8 @@ from proxy.qz_vram_snapshot import (
     _extract_context_from_slots,
     _extract_json_error_message,
     _kv_dtype_config,
+    _metadata_arch_prefix,
+    _metadata_first,
     _normalize_prometheus_metrics,
     _parse_compute_apps_csv,
     _parse_nvidia_smi_gpus,
@@ -1008,8 +1010,8 @@ class EstimateKvCacheBytesTests(unittest.TestCase):
         entry["metadata"].pop("llama.block_count")
         result = _estimate_kv_cache_bytes(entry, 131072, self._kv_dtype())
         self.assertIsNone(result["mib"])
-        self.assertIn("missing_keys", result)
-        self.assertIn("llama.block_count", result["missing_keys"])
+        self.assertIn("missing_logical_fields", result)
+        self.assertIn("block_count", result["missing_logical_fields"])
 
     def test_missing_head_count_returns_unknown(self):
         entry = self._entry()
@@ -1199,6 +1201,365 @@ class ProvenanceComponentsTests(unittest.TestCase):
         self.assertEqual(labels["kv_used"], "KV_USED")
         self.assertEqual(labels["scratch_buffer"], "SCRATCH")
         self.assertEqual(labels["other_residual"], "OTHER")
+
+
+# ---------------------------------------------------------------------------
+# 25. _metadata_arch_prefix
+# ---------------------------------------------------------------------------
+
+class MetadataArchPrefixTests(unittest.TestCase):
+    def test_returns_entry_architecture(self):
+        entry = {"architecture": "qwen3", "metadata": {}}
+        self.assertEqual(_metadata_arch_prefix(entry), "qwen3")
+
+    def test_falls_back_to_general_architecture_in_metadata(self):
+        entry = {"metadata": {"general.architecture": "qwen2"}}
+        self.assertEqual(_metadata_arch_prefix(entry), "qwen2")
+
+    def test_entry_architecture_wins_over_metadata(self):
+        entry = {"architecture": "qwen3", "metadata": {"general.architecture": "llama"}}
+        self.assertEqual(_metadata_arch_prefix(entry), "qwen3")
+
+    def test_skips_unknown_architecture(self):
+        entry = {"architecture": "unknown", "metadata": {"general.architecture": "qwen3"}}
+        self.assertEqual(_metadata_arch_prefix(entry), "qwen3")
+
+    def test_falls_back_to_llama_when_nothing(self):
+        self.assertEqual(_metadata_arch_prefix({}), "llama")
+        self.assertEqual(_metadata_arch_prefix(None), "llama")  # type: ignore
+
+    def test_strips_whitespace(self):
+        entry = {"architecture": " qwen3 "}
+        self.assertEqual(_metadata_arch_prefix(entry), "qwen3")
+
+
+# ---------------------------------------------------------------------------
+# 26. _metadata_first
+# ---------------------------------------------------------------------------
+
+class MetadataFirstTests(unittest.TestCase):
+    def test_arch_prefixed_wins(self):
+        meta = {"qwen3.block_count": 28, "llama.block_count": 32}
+        val, key = _metadata_first(meta, ["block_count"], arch="qwen3")
+        self.assertEqual(val, 28)
+        self.assertEqual(key, "qwen3.block_count")
+
+    def test_llama_fallback_when_arch_missing(self):
+        meta = {"llama.block_count": 32}
+        val, key = _metadata_first(meta, ["block_count"], arch="qwen3")
+        self.assertEqual(val, 32)
+        self.assertEqual(key, "llama.block_count")
+
+    def test_exact_name_fallback(self):
+        meta = {"block_count": 24}
+        val, key = _metadata_first(meta, ["block_count"], arch="qwen3")
+        self.assertEqual(val, 24)
+        self.assertEqual(key, "block_count")
+
+    def test_suffix_match_unambiguous(self):
+        meta = {"some.arch.block_count": 16}
+        val, key = _metadata_first(meta, ["block_count"], arch="qwen3")
+        self.assertEqual(val, 16)
+        self.assertEqual(key, "some.arch.block_count")
+
+    def test_suffix_match_ambiguous_returns_none(self):
+        meta = {"a.block_count": 10, "b.block_count": 20}
+        val, key = _metadata_first(meta, ["block_count"], arch="qwen3")
+        self.assertIsNone(val)
+        self.assertEqual(key, "")
+
+    def test_not_found_returns_none_empty(self):
+        meta = {"unrelated.key": 42}
+        val, key = _metadata_first(meta, ["block_count"], arch="qwen3")
+        self.assertIsNone(val)
+        self.assertEqual(key, "")
+
+    def test_empty_meta_returns_none(self):
+        val, key = _metadata_first({}, ["block_count"], arch="qwen3")
+        self.assertIsNone(val)
+
+    def test_llama_arch_deduplicates(self):
+        # When arch="llama", llama.block_count should still be found once
+        meta = {"llama.block_count": 40}
+        val, key = _metadata_first(meta, ["block_count"], arch="llama")
+        self.assertEqual(val, 40)
+        self.assertIn("llama.block_count", key)
+
+    def test_nested_attention_key(self):
+        meta = {"qwen3.attention.head_count_kv": 8}
+        val, key = _metadata_first(meta, ["attention.head_count_kv"], arch="qwen3")
+        self.assertEqual(val, 8)
+        self.assertEqual(key, "qwen3.attention.head_count_kv")
+
+
+# ---------------------------------------------------------------------------
+# 27. _estimate_kv_cache_bytes — architecture-aware
+# ---------------------------------------------------------------------------
+
+class EstimateKvCacheBytesArchTests(unittest.TestCase):
+    def _kv_dtype(self):
+        return {"key_type": "f16", "value_type": "f16", "key_bytes": 2.0, "value_bytes": 2.0}
+
+    def _qwen3_entry(self, **overrides):
+        meta = {
+            "general.architecture": "qwen3",
+            "qwen3.block_count": 28,
+            "qwen3.embedding_length": 4096,
+            "qwen3.attention.head_count": 32,
+            "qwen3.attention.head_count_kv": 8,
+            "qwen3.attention.key_length": 128,
+            "qwen3.attention.value_length": 128,
+        }
+        meta.update(overrides)
+        return {
+            "architecture": "qwen3",
+            "size_bytes": 20 * 1024 ** 3,
+            "metadata": meta,
+        }
+
+    def test_qwen3_metadata_produces_kv_alloc(self):
+        result = _estimate_kv_cache_bytes(self._qwen3_entry(), 262144, self._kv_dtype())
+        self.assertIsNotNone(result["mib"])
+        self.assertEqual(result["confidence"], "estimated-from-gguf-metadata")
+        self.assertFalse(result["backend_confirmed"])
+
+    def test_qwen3_formula_uses_qwen_prefixed_keys(self):
+        result = _estimate_kv_cache_bytes(self._qwen3_entry(), 262144, self._kv_dtype())
+        keys = result.get("formula", {}).get("keys", {})
+        self.assertIn("qwen3", keys.get("layers", ""))
+        self.assertIn("qwen3", keys.get("head_count_kv", ""))
+
+    def test_qwen3_value_matches_formula(self):
+        # 262144 tokens × 28 layers × (8 × 128 × 2 + 8 × 128 × 2) bytes
+        entry = self._qwen3_entry()
+        result = _estimate_kv_cache_bytes(entry, 262144, self._kv_dtype())
+        expected_bytes = 262144 * 28 * (8 * 128 * 2.0 + 8 * 128 * 2.0)
+        expected_mib = expected_bytes / (1024 ** 2)
+        self.assertAlmostEqual(result["mib"], round(expected_mib, 2), delta=1.0)
+
+    def test_architecture_from_entry_field(self):
+        # entry["architecture"] = "qwen3" → uses qwen3.* keys
+        entry = self._qwen3_entry()
+        result = _estimate_kv_cache_bytes(entry, 131072, self._kv_dtype())
+        self.assertEqual(result.get("architecture"), "qwen3")
+
+    def test_architecture_from_general_architecture_metadata(self):
+        # No entry["architecture"], but metadata has general.architecture
+        entry = self._qwen3_entry()
+        del entry["architecture"]
+        result = _estimate_kv_cache_bytes(entry, 131072, self._kv_dtype())
+        self.assertEqual(result.get("architecture"), "qwen3")
+        self.assertIsNotNone(result["mib"])
+
+    def test_llama_metadata_still_works(self):
+        entry = {
+            "architecture": "llama",
+            "metadata": {
+                "llama.block_count": 32,
+                "llama.embedding_length": 4096,
+                "llama.attention.head_count": 32,
+                "llama.attention.head_count_kv": 8,
+                "llama.attention.key_length": 128,
+                "llama.attention.value_length": 128,
+            },
+        }
+        result = _estimate_kv_cache_bytes(entry, 131072, self._kv_dtype())
+        self.assertIsNotNone(result["mib"])
+        self.assertEqual(result.get("architecture"), "llama")
+
+    def test_missing_metadata_includes_arch_and_sample(self):
+        # Remove block_count so estimate fails
+        entry = self._qwen3_entry()
+        del entry["metadata"]["qwen3.block_count"]
+        result = _estimate_kv_cache_bytes(entry, 131072, self._kv_dtype())
+        self.assertIsNone(result["mib"])
+        self.assertEqual(result.get("architecture"), "qwen3")
+        self.assertIn("block_count", result.get("missing_logical_fields", []))
+        self.assertIsInstance(result.get("available_metadata_keys_sample"), list)
+        self.assertGreater(len(result["available_metadata_keys_sample"]), 0)
+
+    def test_missing_metadata_note_mentions_arch(self):
+        entry = self._qwen3_entry()
+        del entry["metadata"]["qwen3.block_count"]
+        result = _estimate_kv_cache_bytes(entry, 131072, self._kv_dtype())
+        note = " ".join(result.get("notes", []))
+        self.assertIn("qwen3", note)
+
+    def test_derive_head_dim_from_qwen_embedding(self):
+        # Remove key/value lengths; should derive from embedding/head_count
+        entry = self._qwen3_entry()
+        del entry["metadata"]["qwen3.attention.key_length"]
+        del entry["metadata"]["qwen3.attention.value_length"]
+        result = _estimate_kv_cache_bytes(entry, 131072, self._kv_dtype())
+        self.assertIsNotNone(result["mib"])
+        self.assertTrue(any("derived" in n for n in result.get("notes", [])))
+
+    def test_formula_keys_recorded(self):
+        result = _estimate_kv_cache_bytes(self._qwen3_entry(), 131072, self._kv_dtype())
+        keys = result.get("formula", {}).get("keys", {})
+        for field in ("layers", "head_count", "head_count_kv"):
+            self.assertIn(field, keys)
+            self.assertIsInstance(keys[field], str)
+            self.assertTrue(keys[field])  # non-empty
+
+    def test_suffix_match_when_arch_unknown(self):
+        # Unknown arch, metadata has a single key matching the suffix
+        entry = {
+            "architecture": "unknown",
+            "metadata": {
+                "custom.block_count": 24,
+                "custom.embedding_length": 2048,
+                "custom.attention.head_count": 16,
+                "custom.attention.head_count_kv": 4,
+                "custom.attention.key_length": 128,
+                "custom.attention.value_length": 128,
+            },
+        }
+        result = _estimate_kv_cache_bytes(entry, 131072, self._kv_dtype())
+        # arch falls back to "llama", llama.* not found, tries suffix match
+        # For each field, "custom.X" is the only candidate → should succeed
+        self.assertIsNotNone(result["mib"])
+
+    def test_json_serialisable_qwen3(self):
+        result = _estimate_kv_cache_bytes(self._qwen3_entry(), 131072, self._kv_dtype())
+        json.dumps(result)
+
+    def test_json_serialisable_missing(self):
+        entry = self._qwen3_entry()
+        del entry["metadata"]["qwen3.block_count"]
+        result = _estimate_kv_cache_bytes(entry, 131072, self._kv_dtype())
+        json.dumps(result)
+
+
+# ---------------------------------------------------------------------------
+# 28. Full snapshot with qwen3 entry — KV_ALLOC non-null
+# ---------------------------------------------------------------------------
+
+class QwenSnapshotIntegrationTests(unittest.TestCase):
+    def _gpus(self):
+        return [{"index": "0", "name": "GPU", "util_pct": 50, "used_mib": 22000,
+                 "total_mib": 26000, "available_mib": 4000,
+                 "power_w": 200, "temp_c": 70, "pcie_gen": "4", "pcie_width": "16",
+                 "source": "nvidia-smi", "confidence": "host-observed"}]
+
+    def _ctx(self, limit=262144, used=None):
+        return {"limit_tokens": limit, "used_tokens": used, "used_pct": None,
+                "source": "backend-props", "confidence": "backend-confirmed"}
+
+    def _qwen3_entry(self):
+        return {
+            "architecture": "qwen3",
+            "size_bytes": 19 * 1024 ** 3,
+            "metadata": {
+                "general.architecture": "qwen3",
+                "qwen3.block_count": 36,
+                "qwen3.embedding_length": 4096,
+                "qwen3.attention.head_count": 32,
+                "qwen3.attention.head_count_kv": 8,
+                "qwen3.attention.key_length": 128,
+                "qwen3.attention.value_length": 128,
+            },
+        }
+
+    def _kv_dtype(self):
+        return {"key_type": "f16", "value_type": "f16", "key_bytes": 2.0, "value_bytes": 2.0}
+
+    def test_kv_alloc_non_null_for_qwen3(self):
+        snap = _assemble_snapshot(
+            self._gpus(), {}, {}, self._ctx(),
+            now=1.0,
+            catalog_entry=self._qwen3_entry(),
+            catalog_entry_source="model-router",
+            kv_dtype=self._kv_dtype(),
+        )
+        kv_alloc = next(c for c in snap["components"] if c["name"] == "kv_alloc")
+        self.assertIsNotNone(kv_alloc["mib"])
+        self.assertGreater(kv_alloc["mib"], 0)
+        self.assertEqual(kv_alloc["confidence"], "estimated-from-gguf-metadata")
+
+    def test_kv_alloc_formula_has_arch_prefixed_keys(self):
+        snap = _assemble_snapshot(
+            self._gpus(), {}, {}, self._ctx(),
+            now=1.0,
+            catalog_entry=self._qwen3_entry(),
+            catalog_entry_source="model-router",
+            kv_dtype=self._kv_dtype(),
+        )
+        kv_alloc = next(c for c in snap["components"] if c["name"] == "kv_alloc")
+        keys = kv_alloc.get("formula", {}).get("keys", {})
+        self.assertIn("qwen3", keys.get("layers", ""))
+
+    def test_kv_used_computed_when_context_known(self):
+        snap = _assemble_snapshot(
+            self._gpus(), {}, {}, self._ctx(limit=262144, used=5000),
+            now=1.0,
+            catalog_entry=self._qwen3_entry(),
+            catalog_entry_source="model-router",
+            kv_dtype=self._kv_dtype(),
+        )
+        kv_used = next(c for c in snap["components"] if c["name"] == "kv_used")
+        self.assertIsNotNone(kv_used["mib"])
+
+    def test_other_reduced_by_kv_alloc(self):
+        bp = {"process_used_mib": 22000.0, "notes": []}
+        snap_no_catalog = _assemble_snapshot(
+            self._gpus(), bp, {}, self._ctx(),
+            now=1.0, catalog_entry=None, catalog_entry_source="unknown", kv_dtype=None,
+        )
+        snap_with_qwen = _assemble_snapshot(
+            self._gpus(), bp, {}, self._ctx(),
+            now=1.0,
+            catalog_entry=self._qwen3_entry(),
+            catalog_entry_source="model-router",
+            kv_dtype=self._kv_dtype(),
+        )
+        other_no_cat  = next(c for c in snap_no_catalog["components"] if c["name"] == "other_residual")
+        other_with_q  = next(c for c in snap_with_qwen["components"] if c["name"] == "other_residual")
+        # With catalog, MODEL + KV_ALLOC are subtracted, so OTHER is smaller
+        if other_no_cat["mib"] is not None and other_with_q["mib"] is not None:
+            self.assertLess(other_with_q["mib"], other_no_cat["mib"])
+
+    def test_no_estimate_marked_backend_confirmed(self):
+        snap = _assemble_snapshot(
+            self._gpus(), {}, {}, self._ctx(),
+            now=1.0,
+            catalog_entry=self._qwen3_entry(),
+            catalog_entry_source="model-router",
+            kv_dtype=self._kv_dtype(),
+        )
+        for comp in snap["components"]:
+            if comp.get("estimated"):
+                self.assertFalse(
+                    comp.get("backend_confirmed"),
+                    f"Estimated component {comp['name']} should not be backend_confirmed",
+                )
+
+    def test_kv_alloc_comp_has_diagnostic_when_missing(self):
+        # Remove block_count to trigger failure path
+        entry = self._qwen3_entry()
+        del entry["metadata"]["qwen3.block_count"]
+        snap = _assemble_snapshot(
+            self._gpus(), {}, {}, self._ctx(),
+            now=1.0,
+            catalog_entry=entry,
+            catalog_entry_source="model-router",
+            kv_dtype=self._kv_dtype(),
+        )
+        kv_alloc = next(c for c in snap["components"] if c["name"] == "kv_alloc")
+        self.assertIsNone(kv_alloc["mib"])
+        self.assertEqual(kv_alloc.get("architecture"), "qwen3")
+        self.assertIn("block_count", kv_alloc.get("missing_logical_fields", []))
+        self.assertIsInstance(kv_alloc.get("available_metadata_keys_sample"), list)
+
+    def test_json_serialisable(self):
+        snap = _assemble_snapshot(
+            self._gpus(), {}, {}, self._ctx(used=1000),
+            now=1.0,
+            catalog_entry=self._qwen3_entry(),
+            catalog_entry_source="model-router",
+            kv_dtype=self._kv_dtype(),
+        )
+        json.dumps(snap)
 
 
 if __name__ == "__main__":

@@ -657,7 +657,7 @@ Other actions (restart_backend, refresh_catalog, clear_failure) remain synchrono
 | `tests/test_qz_control_plane.py` | Control-plane test coverage |
 | `tests/test_qz_responses_error.py` | Responses error test coverage |
 | `#2` | Phase 1 SQLite substrate (prerequisite for durable recovery tracking) |
-| `#6` | Backend VRAM telemetry — slices 1–4: service/recovery monitors, VRAM snapshot, process isolation, TurboQuant model-param probing; slice 5: live curses VRAM component panel (VRAM+COMP rows), BASE/DELTA removed; slice 6: provenance VRAM estimator (MODEL from catalog size_bytes, KV_ALLOC from GGUF metadata formula, KV_USED from context occupancy, OTHER residual from process_used minus MODEL minus KV_ALLOC) |
+| `#6` | Backend VRAM telemetry — slices 1–4: service/recovery monitors, VRAM snapshot, process isolation, TurboQuant model-param probing; slice 5: live curses VRAM component panel (VRAM+COMP rows), BASE/DELTA removed; slice 6: provenance VRAM estimator (MODEL from catalog size_bytes, KV_ALLOC from GGUF metadata formula, KV_USED from context occupancy, OTHER residual from process_used minus MODEL minus KV_ALLOC); slice 6 follow-up: architecture-aware KV metadata resolution — qwen3/qwen2/non-llama GGUF supported via {arch}.* prefix, llama.* fallback, unambiguous suffix match |
 | `#45` (done) | Remove local qz-codex catalog fallback — completed; proxy is sole path |
 | `#46` | Replace qz-write-runtime-state launcher trace |
 | `#47` | This issue — normalize backend service status and recovery semantics |

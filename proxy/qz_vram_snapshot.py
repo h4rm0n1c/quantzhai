@@ -831,10 +831,82 @@ def _kv_dtype_config(handler=None, entry=None) -> dict:
     }
 
 
+def _metadata_arch_prefix(entry: dict) -> str:
+    """Return architecture prefix for GGUF metadata key lookup. Never raises.
+
+    Prefers entry["architecture"] (already resolved by qz_model_catalog),
+    then metadata["general.architecture"], then falls back to "llama".
+    """
+    if isinstance(entry, dict):
+        arch = entry.get("architecture")
+        if isinstance(arch, str) and arch.strip() and arch.strip() != "unknown":
+            return arch.strip()
+        meta = entry.get("metadata") or {}
+        arch = meta.get("general.architecture")
+        if isinstance(arch, str) and arch.strip():
+            return arch.strip()
+    return "llama"
+
+
+def _metadata_first(meta: dict, names: list, arch: str = "") -> tuple:
+    """Search metadata for the first available key. Returns (value, key_used).
+
+    For each name in names, tries in order:
+    1. {arch}.{name}   — arch-prefixed (e.g. qwen3.block_count)
+    2. llama.{name}    — llama compatibility fallback
+    3. {name} exactly  — bare suffix
+
+    Then as last resort:
+    4. Suffix match: if exactly one metadata key ends with ".{name}", use it.
+       Ambiguous matches (>1 candidate) are silently skipped.
+
+    Returns (None, "") if no match found. Never raises.
+    """
+    tried: set = set()
+
+    def _get(key: str):
+        if key in tried:
+            return None, False
+        tried.add(key)
+        if key in meta:
+            val = meta[key]
+            if val is not None:
+                return val, True
+        return None, False
+
+    for name in names:
+        # 1. arch-prefixed
+        if arch and not name.startswith(f"{arch}."):
+            val, found = _get(f"{arch}.{name}")
+            if found:
+                return val, f"{arch}.{name}"
+        # 2. llama fallback
+        if not name.startswith("llama."):
+            val, found = _get(f"llama.{name}")
+            if found:
+                return val, f"llama.{name}"
+        # 3. exact name
+        val, found = _get(name)
+        if found:
+            return val, name
+
+    # 4. Suffix match — last resort, unambiguous only
+    for name in names:
+        dot_suffix = f".{name}"
+        candidates = [k for k in meta if k.endswith(dot_suffix) and k not in tried]
+        if len(candidates) == 1 and meta[candidates[0]] is not None:
+            return meta[candidates[0]], candidates[0]
+
+    return None, ""
+
+
 def _estimate_kv_cache_bytes(
     entry: dict, context_limit_tokens: int | None, kv_dtype: dict
 ) -> dict:
     """Estimate full-context KV cache allocation from GGUF metadata. Never raises.
+
+    Architecture-aware: resolves metadata keys by {arch}.*, llama.*, bare suffix,
+    then unambiguous suffix match. Works for qwen3, qwen2, llama, and other archs.
 
     Formula per token per layer:
       head_count_kv * key_length * key_bytes + head_count_kv * value_length * value_bytes
@@ -851,44 +923,73 @@ def _estimate_kv_cache_bytes(
         return {**_unknown, "notes": ["No catalog entry available."]}
 
     meta = entry.get("metadata") or {}
+    arch = _metadata_arch_prefix(entry)
     notes: list = []
 
-    layers   = meta.get("llama.block_count")
-    emb_len  = meta.get("llama.embedding_length")
-    head_cnt = meta.get("llama.attention.head_count")
-    head_kv  = meta.get("llama.attention.head_count_kv") or head_cnt
-    key_len  = meta.get("llama.attention.key_length")
-    val_len  = meta.get("llama.attention.value_length")
+    layers,   layers_key   = _metadata_first(meta, ["block_count"], arch)
+    emb_len,  emb_len_key  = _metadata_first(meta, ["embedding_length"], arch)
+    head_cnt, head_cnt_key = _metadata_first(meta, ["attention.head_count"], arch)
+    head_kv,  head_kv_key  = _metadata_first(meta, ["attention.head_count_kv"], arch)
+    key_len,  key_len_key  = _metadata_first(meta, ["attention.key_length"], arch)
+    val_len,  val_len_key  = _metadata_first(meta, ["attention.value_length"], arch)
 
-    missing: list = []
+    # head_count_kv falls back to head_count (GQA models where kv=full heads)
+    if head_kv is None and head_cnt is not None:
+        head_kv     = head_cnt
+        head_kv_key = (head_cnt_key or "head_count") + " (fallback: head_count)"
+
+    # Check required fields
+    missing_logical: list = []
     if layers is None:
-        missing.append("llama.block_count")
+        missing_logical.append("block_count")
     if head_cnt is None:
-        missing.append("llama.attention.head_count")
-    if missing:
-        return {**_unknown, "missing_keys": missing,
-                "notes": [f"KV estimate unavailable: missing GGUF metadata {missing}"]}
+        missing_logical.append("attention.head_count")
+    if missing_logical:
+        sample_keys = sorted(meta.keys())[:12]
+        return {
+            **_unknown,
+            "architecture":                   arch,
+            "missing_logical_fields":         missing_logical,
+            "available_metadata_keys_sample": sample_keys,
+            "notes": [
+                f"KV estimate unavailable for arch={arch}: "
+                f"missing {missing_logical}. "
+                f"Available keys (sample): {sample_keys}"
+            ],
+        }
 
-    # Derive per-head dimension if key/value lengths are absent
+    # Derive per-head dimension if key/value lengths absent
     if key_len is None or val_len is None:
         if emb_len is not None and head_cnt:
             head_dim = emb_len / head_cnt
             if key_len is None:
-                key_len = head_dim
+                key_len    = head_dim
+                key_len_key = (emb_len_key or "embedding_length") + "/head_count"
                 notes.append(f"key_length derived from embedding_length/head_count ({head_dim:.0f})")
             if val_len is None:
-                val_len = head_dim
+                val_len    = head_dim
+                val_len_key = (emb_len_key or "embedding_length") + "/head_count"
                 notes.append(f"value_length derived from embedding_length/head_count ({head_dim:.0f})")
         else:
             deriv_missing: list = []
             if key_len is None:
-                deriv_missing.append("llama.attention.key_length")
+                deriv_missing.append("attention.key_length")
             if val_len is None:
-                deriv_missing.append("llama.attention.value_length")
+                deriv_missing.append("attention.value_length")
             if emb_len is None:
-                deriv_missing.append("llama.embedding_length")
-            return {**_unknown, "missing_keys": deriv_missing,
-                    "notes": [f"KV estimate unavailable: cannot derive head_dim; missing {deriv_missing}"]}
+                deriv_missing.append("embedding_length")
+            sample_keys = sorted(meta.keys())[:12]
+            return {
+                **_unknown,
+                "architecture":                   arch,
+                "missing_logical_fields":         deriv_missing,
+                "available_metadata_keys_sample": sample_keys,
+                "notes": [
+                    f"KV estimate unavailable for arch={arch}: "
+                    f"cannot derive head_dim; missing {deriv_missing}. "
+                    f"Available keys (sample): {sample_keys}"
+                ],
+            }
 
     if not context_limit_tokens or context_limit_tokens <= 0:
         return {**_unknown, "notes": ["KV estimate unavailable: context_limit_tokens unknown."]}
@@ -909,12 +1010,13 @@ def _estimate_kv_cache_bytes(
     ])
 
     return {
-        "mib":              round(kv_alloc_mib, 2),
-        "bytes":            kv_alloc_bytes,
-        "source":           "gguf-metadata-formula",
-        "confidence":       "estimated-from-gguf-metadata",
-        "estimated":        True,
+        "mib":               round(kv_alloc_mib, 2),
+        "bytes":             kv_alloc_bytes,
+        "source":            "gguf-metadata-formula",
+        "confidence":        "estimated-from-gguf-metadata",
+        "estimated":         True,
         "backend_confirmed": False,
+        "architecture":      arch,
         "formula": {
             "layers":               layers,
             "head_count":           head_cnt,
@@ -924,6 +1026,14 @@ def _estimate_kv_cache_bytes(
             "key_bytes":            key_bytes,
             "value_bytes":          value_bytes,
             "context_limit_tokens": context_limit_tokens,
+            "keys": {
+                "layers":       layers_key,
+                "head_count":   head_cnt_key,
+                "head_count_kv": head_kv_key,
+                "key_length":   key_len_key,
+                "value_length": val_len_key,
+                **({"embedding_length": emb_len_key} if emb_len_key else {}),
+            },
         },
         "notes": notes,
     }
@@ -1021,6 +1131,7 @@ def _assemble_snapshot(
             kv_alloc_estimated         = False
             kv_alloc_backend_confirmed = True
 
+    kv_est: dict = {}
     if kv_alloc_mib is None:
         kv_est = _estimate_kv_cache_bytes(catalog_entry, context.get("limit_tokens"), kv_dtype)
         if kv_est.get("mib") is not None:
@@ -1040,6 +1151,16 @@ def _assemble_snapshot(
     }
     if kv_alloc_formula:
         kv_alloc_comp["formula"] = kv_alloc_formula
+    # Propagate diagnostics when KV_ALLOC estimation failed
+    if kv_alloc_mib is None and kv_est:
+        if kv_est.get("architecture"):
+            kv_alloc_comp["architecture"] = kv_est["architecture"]
+        if kv_est.get("missing_logical_fields"):
+            kv_alloc_comp["missing_logical_fields"] = kv_est["missing_logical_fields"]
+        if kv_est.get("available_metadata_keys_sample"):
+            kv_alloc_comp["available_metadata_keys_sample"] = kv_est["available_metadata_keys_sample"]
+        if kv_est.get("notes"):
+            kv_alloc_comp["notes"] = kv_est["notes"]
 
     # ------------------------------------------------------------------
     # KV_USED — estimated active context occupancy (within KV_ALLOC)

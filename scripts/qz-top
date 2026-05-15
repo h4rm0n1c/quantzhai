@@ -1703,6 +1703,15 @@ def once():
             elif comp.get("estimated") and comp.get("mib") is not None:
                 est_marker = "~"
             print(f"  {label:<10} {mib_s+est_marker:<14} conf={conf}  src={src_s}{extra}")
+            # Diagnostics for unknown KV_ALLOC
+            if comp.get("name") == "kv_alloc" and comp.get("mib") is None:
+                if comp.get("architecture") or comp.get("missing_logical_fields"):
+                    arch_s   = comp.get("architecture", "?")
+                    missing  = comp.get("missing_logical_fields", [])
+                    sample   = comp.get("available_metadata_keys_sample", [])[:6]
+                    print(f"    arch={arch_s}  missing={missing}  meta_keys(sample)={sample}")
+                for note in (comp.get("notes") or [])[:1]:
+                    print(f"    note: {note[:140]}")
         # Backend metrics discovery
         bm = vs.get("backend_metrics") or {}
         if bm:
