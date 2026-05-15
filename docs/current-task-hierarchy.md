@@ -257,6 +257,15 @@ tests/test_qz_braincase_db.py — BrainCaseDBSliceCTests: 36 new tests (80 total
 All 1681 tests passing.
 ```
 
+Slice C.1 acceptance (COMPLETE):
+
+```text
+proxy/qz_braincase_db.py — rebuild_fts_index, _sync_fts_for_record, _maybe_backfill_fts_index
+  init() auto-backfills FTS when state_records has rows and FTS is empty
+tests/test_qz_braincase_db.py — BrainCaseDBSliceC1Tests: 12 new tests (92 total)
+All 1693 tests passing.
+```
+
 Blocked by for Slice D:
 
 ```text

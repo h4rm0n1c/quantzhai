@@ -1211,5 +1211,295 @@ class BrainCaseDBSliceCTests(unittest.TestCase):
             db.close()
 
 
+# ---------------------------------------------------------------------------
+# Slice C.1 tests: FTS reindex / backfill
+# ---------------------------------------------------------------------------
+
+class BrainCaseDBSliceC1Tests(unittest.TestCase):
+    """Tests for rebuild_fts_index, _maybe_backfill_fts_index, and _sync_fts_for_record."""
+
+    def _fresh_db(self, td: str) -> BrainCaseDB:
+        db = BrainCaseDB(path=Path(td) / "state.sqlite3", enabled=True)
+        self.assertTrue(db.init())
+        return db
+
+    def _populated_db(self, td: str) -> BrainCaseDB:
+        db = self._fresh_db(td)
+        for ref in _load_source_refs():
+            db.put_source_ref(ref)
+        for rec in _load_state_records():
+            db.put_state_record(rec)
+        return db
+
+    def _clear_fts(self, td: str) -> None:
+        """Directly clear the FTS table via a raw connection."""
+        conn = sqlite3.connect(Path(td) / "state.sqlite3")
+        try:
+            conn.execute("DELETE FROM qz_braincase_state_records_fts")
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _fts_row_count(self, td: str) -> int:
+        conn = sqlite3.connect(Path(td) / "state.sqlite3")
+        try:
+            return conn.execute(
+                "SELECT COUNT(*) FROM qz_braincase_state_records_fts"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+
+    # --- 1. rebuild_fts_index returns False when DB disabled ---
+
+    def test_rebuild_fts_returns_false_when_disabled(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = BrainCaseDB(path=Path(td) / "state.sqlite3", enabled=False)
+            self.assertFalse(db.rebuild_fts_index())
+
+    # --- 2. rebuild_fts_index returns False when FTS unavailable ---
+
+    def test_rebuild_fts_returns_false_when_fts_unavailable(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            # Simulate FTS unavailable (e.g. SQLite build without FTS5)
+            db._fts_available = False
+            self.assertFalse(db.rebuild_fts_index())
+            db.close()
+
+    # --- 3. rebuild_fts_index populates FTS for existing records ---
+
+    def test_rebuild_fts_populates_for_existing_records(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            if not db.fts_available:
+                self.skipTest("FTS5 not available in this SQLite build")
+
+            # Clear FTS table
+            self._clear_fts(td)
+            self.assertEqual(self._fts_row_count(td), 0)
+
+            # Rebuild
+            self.assertTrue(db.rebuild_fts_index())
+
+            # FTS should now have rows
+            self.assertGreater(self._fts_row_count(td), 0)
+
+            # FTS search should find records
+            results = db.search_state_records("automatically ingest", mode="fts")
+            ids = [r["record_id"] for r in results]
+            self.assertIn("rec_bc_001", ids)
+            db.close()
+
+    # --- 4. rebuild_fts_index is idempotent ---
+
+    def test_rebuild_fts_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            if not db.fts_available:
+                self.skipTest("FTS5 not available in this SQLite build")
+
+            records = _load_state_records()
+            self.assertTrue(db.rebuild_fts_index())
+            count_after_first = self._fts_row_count(td)
+
+            self.assertTrue(db.rebuild_fts_index())
+            count_after_second = self._fts_row_count(td)
+
+            self.assertEqual(count_after_first, count_after_second)
+            self.assertEqual(count_after_first, len(records))
+            db.close()
+
+    # --- 5. init backfills FTS when state_records has rows and FTS is empty ---
+
+    def test_init_backfills_when_records_exist_and_fts_empty(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            if not db.fts_available:
+                self.skipTest("FTS5 not available in this SQLite build")
+            records = _load_state_records()
+            db.close()
+
+            # Clear the FTS table directly (simulates pre-FTS DB state)
+            self._clear_fts(td)
+            self.assertEqual(self._fts_row_count(td), 0)
+
+            # Re-open: init() should detect empty FTS with existing records and backfill
+            db2 = BrainCaseDB(path=Path(td) / "state.sqlite3", enabled=True)
+            self.assertTrue(db2.init())
+            self.assertTrue(db2.fts_available)
+
+            # FTS should now be populated
+            self.assertEqual(self._fts_row_count(td), len(records))
+
+            # FTS search works after init backfill (without any put_state_record calls)
+            results = db2.search_state_records("gatekeeper", mode="fts")
+            ids = [r["record_id"] for r in results]
+            self.assertIn("rec_bc_005", ids)
+            db2.close()
+
+    # --- 6. put_state_record uses shared FTS sync helper ---
+
+    def test_put_state_record_uses_sync_helper_correctly(self):
+        """put_state_record should result in an FTS-searchable record."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            if not db.fts_available:
+                self.skipTest("FTS5 not available in this SQLite build")
+
+            records = _load_state_records()
+            rec = records[0]
+            self.assertTrue(db.put_state_record(rec))
+
+            # FTS table should have exactly one row
+            self.assertEqual(self._fts_row_count(td), 1)
+
+            # Should be findable via FTS
+            results = db.search_state_records(rec["claim"][:20], mode="fts")
+            self.assertTrue(any(r["record_id"] == rec["record_id"] for r in results))
+            db.close()
+
+    # --- 7. FTS search finds records after backfill without rewriting records ---
+
+    def test_fts_search_finds_records_after_backfill_without_rewrite(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            if not db.fts_available:
+                self.skipTest("FTS5 not available in this SQLite build")
+
+            # Clear FTS and rebuild without touching state_records
+            self._clear_fts(td)
+            self.assertTrue(db.rebuild_fts_index())
+
+            # FTS search finds records that were already stored
+            results = db.search_state_records("architecture correction", mode="fts")
+            ids = [r["record_id"] for r in results]
+            self.assertIn("rec_bc_005", ids)
+
+            # State records are unchanged
+            rec = db.get_state_record("rec_bc_005")
+            self.assertIsNotNone(rec)
+            self.assertEqual(rec["tier"], "episodic_memory")
+            db.close()
+
+    # --- 8. exact fallback still works if FTS unavailable ---
+
+    def test_exact_fallback_works_when_fts_disabled(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            # Disable FTS to force exact fallback
+            db._fts_available = False
+
+            results = db.search_state_records("automatically ingest", mode="auto")
+            ids = [r["record_id"] for r in results]
+            self.assertIn("rec_bc_001", ids)
+
+            # query_plan should route to exact when fts_available is False
+            plan = db.query_plan("normal text query")
+            self.assertEqual(plan["mode"], "exact")
+            db.close()
+
+    # --- 9. rebuild does not change memory_domain / tier / record fields ---
+
+    def test_rebuild_does_not_change_record_fields(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            if not db.fts_available:
+                self.skipTest("FTS5 not available in this SQLite build")
+
+            # Capture state of all records before rebuild
+            before = {r["record_id"]: r for r in db.list_state_records(limit=100)}
+
+            self._clear_fts(td)
+            db.rebuild_fts_index()
+
+            # Records must be identical after rebuild
+            after = {r["record_id"]: r for r in db.list_state_records(limit=100)}
+            self.assertEqual(set(before.keys()), set(after.keys()))
+            for rid, rec_before in before.items():
+                rec_after = after[rid]
+                self.assertEqual(rec_before["memory_domain"], rec_after["memory_domain"])
+                self.assertEqual(rec_before["tier"], rec_after["tier"])
+                self.assertEqual(rec_before["claim"], rec_after["claim"])
+                self.assertEqual(rec_before["status"], rec_after["status"])
+            db.close()
+
+    # --- 10. rebuild does not create new StateRecords ---
+
+    def test_rebuild_does_not_create_new_state_records(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            if not db.fts_available:
+                self.skipTest("FTS5 not available in this SQLite build")
+
+            records_before = db.list_state_records(limit=100)
+            count_before = len(records_before)
+
+            self._clear_fts(td)
+            db.rebuild_fts_index()
+
+            records_after = db.list_state_records(limit=100)
+            count_after = len(records_after)
+
+            self.assertEqual(count_before, count_after)
+            ids_before = {r["record_id"] for r in records_before}
+            ids_after = {r["record_id"] for r in records_after}
+            self.assertEqual(ids_before, ids_after)
+            db.close()
+
+    # --- 11. no automatic ingestion behaviour in rebuild ---
+
+    def test_rebuild_only_indexes_stored_records_not_new_ones(self):
+        """rebuild_fts_index must not ingest new records or create records."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._fresh_db(td)
+            if not db.fts_available:
+                self.skipTest("FTS5 not available in this SQLite build")
+
+            # Empty DB: rebuild on empty state_records
+            self.assertTrue(db.rebuild_fts_index())
+            self.assertEqual(self._fts_row_count(td), 0)  # Nothing to index
+            self.assertEqual(len(db.list_state_records()), 0)  # No records created
+
+            # Now add one record and rebuild
+            records = _load_state_records()
+            db.put_state_record(records[0])
+            self._clear_fts(td)
+            db.rebuild_fts_index()
+
+            self.assertEqual(self._fts_row_count(td), 1)  # Only the stored record
+            self.assertEqual(len(db.list_state_records()), 1)  # Still just one record
+            db.close()
+
+    # --- Confirm _sync_fts_for_record is the shared helper ---
+
+    def test_sync_fts_helper_updates_fts_entry(self):
+        """_sync_fts_for_record should replace an existing FTS entry correctly."""
+        with tempfile.TemporaryDirectory() as td:
+            db = self._populated_db(td)
+            if not db.fts_available:
+                self.skipTest("FTS5 not available in this SQLite build")
+
+            # Verify initial FTS entry exists for rec_bc_001
+            results = db.search_state_records("automatically ingest", mode="fts")
+            self.assertTrue(any(r["record_id"] == "rec_bc_001" for r in results))
+
+            # Update FTS entry via the helper (as put_state_record would do)
+            db._sync_fts_for_record(
+                "rec_bc_001",
+                "Completely different claim for testing sync helper.",
+                "Different summary.",
+                "braincase testing sync",
+            )
+
+            # Old phrase no longer found via FTS
+            results_old = db.search_state_records("automatically ingest", mode="fts")
+            self.assertFalse(any(r["record_id"] == "rec_bc_001" for r in results_old))
+
+            # New phrase found via FTS
+            results_new = db.search_state_records("Completely different claim", mode="fts")
+            self.assertTrue(any(r["record_id"] == "rec_bc_001" for r in results_new))
+            db.close()
+
+
 if __name__ == "__main__":
     unittest.main()

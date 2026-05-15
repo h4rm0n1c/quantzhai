@@ -5,8 +5,10 @@ BrainCaseDB is the low-level storage case — not a policy layer.
 
 Slice 1: DB availability and schema metadata plumbing.
 Slice 2: Explicit StateRecord and SourceRef storage for Slice A fixture-shaped records.
-Slice 3: Internal search (exact/fts/tag) and inspect helpers over stored records.
-         No model-facing tools. No automatic ingestion. No runtime integration.
+Slice 3:   Internal search (exact/fts/tag) and inspect helpers over stored records.
+           No model-facing tools. No automatic ingestion. No runtime integration.
+Slice 3.1: FTS reindex/backfill helper (rebuild_fts_index).
+           Indexes already-stored StateRecords only. No automatic ingestion.
 
 Hard rules:
 - BrainCaseDB does not auto-ingest observed runtime/request data.
@@ -112,6 +114,9 @@ class BrainCaseDB:
             self._initialize_schema()
             self.available = True
             self.last_error = None
+            # Slice C.1: backfill FTS if state_records has rows and FTS index is empty.
+            if self._fts_available:
+                self._maybe_backfill_fts_index()
             return True
         except Exception as exc:
             self.available = False
@@ -302,15 +307,7 @@ class BrainCaseDB:
             if self._fts_available:
                 try:
                     tags_text = " ".join(str(t) for t in tags)
-                    self._conn.execute(
-                        "DELETE FROM qz_braincase_state_records_fts WHERE record_id = ?",
-                        (record_id,),
-                    )
-                    self._conn.execute(
-                        "INSERT INTO qz_braincase_state_records_fts(record_id, claim, summary, tags) VALUES (?, ?, ?, ?)",
-                        (record_id, record["claim"], record["summary"], tags_text),
-                    )
-                    self._conn.commit()
+                    self._sync_fts_for_record(record_id, record["claim"], record["summary"], tags_text)
                 except Exception:
                     self._fts_available = False
             return True
@@ -620,8 +617,95 @@ class BrainCaseDB:
             return []
 
     # ------------------------------------------------------------------
+    # Slice C.1: FTS reindex / backfill
+    # ------------------------------------------------------------------
+
+    def rebuild_fts_index(self) -> bool:
+        """Rebuild the FTS index from all stored StateRecords.
+
+        Clears qz_braincase_state_records_fts and repopulates it from
+        qz_braincase_state_records. Only indexes already-stored records —
+        this is not automatic ingestion and does not create new records.
+
+        Returns False on disabled DB, unavailable DB, FTS5 unavailable, or error.
+        Idempotent: safe to call multiple times.
+        """
+        if not self.enabled:
+            return False
+        if not self._fts_available:
+            return False
+        if self._conn is None or not self.available:
+            if self._conn is None and not self.init():
+                return False
+        try:
+            assert self._conn is not None
+            rows = self._conn.execute(
+                "SELECT record_id, claim, summary, tags_json FROM qz_braincase_state_records"
+            ).fetchall()
+            self._conn.execute("DELETE FROM qz_braincase_state_records_fts")
+            if rows:
+                self._conn.executemany(
+                    "INSERT INTO qz_braincase_state_records_fts(record_id, claim, summary, tags) VALUES (?, ?, ?, ?)",
+                    [
+                        (
+                            row["record_id"],
+                            row["claim"],
+                            row["summary"],
+                            " ".join(json.loads(row["tags_json"])) if row["tags_json"] else "",
+                        )
+                        for row in rows
+                    ],
+                )
+            self._conn.commit()
+            self.last_error = None
+            return True
+        except Exception as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            return False
+
+    # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _sync_fts_for_record(
+        self, record_id: str, claim: str, summary: str, tags_text: str
+    ) -> None:
+        """Insert or replace one record's entry in the FTS index.
+
+        Does not catch exceptions — caller is responsible for error handling.
+        Does not check FTS availability — caller must guard with self._fts_available.
+        """
+        assert self._conn is not None
+        self._conn.execute(
+            "DELETE FROM qz_braincase_state_records_fts WHERE record_id = ?",
+            (record_id,),
+        )
+        self._conn.execute(
+            "INSERT INTO qz_braincase_state_records_fts(record_id, claim, summary, tags) VALUES (?, ?, ?, ?)",
+            (record_id, claim, summary, tags_text),
+        )
+        self._conn.commit()
+
+    def _maybe_backfill_fts_index(self) -> None:
+        """Auto-backfill FTS if state_records has rows but FTS index is empty.
+
+        Called from init() after FTS is confirmed available. Best-effort: failures
+        are silently swallowed so they cannot break init(). This is not ingestion —
+        it indexes already-stored StateRecords only.
+        """
+        if not self._fts_available or self._conn is None:
+            return
+        try:
+            state_count = self._conn.execute(
+                "SELECT COUNT(*) FROM qz_braincase_state_records"
+            ).fetchone()[0]
+            fts_count = self._conn.execute(
+                "SELECT COUNT(*) FROM qz_braincase_state_records_fts"
+            ).fetchone()[0]
+            if state_count > 0 and fts_count == 0:
+                self.rebuild_fts_index()
+        except Exception:
+            pass
 
     def _initialize_schema(self) -> None:
         assert self._conn is not None

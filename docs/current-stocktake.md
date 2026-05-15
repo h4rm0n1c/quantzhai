@@ -81,8 +81,8 @@ Agent rules:         AGENTS.md includes telemetry doctrine
 
 **#2** — Storage substrate. Slices A and B are complete (Slice A: schemas/fixtures;
 Slice B: BrainCaseDB schema v2 + put/get/list/retire/supersede methods). #2
-remains the storage substrate only. Slices A, B, and C complete
-(schemas/fixtures; BrainCaseDB schema v3; search/inspect helpers with FTS5).
+remains the storage substrate only. Slices A, B, C, and C.1 complete
+(schemas/fixtures; BrainCaseDB schema v3; search/inspect/FTS5; FTS reindex).
 Next work is Slice D (explicit write/update tool path). Unlocks #51 and #46
 once the explicit write API exists. See `docs/braincase-memory-tool-api.md`.
 

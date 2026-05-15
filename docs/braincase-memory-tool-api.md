@@ -599,6 +599,30 @@ Full suite: 1681 tests passing
 Not added: model-facing tools, HTTP routes, RenderPackets, automatic ingestion.
 ```
 
+### Slice C.1: FTS reindex/backfill — COMPLETE
+
+```text
+Added to proxy/qz_braincase_db.py:
+  rebuild_fts_index() -> bool
+    Clears and repopulates qz_braincase_state_records_fts from stored records.
+    Indexes already-stored StateRecords only. Not automatic ingestion.
+    Returns False if disabled, FTS unavailable, or error.
+    Idempotent. Catches exceptions, sets last_error on failure.
+
+  _sync_fts_for_record(record_id, claim, summary, tags_text) -> None
+    Shared helper used by put_state_record and rebuild_fts_index.
+
+  _maybe_backfill_fts_index() -> None
+    Called from init() after FTS is confirmed available.
+    Auto-backfills if state_records has rows and FTS index is empty.
+    Best-effort: failures are swallowed to preserve init() reliability.
+
+  init() updated: calls _maybe_backfill_fts_index() after FTS is available.
+
+Tests: BrainCaseDBSliceC1Tests — 12 new tests (92 total in file), all passing
+Full suite: 1693 tests passing
+```
+
 ### Slice D: braincase.write and update
 
 After Slice C search works:
