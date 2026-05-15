@@ -629,11 +629,12 @@ Other actions (restart_backend, refresh_catalog, clear_failure) remain synchrono
    from "wait and retry".
 
 3. **How should VRAM allocation confidence be expressed in the service status?**
-   Slice 6 of #6 adds provenance-labelled estimates: MODEL from catalog size_bytes
-   (estimated-from-gguf-size), KV_ALLOC from GGUF metadata formula
-   (estimated-from-gguf-metadata), KV_USED from context occupancy
-   (estimated-runtime-occupancy). No estimate is marked backend-confirmed.
-   Exact allocation still requires backend-side byte allocator metrics.
+   #6 now follows `docs/patterns/provenance-telemetry.md`. VRAM telemetry is
+   operationally useful but is not exact allocator introspection. The live
+   split is MODEL_RUNTIME (calibrated) / MODEL_FILE (provenance) / KV_ALLOC
+   (runtime budget) / OTHER (residual). Remaining work is backend metric
+   exposure from TurboQuant to replace calibration with `backend-confirmed`
+   values. See `docs/runtime-observability-notes.md` for current semantics.
 
 4. **Should `/qz/status` be deprecated in favour of `/qz/control-plane`?** Currently
    both exist. `/qz/status` is richer for internal/proxy use; `/qz/control-plane` is

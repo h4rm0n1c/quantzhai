@@ -165,45 +165,90 @@ to avoid false failures from SSE timing events crowding out `tool_sandbox_denied
   low-water `BASE` and live `DELTA`. `DELTA` is useful for cache/buffer pressure
   testing, but it is an approximation until the backend reports exact model,
   KV-cache, and scratch-buffer allocations.
-- #6 slice 6 (done): `proxy/qz_vram_snapshot.py` now adds provenance-labelled
-  component estimates: MODEL from catalog `size_bytes` (confidence
-  `estimated-from-gguf-size`), KV_ALLOC from GGUF metadata formula
-  (confidence `estimated-from-gguf-metadata`), KV_USED from KV_ALLOC ×
-  context occupancy ratio (confidence `estimated-runtime-occupancy`), SCRATCH
-  remains unknown, OTHER/residual = `backend_process_used_mib` - MODEL -
-  KV_ALLOC (clamped at 0 if negative). An `estimates` block at the snapshot
-  top level records schema, model entry source, KV dtype, and known allocated
-  MiB. qz-top COMP line adds `~` (estimated) / `✓` (backend-confirmed) / `?`
-  (unknown) markers. No estimate is marked backend-confirmed.
-- #6 slice 6 follow-up 2 (done): KV_ALLOC source priority updated: (1) backend
-  metric kv_cache_size_bytes (backend-confirmed), (2) QZ_CACHE_RAM or
-  --cache-ram launch arg (estimated-from-runtime-cache-budget), (3) GGUF
-  metadata formula (estimated-from-gguf-metadata), (4) unknown. When the
-  runtime budget wins, the formula result is stored as alternate_estimates for
-  comparison. A quant registry replaces the old 4-entry _KV_DTYPE_BYTES table;
-  covers f32/f16/bf16, q4_0/q4_1/q5_0/q5_1/q8_0/q8_1, k-quants (q2_k through
-  q6_k), IQ quants (iq1_s through iq4_xs), tq1_0/tq2_0, and turbo2/turbo3/turbo4
-  using effective bytes/element from struct assertions in ggml-common.h. Unknown
-  quants are NOT silently replaced with f16 — formula is disabled and
-  formula_safe=False is set. Consistency diagnostics (overallocated/plausible/
-  unknown) added to the estimates block. qz-top --once shows CACHE_BDG, KV_DTYPE
-  with bit widths, and CONSIST status. Live COMP line shows OVER=X.XGiB if
-  estimated MODEL + KV_ALLOC exceeds measured process VRAM.
-- #6 slice 6 follow-up 3 (done): MODEL_RUNTIME calibrated from measured backend
-  process VRAM minus KV_ALLOC when both are known. Priority: (1) backend metric
-  model_size_bytes (backend-confirmed), (2) process_used - kv_alloc (calibrated-
-  from-host-observed-baseline when idle, calibrated-from-host-observed-runtime
-  when context tokens active), (3) catalog.size_bytes fallback. MODEL_FILE
-  (catalog.size_bytes) is always retained as a separate non-subtractive provenance
-  component (subtractive=False). Residual only subtracts MODEL_RUNTIME + KV_ALLOC,
-  not MODEL_FILE. Consistency adds "calibrated" status when MODEL_RUNTIME is used.
-  With QZ_CACHE_RAM=8192 and process=21.9GiB: MODEL_RUNTIME≈13.9GiB, OTHER≈0,
-  OVER disappears, consistency=calibrated. GGUF file size (18.5GiB) remains
-  visible as MODEL_FILE for provenance but does not drive the residual.
-- Remaining qz-top telemetry work: expose exact backend allocator metrics
-  (model_size_bytes, kv_cache_size_bytes from /metrics) to replace estimates
-  with confirmed values; currently TurboQuant does not emit these.
+- #6 (done): `proxy/qz_vram_snapshot.py` builds `qz.vram.snapshot.v1` with
+  provenance-labelled components. See `docs/patterns/provenance-telemetry.md`
+  for the full pattern. See below for current component semantics.
 - `README.md` documents the new launcher and monitor entry points.
+
+## qz.vram.snapshot.v1 component semantics
+
+`proxy/qz_vram_snapshot.py` builds the snapshot. The full provenance pattern
+is documented in `docs/patterns/provenance-telemetry.md`.
+
+### Component table
+
+| Component | Label | Subtractive | Confidence when live | Source |
+|---|---|---|---|---|
+| `model` | `MODEL_RUNTIME` | **yes** | `calibrated-from-host-observed-baseline` | `process_used - KV_ALLOC` |
+| `model_file` | `MODEL_FILE` | **no** | `estimated-from-gguf-size` | `catalog.size_bytes` |
+| `kv_alloc` | `KV_ALLOC` | **yes** | `estimated-from-runtime-cache-budget` | `QZ_CACHE_RAM` |
+| `kv_used` | `KV_USED` | no | `estimated-runtime-occupancy` | `KV_ALLOC × used_tokens/limit` |
+| `scratch_buffer` | `SCRATCH` | no | `unknown` | no allocator metric |
+| `other_residual` | `OTHER` | — | `host-observed-residual` | `process_used − MODEL − KV_ALLOC` |
+
+### Why MODEL_RUNTIME ≠ MODEL_FILE
+
+- **MODEL_FILE** is the GGUF file size on disk (18.5 GiB for Qwen3-30B-A3B
+  Q8_0). It is kept as provenance (`subtractive=false`) but is **not** used
+  in residual math once a calibrated estimate is available.
+- **MODEL_RUNTIME** (≈13.9 GiB live) is `backend_process_used_mib − KV_ALLOC`.
+  It is the observed loaded footprint including model weights and any load-time
+  GPU overhead that cannot yet be separated.
+- The difference (≈4.6 GiB) is expected: quantized weights occupy less GPU
+  VRAM than the file occupies on disk, and GGUF file metadata, padding, and
+  disk alignment are not in GPU VRAM.
+
+### Why OTHER is not SCRATCH
+
+`OTHER` is the residual after subtracting MODEL_RUNTIME and KV_ALLOC from
+the measured backend process VRAM. It is not labelled SCRATCH because residual
+contains everything that cannot be separately attributed: scratch buffers,
+fragmentation, CUDA runtime overhead, loader pages, etc. Calling it SCRATCH
+would claim false precision. OTHER ≈ 0 when calibration is correct.
+
+### KV_ALLOC source priority
+
+```
+1. backend metric kv_cache_size_bytes  → backend-confirmed
+2. QZ_CACHE_RAM or --cache-ram         → estimated-from-runtime-cache-budget
+3. GGUF metadata formula               → estimated-from-gguf-metadata
+4. unknown
+```
+
+### MODEL source priority
+
+```
+1. backend metric model_size_bytes     → backend-confirmed
+2. process_used − KV_ALLOC             → calibrated-from-host-observed-baseline/runtime
+3. catalog.size_bytes                  → estimated-from-gguf-size (fallback only)
+```
+
+### qz-top display markers
+
+```
+~  estimated or calibrated (not backend-confirmed)
+✓  backend-confirmed
+?  unknown / null
+```
+
+Live COMP line example:
+
+```
+COMP MODEL_RUNTIME=13.9GiB~  MODEL_FILE=18.5GiB~  KV_ALLOC=8.0GiB~  KV_USED=?  SCRATCH=?  OTHER=0MiB~  CTX=?/262144✓
+```
+
+### Remaining gaps
+
+- TurboQuant does not expose `model_size_bytes` / `kv_cache_size_bytes` in
+  `/metrics`. When it does, those replace the calibration estimates with
+  `backend-confirmed` values and the component picture becomes exact.
+- `KV_USED` is null when no context occupancy signal is available.
+- `SCRATCH` is unknown until a backend allocator metric is exposed.
+- Consistency status: `calibrated` when MODEL_RUNTIME is used; `overallocated`
+  when KV_ALLOC alone exceeds process VRAM; `plausible` when estimates fit
+  without calibration; `unknown` when process VRAM is unavailable.
+
+---
 
 ## Roadmap Impact
 

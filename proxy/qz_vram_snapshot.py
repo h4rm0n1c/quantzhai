@@ -1210,9 +1210,14 @@ def _assemble_snapshot(
 ) -> dict:
     """Assemble full qz.vram.snapshot.v1 dict from collected data.
 
-    Components: model, kv_alloc, kv_used, scratch_buffer, other_residual.
-    Residual subtracts MODEL + KV_ALLOC only (not KV_USED, which is within KV_ALLOC).
-    Backend metrics beat catalog estimates; estimates are never marked backend_confirmed.
+    Components: model (MODEL_RUNTIME), model_file (MODEL_FILE provenance),
+    kv_alloc, kv_used, scratch_buffer, other_residual.
+
+    Source/confidence/subtractive rules follow docs/patterns/provenance-telemetry.md.
+    Residual subtracts MODEL_RUNTIME + KV_ALLOC only; MODEL_FILE is provenance-only
+    (subtractive=False). KV_USED is within KV_ALLOC and is not separately subtracted.
+    Backend allocator metrics always beat calibration or estimation.
+    No estimate is ever marked backend_confirmed.
     """
     host_observed         = len(gpus) > 0
     _bm                   = backend_metrics_summary or {}

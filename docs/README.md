@@ -80,6 +80,7 @@ No clever memory, active memory tools, learned preferences, roleplay memory, HSM
 | Config examples | [Prompt compiler example](../config/example/prompt-compiler.md) | Example symlink-profile shape, override layering, and backend-target contract for a Codex-visible profile. |
 | Benchmarking | [QuantZhai benchmark harness](quantzhai-benchmark-harness.md) | Running fixed prompts, collecting artifacts, and comparing profile compression/results. |
 | Runtime debugging | [Runtime observability notes](runtime-observability-notes.md) | Captures, logs, thoughts stream, telemetry, and runtime inspection. |
+| Telemetry pattern | [Provenance telemetry pattern](patterns/provenance-telemetry.md) | Doctrine for source/confidence/subtractive fields in telemetry and status components. Use for any new telemetry/status work. |
 | Search | [Search roadmap](search-roadmap.md) | Planned search capabilities, routing, and local SearXNG policy direction. |
 | Search | [Profiled web search pickup README](profiled-web-search-pickup-README.md) | Pickup notes for the profiled web-search implementation/policy work. |
 | Research | [Deep research report](deep-research-report.md) | Longer-form research/background notes relevant to QuantZhai direction. |
@@ -211,6 +212,7 @@ Read:
 docs/observability-streaming-bugfix-agenda.md
 docs/responses-stream-tool-state-contract.md
 docs/runtime-observability-notes.md
+docs/patterns/provenance-telemetry.md
 docs/master-stabilisation-plan.md
 ```
 
@@ -319,6 +321,7 @@ docs/qz-caveman-codex-model-instructions-v2.md
 docs/repeated-read-dedup-plan.md
 docs/responses-stream-tool-state-contract.md
 docs/runtime-observability-notes.md
+docs/patterns/provenance-telemetry.md
 docs/search-roadmap.md
 docs/state-and-memory-architecture-plan.md
 ```

@@ -156,6 +156,26 @@ Codex-visible behaviour
 
 For streaming bugs, distinguish transport failure from model behaviour. A stream can be perfectly transported and still be useless if upstream emits reasoning only and no `output_text`.
 
+## Telemetry and Status Field Doctrine
+
+For any new telemetry value, status component, or dashboard field:
+
+Follow `docs/patterns/provenance-telemetry.md`.
+
+Key rules:
+- Every value needs `source`, `confidence`, `estimated`, and `backend_confirmed`.
+- Use only the confidence vocabulary defined in the pattern doc.
+- Do not collapse observed / configured / estimated / calibrated / provenance-only
+  values into one confidence bucket.
+- Never label residual as scratch. Residual = process minus components; scratch
+  is one specific type that cannot be inferred without an allocator metric.
+- Never mark an estimate as `backend_confirmed`. Only backend allocator metrics
+  earn that label.
+- Only subtract components with `subtractive=true` from residual math. Keep
+  provenance-only facts visible but out of the arithmetic.
+- Unknown quant dtype must not silently become f16. Set `formula_safe=false`
+  and surface the unknown type in notes.
+
 ## Contract-First Fixes
 
 QuantZhai bugs often come from blurred ownership between config, model catalog, profile aliases, backend routing, prompt policy, runtime state, SSE streaming, telemetry, monitors, and generated Codex metadata.
