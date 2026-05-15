@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import socket
 import time
 import urllib.request
 
@@ -28,6 +29,12 @@ try:
     from .qz_telemetry import RequestTelemetryEmitter
     from .qz_file_signal import record_tool_call, seed_repeated_read_state
     from .qz_stream_terminal import StreamObservation, classify_stream_terminal
+    from .qz_stream_watchdog import (
+        STREAM_NO_OUTPUT_TIMEOUT_S,
+        StreamWatchdogState,
+        build_timeout_telemetry_payload,
+        should_trigger_no_output_timeout,
+    )
 except ImportError:
     from qz_responses import (
         _now_ts,
@@ -52,6 +59,12 @@ except ImportError:
     from qz_telemetry import RequestTelemetryEmitter
     from qz_file_signal import record_tool_call, seed_repeated_read_state
     from qz_stream_terminal import StreamObservation, classify_stream_terminal
+    from qz_stream_watchdog import (
+        STREAM_NO_OUTPUT_TIMEOUT_S,
+        StreamWatchdogState,
+        build_timeout_telemetry_payload,
+        should_trigger_no_output_timeout,
+    )
 
 
 PRIVATE_FUNCTION_CALL_TIMEOUT_S = float(os.environ.get("QZ_PRIVATE_TOOL_CALL_TIMEOUT_S", "120"))
@@ -169,6 +182,14 @@ def _is_valid_public_output_item(item: dict) -> bool:
     return True
 
 
+def _is_completed_assistant_message_item(item: dict) -> bool:
+    if not isinstance(item, dict):
+        return False
+    if item.get("type") != "message":
+        return False
+    return item.get("status") not in {"in_progress", "incomplete"}
+
+
 def _response_has_valid_public_item(response: dict) -> bool:
     return any(_is_valid_public_output_item(item) for item in _response_output_items(response))
 
@@ -224,6 +245,7 @@ class ResponsesStreamRuntime:
         context_pressure_signal_threshold: float | None = None,
         empty_answer_repair_hops: int | None = None,
         empty_answer_repair_disable_tools: bool | None = None,
+        stream_no_output_timeout_s: float | None = None,
     ):
         self.upstream = upstream.rstrip("/")
         self.authorization = authorization or "Bearer local"
@@ -277,6 +299,11 @@ class ResponsesStreamRuntime:
             if empty_answer_repair_disable_tools is None
             else bool(empty_answer_repair_disable_tools)
         )
+        self.stream_no_output_timeout_s = (
+            STREAM_NO_OUTPUT_TIMEOUT_S
+            if stream_no_output_timeout_s is None
+            else float(stream_no_output_timeout_s)
+        )
 
     def _open_upstream_stream(self, body: dict):
         data = json.dumps(body).encode("utf-8")
@@ -291,6 +318,34 @@ class ResponsesStreamRuntime:
             },
         )
         return urllib.request.urlopen(req, timeout=900)
+
+    def _configure_stream_read_timeout(self, resp) -> None:
+        """Apply the no-output watchdog timeout to the upstream socket if possible."""
+        if self.stream_no_output_timeout_s <= 0:
+            return
+        timeout = max(0.001, float(self.stream_no_output_timeout_s))
+        targets = [resp]
+        fp = getattr(resp, "fp", None)
+        if fp is not None:
+            targets.append(fp)
+            raw = getattr(fp, "raw", None)
+            if raw is not None:
+                targets.append(raw)
+                sock = getattr(raw, "_sock", None)
+                if sock is not None:
+                    targets.append(sock)
+        for target in targets:
+            settimeout = getattr(target, "settimeout", None)
+            if callable(settimeout):
+                try:
+                    settimeout(timeout)
+                    return
+                except Exception:
+                    continue
+
+    @staticmethod
+    def _read_stream_line(resp):
+        return resp.readline()
 
     def _write_chunk(self, chunk: bytes):
         try:
@@ -616,6 +671,113 @@ class ResponsesStreamRuntime:
         self._emit_completed(requested_model, [output_item], summary_started, usage=final_usage)
         return [output_item], sequence
 
+    def _emit_no_output_timeout_fallback(
+        self,
+        requested_model: str,
+        summary_started: set,
+        final_usage,
+        watchdog_state: "StreamWatchdogState",
+        now: float,
+        obs: "StreamObservation",
+        public_index: int = 0,
+        sequence: int = 0,
+    ) -> tuple:
+        """Emit a fallback terminal when no visible output appeared before deadline.
+
+        Follows the same SSE-event pattern as _emit_reasoning_only_aborted().
+        Emits stream_terminal_classified telemetry with signal-compatible payload.
+        """
+        text = (
+            "The stream started but produced no visible output before the "
+            "no-output timeout. The request may have stalled upstream. "
+            "Please retry."
+        )
+        output_item = {
+            "id": f"msg_local_{_now_ts()}",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": text, "annotations": []}],
+        }
+        terminal = classify_stream_terminal(obs)
+        payload = build_timeout_telemetry_payload(
+            watchdog_state, terminal, now, request_id=self.request_id
+        )
+        self._emit("stream_terminal_classified", payload)
+        sequence = self._stream_fallback_message(output_item, public_index, sequence)
+        self._emit_completed(requested_model, [output_item], summary_started, usage=final_usage)
+        return [output_item], sequence
+
+    def _finish_no_output_timeout(
+        self,
+        requested_model: str,
+        started_at: float,
+        first_output_at: float | None,
+        final_usage,
+        public_trace: list,
+        summary_started: set,
+        watchdog_state: "StreamWatchdogState",
+        timeout_at: float,
+        *,
+        reasoning_only_chars: int,
+        visible_output_text_seen: bool,
+        assistant_item_seen: bool,
+        completed_call,
+        sent_terminal: bool,
+        sent_done: bool,
+        sequence: int,
+    ) -> dict:
+        watchdog_state.triggered = True
+        timeout_obs = StreamObservation(
+            saw_reasoning=bool(reasoning_only_chars > 0),
+            saw_output_text=bool(visible_output_text_seen),
+            saw_assistant_item=bool(assistant_item_seen),
+            saw_tool_call=bool(completed_call is not None),
+            saw_response_completed=bool(sent_terminal),
+            saw_done=bool(sent_done),
+            output_timeout=True,
+            request_id=self.request_id,
+        )
+        timeout_items, _sequence = self._emit_no_output_timeout_fallback(
+            requested_model,
+            summary_started,
+            final_usage,
+            watchdog_state,
+            timeout_at,
+            timeout_obs,
+            public_index=len(public_trace),
+            sequence=sequence,
+        )
+        public_trace.extend(timeout_items)
+        self._emit_stream_completed(
+            requested_model, len(public_trace), started_at, fallback=True
+        )
+        completed_at = time.time()
+        return self._build_result(
+            requested_model,
+            started_at,
+            first_output_at,
+            completed_at,
+            final_usage,
+            len(public_trace),
+            fallback=True,
+            obs=StreamObservation(
+                fallback_emitted=True,
+                output_timeout=True,
+                request_id=self.request_id,
+            ),
+        )
+
+    @staticmethod
+    def _timeout_check_time(exc: BaseException, state: "StreamWatchdogState") -> float:
+        exc_now = getattr(exc, "now", None)
+        if isinstance(exc_now, (int, float)):
+            return float(exc_now)
+        if state.timeout_secs > 0:
+            reference = state.first_event_at if state.first_event_at is not None else state.started_at
+            return reference + state.timeout_secs
+        return time.time()
+
     def _emit_stream_completed(self, requested_model: str, output_items: int, started_at: float, fallback: bool = False):
         self._emit("stream_completed", {
             "model": requested_model,
@@ -809,6 +971,7 @@ class ResponsesStreamRuntime:
                 raw_log = None
                 try:
                     resp = self.stream_opener(hop_body)
+                    self._configure_stream_read_timeout(resp)
                     raw_log = self._open_raw_log()
                     tool_call_state = StreamToolCallState()
                     event_lines = []
@@ -824,11 +987,38 @@ class ResponsesStreamRuntime:
                     reasoning_only_sample = ""
                     output_text_chars = 0
                     visible_output_text_seen = False
+                    assistant_item_seen = False
                     public_item_seen = False
                     max_output_index = -1
+                    watchdog_state = StreamWatchdogState(
+                        timeout_secs=self.stream_no_output_timeout_s,
+                        started_at=time.time(),
+                    )
 
                     while True:
-                        chunk = resp.readline()
+                        try:
+                            chunk = self._read_stream_line(resp)
+                        except (TimeoutError, socket.timeout) as exc:
+                            timeout_at = self._timeout_check_time(exc, watchdog_state)
+                            if should_trigger_no_output_timeout(watchdog_state, timeout_at):
+                                return self._finish_no_output_timeout(
+                                    requested_model,
+                                    started_at,
+                                    first_output_at,
+                                    final_usage,
+                                    public_trace,
+                                    summary_started,
+                                    watchdog_state,
+                                    timeout_at,
+                                    reasoning_only_chars=reasoning_only_chars,
+                                    visible_output_text_seen=visible_output_text_seen,
+                                    assistant_item_seen=assistant_item_seen,
+                                    completed_call=completed_call,
+                                    sent_terminal=sent_terminal,
+                                    sent_done=sent_done,
+                                    sequence=sequence,
+                                )
+                            raise
                         if not chunk:
                             if event_lines:
                                 chunk = b"\n"
@@ -849,6 +1039,7 @@ class ResponsesStreamRuntime:
                         event_type, payload = parse_sse_event_lines(event_lines)
                         event_parsed_at = time.time()
                         event_started_at = None
+                        watchdog_state.mark_event(event_parsed_at)
                         if first_output_at is None and event_type not in {"response.created", "response.in_progress"}:
                             first_output_at = time.time()
                         if isinstance(payload, dict) and isinstance(payload.get("output_index"), int):
@@ -861,17 +1052,44 @@ class ResponsesStreamRuntime:
                             output_text_chars += len(delta_text)
                             if delta_text.strip():
                                 visible_output_text_seen = True
+                                watchdog_state.mark_visible_output(event_parsed_at)
                         if event_type in {
                             "response.output_item.added",
                             "response.output_item.done",
                         } and isinstance(payload, dict):
                             item = payload.get("item")
+                            if event_type == "response.output_item.done" and _is_completed_assistant_message_item(item):
+                                assistant_item_seen = True
+                                watchdog_state.mark_visible_output(event_parsed_at)
                             if event_type == "response.output_item.done" and _is_valid_public_output_item(item):
                                 public_item_seen = True
                         if event_type == "response.completed":
                             response = payload.get("response") if isinstance(payload, dict) else {}
                             if isinstance(response, dict):
                                 final_usage = _normalize_response_usage(response.get("usage"))
+                        if is_terminal_stream_event(event_type, payload):
+                            watchdog_state.mark_terminal(event_parsed_at)
+
+                        # No-output watchdog: fires on any event arrival if deadline passed
+                        # and no visible output or terminal event has been seen.
+                        if should_trigger_no_output_timeout(watchdog_state, event_parsed_at):
+                            return self._finish_no_output_timeout(
+                                requested_model,
+                                started_at,
+                                first_output_at,
+                                final_usage,
+                                public_trace,
+                                summary_started,
+                                watchdog_state,
+                                event_parsed_at,
+                                reasoning_only_chars=reasoning_only_chars,
+                                visible_output_text_seen=visible_output_text_seen,
+                                assistant_item_seen=assistant_item_seen,
+                                completed_call=completed_call,
+                                sent_terminal=sent_terminal,
+                                sent_done=sent_done,
+                                sequence=sequence,
+                            )
 
                         completed = tool_call_state.observe(event_type, payload, event_received_at)
                         if is_function_call_stream_event(event_type, payload):
@@ -923,6 +1141,7 @@ class ResponsesStreamRuntime:
                             }
                             and isinstance(payload, dict)
                             and not visible_output_text_seen
+                            and not assistant_item_seen
                             and not public_item_seen
                         ):
                             if reasoning_only_started_at is None:
@@ -1293,6 +1512,7 @@ class ResponsesStreamRuntime:
                                 self._emit_completed(requested_model, public_trace, summary_started, usage=final_usage)
                                 sent_terminal = True
                                 sent_done = True
+                                watchdog_state.mark_terminal(event_parsed_at)
                                 event_lines = []
                                 continue
                             if (
@@ -1312,6 +1532,7 @@ class ResponsesStreamRuntime:
                                 self._emit_completed(requested_model, public_trace, summary_started, usage=final_usage)
                                 sent_terminal = True
                                 sent_done = True
+                                watchdog_state.mark_terminal(event_parsed_at)
                                 event_lines = []
                                 continue
                             forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(self._transformed_chunks(
@@ -1335,6 +1556,7 @@ class ResponsesStreamRuntime:
                                 sent_done = True
                             else:
                                 sent_terminal = True
+                            watchdog_state.mark_terminal(event_parsed_at)
                             event_lines = []
                             continue
 
@@ -1434,7 +1656,7 @@ class ResponsesStreamRuntime:
                 hop_obs = StreamObservation(
                     saw_reasoning=bool(reasoning_only_chars > 0),
                     saw_output_text=bool(visible_output_text_seen),
-                    saw_assistant_item=bool(public_item_seen),
+                    saw_assistant_item=bool(assistant_item_seen),
                     saw_tool_call=bool(completed_call is not None),
                     saw_response_completed=bool(sent_terminal),
                     saw_done=bool(sent_done),

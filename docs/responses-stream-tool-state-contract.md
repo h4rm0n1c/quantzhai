@@ -109,6 +109,8 @@ Implementation:
 
 ```text
 proxy/qz_responses_stream.py   streamed Responses runtime and continuation loop
+proxy/qz_stream_terminal.py    stream terminal classification
+proxy/qz_stream_watchdog.py    no-visible-output watchdog state and telemetry payloads
 proxy/qz_streaming.py          SSE parser and streamed function-call assembler
 proxy/qz_responses.py          compatibility exports, output cleanup, and
                                compaction helpers
@@ -137,6 +139,8 @@ Regression tests:
 
 ```text
 tests/test_qz_responses_stream.py
+tests/test_qz_stream_terminal.py
+tests/test_qz_stream_watchdog.py
 tests/test_qz_streaming.py
 tests/test_qz_proxy_tools.py
 tests/test_qz_tool_lifecycle.py
@@ -750,7 +754,7 @@ Still needed:
 - External gateway behavior is useful evidence, but not a substitute for local
   captures against Qwen plus llama.cpp/TurboQuant.
 
-## Stream Terminal Classification (#40 slice 1)
+## Stream Terminal Classification and No-Output Watchdog (#40)
 
 Added: `proxy/qz_stream_terminal.py` — pure stream outcome classifier.
 
@@ -771,7 +775,7 @@ repair_emitted, output_timeout).
 | `stream_terminal_missing` | activity seen but no terminal before close |
 | `protocol_drift_seen` | unknown/newer item-delta events but stream ok |
 | `unrecoverable` | error event, no terminal, no fallback |
-| `stream_no_output_timeout` | reserved for slice 2 watchdog; set by output_timeout flag |
+| `stream_no_output_timeout` | no visible output before the bounded stream watchdog deadline |
 
 `observation_from_event_type(event_type, payload)` maps individual SSE events
 to partial observation dicts, including:
@@ -783,8 +787,20 @@ Telemetry: `stream_terminal_classified` emitted for non-ok outcomes.
 `ResponsesStreamRuntime._build_result` accepts `obs=StreamObservation` and
 classifies/emits at the end of each normal hop.
 
-**Slice 2 (future):** real-time watchdog; set `output_timeout=True` on the
-StreamObservation to trigger `stream_no_output_timeout` classification.
+Slice 2 adds `proxy/qz_stream_watchdog.py`, a pure timing/state helper for the
+bounded no-visible-output watchdog. `QZ_STREAM_NO_OUTPUT_TIMEOUT_S <= 0`
+disables the watchdog. Positive values apply a best-effort read timeout to the
+upstream response object and also check the watchdog after parsed events. This
+is important because checking only after `readline()` returns cannot recover
+from a real upstream stall.
+
+When `response.created` / `response.in_progress` arrive and the next upstream
+read stalls past the configured deadline before any visible output or terminal
+event, `ResponsesStreamRuntime` emits a synthetic fallback message,
+`response.completed`, `[DONE]`, `stream_completed(fallback=True)`, and a
+`stream_terminal_classified` payload with `classification:
+stream_no_output_timeout`. Terminal events are marked before watchdog checks so
+a late `response.completed` suppresses the timeout path.
 
 ## Related Docs
 
