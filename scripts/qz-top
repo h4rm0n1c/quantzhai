@@ -188,6 +188,64 @@ def _mib_str(mib) -> str:
         return "?"
 
 
+def _vram_total_line(vram_snap: Optional[dict]) -> str:
+    """Build compact VRAM totals string from qz.vram.snapshot.v1."""
+    if not isinstance(vram_snap, dict):
+        return ""
+    totals = vram_snap.get("totals") or {}
+    used  = totals.get("used_mib")
+    avail = totals.get("available_mib")
+    total = totals.get("total_mib")
+    proc  = totals.get("backend_process_used_mib")
+    conf  = vram_snap.get("confidence", "?")
+    parts = [f"src={conf}"]
+    if used is not None and total is not None:
+        parts.append(f"used={_mib_str(used)} avail={_mib_str(avail)} tot={_mib_str(total)}")
+    if proc is not None:
+        parts.append(f"proc={_mib_str(proc)}")
+    return "  ".join(parts)
+
+
+def _vram_comp_line(vram_snap: Optional[dict]) -> str:
+    """Build compact component line: MODEL=? KV=? SCRATCH=? OTHER=22.0GiB CTX=?/262144."""
+    if not isinstance(vram_snap, dict):
+        return ""
+    comps = vram_snap.get("components") or []
+    ctx   = vram_snap.get("context") or {}
+    parts = []
+    for comp in comps:
+        label = comp.get("label", comp.get("name", "?").upper())
+        mib   = comp.get("mib")
+        val   = _mib_str(mib) if mib is not None else "?"
+        parts.append(f"{label}={val}")
+    ctx_limit = ctx.get("limit_tokens")
+    if ctx_limit:
+        ctx_used = ctx.get("used_tokens")
+        ctx_pct  = ctx.get("used_pct")
+        ctx_conf = ctx.get("confidence", "")
+        used_str = str(ctx_used) if ctx_used is not None else "?"
+        ctx_s    = f"CTX={used_str}/{ctx_limit}"
+        if ctx_pct is not None:
+            ctx_s += f"({ctx_pct}%)"
+        if ctx_conf == "backend-confirmed":
+            ctx_s += "✓"
+        parts.append(ctx_s)
+    return "  ".join(parts)
+
+
+def _vram_confidence_colour(ui: "UI", confidence: str):
+    """Return curses attribute for a vram confidence string."""
+    if confidence in ("backend-confirmed",):
+        return ui.green | ui.bold
+    if confidence in ("host-observed",):
+        return ui.white
+    if confidence in ("host-observed-heuristic", "estimated"):
+        return ui.yellow
+    if confidence in ("host-observed-residual",):
+        return ui.cyan
+    return ui.dim  # unknown
+
+
 def proxy_base_url() -> str:
     host = os.environ.get("QZ_PROXY_HOST", "127.0.0.1")
     port = os.environ.get("QZ_PROXY_PORT", "18180")
@@ -1084,7 +1142,11 @@ class UI:
         cursor += self.draw_status_tile(y, cursor, "BACKEND", backend_ok) + 2
         self.draw_status_tile(y, cursor, "PROXY", proxy_ok)
 
-    def draw_header(self, backend_ok: bool, proxy_ok: bool, gpus: Optional[List[GpuRow]] = None):
+    def draw_header(
+        self, backend_ok: bool, proxy_ok: bool,
+        gpus: Optional[List[GpuRow]] = None,
+        vram_snap: Optional[dict] = None,
+    ):
         h, w = self.stdscr.getmaxyx()
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
         self.add(0, 0, " QZ-TOP ", self.cyan | self.bold)
@@ -1092,11 +1154,24 @@ class UI:
 
         bx = 31
         self.add(0, bx, f"refresh={self.interval:g}s", self.dim)
-        if gpus:
+        # Prefer proxy VRAM totals; fall back to local nvidia-smi summary
+        if isinstance(vram_snap, dict):
+            totals = vram_snap.get("totals") or {}
+            used  = totals.get("used_mib")
+            avail = totals.get("available_mib")
+            total = totals.get("total_mib")
+            conf  = vram_snap.get("confidence", "?")
+            if used is not None and total is not None:
+                vram_txt = (
+                    f"vram={human_bytes_from_mib(used, compact=True)}/"
+                    f"{human_bytes_from_mib(avail, compact=True)}/"
+                    f"{human_bytes_from_mib(total, compact=True)} {conf}"
+                )
+                self.add(0, bx + 23, vram_txt, self.dim)
+        elif gpus:
             used, available, total = vram_summary(gpus)
             self.add(
-                0,
-                bx + 23,
+                0, bx + 23,
                 f"vram={human_bytes_from_mib(used, compact=True)}/{human_bytes_from_mib(available, compact=True)}/{human_bytes_from_mib(total, compact=True)}",
                 self.dim,
             )
@@ -1230,43 +1305,105 @@ class UI:
             self.add(y + 2, x + 2, clip(line, w - 4), self.red | self.bold)
 
     def draw_gpu(self, y: int, x: int, h: int, w: int, gpus: List[GpuRow], vram_snap: Optional[dict] = None):
+        have_snap = isinstance(vram_snap, dict)
+        # Box title: show proxy confidence when snapshot is available
         src_label = ""
-        if isinstance(vram_snap, dict):
-            src  = vram_snap.get("source", "?")
+        if have_snap:
             conf = vram_snap.get("confidence", "?")
-            src_label = f" {src}/{conf}"
+            bm_avail = (vram_snap.get("backend_metrics") or {}).get("available", False)
+            src_label = f" proxy/{conf}" + (" metrics=ok" if bm_avail else "")
         self.box(y, x, h, w, f"GPU{src_label}")
-        update_vram_baseline(gpus, self.vram_baseline)
-        self.add(y + 1, x + 2, f"{'ID':<5} {'NAME':<24} {'UTIL':>5}  {'USED':>8} {'BASE':>8} {'DELTA':>8} {'FREE':>8} {'TOTAL':>8} {'POWER':>7} {'TEMP':>5} {'PCIE':>8}", self.dim | self.bold)
-        rows = gpus[: max(0, h - 4)]
-        for i, gpu in enumerate(rows):
-            row = y + 2 + i
-            name = clip(gpu.name, 24)
-            used, base, delta, available = vram_parts(gpu, self.vram_baseline)
-            row_text = (
-                f"GPU{gpu.index:<2} {name:<24} {gpu.util:>4.0f}%  "
-                f"{human_bytes_from_mib(used, compact=True):>8} "
-                f"{human_bytes_from_mib(base, compact=True):>8} "
-                f"{human_bytes_from_mib(delta, compact=True):>8} "
-                f"{human_bytes_from_mib(available, compact=True):>8} "
-                f"{human_bytes_from_mib(gpu.mem_total, compact=True):>8} "
-                f"{gpu.power:>5.1f}W {gpu.temp:>4.0f}C g{gpu.gen}x{gpu.width}"
+
+        if have_snap:
+            # --- Proxy-informed display: no BASE/DELTA ---
+            self.add(
+                y + 1, x + 2,
+                f"{'ID':<5} {'NAME':<24} {'UTIL':>5}  {'USED':>8} {'FREE':>8} {'TOTAL':>8} {'POWER':>7} {'TEMP':>5} {'PCIE':>8}",
+                self.dim | self.bold,
             )
-            self.add(row, x + 2, row_text, self.colour_for_util(gpu.util))
-        if gpus and len(rows) < h - 3:
-            util, _, _, _, power, temp = gpu_summary(gpus)
-            used, base, delta, available, total = vram_split_summary(gpus, self.vram_baseline)
-            row = y + 2 + len(rows)
-            total_text = (
-                f"{'TOTAL':<5} {'':<24} {util:>4.0f}%  "
-                f"{human_bytes_from_mib(used, compact=True):>8} "
-                f"{human_bytes_from_mib(base, compact=True):>8} "
-                f"{human_bytes_from_mib(delta, compact=True):>8} "
-                f"{human_bytes_from_mib(available, compact=True):>8} "
-                f"{human_bytes_from_mib(total, compact=True):>8} "
-                f"{power:>5.1f}W {temp:>4.0f}C {'-':>8}"
+            rows = gpus[: max(0, h - 5)]  # leave room for TOTAL+VRAM+COMP rows
+            for i, gpu in enumerate(rows):
+                row = y + 2 + i
+                name = clip(gpu.name, 24)
+                free = max(0.0, gpu.mem_total - gpu.mem_used)
+                row_text = (
+                    f"GPU{gpu.index:<2} {name:<24} {gpu.util:>4.0f}%  "
+                    f"{human_bytes_from_mib(gpu.mem_used, compact=True):>8} "
+                    f"{human_bytes_from_mib(free, compact=True):>8} "
+                    f"{human_bytes_from_mib(gpu.mem_total, compact=True):>8} "
+                    f"{gpu.power:>5.1f}W {gpu.temp:>4.0f}C g{gpu.gen}x{gpu.width}"
+                )
+                self.add(row, x + 2, row_text, self.colour_for_util(gpu.util))
+            # Physical GPU TOTAL (from nvidia-smi, condensed)
+            gpu_total_row = y + 2 + len(rows)
+            if gpus and gpu_total_row < y + h - 3:
+                util, used_l, avail_l, total_l, power, temp = gpu_summary(gpus)
+                total_text = (
+                    f"{'TOTAL':<5} {'':<24} {util:>4.0f}%  "
+                    f"{human_bytes_from_mib(used_l, compact=True):>8} "
+                    f"{human_bytes_from_mib(avail_l, compact=True):>8} "
+                    f"{human_bytes_from_mib(total_l, compact=True):>8} "
+                    f"{power:>5.1f}W {temp:>4.0f}C {'-':>8}"
+                )
+                self.add(gpu_total_row, x + 2, total_text, self.cyan | self.bold)
+            # VRAM proxy line (process isolation + source)
+            vram_row = y + h - 3
+            vtotals = vram_snap.get("totals") or {}
+            backend = vram_snap.get("backend") or {}
+            proc    = vtotals.get("backend_process_used_mib")
+            proc_conf = backend.get("confidence", "unknown")
+            proc_meth = backend.get("match_method", "")
+            proc_str  = _mib_str(proc) if proc is not None else "?"
+            vram_line = f"proc={proc_str}"
+            if proc_conf != "unknown":
+                vram_line += f" ({proc_conf[:10]}"
+                if proc_meth:
+                    vram_line += f"/{proc_meth[:14]}"
+                vram_line += ")"
+            self.add(vram_row, x + 2, "VRAM", self.dim | self.bold)
+            self.add(vram_row, x + 8, clip(vram_line, w - 10),
+                     _vram_confidence_colour(self, proc_conf))
+            # COMP line (component summary)
+            comp_line = _vram_comp_line(vram_snap)
+            self.add(y + h - 2, x + 2, "COMP", self.dim | self.bold)
+            self.add(y + h - 2, x + 8, clip(comp_line, w - 10), self.white)
+        else:
+            # --- Fallback: old local baseline display with BASE/DELTA ---
+            update_vram_baseline(gpus, self.vram_baseline)
+            self.add(
+                y + 1, x + 2,
+                f"{'ID':<5} {'NAME':<24} {'UTIL':>5}  {'USED':>8} {'BASE':>8} {'DELTA':>8} {'FREE':>8} {'TOTAL':>8} {'POWER':>7} {'TEMP':>5} {'PCIE':>8}",
+                self.dim | self.bold,
             )
-            self.add(row, x + 2, total_text, self.cyan | self.bold)
+            rows = gpus[: max(0, h - 4)]
+            for i, gpu in enumerate(rows):
+                row = y + 2 + i
+                name = clip(gpu.name, 24)
+                used, base, delta, available = vram_parts(gpu, self.vram_baseline)
+                row_text = (
+                    f"GPU{gpu.index:<2} {name:<24} {gpu.util:>4.0f}%  "
+                    f"{human_bytes_from_mib(used, compact=True):>8} "
+                    f"{human_bytes_from_mib(base, compact=True):>8} "
+                    f"{human_bytes_from_mib(delta, compact=True):>8} "
+                    f"{human_bytes_from_mib(available, compact=True):>8} "
+                    f"{human_bytes_from_mib(gpu.mem_total, compact=True):>8} "
+                    f"{gpu.power:>5.1f}W {gpu.temp:>4.0f}C g{gpu.gen}x{gpu.width}"
+                )
+                self.add(row, x + 2, row_text, self.colour_for_util(gpu.util))
+            if gpus and len(rows) < h - 3:
+                util, _, _, _, power, temp = gpu_summary(gpus)
+                used, base, delta, available, total = vram_split_summary(gpus, self.vram_baseline)
+                row = y + 2 + len(rows)
+                total_text = (
+                    f"{'TOTAL':<5} {'':<24} {util:>4.0f}%  "
+                    f"{human_bytes_from_mib(used, compact=True):>8} "
+                    f"{human_bytes_from_mib(base, compact=True):>8} "
+                    f"{human_bytes_from_mib(delta, compact=True):>8} "
+                    f"{human_bytes_from_mib(available, compact=True):>8} "
+                    f"{human_bytes_from_mib(total, compact=True):>8} "
+                    f"{power:>5.1f}W {temp:>4.0f}C {'-':>8}"
+                )
+                self.add(row, x + 2, total_text, self.cyan | self.bold)
 
     def draw_throughput(self, y: int, x: int, h: int, w: int, rates: Rates):
         self.box(y, x, h, w, "LIVE THROUGHPUT")
@@ -1361,18 +1498,19 @@ class UI:
         vram_snap = fetch_vram_snapshot(cp)
         benchmark = latest_benchmark()
 
-        self.draw_header(backend_ok, proxy_ok, gpus)
+        self.draw_header(backend_ok, proxy_ok, gpus, vram_snap=vram_snap)
 
-        if h < 29 or w < 100:
-            self.add(4, 2, "Terminal too small. Need roughly 100x29.", self.red | self.bold)
+        if h < 32 or w < 100:
+            self.add(4, 2, "Terminal too small. Need roughly 100x32.", self.red | self.bold)
             self.stdscr.refresh()
             return
 
         full_w = w - 2
+        gpu_h = 8 + min(2, len(gpus))  # +3 vs original: physical TOTAL + VRAM + COMP rows
         self.draw_profile(3, 0, 12, full_w, model_status, srs)
         self.draw_container(15, 0, 5, full_w)
-        self.draw_gpu(20, 0, 5 + min(2, len(gpus)), full_w, gpus, vram_snap=vram_snap)
-        throughput_y = 25 + min(2, len(gpus))
+        self.draw_gpu(20, 0, gpu_h, full_w, gpus, vram_snap=vram_snap)
+        throughput_y = 20 + gpu_h
         self.draw_throughput(throughput_y, 0, 9, full_w, rates)
         benchmark_h = 5 if benchmark is not None else 0
         if benchmark is not None:
@@ -1488,31 +1626,22 @@ def once():
         print(job_line)
     if srs.fatal and srs.last_error:
         print(f"FATAL  {srs.last_error[:120]}")
-    if gpus:
-        baseline = update_vram_baseline(gpus, {})
-        used, base, delta, available, total = vram_split_summary(gpus, baseline)
-        print(
-            f"  vram=used={human_bytes_from_mib(used)} base={human_bytes_from_mib(base)} "
-            f"delta={human_bytes_from_mib(delta)} available={human_bytes_from_mib(available)} total={human_bytes_from_mib(total)}"
-        )
     print()
     print("GPU")
-    baseline = update_vram_baseline(gpus, {})
     for gpu in gpus:
-        used, base, delta, avail = vram_parts(gpu, baseline)
+        free = max(0.0, gpu.mem_total - gpu.mem_used)
         print(
             f"  GPU{gpu.index} {gpu.name:<26} util={gpu.util:3.0f}% "
-            f"used={human_bytes_from_mib(used)} base={human_bytes_from_mib(base)} "
-            f"delta={human_bytes_from_mib(delta)} avail={human_bytes_from_mib(avail)} total={human_bytes_from_mib(gpu.mem_total)} "
+            f"used={human_bytes_from_mib(gpu.mem_used)} free={human_bytes_from_mib(free)} "
+            f"total={human_bytes_from_mib(gpu.mem_total)} "
             f"pwr={gpu.power:.1f}W temp={gpu.temp:.0f}C PCIe=g{gpu.gen}x{gpu.width}"
         )
     if gpus:
-        util, _, _, _, power, temp = gpu_summary(gpus)
-        used, base, delta, available, total = vram_split_summary(gpus, baseline)
+        util, used_l, avail_l, total_l, power, temp = gpu_summary(gpus)
         print(
             f"  TOTAL {'':<26} util={util:3.0f}% "
-            f"used={human_bytes_from_mib(used)} base={human_bytes_from_mib(base)} "
-            f"delta={human_bytes_from_mib(delta)} avail={human_bytes_from_mib(available)} total={human_bytes_from_mib(total)} "
+            f"used={human_bytes_from_mib(used_l)} free={human_bytes_from_mib(avail_l)} "
+            f"total={human_bytes_from_mib(total_l)} "
             f"pwr={power:.1f}W temp={temp:.0f}C PCIe=-"
         )
     print()
@@ -1555,6 +1684,26 @@ def once():
             elif comp.get("context_limit"):
                 extra = f"  ctx_limit={comp['context_limit']}"
             print(f"  {label:<8} {mib_s:<12} conf={conf}  src={src_s}{extra}")
+        # Backend metrics discovery
+        bm = vs.get("backend_metrics") or {}
+        if bm:
+            bm_model = (bm.get("model") or "")[:55]
+            bm_avail = bm.get("available", False)
+            bm_src   = bm.get("model_source", "?")
+            print(f"  METRICS available={bm_avail}  model={bm_model}  model_src={bm_src}")
+            for ep, info in list((bm.get("endpoints") or {}).items())[:4]:
+                kind = info.get("kind", "?")
+                n    = info.get("metric_count", info.get("slot_count", ""))
+                n_ctx = info.get("n_ctx", "")
+                err  = info.get("error", "")
+                ep_line = f"    {ep}: kind={kind}"
+                if n != "":
+                    ep_line += f" count={n}"
+                if n_ctx:
+                    ep_line += f" n_ctx={n_ctx}"
+                if err:
+                    ep_line += f" err={err[:60]}"
+                print(ep_line)
         # Notes
         for note in (vs.get("notes") or []):
             print(f"  note: {note}")
