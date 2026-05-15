@@ -131,6 +131,18 @@ codex-context-memory-contract.md, and this file, then know what to do next.
 Goal: store parser-derived operational facts safely without changing model-visible
 behaviour.
 
+Current slice status:
+
+```text
+Slice 1 landed: optional/non-fatal SQLite substrate skeleton only.
+Module: proxy/qz_operational_db.py
+Env: QZ_STATE_DB_ENABLED, QZ_STATE_DB_PATH
+Default: disabled; enabling is explicit via QZ_STATE_DB_ENABLED.
+Schema: version metadata only, PRAGMA user_version = 1.
+No parser facts, runtime signal history, stream telemetry, recovery/backoff
+state, or model-visible memory are persisted yet.
+```
+
 Scope:
 
 ```text
@@ -142,10 +154,10 @@ DB write failure logs/telemeters but does not break proxy responses.
 Follow docs/foundation-audit-before-sqlite.md.
 ```
 
-Likely new file:
+Substrate file:
 
 ```text
-proxy/qz_state_db.py
+proxy/qz_operational_db.py
 ```
 
 Likely tests:

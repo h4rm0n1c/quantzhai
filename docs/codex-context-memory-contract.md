@@ -624,6 +624,20 @@ avoid cross-scope memory reads
 Phase 1 should store identity and operational facts only. It must not implement
 learned preferences, profile-private memory, HSM memory, or promotion.
 
+Slice 1 status:
+
+```text
+proxy/qz_operational_db.py exists as the optional/non-fatal SQLite substrate
+skeleton.
+QZ_STATE_DB_ENABLED defaults to disabled.
+QZ_STATE_DB_PATH defaults to var/qz-state.sqlite3 when enabled.
+Schema version metadata and PRAGMA user_version are initialized.
+No sessions, turns, requests, workspace facts, runtime signal history, stream
+telemetry, recovery/backoff state, or model-visible memory are persisted yet.
+DB open/write failure is degraded into health().last_error and must not break
+proxy request handling.
+```
+
 ### sessions
 
 ```text
