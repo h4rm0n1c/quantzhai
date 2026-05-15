@@ -1,0 +1,21 @@
+{
+  "record_id": "rec_bc_006",
+  "schema": "braincase/state-record@1",
+  "memory_domain": "coding",
+  "tier": "working_state",
+  "record_type": "recent_topic",
+  "claim": "Current open loop: implementing #53 Slice A (StateRecord/SourceRef/RenderPacket schemas and fixtures). #2 remains parked; BrainCaseDB schema work (Slice B) waits for Slice A to settle the record shape.",
+  "summary": "Active task is Slice A schema fixtures under docs/schemas/braincase/ and docs/fixtures/braincase/. No DB tables, no SQL, no runtime code. Slice B (BrainCaseDB schema) starts only after Slice A fixtures are complete and reviewed.",
+  "status": "active",
+  "visibility": "internal",
+  "confidence": 1.0,
+  "importance": 0.7,
+  "retention": "ephemeral",
+  "created_at_ms": 1778803200000,
+  "updated_at_ms": 1778803200000,
+  "source_refs": ["sref_github_issue_53"],
+  "tags": ["braincase", "working-state", "open-loop", "slice-a", "current-task"],
+  "supersedes": null,
+  "superseded_by": null,
+  "metadata": null
+}

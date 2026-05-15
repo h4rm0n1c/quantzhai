@@ -1,0 +1,24 @@
+{
+  "record_id": "rec_bc_007",
+  "schema": "braincase/state-record@1",
+  "memory_domain": "hsm",
+  "tier": "episodic_memory",
+  "record_type": "identity_note",
+  "claim": "HSM may be represented as a configured memory_domain value. The BrainCase schema records the configured value but does not define, grant, infer, normalize, or authorize 'hsm' as a domain. memory_domain definitions remain config-owned.",
+  "summary": "Example of an HSM-scoped record. 'hsm' is a configured memory_domain value set by the operator/user. Isolation is enforced by scope_resolve reading the configured domain — not by BrainCaseDB policy. BrainCaseDB stores the value; it does not define what domains are valid.",
+  "status": "active",
+  "visibility": "internal",
+  "confidence": 1.0,
+  "importance": 0.7,
+  "retention": "durable",
+  "created_at_ms": 1778803200000,
+  "updated_at_ms": 1778803200000,
+  "source_refs": ["sref_doc_braincase_api"],
+  "tags": ["hsm", "memory_domain", "example", "configured-value", "doctrine"],
+  "supersedes": null,
+  "superseded_by": null,
+  "metadata": {
+    "hsm_domain_note": "'hsm' is a configured memory_domain example. The schema does not define or grant this domain. memory_domain authority remains with the operator config.",
+    "fixture_purpose": "Demonstrates that any string may appear as memory_domain — the schema enforces no registry."
+  }
+}

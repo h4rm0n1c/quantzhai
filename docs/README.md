@@ -135,10 +135,10 @@ docs/progress-snapshot.md
 Current next engineering target:
 
 ```text
-P1 BrainCase memory tool API — Slice A: StateRecord JSON schema fixtures.
+P1 BrainCase — Slice B: BrainCaseDB schema (state_records, source_refs, record_links).
+Slice A (schemas + fixtures + 44 tests) is complete.
 See docs/braincase-memory-tool-api.md for the full slice plan.
-BrainCaseDB skeleton exists (proxy/qz_braincase_db.py); #2 is parked pending
-Slice A fixture design. Do not add automatic ingestion.
+Record shape is defined by docs/schemas/braincase/. Do not add automatic ingestion.
 ```
 
 Then:
@@ -341,6 +341,12 @@ docs/runtime-observability-notes.md
 docs/patterns/provenance-telemetry.md
 docs/search-roadmap.md
 docs/braincase-memory-tool-api.md
+docs/schemas/braincase/source-ref.schema.json
+docs/schemas/braincase/state-record.schema.json
+docs/schemas/braincase/render-packet.schema.json
+docs/fixtures/braincase/source-refs/
+docs/fixtures/braincase/state-records/
+docs/fixtures/braincase/render-packets/
 docs/state-and-memory-architecture-plan.md
 ```
 

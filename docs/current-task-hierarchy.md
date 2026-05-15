@@ -229,18 +229,23 @@ BrainCaseDB skeleton exists, disabled by default, schema metadata initialised.
 No automatic ingestion.
 ```
 
-Future acceptance (after memory tool API design):
+Slice A acceptance (COMPLETE):
 
 ```text
-To be defined after Slice A (JSON schema fixtures) is complete.
-See docs/braincase-memory-tool-api.md for the slice plan.
+docs/schemas/braincase/source-ref.schema.json    — SourceRef schema
+docs/schemas/braincase/state-record.schema.json  — StateRecord schema (memory_domain=string, no enum)
+docs/schemas/braincase/render-packet.schema.json — RenderPacket schema
+docs/fixtures/braincase/source-refs/             — 4 source ref fixtures
+docs/fixtures/braincase/state-records/           — 7 state records (all mandatory tiers covered)
+docs/fixtures/braincase/render-packets/          — 1 render packet fixture
+tests/test_braincase_schema_fixtures.py          — 44 tests, all passing
 ```
 
-Blocked by:
+Blocked by for Slice B:
 
 ```text
-Slice A: StateRecord / memory tool API design (JSON schema fixtures, no code).
-Do not start Slice B (DB schema) until Slice A fixtures settle the record shape.
+Slice A is complete. Slice B (BrainCaseDB schema) may now start.
+Do not add automatic ingestion in Slice B. Write paths remain explicit.
 ```
 
 Best resource:
@@ -435,30 +440,25 @@ cross-domain isolation tests
 
 ---
 
-## Next implementation prompt: BrainCase memory tool API
+## Next implementation prompt: BrainCase Slice B (BrainCaseDB schema)
 
-**PARKED — do not start implementation until Slice A (StateRecord fixtures) is done.**
+**Slice A is complete. Slice B may now start.**
 
-Read `docs/braincase-memory-tool-api.md` before starting any implementation.
-
-The architecture is tool-mediated, not DB-first:
+Read `docs/braincase-memory-tool-api.md` before starting Slice B.
 
 ```text
-LLM + harness -> memory tools -> deterministic helpers -> BrainCaseDB / indexes -> renderers -> scoped model-visible packets
+Slice A: COMPLETE — schemas + fixtures + 44 tests passing
+Slice B: NEXT — BrainCaseDB schema for state_records, source_refs, record_links, revisions
+Slice C: braincase.search + inspect over fixture records
+Slice D: braincase.write/update with explicit tool path
+Slice E: braincase.render bounded packet builder
+Slice F: harness injection for memory tool-use policy
 ```
 
-Implementation order:
-1. Slice A: StateRecord JSON schema + fixture tests (docs/fixtures only, no DB)
-2. Slice B: BrainCaseDB schema (state_records, source_refs, record_links, revisions)
-3. Slice C: braincase.search + inspect over fixture records
-4. Slice D: braincase.write/update with explicit tool path
-5. Slice E: braincase.render bounded packet builder
-6. Slice F: harness injection for memory tool-use policy
+Do not add automatic ingestion in Slice B. Write paths must remain explicit.
+Record shape is defined by Slice A schemas and fixtures — use them as the source of truth.
 
-Do not implement Slice B until Slice A fixtures settle the record shape.
-Do not add automatic ingestion at any slice.
-
-Until Slice A fixtures exist, the reference below is for design context only.
+Full reference below for Slice B context:
 
 ```text
 PARKED REFERENCE — do not implement until memory-write API design exists.

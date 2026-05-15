@@ -1,0 +1,13 @@
+{
+  "source_ref_id": "sref_github_issue_53",
+  "source_type": "github_issue",
+  "title": "Design BrainCase memory tool API and tiered memory model (#53)",
+  "summary": "Parent issue for BrainCase memory tool API and tiered memory model implementation. Defines tool set (recall/search/inspect/write/update/render), memory tiers, implementation slices A-F, and hard rule: no automatic ingestion at any slice.",
+  "locator": "https://github.com/h4rm0n1c/quantzhai/issues/53",
+  "content_hash": null,
+  "captured_at_ms": 1778803200000,
+  "metadata": {
+    "issue_number": 53,
+    "repo": "h4rm0n1c/quantzhai"
+  }
+}

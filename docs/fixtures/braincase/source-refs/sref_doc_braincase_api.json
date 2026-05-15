@@ -1,0 +1,13 @@
+{
+  "source_ref_id": "sref_doc_braincase_api",
+  "source_type": "doc_file",
+  "title": "BrainCase Memory Tool API — architecture doc",
+  "summary": "Design/doctrine doc defining the tool-mediated memory plane: core doctrine, high-level loop, six memory tools, harness policy, deterministic helpers, BrainCaseDB storage role, memory domains vs tiers, and implementation slices A-F.",
+  "locator": "docs/braincase-memory-tool-api.md",
+  "content_hash": null,
+  "captured_at_ms": 1778803200000,
+  "metadata": {
+    "repo": "h4rm0n1c/quantzhai",
+    "commit": "cf31592"
+  }
+}

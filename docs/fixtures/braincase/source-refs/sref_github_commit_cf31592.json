@@ -1,0 +1,13 @@
+{
+  "source_ref_id": "sref_github_commit_cf31592",
+  "source_type": "github_commit",
+  "title": "Document BrainCase memory tool architecture (cf31592)",
+  "summary": "Commit adding docs/braincase-memory-tool-api.md and BrainCase Memory Tool Plane Doctrine to AGENTS.md. Corrected the proposal/gatekeeper framing to LLM operator + helper accelerators. Marked #2 parked; created issue #53.",
+  "locator": "https://github.com/h4rm0n1c/quantzhai/commit/cf31592",
+  "content_hash": "cf31592",
+  "captured_at_ms": 1778803200000,
+  "metadata": {
+    "repo": "h4rm0n1c/quantzhai",
+    "branch": "main"
+  }
+}

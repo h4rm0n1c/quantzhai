@@ -518,17 +518,26 @@ One-shot write-and-forget — records have provenance, revision, and lifetime.
 
 ## First implementation slices
 
-Ordered dependency chain. None are started.
+### Slice A: tool API design and schema fixtures — COMPLETE
 
-### Slice A: tool API design and schema fixtures
-
-Docs and JSON schema fixtures only. No BrainCaseDB tables.
+Schemas and fixtures in `docs/schemas/braincase/` and `docs/fixtures/braincase/`.
+Tests in `tests/test_braincase_schema_fixtures.py` (44 tests, all passing).
 
 ```text
-Define JSON schema for StateRecord (aligned with model-state-signal-contract.md).
-Write fixture records covering key kinds: fact, decision, procedure, artifact_ref, episode.
-Write schema validation tests against fixtures.
-No SQL. No HTTP. No proxy changes.
+docs/schemas/braincase/source-ref.schema.json    — SourceRef schema (JSON Schema Draft 7)
+docs/schemas/braincase/state-record.schema.json  — StateRecord schema
+docs/schemas/braincase/render-packet.schema.json — RenderPacket schema
+
+docs/fixtures/braincase/source-refs/             — 4 source ref fixtures
+docs/fixtures/braincase/state-records/           — 7 state record fixtures (all tiers covered)
+docs/fixtures/braincase/render-packets/          — 1 render packet fixture
+
+Key schema decisions:
+- memory_domain is type: string with no enum (config-owned invariant)
+- StateRecord.visibility: internal | renderable | never_model_visible
+- Records internal until explicitly rendered
+- Schemas do not define a memory_domain registry
+- HSM fixture uses memory_domain="hsm" as a configured example, not a built-in domain
 ```
 
 ### Slice B: BrainCaseDB schema for state records
@@ -589,13 +598,15 @@ Tests: harness policy injection, tool-use guidance.
 ## Open questions
 
 ```text
-1. Does Slice A require a new repo? Or do fixtures live in tests/fixtures/memory/?
+1. RESOLVED: Slice A fixtures live in docs/schemas/braincase/ and docs/fixtures/braincase/.
 2. Should braincase.recall return raw records or pre-rendered summaries?
 3. Does render always require a separate call, or can recall/inspect render on request?
 4. What is the right lifetime for working_state — ephemeral in-memory, or short-lived BrainCaseDB rows?
-5. How are artifact_memory source refs structured — file paths, git commits, capture paths, or all three?
+5. RESOLVED: artifact_memory source refs use SourceRef with locator (file path, URL, commit hash,
+   capture path as appropriate). See docs/fixtures/braincase/source-refs/ for examples.
 6. What is the harness injection mechanism — system prompt prefix, or injected tool response?
 7. Does HSM work need a separate BrainCaseDB instance, or does memory_domain=hsm isolation suffice?
+   (Current working assumption: memory_domain isolation suffices; use memory_domain="hsm".)
 8. Should braincase.search expose SQL mode directly, or keep SQL fully behind query_plan?
 9. What is the right conflict_check strategy — exact field match, semantic similarity, or LLM pass?
 10. Does retention_hint need a decay function, or is lifetime explicit enough?

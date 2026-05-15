@@ -1,0 +1,14 @@
+{
+  "source_ref_id": "sref_github_issue_2",
+  "source_type": "github_issue",
+  "title": "BrainCaseDB storage substrate for future memory/state records (#2)",
+  "summary": "BrainCaseDB substrate issue. Parked pending BrainCase memory tool API and StateRecord design. Establishes hard rule: BrainCaseDB must not store data merely because QuantZhai observed it. All write paths must be explicit.",
+  "locator": "https://github.com/h4rm0n1c/quantzhai/issues/2",
+  "content_hash": null,
+  "captured_at_ms": 1778803200000,
+  "metadata": {
+    "issue_number": 2,
+    "repo": "h4rm0n1c/quantzhai",
+    "status": "parked"
+  }
+}

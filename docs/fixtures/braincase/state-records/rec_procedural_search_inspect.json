@@ -1,0 +1,21 @@
+{
+  "record_id": "rec_bc_002",
+  "schema": "braincase/state-record@1",
+  "memory_domain": "coding",
+  "tier": "procedural_memory",
+  "record_type": "procedure",
+  "claim": "When exact prior wording, issue state, command, path, or source evidence is needed: use braincase.search first, then braincase.inspect on likely hits, then reason again with the evidence.",
+  "summary": "Search -> inspect -> reason pattern for exact evidence retrieval. A targeted FTS/grep/exact search is often faster and more accurate than broad recall. Prefer narrow search over recall when looking for known phrases, file paths, issue numbers, or commands. Do not fish with inspect — narrow first with search.",
+  "status": "active",
+  "visibility": "internal",
+  "confidence": 1.0,
+  "importance": 0.85,
+  "retention": "durable",
+  "created_at_ms": 1778803200000,
+  "updated_at_ms": 1778803200000,
+  "source_refs": ["sref_doc_braincase_api"],
+  "tags": ["braincase", "search", "inspect", "procedure", "harness", "tool-use"],
+  "supersedes": null,
+  "superseded_by": null,
+  "metadata": null
+}

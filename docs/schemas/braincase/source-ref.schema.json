@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "braincase/source-ref@1",
+  "title": "SourceRef",
+  "description": "Provenance reference pointing to evidence for a BrainCase memory record. SourceRef must not embed raw request bodies, raw prompts, or giant content blobs. It points to evidence; it does not store it.",
+  "type": "object",
+  "required": ["source_ref_id", "source_type", "summary", "locator"],
+  "additionalProperties": false,
+  "properties": {
+    "source_ref_id": {
+      "type": "string",
+      "description": "Unique identifier for this source reference."
+    },
+    "source_type": {
+      "type": "string",
+      "description": "Category of the evidence source.",
+      "enum": [
+        "user_instruction",
+        "github_issue",
+        "github_commit",
+        "repo_file",
+        "doc_file",
+        "artifact",
+        "capture",
+        "manual_note"
+      ]
+    },
+    "title": {
+      "type": ["string", "null"],
+      "description": "Short human-readable title. Optional."
+    },
+    "summary": {
+      "type": "string",
+      "description": "Brief description of what this source contains or established. Not the full raw content.",
+      "maxLength": 1000
+    },
+    "locator": {
+      "type": "string",
+      "description": "Path, URL, issue number, commit hash, or other bounded locator for the source. Must not be a raw content dump."
+    },
+    "content_hash": {
+      "type": ["string", "null"],
+      "description": "Optional hash of the referenced content at capture time."
+    },
+    "captured_at_ms": {
+      "type": ["integer", "null"],
+      "description": "Unix timestamp in milliseconds when this reference was captured. Null if unknown."
+    },
+    "metadata": {
+      "type": ["object", "null"],
+      "description": "Optional bounded metadata key-value pairs. Must not store raw request bodies or prompt content.",
+      "additionalProperties": true,
+      "maxProperties": 20
+    }
+  }
+}

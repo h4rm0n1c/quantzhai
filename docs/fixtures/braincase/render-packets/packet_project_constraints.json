@@ -1,0 +1,16 @@
+{
+  "packet_id": "pkt_bc_001",
+  "schema": "braincase/render-packet@1",
+  "purpose": "project_constraints",
+  "memory_domain": "coding",
+  "generated_at_ms": 1778803200000,
+  "budget_tokens": 200,
+  "rendered_text": "== BrainCase Project Constraints (coding) ==\n\n1. BrainCaseDB must not automatically ingest requests, turns, sessions, telemetry, stream events, or recovery state. All write paths must be explicit memory tool actions.\n\n2. Memory implementation must start from tool semantics, harness policy, memory tiers, and render boundaries — not from SQL tables.\n\n[2 records, 0 omitted]",
+  "source_record_ids": ["rec_bc_001", "rec_bc_004"],
+  "omitted_count": 0,
+  "warnings": [],
+  "metadata": {
+    "tiers_included": ["project_state", "preference_constraint_memory"],
+    "render_strategy": "importance_rank"
+  }
+}

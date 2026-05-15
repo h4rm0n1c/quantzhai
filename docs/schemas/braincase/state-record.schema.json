@@ -1,0 +1,144 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "braincase/state-record@1",
+  "title": "StateRecord",
+  "description": "A durable or semi-durable memory/state record in BrainCaseDB. StateRecords are internal until explicitly rendered. memory_domain is the configured isolation value recorded at write time — the schema does not define, grant, or authorize memory_domain values. Records are written only through explicit memory tool actions, never automatically ingested.",
+  "type": "object",
+  "required": [
+    "record_id",
+    "schema",
+    "memory_domain",
+    "tier",
+    "record_type",
+    "claim",
+    "summary",
+    "status",
+    "visibility",
+    "confidence",
+    "importance",
+    "retention",
+    "created_at_ms",
+    "updated_at_ms",
+    "source_refs",
+    "tags"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "record_id": {
+      "type": "string",
+      "description": "Unique identifier for this record."
+    },
+    "schema": {
+      "type": "string",
+      "description": "Schema identifier and version, e.g. 'braincase/state-record@1'."
+    },
+    "memory_domain": {
+      "type": "string",
+      "description": "Configured isolation boundary for this record. This is the value configured by the operator/user — the schema does not define, grant, infer, or authorize domain values. Missing memory_domain at write time should resolve to 'isolated'."
+    },
+    "tier": {
+      "type": "string",
+      "description": "Memory tier classifying purpose, retention, and default visibility within the memory_domain.",
+      "enum": [
+        "working_state",
+        "session_state",
+        "project_state",
+        "semantic_memory",
+        "procedural_memory",
+        "episodic_memory",
+        "artifact_memory",
+        "perceptual_index",
+        "preference_constraint_memory"
+      ]
+    },
+    "record_type": {
+      "type": "string",
+      "description": "Semantic classification of the record's content.",
+      "enum": [
+        "constraint",
+        "preference",
+        "project_decision",
+        "project_state",
+        "procedure",
+        "artifact_reference",
+        "diagnostic",
+        "open_question",
+        "identity_note",
+        "correction",
+        "episode",
+        "recent_topic"
+      ]
+    },
+    "claim": {
+      "type": "string",
+      "description": "The durable claim, fact, or assertion this record stores. Should be a complete sentence. Must not include raw prompts or raw request body content.",
+      "maxLength": 2000
+    },
+    "summary": {
+      "type": "string",
+      "description": "Brief human-readable summary for recall/render. Must not include raw prompts or raw request body content.",
+      "maxLength": 1000
+    },
+    "status": {
+      "type": "string",
+      "description": "Lifecycle status of this record.",
+      "enum": ["active", "superseded", "retired", "candidate"]
+    },
+    "visibility": {
+      "type": "string",
+      "description": "Controls whether this record can ever become model-visible. 'internal' means never surfaced to the model directly. 'renderable' means eligible for inclusion in a RenderPacket when explicitly requested. 'never_model_visible' means permanently excluded from any render path.",
+      "enum": ["internal", "renderable", "never_model_visible"]
+    },
+    "confidence": {
+      "type": "number",
+      "description": "Confidence in the claim, from 0.0 (uncertain) to 1.0 (certain).",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    "importance": {
+      "type": "number",
+      "description": "Relative importance for ranking during recall and render, from 0.0 to 1.0.",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    "retention": {
+      "type": "string",
+      "description": "Intended lifetime of the record.",
+      "enum": ["ephemeral", "session", "project", "durable"]
+    },
+    "created_at_ms": {
+      "type": "integer",
+      "description": "Unix timestamp in milliseconds when this record was first written."
+    },
+    "updated_at_ms": {
+      "type": "integer",
+      "description": "Unix timestamp in milliseconds when this record was last updated."
+    },
+    "source_refs": {
+      "type": "array",
+      "description": "List of source_ref_id values providing provenance for this record. Sessions/turns/requests may appear here only as bounded provenance references, not as automatic logs.",
+      "items": {"type": "string"},
+      "uniqueItems": true
+    },
+    "tags": {
+      "type": "array",
+      "description": "Searchable tags for FTS/tag-index retrieval.",
+      "items": {"type": "string"},
+      "uniqueItems": true
+    },
+    "supersedes": {
+      "type": ["string", "null"],
+      "description": "record_id of the record this supersedes. Null if this is an original record."
+    },
+    "superseded_by": {
+      "type": ["string", "null"],
+      "description": "record_id of the record that supersedes this one. Null if still active."
+    },
+    "metadata": {
+      "type": ["object", "null"],
+      "description": "Optional bounded key-value metadata. Must not store raw prompts, raw request bodies, or content that would constitute automatic ingestion.",
+      "additionalProperties": true,
+      "maxProperties": 20
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "record_id": "rec_bc_001",
+  "schema": "braincase/state-record@1",
+  "memory_domain": "coding",
+  "tier": "project_state",
+  "record_type": "constraint",
+  "claim": "BrainCaseDB must not automatically ingest requests, turns, sessions, telemetry, stream events, or recovery state. All BrainCaseDB write paths must be explicit memory tool actions.",
+  "summary": "BrainCaseDB is not an automatic ingestion target. Records may only be written through explicit paths: manual/user-approved save, future promotion pipeline, future memory extractor, future StateRecord creation, explicit test fixture, or narrow provenance/scoping support attached to an actual stored memory/state record.",
+  "status": "active",
+  "visibility": "internal",
+  "confidence": 1.0,
+  "importance": 0.95,
+  "retention": "durable",
+  "created_at_ms": 1778803200000,
+  "updated_at_ms": 1778803200000,
+  "source_refs": ["sref_github_issue_2", "sref_doc_braincase_api"],
+  "tags": ["braincase", "ingestion", "constraint", "doctrine", "no-auto-ingest"],
+  "supersedes": null,
+  "superseded_by": null,
+  "metadata": null
+}

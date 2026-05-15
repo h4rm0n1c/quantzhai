@@ -1,0 +1,21 @@
+{
+  "record_id": "rec_bc_005",
+  "schema": "braincase/state-record@1",
+  "memory_domain": "coding",
+  "tier": "episodic_memory",
+  "record_type": "episode",
+  "claim": "Architecture correction on 2026-05-15: the 'proposal to gatekeeper' framing was replaced by 'LLM operator + deterministic helper accelerators'. Helpers accelerate mechanics and enforce invariants; they do not replace LLM reasoning.",
+  "summary": "Earlier design described: LLM proposes -> deterministic judge decides -> DB stores. This was too single-tiered and implied helpers were final philosophical judges. Corrected to: LLM thinks -> uses memory tools -> helpers accelerate/constrain mechanics -> storage/indexes return exact evidence -> LLM reasons again. Documented in docs/braincase-memory-tool-api.md, committed in cf31592.",
+  "status": "active",
+  "visibility": "internal",
+  "confidence": 1.0,
+  "importance": 0.8,
+  "retention": "durable",
+  "created_at_ms": 1778803200000,
+  "updated_at_ms": 1778803200000,
+  "source_refs": ["sref_doc_braincase_api", "sref_github_commit_cf31592"],
+  "tags": ["braincase", "episode", "architecture", "correction", "gatekeeper-framing"],
+  "supersedes": null,
+  "superseded_by": null,
+  "metadata": null
+}

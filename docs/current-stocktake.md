@@ -80,13 +80,12 @@ Agent rules:         AGENTS.md includes telemetry doctrine
 ### Notes on each
 
 **#2** — The foundational next state work. Slice 1 added the optional/non-fatal
-SQLite storage skeleton (BrainCaseDB) only. **#2 is now parked** pending the
-BrainCase memory tool API and StateRecord design. See
-`docs/braincase-memory-tool-api.md`. The memory architecture is tool-mediated,
-not DB-first. The next step is Slice A (StateRecord JSON schema fixtures), not
-automatic parser-fact ingestion. BrainCaseDB must not store data merely because
-QuantZhai observed it — all write paths must be explicit. Unlocks #51 and #46
-once the explicit write API and at least one stored-fact type exist.
+SQLite storage skeleton (BrainCaseDB) only. #2 remains parked pending BrainCase
+Slice B (BrainCaseDB schema). Slice A (StateRecord/SourceRef/RenderPacket schemas
+and fixtures) is complete — see `docs/braincase-memory-tool-api.md`. The memory
+architecture is tool-mediated, not DB-first. All write paths must be explicit.
+Unlocks #51 and #46 once the explicit write API and at least one stored-fact
+type exist.
 
 **#51** — Recovery backoff state is currently in-memory only. Should be persisted
 once #2 exists. Do not implement before #2.
@@ -272,29 +271,30 @@ Signal/feedback subsystem design (#42)
 
 ## 10. Suggested next agent prompts
 
-### Prompt A: BrainCase memory tool API — Slice A (#2) — PARKED
+### Prompt A: BrainCase Slice B — BrainCaseDB schema (#2, #53)
 
-**#2 is parked. Read `docs/braincase-memory-tool-api.md` before starting.**
+**Slice A is complete. Slice B may now start.**
 
-The memory architecture is tool-mediated, not DB-first. Do not start from SQL
-tables. Start from Slice A: StateRecord JSON schema fixtures.
+Read `docs/braincase-memory-tool-api.md` before starting.
 
 ```text
-PARKED REFERENCE — start with docs/braincase-memory-tool-api.md Slice A.
+Slice A COMPLETE: schemas + fixtures + 44 tests in tests/test_braincase_schema_fixtures.py
 
 Read first:
-- docs/braincase-memory-tool-api.md       (full tool plane design and slice plan)
-- docs/model-state-signal-contract.md     (StateRecord envelope)
+- docs/braincase-memory-tool-api.md       (architecture; Slice B spec)
+- docs/schemas/braincase/state-record.schema.json   (record shape to implement)
+- docs/schemas/braincase/source-ref.schema.json
+- docs/fixtures/braincase/state-records/  (fixture records = test data for Slice B)
 - AGENTS.md BrainCase Memory Tool Plane Doctrine
 - AGENTS.md BrainCaseDB / Memory Storage Doctrine
-- docs/codex-context-memory-contract.md   (BrainCaseDB write doctrine)
 - proxy/qz_braincase_db.py
 
-Slice A goal: StateRecord JSON schema + fixture tests. No DB. No SQL.
-Define fixture records covering: fact, decision, procedure, artifact_ref, episode.
-Write schema validation tests against fixtures.
-Do not implement Slice B (DB schema) until Slice A fixtures settle the record shape.
-Do not add automatic ingestion at any slice.
+Slice B goal: BrainCaseDB schema.
+Tables: state_records, source_refs, record_links, record_revisions.
+Indexes: FTS on claim/summary, timeline on created_at, tag index.
+No automatic ingestion — only explicit write paths.
+Tests: insert/query/supersede/retire round-trips on fixture records.
+Do not add automatic ingestion at any step.
 ```
 
 ### Prompt B: Recovery state persistence (#51, after #2)

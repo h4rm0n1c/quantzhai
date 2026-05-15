@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "braincase/render-packet@1",
+  "title": "RenderPacket",
+  "description": "Bounded model-facing memory output. RenderPackets are the only model-facing boundary in the BrainCase memory plane. Raw StateRecords are internal until rendered. A RenderPacket must stay within one memory_domain unless future explicit cross-domain policy exists. It must be bounded by a token budget and must cite source record IDs rather than dumping raw storage.",
+  "type": "object",
+  "required": [
+    "packet_id",
+    "schema",
+    "purpose",
+    "memory_domain",
+    "generated_at_ms",
+    "budget_tokens",
+    "rendered_text",
+    "source_record_ids",
+    "omitted_count",
+    "warnings"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "packet_id": {
+      "type": "string",
+      "description": "Unique identifier for this render packet."
+    },
+    "schema": {
+      "type": "string",
+      "description": "Schema identifier and version, e.g. 'braincase/render-packet@1'."
+    },
+    "purpose": {
+      "type": "string",
+      "description": "What this packet is for, e.g. 'task_continuity', 'project_constraints', 'open_loops'. Drives what the renderer selects."
+    },
+    "memory_domain": {
+      "type": "string",
+      "description": "Configured isolation domain this packet was rendered from. Must not mix domains. This is the configured value — the schema does not define or grant domain values."
+    },
+    "generated_at_ms": {
+      "type": "integer",
+      "description": "Unix timestamp in milliseconds when this packet was generated."
+    },
+    "budget_tokens": {
+      "type": "integer",
+      "description": "Maximum token budget allocated to this packet.",
+      "minimum": 1
+    },
+    "rendered_text": {
+      "type": "string",
+      "description": "The bounded model-facing text content. Must not exceed budget_tokens when tokenized. This is the only model-visible content in the BrainCase memory plane."
+    },
+    "source_record_ids": {
+      "type": "array",
+      "description": "record_ids of the StateRecords whose content contributed to this packet.",
+      "items": {"type": "string"},
+      "uniqueItems": true
+    },
+    "omitted_count": {
+      "type": "integer",
+      "description": "Number of candidate records that were omitted due to budget constraints or redaction.",
+      "minimum": 0
+    },
+    "warnings": {
+      "type": "array",
+      "description": "Non-fatal warnings from the render process, e.g. budget pressure, low-confidence records, redacted items.",
+      "items": {"type": "string"}
+    },
+    "metadata": {
+      "type": ["object", "null"],
+      "description": "Optional bounded render metadata.",
+      "additionalProperties": true,
+      "maxProperties": 20
+    }
+  }
+}
