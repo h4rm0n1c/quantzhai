@@ -175,6 +175,20 @@ to avoid false failures from SSE timing events crowding out `tool_sandbox_denied
   top level records schema, model entry source, KV dtype, and known allocated
   MiB. qz-top COMP line adds `~` (estimated) / `✓` (backend-confirmed) / `?`
   (unknown) markers. No estimate is marked backend-confirmed.
+- #6 slice 6 follow-up 2 (done): KV_ALLOC source priority updated: (1) backend
+  metric kv_cache_size_bytes (backend-confirmed), (2) QZ_CACHE_RAM or
+  --cache-ram launch arg (estimated-from-runtime-cache-budget), (3) GGUF
+  metadata formula (estimated-from-gguf-metadata), (4) unknown. When the
+  runtime budget wins, the formula result is stored as alternate_estimates for
+  comparison. A quant registry replaces the old 4-entry _KV_DTYPE_BYTES table;
+  covers f32/f16/bf16, q4_0/q4_1/q5_0/q5_1/q8_0/q8_1, k-quants (q2_k through
+  q6_k), IQ quants (iq1_s through iq4_xs), tq1_0/tq2_0, and turbo2/turbo3/turbo4
+  using effective bytes/element from struct assertions in ggml-common.h. Unknown
+  quants are NOT silently replaced with f16 — formula is disabled and
+  formula_safe=False is set. Consistency diagnostics (overallocated/plausible/
+  unknown) added to the estimates block. qz-top --once shows CACHE_BDG, KV_DTYPE
+  with bit widths, and CONSIST status. Live COMP line shows OVER=X.XGiB if
+  estimated MODEL + KV_ALLOC exceeds measured process VRAM.
 - Remaining qz-top telemetry work: expose exact backend allocator metrics
   (model_size_bytes, kv_cache_size_bytes from /metrics) to replace estimates
   with confirmed values; currently TurboQuant does not emit these.

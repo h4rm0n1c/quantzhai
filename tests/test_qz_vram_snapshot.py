@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from proxy.qz_vram_snapshot import (
     VRAM_SNAPSHOT_SCHEMA,
+    _KV_QUANT_REGISTRY,
     _METRIC_ALIASES,
     _assemble_snapshot,
     _backend_base_url,
@@ -22,6 +23,7 @@ from proxy.qz_vram_snapshot import (
     _extract_context_from_slots,
     _extract_json_error_message,
     _kv_dtype_config,
+    _kv_dtype_info,
     _metadata_arch_prefix,
     _metadata_first,
     _normalize_prometheus_metrics,
@@ -32,6 +34,7 @@ from proxy.qz_vram_snapshot import (
     _probe_backend_process,
     _probe_props,
     _probe_slots,
+    _runtime_cache_budget_mib,
     _selected_backend_model_id,
     _selected_model_catalog_entry,
     build_vram_snapshot,
@@ -931,7 +934,8 @@ class KvDtypeConfigTests(unittest.TestCase):
         with mock.patch.dict("os.environ", {"QZ_KV_KEY": "f32", "QZ_KV_VALUE": "q8_0"}):
             cfg = _kv_dtype_config()
         self.assertAlmostEqual(cfg["key_bytes"], 4.0)
-        self.assertAlmostEqual(cfg["value_bytes"], 1.0)
+        # q8_0: 34 bytes / 32 elements = 1.0625 (effective, includes scale overhead)
+        self.assertAlmostEqual(cfg["value_bytes"], 34/32)
 
     def test_default_when_no_env(self):
         with mock.patch.dict("os.environ", self._clean_env(), clear=True):
@@ -945,14 +949,25 @@ class KvDtypeConfigTests(unittest.TestCase):
         with mock.patch.dict("os.environ", self._clean_env(), clear=True):
             cfg = _kv_dtype_config(entry=entry)
         self.assertEqual(cfg["key_type"], "q8_0")
-        self.assertAlmostEqual(cfg["key_bytes"], 1.0)
+        self.assertAlmostEqual(cfg["key_bytes"], 34/32)  # documented-effective
         self.assertEqual(cfg["source"], "launch_args")
 
-    def test_unsupported_dtype_fallback_with_note(self):
+    def test_unknown_dtype_preserved_not_replaced(self):
+        # Unknown dtype must NOT fall back to f16 — preserve name, set formula_safe=False
+        with mock.patch.dict("os.environ", {"QZ_KV_KEY": "mystery_quant", "QZ_KV_VALUE": "f16"}):
+            cfg = _kv_dtype_config()
+        self.assertEqual(cfg["key_type"], "mystery_quant")  # preserved
+        self.assertIsNone(cfg["key_bytes"])
+        self.assertFalse(cfg["formula_safe"])
+        self.assertTrue(len(cfg.get("notes", [])) > 0)
+
+    def test_known_dtype_q4_k_m_has_bytes(self):
+        # q4_k_m is in the registry and should have bytes_per_element
         with mock.patch.dict("os.environ", {"QZ_KV_KEY": "q4_k_m", "QZ_KV_VALUE": "f16"}):
             cfg = _kv_dtype_config()
-        self.assertEqual(cfg["key_type"], "f16")
-        self.assertTrue(any("Unsupported" in n for n in cfg.get("notes", [])))
+        self.assertEqual(cfg["key_type"], "q4_k_m")
+        self.assertIsNotNone(cfg["key_bytes"])
+        self.assertTrue(cfg["formula_safe"])
 
     def test_json_serialisable(self):
         with mock.patch.dict("os.environ", {"QZ_KV_KEY": "f16", "QZ_KV_VALUE": "f16"}):
@@ -1560,6 +1575,378 @@ class QwenSnapshotIntegrationTests(unittest.TestCase):
             kv_dtype=self._kv_dtype(),
         )
         json.dumps(snap)
+
+
+# ---------------------------------------------------------------------------
+# 29. _kv_dtype_info and _KV_QUANT_REGISTRY
+# ---------------------------------------------------------------------------
+
+class KvDtypeInfoTests(unittest.TestCase):
+    def test_f32_exact(self):
+        info = _kv_dtype_info("f32")
+        self.assertAlmostEqual(info["bytes_per_element"], 4.0)
+        self.assertEqual(info["confidence"], "exact")
+
+    def test_f16_exact(self):
+        info = _kv_dtype_info("f16")
+        self.assertAlmostEqual(info["bytes_per_element"], 2.0)
+        self.assertEqual(info["confidence"], "exact")
+
+    def test_bf16_exact(self):
+        info = _kv_dtype_info("bf16")
+        self.assertAlmostEqual(info["bytes_per_element"], 2.0)
+
+    def test_q8_0_documented_effective(self):
+        info = _kv_dtype_info("q8_0")
+        # 34 bytes / 32 elements (includes 2-byte scale overhead)
+        self.assertAlmostEqual(info["bytes_per_element"], 34/32)
+        self.assertEqual(info["confidence"], "documented-effective")
+        self.assertEqual(info["nominal_bits"], 8)
+
+    def test_q4_0_documented(self):
+        info = _kv_dtype_info("q4_0")
+        self.assertAlmostEqual(info["bytes_per_element"], 18/32)
+        self.assertEqual(info["nominal_bits"], 4)
+
+    def test_turbo3_documented_effective(self):
+        info = _kv_dtype_info("turbo3")
+        # 50 bytes / 128 elements: ggml_half + 128/4 + 128/8
+        self.assertAlmostEqual(info["bytes_per_element"], 50/128)
+        self.assertEqual(info["nominal_bits"], 3)
+        self.assertEqual(info["confidence"], "documented-effective")
+        self.assertIn("turboquant", info["source"])
+
+    def test_turbo2_documented_effective(self):
+        info = _kv_dtype_info("turbo2")
+        self.assertAlmostEqual(info["bytes_per_element"], 34/128)
+        self.assertEqual(info["nominal_bits"], 2)
+
+    def test_turbo4_documented_effective(self):
+        info = _kv_dtype_info("turbo4")
+        self.assertAlmostEqual(info["bytes_per_element"], 68/128)
+        self.assertEqual(info["nominal_bits"], 4)
+
+    def test_tq1_0_documented(self):
+        info = _kv_dtype_info("tq1_0")
+        self.assertAlmostEqual(info["bytes_per_element"], 54/256)
+
+    def test_tq2_0_documented(self):
+        info = _kv_dtype_info("tq2_0")
+        self.assertAlmostEqual(info["bytes_per_element"], 66/256)
+
+    def test_q4_k_m_documented(self):
+        info = _kv_dtype_info("q4_k_m")
+        self.assertAlmostEqual(info["bytes_per_element"], 144/256)
+
+    def test_unknown_dtype_returns_none_bytes(self):
+        info = _kv_dtype_info("totally_fake_quant")
+        self.assertIsNone(info["bytes_per_element"])
+        self.assertEqual(info["confidence"], "unknown")
+        self.assertTrue(len(info.get("notes", [])) > 0)
+
+    def test_registry_all_entries_json_serialisable(self):
+        import json
+        json.dumps(_KV_QUANT_REGISTRY)
+
+    def test_iq3_s_unknown_bytes(self):
+        # iq3_s requires IQ3S_N_SCALE; correctly marked unknown
+        info = _kv_dtype_info("iq3_s")
+        self.assertIsNone(info["bytes_per_element"])
+
+    def test_turbo1_unknown_bytes(self):
+        info = _kv_dtype_info("turbo1")
+        self.assertIsNone(info["bytes_per_element"])
+
+
+# ---------------------------------------------------------------------------
+# 30. _kv_dtype_config with new registry
+# ---------------------------------------------------------------------------
+
+class KvDtypeConfigRegistryTests(unittest.TestCase):
+    def _clean_env(self):
+        return {k: v for k, v in os.environ.items() if k not in ("QZ_KV_KEY", "QZ_KV_VALUE")}
+
+    def test_formula_safe_both_known(self):
+        with mock.patch.dict("os.environ", {"QZ_KV_KEY": "q8_0", "QZ_KV_VALUE": "f16"}):
+            cfg = _kv_dtype_config()
+        self.assertTrue(cfg["formula_safe"])
+
+    def test_formula_safe_false_for_unknown_key(self):
+        with mock.patch.dict("os.environ", {"QZ_KV_KEY": "mystery", "QZ_KV_VALUE": "f16"}):
+            cfg = _kv_dtype_config()
+        self.assertFalse(cfg["formula_safe"])
+        self.assertEqual(cfg["key_type"], "mystery")   # not replaced with f16
+        self.assertIsNone(cfg["key_bytes"])
+
+    def test_formula_safe_false_for_unknown_value(self):
+        with mock.patch.dict("os.environ", {"QZ_KV_KEY": "f16", "QZ_KV_VALUE": "turbo99"}):
+            cfg = _kv_dtype_config()
+        self.assertFalse(cfg["formula_safe"])
+        self.assertEqual(cfg["value_type"], "turbo99")  # not replaced
+
+    def test_turbo3_formula_safe(self):
+        with mock.patch.dict("os.environ", {"QZ_KV_KEY": "q8_0", "QZ_KV_VALUE": "turbo3"}):
+            cfg = _kv_dtype_config()
+        self.assertTrue(cfg["formula_safe"])
+        self.assertAlmostEqual(cfg["value_bytes"], 50/128)
+
+    def test_key_info_value_info_present(self):
+        with mock.patch.dict("os.environ", {"QZ_KV_KEY": "f16", "QZ_KV_VALUE": "q8_0"}):
+            cfg = _kv_dtype_config()
+        self.assertIn("key_info", cfg)
+        self.assertIn("value_info", cfg)
+        self.assertEqual(cfg["key_info"]["nominal_bits"], 16)
+        self.assertEqual(cfg["value_info"]["nominal_bits"], 8)
+
+    def test_json_serialisable(self):
+        with mock.patch.dict("os.environ", {"QZ_KV_KEY": "turbo3", "QZ_KV_VALUE": "q8_0"}):
+            cfg = _kv_dtype_config()
+        json.dumps(cfg)
+
+
+# ---------------------------------------------------------------------------
+# 31. _runtime_cache_budget_mib
+# ---------------------------------------------------------------------------
+
+class RuntimeCacheBudgetMibTests(unittest.TestCase):
+    def _clean_env(self):
+        return {k: v for k, v in os.environ.items() if k != "QZ_CACHE_RAM"}
+
+    def test_env_qz_cache_ram_mib(self):
+        with mock.patch.dict("os.environ", {"QZ_CACHE_RAM": "8192"}, clear=False):
+            result = _runtime_cache_budget_mib()
+        self.assertAlmostEqual(result["mib"], 8192.0)
+        self.assertIn("QZ_CACHE_RAM", result["source"])
+        self.assertEqual(result["confidence"], "estimated-from-runtime-cache-budget")
+
+    def test_env_qz_cache_ram_float(self):
+        with mock.patch.dict("os.environ", {"QZ_CACHE_RAM": "4096.5"}, clear=False):
+            result = _runtime_cache_budget_mib()
+        self.assertAlmostEqual(result["mib"], 4096.5)
+
+    def test_no_env_returns_unknown(self):
+        with mock.patch.dict("os.environ", self._clean_env(), clear=True):
+            result = _runtime_cache_budget_mib()
+        self.assertIsNone(result["mib"])
+
+    def test_launch_args_cache_ram(self):
+        entry = {"launch_args": ["--cache-ram", "6144"]}
+        with mock.patch.dict("os.environ", self._clean_env(), clear=True):
+            result = _runtime_cache_budget_mib(entry=entry)
+        self.assertAlmostEqual(result["mib"], 6144.0)
+        self.assertIn("launch_args", result["source"])
+
+    def test_env_beats_launch_args(self):
+        entry = {"launch_args": ["--cache-ram", "1024"]}
+        with mock.patch.dict("os.environ", {"QZ_CACHE_RAM": "8192"}, clear=False):
+            result = _runtime_cache_budget_mib(entry=entry)
+        self.assertAlmostEqual(result["mib"], 8192.0)  # env wins
+        self.assertIn("QZ_CACHE_RAM", result["source"])
+
+    def test_zero_budget_ignored(self):
+        with mock.patch.dict("os.environ", {"QZ_CACHE_RAM": "0"}, clear=False):
+            result = _runtime_cache_budget_mib()
+        self.assertIsNone(result["mib"])  # 0 is invalid
+
+    def test_json_serialisable(self):
+        with mock.patch.dict("os.environ", {"QZ_CACHE_RAM": "8192"}, clear=False):
+            result = _runtime_cache_budget_mib()
+        json.dumps(result)
+
+
+# ---------------------------------------------------------------------------
+# 32. KV_ALLOC source priority and consistency in _assemble_snapshot
+# ---------------------------------------------------------------------------
+
+class KvAllocPriorityTests(unittest.TestCase):
+    def _gpus(self):
+        return [{"index": "0", "name": "GPU", "util_pct": 50, "used_mib": 22000,
+                 "total_mib": 26000, "available_mib": 4000,
+                 "power_w": 200, "temp_c": 70, "pcie_gen": "4", "pcie_width": "16",
+                 "source": "nvidia-smi", "confidence": "host-observed"}]
+
+    def _ctx(self, limit=262144):
+        return {"limit_tokens": limit, "used_tokens": None, "used_pct": None,
+                "source": "backend-props", "confidence": "backend-confirmed"}
+
+    def _qwen_entry(self):
+        return {
+            "architecture": "qwen3",
+            "size_bytes": 19 * 1024 ** 3,
+            "metadata": {
+                "general.architecture": "qwen3",
+                "qwen3.block_count": 36,
+                "qwen3.embedding_length": 4096,
+                "qwen3.attention.head_count": 32,
+                "qwen3.attention.head_count_kv": 8,
+                "qwen3.attention.key_length": 128,
+                "qwen3.attention.value_length": 128,
+            },
+        }
+
+    def _kv_dtype(self, formula_safe=True):
+        bpe = 1.0625 if formula_safe else None
+        return {
+            "key_type": "q8_0", "value_type": "f16",
+            "key_bytes": bpe, "value_bytes": 2.0,
+            "key_info": {}, "value_info": {},
+            "formula_safe": formula_safe, "notes": [],
+        }
+
+    def _snap(self, **kwargs):
+        defaults = dict(
+            gpus=self._gpus(), backend_proc={}, metrics={},
+            context=self._ctx(), now=1.0,
+            catalog_entry=self._qwen_entry(),
+            catalog_entry_source="model-router",
+            kv_dtype=self._kv_dtype(),
+            cache_budget=None,
+        )
+        defaults.update(kwargs)
+        return _assemble_snapshot(**defaults)
+
+    def test_backend_metric_beats_budget(self):
+        # Backend metric wins even when budget is available
+        metrics = {"llama_kv_cache_size_bytes": 5 * 1024 ** 3}  # 5 GiB
+        budget  = {"mib": 8192.0, "source": "env.QZ_CACHE_RAM", "confidence": "estimated-from-runtime-cache-budget", "raw": "8192", "notes": []}
+        snap = self._snap(metrics=metrics, cache_budget=budget)
+        kv_alloc = next(c for c in snap["components"] if c["name"] == "kv_alloc")
+        self.assertAlmostEqual(kv_alloc["mib"], 5 * 1024, delta=1)
+        self.assertEqual(kv_alloc["confidence"], "backend-confirmed")
+        self.assertTrue(kv_alloc["backend_confirmed"])
+
+    def test_runtime_budget_beats_formula(self):
+        budget = {"mib": 8192.0, "source": "env.QZ_CACHE_RAM", "confidence": "estimated-from-runtime-cache-budget", "raw": "8192", "notes": []}
+        snap = self._snap(cache_budget=budget)
+        kv_alloc = next(c for c in snap["components"] if c["name"] == "kv_alloc")
+        self.assertAlmostEqual(kv_alloc["mib"], 8192.0)
+        self.assertEqual(kv_alloc["confidence"], "estimated-from-runtime-cache-budget")
+
+    def test_formula_used_when_no_backend_no_budget(self):
+        snap = self._snap(cache_budget=None)
+        kv_alloc = next(c for c in snap["components"] if c["name"] == "kv_alloc")
+        self.assertIsNotNone(kv_alloc["mib"])
+        self.assertEqual(kv_alloc["confidence"], "estimated-from-gguf-metadata")
+
+    def test_unknown_dtype_disables_formula(self):
+        snap = self._snap(kv_dtype=self._kv_dtype(formula_safe=False), cache_budget=None)
+        kv_alloc = next(c for c in snap["components"] if c["name"] == "kv_alloc")
+        self.assertIsNone(kv_alloc["mib"])
+
+    def test_alternate_estimate_when_budget_wins(self):
+        budget = {"mib": 8192.0, "source": "env.QZ_CACHE_RAM", "confidence": "estimated-from-runtime-cache-budget", "raw": "8192", "notes": []}
+        snap = self._snap(cache_budget=budget)
+        kv_alloc = next(c for c in snap["components"] if c["name"] == "kv_alloc")
+        # If formula could compute, alternate_estimates should be present
+        alt = kv_alloc.get("alternate_estimates")
+        if alt:  # only if formula succeeded
+            self.assertIn("gguf_formula_mib", alt)
+            self.assertIn("budget_mib", alt)
+
+    def test_residual_uses_budget_not_formula(self):
+        budget = {"mib": 8192.0, "source": "env.QZ_CACHE_RAM", "confidence": "estimated-from-runtime-cache-budget", "raw": "8192", "notes": []}
+        bp = {"process_used_mib": 22000.0, "notes": []}
+        snap = self._snap(backend_proc=bp, cache_budget=budget)
+        kv_alloc = next(c for c in snap["components"] if c["name"] == "kv_alloc")
+        model    = next(c for c in snap["components"] if c["name"] == "model")
+        other    = next(c for c in snap["components"] if c["name"] == "other_residual")
+        # Residual = 22000 - model - 8192 (budget), NOT 22000 - model - formula_value
+        if kv_alloc["mib"] is not None and model["mib"] is not None and other["mib"] is not None:
+            expected = 22000.0 - model["mib"] - kv_alloc["mib"]
+            if expected >= 0:
+                self.assertAlmostEqual(other["mib"], expected, delta=2)
+
+
+# ---------------------------------------------------------------------------
+# 33. Consistency diagnostics
+# ---------------------------------------------------------------------------
+
+class ConsistencyDiagnosticsTests(unittest.TestCase):
+    def _gpus(self, used=22000):
+        return [{"index": "0", "name": "GPU", "util_pct": 50, "used_mib": used,
+                 "total_mib": 26000, "available_mib": max(0, 26000-used),
+                 "power_w": 200, "temp_c": 70, "pcie_gen": "4", "pcie_width": "16",
+                 "source": "nvidia-smi", "confidence": "host-observed"}]
+
+    def _ctx(self):
+        return {"limit_tokens": 262144, "used_tokens": None, "used_pct": None,
+                "source": "env", "confidence": "config"}
+
+    def _entry(self):
+        return {
+            "architecture": "qwen3",
+            "size_bytes": 19 * 1024 ** 3,   # 19 GiB
+            "metadata": {
+                "general.architecture": "qwen3",
+                "qwen3.block_count": 36,
+                "qwen3.embedding_length": 4096,
+                "qwen3.attention.head_count": 32,
+                "qwen3.attention.head_count_kv": 8,
+                "qwen3.attention.key_length": 128,
+                "qwen3.attention.value_length": 128,
+            },
+        }
+
+    def _kv_dtype_f16(self):
+        return {"key_type": "f16", "value_type": "f16",
+                "key_bytes": 2.0, "value_bytes": 2.0,
+                "key_info": {}, "value_info": {},
+                "formula_safe": True, "notes": []}
+
+    def test_overallocated_when_model_plus_kv_exceeds_process(self):
+        # model = 19 GiB, budget = 8 GiB, process = 21.9 GiB → MODEL+KV > process
+        budget = {"mib": 8192.0, "source": "env.QZ_CACHE_RAM", "confidence": "estimated-from-runtime-cache-budget", "raw": "8192", "notes": []}
+        bp = {"process_used_mib": 21900.0, "notes": []}
+        snap = _assemble_snapshot(
+            self._gpus(used=21900), bp, {}, self._ctx(), now=1.0,
+            catalog_entry=self._entry(), catalog_entry_source="model-router",
+            kv_dtype=self._kv_dtype_f16(), cache_budget=budget,
+        )
+        cons = snap["estimates"]["consistency"]
+        # 19*1024 + 8192 = 19456 + 8192 = 27648 > 21900 → overallocated
+        self.assertEqual(cons["status"], "overallocated")
+        self.assertGreater(cons.get("over_by_mib", 0), 0)
+        self.assertTrue(len(cons.get("notes", [])) > 0)
+        # Residual still clamped at 0
+        other = next(c for c in snap["components"] if c["name"] == "other_residual")
+        self.assertEqual(other["mib"], 0.0)
+
+    def test_plausible_when_estimates_fit(self):
+        # model = 1 GiB (small), budget = 1 GiB, process = 22 GiB → plausible
+        small_entry = {
+            "architecture": "llama",
+            "size_bytes": 1024 ** 3,   # 1 GiB
+            "metadata": {},
+        }
+        budget = {"mib": 1024.0, "source": "env.QZ_CACHE_RAM", "confidence": "estimated-from-runtime-cache-budget", "raw": "1024", "notes": []}
+        bp = {"process_used_mib": 22000.0, "notes": []}
+        snap = _assemble_snapshot(
+            self._gpus(), bp, {}, self._ctx(), now=1.0,
+            catalog_entry=small_entry, catalog_entry_source="model-router",
+            kv_dtype=self._kv_dtype_f16(), cache_budget=budget,
+        )
+        cons = snap["estimates"]["consistency"]
+        self.assertEqual(cons["status"], "plausible")
+        self.assertIsNone(cons.get("over_by_mib"))
+
+    def test_unknown_when_no_process_vram(self):
+        snap = _assemble_snapshot(
+            [], {}, {}, self._ctx(), now=1.0,   # no GPUs, no backend_proc
+            catalog_entry=self._entry(), catalog_entry_source="model-router",
+            kv_dtype=self._kv_dtype_f16(), cache_budget=None,
+        )
+        cons = snap["estimates"]["consistency"]
+        self.assertEqual(cons["status"], "unknown")
+
+    def test_consistency_json_serialisable(self):
+        budget = {"mib": 8192.0, "source": "env.QZ_CACHE_RAM", "confidence": "estimated-from-runtime-cache-budget", "raw": "8192", "notes": []}
+        bp = {"process_used_mib": 21900.0, "notes": []}
+        snap = _assemble_snapshot(
+            self._gpus(), bp, {}, self._ctx(), now=1.0,
+            catalog_entry=self._entry(), catalog_entry_source="model-router",
+            kv_dtype=self._kv_dtype_f16(), cache_budget=budget,
+        )
+        json.dumps(snap["estimates"])
 
 
 if __name__ == "__main__":

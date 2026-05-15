@@ -242,6 +242,11 @@ def _vram_comp_line(vram_snap: Optional[dict]) -> str:
         if ctx_conf == "backend-confirmed":
             ctx_s += "✓"
         parts.append(ctx_s)
+    # Consistency marker
+    est = vram_snap.get("estimates") or {}
+    cons = est.get("consistency") or {}
+    if cons.get("status") == "overallocated" and cons.get("over_by_mib") is not None:
+        parts.append(f"OVER={_mib_str(cons['over_by_mib'])}")
     return "  ".join(parts)
 
 
@@ -1735,12 +1740,33 @@ def once():
         # Estimates/provenance block
         est = vs.get("estimates") or {}
         if est:
-            print(f"  ESTIMATES entry_src={est.get('model_entry_source','?')}  model_size_src={est.get('model_size_source','?')}  kv_formula={est.get('kv_formula_available',False)}")
+            print(f"  ESTIMATES entry_src={est.get('model_entry_source','?')}  kv_alloc_src={est.get('kv_alloc_source','?')}  kv_formula={est.get('kv_formula_available',False)}")
             if est.get("known_allocated_mib") is not None:
-                print(f"  ALLOCATED {_mib_str(est['known_allocated_mib'])}~  conf={est.get('known_allocated_confidence','?')}  basis={est.get('residual_basis','?')}")
+                print(f"  ALLOCATED {_mib_str(est['known_allocated_mib'])}~  conf={est.get('known_allocated_confidence','?')}")
+            # Cache budget
+            cb = est.get("cache_budget") or {}
+            if cb.get("mib") is not None:
+                print(f"  CACHE_BDG {_mib_str(cb['mib'])}  src={cb.get('source','?')}  raw={cb.get('raw','?')}")
+            # KV dtype with bit widths
             kv_dt = est.get("kv_dtype") or {}
             if kv_dt:
-                print(f"  KV_DTYPE  key={kv_dt.get('key_type','?')}({kv_dt.get('key_bytes','?')}B)  val={kv_dt.get('value_type','?')}({kv_dt.get('value_bytes','?')}B)  src={kv_dt.get('source','?')}")
+                k_info = kv_dt.get("key_info") or {}
+                v_info = kv_dt.get("value_info") or {}
+                k_bits = k_info.get("nominal_bits")
+                v_bits = v_info.get("nominal_bits")
+                k_bpe  = kv_dt.get("key_bytes")
+                v_bpe  = kv_dt.get("value_bytes")
+                k_str = f"{kv_dt.get('key_type','?')}" + (f" {k_bits}b" if k_bits else "") + (f"/{k_bpe:.3f}B" if k_bpe else "/?B")
+                v_str = f"{kv_dt.get('value_type','?')}" + (f" {v_bits}b" if v_bits else "") + (f"/{v_bpe:.3f}B" if v_bpe else "/?B")
+                fs = "✓" if kv_dt.get("formula_safe") else "✗"
+                print(f"  KV_DTYPE  key={k_str}  val={v_str}  formula_safe={fs}  src={kv_dt.get('source','?')}")
+            # Consistency
+            cons = est.get("consistency") or {}
+            c_status = cons.get("status", "unknown")
+            c_attr = f"  proc={_mib_str(cons.get('backend_process_used_mib'))}  est_alloc={_mib_str(cons.get('estimated_allocated_mib'))}  residual={_mib_str(cons.get('residual_mib'))}"
+            if c_status == "overallocated":
+                c_attr += f"  OVER_BY={_mib_str(cons.get('over_by_mib'))}"
+            print(f"  CONSIST   {c_status}{c_attr}")
         # Notes
         for note in (vs.get("notes") or []):
             print(f"  note: {note}")

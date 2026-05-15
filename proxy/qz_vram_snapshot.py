@@ -9,16 +9,19 @@ Source/confidence vocabulary:
   backend-confirmed            llama.cpp /metrics returned this value directly
   host-observed                nvidia-smi GPU total on this host
   host-observed-residual       GPU total minus known components (conservative residual)
-  estimated-from-gguf-size     GGUF file size used as model weight proxy
-  estimated-from-gguf-metadata GGUF metadata formula used to estimate KV allocation
-  estimated-runtime-occupancy  KV_ALLOC scaled by context token occupancy ratio
-  derived-clamped              residual clamped because estimates exceeded process VRAM
-  estimated                    derived from other observed values
-  config                       from QZ_CONTEXT env or model router
-  unknown                      no data source available
+  estimated-from-gguf-size             GGUF file size used as model weight proxy
+  estimated-from-gguf-metadata         GGUF metadata formula used to estimate KV allocation
+  estimated-from-runtime-cache-budget  KV_ALLOC from QZ_CACHE_RAM or --cache-ram
+  estimated-runtime-occupancy          KV_ALLOC scaled by context token occupancy ratio
+  derived-clamped                      residual clamped because estimates exceeded process VRAM
+  estimated                            derived from other observed values
+  config                               from QZ_CONTEXT env or model router
+  unknown                              no data source available
 
 Updated in #6 slice 4: TurboQuant router requires ?model=<selected_backend_id>.
 Updated in #6 slice 6: provenance-based MODEL/KV_ALLOC/KV_USED split estimates.
+Updated in #6 slice 6 follow-up: architecture-aware GGUF metadata key lookup.
+Updated in #6 slice 6 follow-up 2: runtime cache budget preferred; quant registry.
 """
 from __future__ import annotations
 
@@ -64,12 +67,85 @@ _METRIC_ALIASES: dict[str, list[str]] = {
 
 VRAM_SNAPSHOT_SCHEMA = "qz.vram.snapshot.v1"
 
-# KV dtype → bytes per element
-_KV_DTYPE_BYTES: dict[str, float] = {
-    "f16":  2.0,
-    "bf16": 2.0,
-    "f32":  4.0,
-    "q8_0": 1.0,
+# KV quant registry: dtype name → dtype info.
+# bytes_per_element = type_size_bytes / blck_size (effective, including scale/header overhead).
+# Source: ggml/src/ggml-common.h and turboquant/ggml/src/ggml-common.h struct assertions.
+# None means bytes_per_element cannot be determined from available source.
+_KV_QUANT_REGISTRY: dict[str, dict] = {
+    # --- Floating point (exact) ---
+    "f32":     {"nominal_bits": 32, "bytes_per_element": 4.0,        "confidence": "exact",                "source": "ieee-754",                "notes": []},
+    "f16":     {"nominal_bits": 16, "bytes_per_element": 2.0,        "confidence": "exact",                "source": "ieee-754",                "notes": []},
+    "bf16":    {"nominal_bits": 16, "bytes_per_element": 2.0,        "confidence": "exact",                "source": "bfloat16",                "notes": []},
+
+    # --- Standard GGML quants (blck_size=32) ---
+    # q8_0: 2(scale) + 32 = 34 bytes / 32 elements
+    "q8_0":   {"nominal_bits": 8,  "bytes_per_element": 34/32,       "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 32,  "notes": []},
+    # q8_1: 2(scale)+2(bias) + 32 = 36 bytes / 32 elements
+    "q8_1":   {"nominal_bits": 8,  "bytes_per_element": 36/32,       "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 32,  "notes": []},
+    # q4_0: 2(scale) + 16(nibbles) = 18 bytes / 32 elements
+    "q4_0":   {"nominal_bits": 4,  "bytes_per_element": 18/32,       "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 32,  "notes": []},
+    # q4_1: 4(scale+bias) + 16 = 20 bytes / 32 elements
+    "q4_1":   {"nominal_bits": 4,  "bytes_per_element": 20/32,       "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 32,  "notes": []},
+    # q5_0: 2(scale) + 16(low4) + 4(high1) = 22 bytes / 32 elements
+    "q5_0":   {"nominal_bits": 5,  "bytes_per_element": 22/32,       "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 32,  "notes": []},
+    # q5_1: 4(scale+bias) + 16 + 4 = 24 bytes / 32 elements
+    "q5_1":   {"nominal_bits": 5,  "bytes_per_element": 24/32,       "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 32,  "notes": []},
+
+    # --- K-quants (blck_size=256, QK_K=256, K_SCALE_SIZE=12) ---
+    # q2_K: 2*ggml_half + 256/16(scales) + 256/4(quants) = 4+16+64 = 84 bytes / 256
+    "q2_k":   {"nominal_bits": 2,  "bytes_per_element": 84/256,      "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 256, "notes": []},
+    # q3_K: ggml_half + 256/4(qs) + 256/8(hmask) + 12(scales) = 2+64+32+12 = 110 bytes / 256
+    "q3_k_s": {"nominal_bits": 3,  "bytes_per_element": 110/256,     "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 256, "notes": []},
+    "q3_k_m": {"nominal_bits": 3,  "bytes_per_element": 110/256,     "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 256, "notes": []},
+    "q3_k_l": {"nominal_bits": 3,  "bytes_per_element": 110/256,     "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 256, "notes": []},
+    # q4_K: 2*ggml_half + K_SCALE_SIZE + 256/2(nibbles) = 4+12+128 = 144 bytes / 256
+    "q4_k_s": {"nominal_bits": 4,  "bytes_per_element": 144/256,     "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 256, "notes": []},
+    "q4_k_m": {"nominal_bits": 4,  "bytes_per_element": 144/256,     "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 256, "notes": []},
+    # q5_K: 2*ggml_half + K_SCALE_SIZE + 256/2 + 256/8 = 4+12+128+32 = 176 bytes / 256
+    "q5_k_s": {"nominal_bits": 5,  "bytes_per_element": 176/256,     "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 256, "notes": []},
+    "q5_k_m": {"nominal_bits": 5,  "bytes_per_element": 176/256,     "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 256, "notes": []},
+    # q6_K: ggml_half + 256/16(scales) + 3*256/4(ql+qh) = 2+16+192 = 210 bytes / 256
+    "q6_k":   {"nominal_bits": 6,  "bytes_per_element": 210/256,     "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 256, "notes": []},
+
+    # --- IQ quants (blck_size=256 unless noted) ---
+    # iq1_s: ggml_half + 256/8(qs) + 256/16(qh) = 2+32+16 = 50 bytes / 256
+    "iq1_s":  {"nominal_bits": 1,  "bytes_per_element": 50/256,      "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 256, "notes": []},
+    # iq1_m: 256/8 + 256/16 + 256/32 = 32+16+8 = 56 bytes / 256
+    "iq1_m":  {"nominal_bits": 1,  "bytes_per_element": 56/256,      "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 256, "notes": []},
+    # iq2_xxs: ggml_half + 256/8*uint16 = 2+64 = 66 bytes / 256
+    "iq2_xxs":{"nominal_bits": 2,  "bytes_per_element": 66/256,      "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 256, "notes": []},
+    # iq2_xs: ggml_half + 256/8*uint16 + 256/32(scales) = 2+64+8 = 74 bytes / 256
+    "iq2_xs": {"nominal_bits": 2,  "bytes_per_element": 74/256,      "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 256, "notes": []},
+    # iq2_s: ggml_half + 256/4(qs) + 256/16(qh+scales) = 2+64+16 = 82 bytes / 256
+    "iq2_s":  {"nominal_bits": 2,  "bytes_per_element": 82/256,      "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 256, "notes": []},
+    # iq2_m: not in available source; mark unknown
+    "iq2_m":  {"nominal_bits": 2,  "bytes_per_element": None,        "confidence": "unknown",              "source": "ggml-common-h",           "blck_size": 256, "notes": ["iq2_m block struct unavailable; bytes_per_element not computed"]},
+    # iq3_xxs: ggml_half + 3*256/8 = 2+96 = 98 bytes / 256
+    "iq3_xxs":{"nominal_bits": 3,  "bytes_per_element": 98/256,      "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 256, "notes": []},
+    # iq3_s: requires IQ3S_N_SCALE constant; mark unknown
+    "iq3_s":  {"nominal_bits": 3,  "bytes_per_element": None,        "confidence": "unknown",              "source": "ggml-common-h",           "blck_size": 256, "notes": ["iq3_s block size requires IQ3S_N_SCALE; bytes_per_element not computed"]},
+    # iq3_m: not in available source; mark unknown
+    "iq3_m":  {"nominal_bits": 3,  "bytes_per_element": None,        "confidence": "unknown",              "source": "ggml-common-h",           "blck_size": 256, "notes": ["iq3_m block struct unavailable; bytes_per_element not computed"]},
+    # iq4_nl: blck_size=QK4_NL=32; ggml_half + 32/2(nibbles) = 2+16 = 18 bytes / 32
+    "iq4_nl": {"nominal_bits": 4,  "bytes_per_element": 18/32,       "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 32,  "notes": []},
+    # iq4_xs: ggml_half + uint16 + 256/64 + 256/2 = 2+2+4+128 = 136 bytes / 256
+    "iq4_xs": {"nominal_bits": 4,  "bytes_per_element": 136/256,     "confidence": "documented-effective", "source": "ggml-common-h",           "blck_size": 256, "notes": []},
+
+    # --- TQ quants (blck_size=256, QK_K=256) ---
+    # tq1_0: ggml_half + 256/64(qh) + (256-16)/5(qs base-3) = 2+4+48 = 54 bytes / 256
+    "tq1_0":  {"nominal_bits": 1,  "bytes_per_element": 54/256,      "confidence": "documented-effective", "source": "turboquant-ggml-common-h", "blck_size": 256, "notes": []},
+    # tq2_0: ggml_half + 256/4(qs 2-bit) = 2+64 = 66 bytes / 256
+    "tq2_0":  {"nominal_bits": 2,  "bytes_per_element": 66/256,      "confidence": "documented-effective", "source": "turboquant-ggml-common-h", "blck_size": 256, "notes": []},
+
+    # --- TurboQuant KV cache types (blck_size=128, QK_TURBO*=128) ---
+    # turbo2: ggml_half + 128/4(qs 2-bit) = 2+32 = 34 bytes / 128
+    "turbo2": {"nominal_bits": 2,  "bytes_per_element": 34/128,      "confidence": "documented-effective", "source": "turboquant-ggml-common-h", "blck_size": 128, "notes": ["WHT + 2-bit PolarQuant"]},
+    # turbo3: ggml_half + 128/4(qs lower-2bit) + 128/8(signs 1-bit) = 2+32+16 = 50 bytes / 128
+    "turbo3": {"nominal_bits": 3,  "bytes_per_element": 50/128,      "confidence": "documented-effective", "source": "turboquant-ggml-common-h", "blck_size": 128, "notes": ["WHT + 3-bit PolarQuant"]},
+    # turbo4: 2*ggml_half + 128*3/8(qs 3-bit) + 128/8(signs 1-bit) = 4+48+16 = 68 bytes / 128
+    "turbo4": {"nominal_bits": 4,  "bytes_per_element": 68/128,      "confidence": "documented-effective", "source": "turboquant-ggml-common-h", "blck_size": 128, "notes": ["WHT + 4-bit PolarQuant"]},
+    # turbo1: not in available source; mark unknown
+    "turbo1": {"nominal_bits": 1,  "bytes_per_element": None,        "confidence": "unknown",              "source": "turboquant-ggml-common-h", "blck_size": 128, "notes": ["turbo1 struct unavailable; bytes_per_element not computed"]},
 }
 
 # Module-level TTL cache so nvidia-smi is not called more than once per interval.
@@ -769,31 +845,62 @@ def _selected_model_catalog_entry(handler=None, model_id: str = "") -> tuple[dic
     return {}, "unknown"
 
 
+def _kv_dtype_info(dtype: str) -> dict:
+    """Look up quant dtype in _KV_QUANT_REGISTRY. Never raises.
+
+    Returns registry entry if known, else unknown stub.
+    bytes_per_element is None for unknown or undocumented types.
+    """
+    key = dtype.strip().lower() if isinstance(dtype, str) else ""
+    if key in _KV_QUANT_REGISTRY:
+        return dict(_KV_QUANT_REGISTRY[key], dtype=key)
+    return {
+        "dtype": key,
+        "nominal_bits": None,
+        "bytes_per_element": None,
+        "confidence": "unknown",
+        "source": "not-in-registry",
+        "notes": [f"Unknown KV dtype '{key}'; not in quant registry; bytes_per_element unavailable."],
+    }
+
+
 def _kv_dtype_config(handler=None, entry=None) -> dict:
     """Return KV key/value dtype config. Never raises.
 
     Sources in order: env QZ_KV_KEY/QZ_KV_VALUE, launch_args, default f16/f16.
+
+    Unknown dtype names are preserved as-is (not replaced with f16).
+    formula_safe is False when either key or value bytes_per_element is unknown.
     """
     notes: list = []
+
+    def _resolve(ktype: str, vtype: str, source: str, conf: str) -> dict:
+        k_info = _kv_dtype_info(ktype)
+        v_info = _kv_dtype_info(vtype)
+        kb = k_info.get("bytes_per_element")
+        vb = v_info.get("bytes_per_element")
+        if kb is None:
+            notes.append(f"Unknown KV key dtype '{ktype}'; bytes_per_element unavailable; GGUF formula disabled.")
+        if vb is None:
+            notes.append(f"Unknown KV value dtype '{vtype}'; bytes_per_element unavailable; GGUF formula disabled.")
+        formula_safe = kb is not None and vb is not None
+        return {
+            "key_type":    ktype,
+            "value_type":  vtype,
+            "key_bytes":   kb,
+            "value_bytes": vb,
+            "key_info":    k_info,
+            "value_info":  v_info,
+            "source":      source,
+            "confidence":  conf,
+            "formula_safe": formula_safe,
+            "notes":       notes,
+        }
 
     env_key = os.environ.get("QZ_KV_KEY", "").strip().lower()
     env_val = os.environ.get("QZ_KV_VALUE", "").strip().lower()
     if env_key or env_val:
-        ktype = env_key or "f16"
-        vtype = env_val or "f16"
-        kb = _KV_DTYPE_BYTES.get(ktype)
-        vb = _KV_DTYPE_BYTES.get(vtype)
-        if kb is None:
-            notes.append(f"Unsupported KV key dtype '{ktype}'; using f16 estimate.")
-            kb, ktype = 2.0, "f16"
-        if vb is None:
-            notes.append(f"Unsupported KV value dtype '{vtype}'; using f16 estimate.")
-            vb, vtype = 2.0, "f16"
-        return {
-            "key_type": ktype, "value_type": vtype,
-            "key_bytes": kb, "value_bytes": vb,
-            "source": "env", "confidence": "config", "notes": notes,
-        }
+        return _resolve(env_key or "f16", env_val or "f16", "env", "config")
 
     if isinstance(entry, dict):
         launch_args = entry.get("launch_args") or []
@@ -808,27 +915,62 @@ def _kv_dtype_config(handler=None, entry=None) -> dict:
                 vtype = nxt.strip().lower()
             i += 1
         if ktype or vtype:
-            ktype = ktype or "f16"
-            vtype = vtype or "f16"
-            kb = _KV_DTYPE_BYTES.get(ktype)
-            vb = _KV_DTYPE_BYTES.get(vtype)
-            if kb is None:
-                notes.append(f"Unsupported KV key dtype '{ktype}'; using f16 estimate.")
-                kb, ktype = 2.0, "f16"
-            if vb is None:
-                notes.append(f"Unsupported KV value dtype '{vtype}'; using f16 estimate.")
-                vb, vtype = 2.0, "f16"
-            return {
-                "key_type": ktype, "value_type": vtype,
-                "key_bytes": kb, "value_bytes": vb,
-                "source": "launch_args", "confidence": "config", "notes": notes,
-            }
+            return _resolve(ktype or "f16", vtype or "f16", "launch_args", "config")
 
-    return {
-        "key_type": "f16", "value_type": "f16",
-        "key_bytes": 2.0, "value_bytes": 2.0,
-        "source": "default", "confidence": "estimated-default", "notes": notes,
+    return _resolve("f16", "f16", "default", "estimated-default")
+
+
+def _runtime_cache_budget_mib(handler=None, entry: dict | None = None) -> dict:
+    """Return runtime KV cache budget in MiB from env or launch_args. Never raises.
+
+    Sources in order:
+    1. QZ_CACHE_RAM env var (in MiB; e.g. 8192 = 8 GiB — matches qz-env default)
+    2. Entry launch_args --cache-ram VALUE (in MiB, as passed to llama.cpp by qz-up)
+    """
+    _unknown: dict = {
+        "mib": None, "source": "unknown",
+        "confidence": "unknown", "raw": "", "notes": [],
     }
+
+    # 1. QZ_CACHE_RAM (in MiB)
+    env_val = os.environ.get("QZ_CACHE_RAM", "").strip()
+    if env_val:
+        try:
+            mib = float(env_val)
+            if mib > 0:
+                return {
+                    "mib":        mib,
+                    "source":     "env.QZ_CACHE_RAM",
+                    "confidence": "estimated-from-runtime-cache-budget",
+                    "raw":        f"{env_val} MiB",
+                    "notes":      [],
+                }
+        except (ValueError, TypeError):
+            pass
+
+    # 2. launch_args --cache-ram VALUE (MiB)
+    if isinstance(entry, dict):
+        launch_args = entry.get("launch_args") or []
+        i = 0
+        while i < len(launch_args) - 1:
+            arg = str(launch_args[i])
+            nxt = str(launch_args[i + 1])
+            if arg == "--cache-ram":
+                try:
+                    mib = float(nxt)
+                    if mib > 0:
+                        return {
+                            "mib":        mib,
+                            "source":     "launch_args.--cache-ram",
+                            "confidence": "estimated-from-runtime-cache-budget",
+                            "raw":        f"{nxt} MiB",
+                            "notes":      [],
+                        }
+                except (ValueError, TypeError):
+                    pass
+            i += 1
+
+    return _unknown
 
 
 def _metadata_arch_prefix(entry: dict) -> str:
@@ -908,6 +1050,8 @@ def _estimate_kv_cache_bytes(
     Architecture-aware: resolves metadata keys by {arch}.*, llama.*, bare suffix,
     then unambiguous suffix match. Works for qwen3, qwen2, llama, and other archs.
 
+    Requires kv_dtype["formula_safe"] == True; returns unknown if dtype bytes unavailable.
+
     Formula per token per layer:
       head_count_kv * key_length * key_bytes + head_count_kv * value_length * value_bytes
 
@@ -921,6 +1065,14 @@ def _estimate_kv_cache_bytes(
     }
     if not isinstance(entry, dict):
         return {**_unknown, "notes": ["No catalog entry available."]}
+
+    # Refuse to compute with unknown dtype bytes — do not silently fall back
+    if not kv_dtype.get("formula_safe", True):
+        dtype_notes = kv_dtype.get("notes") or []
+        return {
+            **_unknown,
+            "notes": ["GGUF formula disabled: KV dtype bytes_per_element unknown."] + dtype_notes[:2],
+        }
 
     meta = entry.get("metadata") or {}
     arch = _metadata_arch_prefix(entry)
@@ -994,8 +1146,8 @@ def _estimate_kv_cache_bytes(
     if not context_limit_tokens or context_limit_tokens <= 0:
         return {**_unknown, "notes": ["KV estimate unavailable: context_limit_tokens unknown."]}
 
-    key_bytes   = kv_dtype.get("key_bytes", 2.0)
-    value_bytes = kv_dtype.get("value_bytes", 2.0)
+    key_bytes   = kv_dtype.get("key_bytes")   or 2.0
+    value_bytes = kv_dtype.get("value_bytes") or 2.0
 
     kv_bytes_per_token_per_layer = (
         head_kv * key_len * key_bytes + head_kv * val_len * value_bytes
@@ -1051,6 +1203,7 @@ def _assemble_snapshot(
     catalog_entry: dict | None = None,
     catalog_entry_source: str = "unknown",
     kv_dtype: dict | None = None,
+    cache_budget: dict | None = None,
 ) -> dict:
     """Assemble full qz.vram.snapshot.v1 dict from collected data.
 
@@ -1114,14 +1267,18 @@ def _assemble_snapshot(
 
     # ------------------------------------------------------------------
     # KV_ALLOC — estimated reserved full-context KV allocation
+    # Priority: backend metric > runtime cache budget > GGUF formula > unknown
     # ------------------------------------------------------------------
-    kv_alloc_mib              = None
-    kv_alloc_src              = "unknown"
-    kv_alloc_conf             = "unknown"
-    kv_alloc_estimated        = True
+    kv_alloc_mib               = None
+    kv_alloc_src               = "unknown"
+    kv_alloc_conf              = "unknown"
+    kv_alloc_estimated         = True
     kv_alloc_backend_confirmed = False
-    kv_alloc_formula          = None
+    kv_alloc_formula           = None
+    kv_alloc_alt: dict         = {}   # alternate estimate when budget wins over formula
+    kv_est: dict               = {}
 
+    # A. Backend metric (backend-confirmed)
     if "kv_cache_size_bytes" in normalized_metrics:
         raw = normalized_metrics["kv_cache_size_bytes"]
         if raw > 0:
@@ -1131,14 +1288,36 @@ def _assemble_snapshot(
             kv_alloc_estimated         = False
             kv_alloc_backend_confirmed = True
 
-    kv_est: dict = {}
+    # B. Runtime cache budget (QZ_CACHE_RAM or --cache-ram), pre-computed by caller
+    cache_budget = cache_budget or {}
+    if kv_alloc_mib is None and cache_budget.get("mib") is not None:
+        kv_alloc_mib  = cache_budget["mib"]
+        kv_alloc_src  = cache_budget["source"]
+        kv_alloc_conf = cache_budget["confidence"]
+        # Also attempt formula for comparison (record as alternate even if not primary)
+        kv_est = _estimate_kv_cache_bytes(catalog_entry, context.get("limit_tokens"), kv_dtype)
+        if kv_est.get("mib") is not None:
+            formula_mib = kv_est["mib"]
+            diff_abs    = abs(formula_mib - kv_alloc_mib)
+            diff_rel    = diff_abs / kv_alloc_mib if kv_alloc_mib > 0 else 0.0
+            kv_alloc_alt = {
+                "gguf_formula_mib":        round(formula_mib, 2),
+                "gguf_formula_confidence": kv_est["confidence"],
+                "budget_mib":              round(kv_alloc_mib, 2),
+                "diff_abs_mib":            round(diff_abs, 2),
+                "diff_rel_pct":            round(diff_rel * 100, 1),
+                "material_difference":     diff_abs > 512 or diff_rel > 0.20,
+                "formula_keys":            (kv_est.get("formula") or {}).get("keys"),
+            }
+
+    # C. GGUF metadata formula (when no backend metric and no budget)
     if kv_alloc_mib is None:
         kv_est = _estimate_kv_cache_bytes(catalog_entry, context.get("limit_tokens"), kv_dtype)
         if kv_est.get("mib") is not None:
-            kv_alloc_mib      = kv_est["mib"]
-            kv_alloc_src      = kv_est["source"]
-            kv_alloc_conf     = kv_est["confidence"]
-            kv_alloc_formula  = kv_est.get("formula")
+            kv_alloc_mib     = kv_est["mib"]
+            kv_alloc_src     = kv_est["source"]
+            kv_alloc_conf    = kv_est["confidence"]
+            kv_alloc_formula = kv_est.get("formula")
 
     kv_alloc_comp: dict = {
         "name": "kv_alloc", "label": "KV_ALLOC",
@@ -1151,6 +1330,8 @@ def _assemble_snapshot(
     }
     if kv_alloc_formula:
         kv_alloc_comp["formula"] = kv_alloc_formula
+    if kv_alloc_alt:
+        kv_alloc_comp["alternate_estimates"] = kv_alloc_alt
     # Propagate diagnostics when KV_ALLOC estimation failed
     if kv_alloc_mib is None and kv_est:
         if kv_est.get("architecture"):
@@ -1256,17 +1437,59 @@ def _assemble_snapshot(
     components = [model_comp, kv_alloc_comp, kv_used_comp, scratch_comp, other_comp]
 
     # ------------------------------------------------------------------
+    # Consistency diagnostics
+    # ------------------------------------------------------------------
+    est_allocated = (model_comp.get("mib") or 0.0) + (kv_alloc_mib or 0.0)
+    if backend_process_used is None:
+        consistency: dict = {
+            "status":                  "unknown",
+            "backend_process_used_mib": None,
+            "estimated_allocated_mib":  round(est_allocated, 1) if est_allocated > 0 else None,
+            "residual_mib":            None,
+            "over_by_mib":             None,
+            "notes":                   ["backend_process_used_mib unknown; cannot assess consistency"],
+        }
+    else:
+        residual_c = backend_process_used - est_allocated
+        if residual_c < 0:
+            consistency = {
+                "status":                  "overallocated",
+                "backend_process_used_mib": round(backend_process_used, 1),
+                "estimated_allocated_mib":  round(est_allocated, 1),
+                "residual_mib":            0.0,
+                "over_by_mib":             round(-residual_c, 1),
+                "notes": [
+                    "Estimated MODEL + KV_ALLOC exceeds measured backend process VRAM. "
+                    "GGUF file size may overstate VRAM model weight footprint; "
+                    "cache budget may be compressed or reserved; "
+                    "backend memory accounting may differ from component estimates."
+                ],
+            }
+        else:
+            consistency = {
+                "status":                  "plausible",
+                "backend_process_used_mib": round(backend_process_used, 1),
+                "estimated_allocated_mib":  round(est_allocated, 1),
+                "residual_mib":            round(residual_c, 1),
+                "over_by_mib":             None,
+                "notes":                   [],
+            }
+
+    # ------------------------------------------------------------------
     # Estimates/provenance block
     # ------------------------------------------------------------------
     estimates: dict = {
         "schema":                    "qz.vram.estimates.v1",
         "model_entry_source":        catalog_entry_source,
         "model_size_source":         model_src,
+        "kv_alloc_source":           kv_alloc_src,
         "kv_formula_available":      kv_alloc_mib is not None and not kv_alloc_backend_confirmed,
         "kv_dtype":                  kv_dtype if kv_dtype else None,
+        "cache_budget":              cache_budget if cache_budget.get("mib") is not None else None,
         "known_allocated_mib":       round(known_sum, 2) if known_sum > 0 else None,
         "known_allocated_confidence": "mixed-estimated",
         "residual_basis":            "backend_process_used_mib - estimated MODEL - estimated KV_ALLOC",
+        "consistency":               consistency,
     }
 
     # ------------------------------------------------------------------
@@ -1382,7 +1605,8 @@ def build_vram_snapshot(handler=None, *, now: float | None = None) -> dict:
             handler=handler, metrics=metrics, props=props, slots=slots,
         )
         catalog_entry, catalog_entry_source = _selected_model_catalog_entry(handler, model_id)
-        kv_dtype = _kv_dtype_config(handler=handler, entry=catalog_entry)
+        kv_dtype     = _kv_dtype_config(handler=handler, entry=catalog_entry)
+        cache_budget = _runtime_cache_budget_mib(handler=handler, entry=catalog_entry)
         return _assemble_snapshot(
             gpus, backend_proc, metrics, context,
             now=now, metrics_note=metrics_note,
@@ -1390,6 +1614,7 @@ def build_vram_snapshot(handler=None, *, now: float | None = None) -> dict:
             catalog_entry=catalog_entry,
             catalog_entry_source=catalog_entry_source,
             kv_dtype=kv_dtype,
+            cache_budget=cache_budget,
         )
     except Exception as exc:
         return {
