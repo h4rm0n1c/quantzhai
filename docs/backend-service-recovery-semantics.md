@@ -583,6 +583,13 @@ Two-step smoke flow available with `--allow-restart-and-reload`:
 3. trigger reload_selected_model
 4. verify control-plane backend.reachable + model state
 
+### #48 (done): `start_backend` trigger action
+
+Added `start_backend` to `POST /qz/recovery/trigger`. Non-destructive: inspects container state,
+starts if stopped/missing, skips if already running+healthy. Never rm -f (that's restart_backend).
+Does not load models. `select_model` still deferred.
+Tests: `tests/test_qz_recovery_trigger.py` — 145 assertions.
+
 ### #50 (done): Async recovery job model
 
 Added async job support for `reload_selected_model` via `POST /qz/recovery/trigger` with `"async": true`.

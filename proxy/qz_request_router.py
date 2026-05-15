@@ -107,7 +107,7 @@ except ImportError:
 
 
 SAFE_TRIGGER_ACTIONS: frozenset = frozenset({"refresh_catalog", "clear_failure"})
-DANGEROUS_TRIGGER_ACTIONS: frozenset = frozenset({"restart_backend", "reload_selected_model"})
+DANGEROUS_TRIGGER_ACTIONS: frozenset = frozenset({"restart_backend", "reload_selected_model", "start_backend"})
 ASYNC_SUPPORTED_ACTIONS: frozenset = frozenset({"reload_selected_model"})
 IMPLEMENTED_TRIGGER_ACTIONS: frozenset = SAFE_TRIGGER_ACTIONS | DANGEROUS_TRIGGER_ACTIONS
 UNIMPLEMENTED_TRIGGER_ACTIONS: frozenset = ALLOWED_RECOVERY_ACTIONS - IMPLEMENTED_TRIGGER_ACTIONS
@@ -116,6 +116,10 @@ RECOVERY_TRIGGER_SCHEMA = "qz.recovery.trigger.v1"
 _TRIGGER_WARNINGS: dict = {
     "refresh_catalog":      "Refreshing the catalog does not restart the backend.",
     "clear_failure":        "Clearing failure state does not start or restart the backend.",
+    "start_backend":        (
+        "Starting the backend creates or starts the container without modifying models. "
+        "Use restart_backend if the existing container must be replaced."
+    ),
     "restart_backend":      (
         "Restarting the backend will interrupt active requests and requires a model reload afterward."
     ),
@@ -684,8 +688,9 @@ class RequestRouter:
         if action in UNIMPLEMENTED_TRIGGER_ACTIONS:
             return 409, "action_not_implemented", "state", (
                 f"Action {action!r} is not yet implemented. "
-                "Implemented: refresh_catalog, clear_failure, restart_backend, reload_selected_model. "
-                "start_backend/select_model remain deferred."
+                "Implemented: refresh_catalog, clear_failure, start_backend, "
+                "restart_backend, reload_selected_model. "
+                "select_model remains deferred."
             )
 
         # force=true is only valid for dangerous (interrupt) actions, not safe ones
@@ -822,6 +827,37 @@ class RequestRouter:
             return False, err or f"Model load did not complete (state={state!r})"
         except Exception as exc:
             return False, str(exc)
+
+    def _do_start_backend(self) -> tuple[bool, str]:
+        """Non-destructive backend start via BackendClient.start_container().
+
+        Does not load or unload models. Does not rm -f existing containers.
+        Returns (success, error_message). Never raises.
+        """
+        try:
+            router = self.handler._model_router()
+            context_length = router.backend_context_length()
+            if not isinstance(context_length, int) or context_length <= 0:
+                context_length = int(os.environ.get("QZ_CONTEXT", 131072))
+
+            backend = self.handler._backend()
+            backend.start_container(context_length)
+
+            cls = self.handler.__class__
+            cls.model_load_state = "idle"
+            cls.model_load_error = None
+            cls.model_load_finished_at = time.time()
+            return True, ""
+        except Exception as exc:
+            error = str(exc)
+            try:
+                cls = self.handler.__class__
+                cls.model_load_state = "failed"
+                cls.model_load_error = error
+                cls.model_load_finished_at = time.time()
+            except Exception:
+                pass
+            return False, error
 
     def _do_restart_backend(self) -> tuple[bool, str]:
         """Execute backend restart via BackendClient.restart_container().
@@ -1132,6 +1168,8 @@ class RequestRouter:
                 ok, error = self._do_refresh_catalog()
             elif action == "clear_failure":
                 ok, error = self._do_clear_failure(rs)
+            elif action == "start_backend":
+                ok, error = self._do_start_backend()
             elif action == "restart_backend":
                 ok, error = self._do_restart_backend()
             elif action == "reload_selected_model":

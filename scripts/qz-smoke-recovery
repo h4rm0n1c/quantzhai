@@ -12,6 +12,7 @@
 #   --post-timeout N         curl max-time for ordinary POST checks (default: 15)
 #   --dangerous-timeout N    curl max-time for restart/reload trigger calls (default: 300)
 #   --skip-refresh-trigger   Skip the optional refresh_catalog trigger test
+#   --allow-start            Run start_backend trigger (non-destructive start/check)
 #   --allow-restart          Run restart_backend trigger (INTERRUPTS backend)
 #   --allow-reload           Run reload_selected_model trigger (may stall)
 #   --allow-restart-and-reload   Run restart_backend then reload_selected_model
@@ -53,6 +54,7 @@ WAIT_SECS="${QZ_WAIT_SECS:-30}"
 POST_TIMEOUT="${QZ_SMOKE_POST_TIMEOUT:-15}"
 DANGEROUS_POST_TIMEOUT="${QZ_SMOKE_DANGEROUS_POST_TIMEOUT:-300}"
 SKIP_REFRESH_TRIGGER=0
+ALLOW_START=0
 ALLOW_RESTART=0
 ALLOW_RELOAD=0
 ALLOW_RESTART_AND_RELOAD=0
@@ -78,6 +80,7 @@ while [[ $# -gt 0 ]]; do
     --skip-refresh-trigger)      SKIP_REFRESH_TRIGGER=1; shift ;;
     --allow-restart)             ALLOW_RESTART=1; shift ;;
     --allow-reload)              ALLOW_RELOAD=1; shift ;;
+    --allow-start)               ALLOW_START=1; shift ;;
     --allow-restart-and-reload)  ALLOW_RESTART_AND_RELOAD=1; ALLOW_RESTART=1; ALLOW_RELOAD=1; shift ;;
     --allow-async-reload)        ALLOW_ASYNC_RELOAD=1; shift ;;
     -h|--help)                   usage ;;
@@ -418,21 +421,20 @@ if [[ "$AUTHORITY_ENABLED" -eq 1 ]]; then
     info "  artifact: $BAD_CONFIRM_FILE"
   fi
 
-  # 7b. start_backend remains 409
-  START_BLOCK_FILE=/tmp/qz-recovery-smoke-trigger-start-blocked.json
-  _jq_body='{"action":"start_backend","reason":"start_backend must remain blocked","confirm":"this is definitely wrong"}'
-  SB_STATUS=$(_post_json "${PROXY_URL}/qz/recovery/trigger" "$_jq_body" "$START_BLOCK_FILE")
-  if [[ "$SB_STATUS" == "409" ]]; then
-    got_err=$(_jq "$START_BLOCK_FILE" '.error')
-    if [[ "$got_err" == "action_not_implemented" ]]; then
-      ok "trigger start_backend: HTTP 409 action_not_implemented"
-    else
-      fail "trigger start_backend: HTTP 409 but error=${got_err} (expected action_not_implemented)"
-    fi
-    _expect_field "trigger/start_backend" "$START_BLOCK_FILE" '.schema' "qz.recovery.error.v1"
+  # 7b. start_backend plan check (not a full trigger — plan only)
+  START_PLAN_FILE=/tmp/qz-recovery-smoke-plan-start-backend.json
+  SP_STATUS=$(_post_json \
+    "${PROXY_URL}/qz/recovery/plan" \
+    '{"action":"start_backend","force":true}' \
+    "$START_PLAN_FILE")
+  if [[ "$SP_STATUS" == "200" ]]; then
+    ok "plan/start_backend: HTTP 200"
+    _expect_field "plan/start_backend" "$START_PLAN_FILE" '.schema' "qz.recovery.plan.v1"
+    _expect_field "plan/start_backend" "$START_PLAN_FILE" '.action' "start_backend"
+    _expect_field_exists "plan/start_backend" "$START_PLAN_FILE" '.feasible'
   else
-    fail "trigger start_backend: expected HTTP 409 got ${SB_STATUS}"
-    info "  artifact: $START_BLOCK_FILE"
+    fail "plan/start_backend: expected HTTP 200 got ${SP_STATUS}"
+    info "  artifact: $START_PLAN_FILE"
   fi
 
   # 7c. select_model remains 409
@@ -511,7 +513,51 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 8. Optional dangerous: restart_backend
+# 8a. Optional: start_backend (--allow-start)
+# ---------------------------------------------------------------------------
+if [[ "$ALLOW_START" -eq 1 ]]; then
+  echo
+  echo '--- trigger: start_backend (--allow-start) ---'
+  if [[ -z "$CONFIRM_PHRASE" ]]; then
+    fail "trigger start_backend: --confirm PHRASE required for --allow-start"
+  elif [[ "$AUTHORITY_ENABLED" -eq 0 ]]; then
+    fail "trigger start_backend: proxy authority not enabled (QZ_RECOVERY_ACTIONS!=1)"
+  else
+    START_FILE=/tmp/qz-recovery-smoke-trigger-start-backend.json
+    START_ERR=/tmp/qz-recovery-smoke-trigger-start-backend.curl.err
+    _body=$(printf '{"action":"start_backend","reason":"recovery smoke explicit start","confirm":"%s","force":true}' \
+      "$CONFIRM_PHRASE")
+    printf '  timeout: %ss\n' "$DANGEROUS_POST_TIMEOUT"
+    SB_TR_STATUS=$(_post_json_ext "${PROXY_URL}/qz/recovery/trigger" "$_body" \
+      "$START_FILE" "$DANGEROUS_POST_TIMEOUT" "$START_ERR")
+    if [[ "$SB_TR_STATUS" == "200" ]]; then
+      ok "trigger start_backend: HTTP 200"
+      _expect_field "trigger/start_backend" "$START_FILE" '.schema' "qz.recovery.trigger.v1"
+      _expect_field "trigger/start_backend" "$START_FILE" '.accepted' "true"
+      # Verify backend reachable
+      CP_POST_START_FILE=/tmp/qz-recovery-smoke-control-plane-post-start.json
+      _cp_st=$(_get_json "${PROXY_URL}/qz/control-plane" "$CP_POST_START_FILE")
+      if [[ "$_cp_st" == "200" ]]; then
+        _reachable=$(_jq "$CP_POST_START_FILE" '.backend.reachable // false')
+        if [[ "$_reachable" == "true" ]]; then
+          ok "control-plane post-start: backend.reachable=true"
+        else
+          fail "control-plane post-start: backend.reachable=${_reachable}"
+        fi
+      fi
+    elif [[ "$SB_TR_STATUS" == "000" ]]; then
+      fail "trigger start_backend: HTTP 000 (curl timed out); increase --dangerous-timeout"
+      _capture_dangerous_timeout_diagnostics "start-backend"
+    else
+      fail "trigger start_backend: expected HTTP 200 got ${SB_TR_STATUS}"
+      info "  artifact: $START_FILE"
+      printf '  response: %s\n' "$(cat "$START_FILE" 2>/dev/null || echo '(empty)')" >&2
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 8b. Optional dangerous: restart_backend
 # ---------------------------------------------------------------------------
 if [[ "$ALLOW_RESTART" -eq 1 ]] && [[ "$ALLOW_RESTART_AND_RELOAD" -eq 0 ]]; then
   echo

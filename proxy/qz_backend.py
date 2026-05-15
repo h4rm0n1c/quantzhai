@@ -241,6 +241,150 @@ class BackendClient:
         output = (proc.stdout or "") + (proc.stderr or "")
         return output.strip()
 
+    def _inspect_container_state(self, container: str) -> str:
+        """Return the container's current state as a string.
+
+        Returns: 'running' | 'stopped' | 'missing' | 'unknown'
+        Uses 'docker inspect --format {{.State.Status}}'; does not raise.
+        """
+        docker = self._docker_command()
+        cmd = docker + ["inspect", "--format", "{{.State.Status}}", container]
+        try:
+            proc = subprocess.run(
+                cmd, check=False, capture_output=True, text=True, timeout=10
+            )
+            if proc.returncode != 0:
+                return "missing"
+            status = (proc.stdout or "").strip().lower()
+            if status in ("running", "restarting"):
+                return "running"
+            if status in ("exited", "created", "dead", "paused"):
+                return "stopped"
+            return "unknown"
+        except Exception:
+            return "unknown"
+
+    def start_container(
+        self,
+        context_size: int,
+        timeout: float = 120,
+        health_timeout: float | None = None,
+    ) -> Dict[str, Any]:
+        """Non-destructive backend container start.
+
+        Behaviour depends on current container state:
+        - Running and healthy  → return success immediately (no Docker action).
+        - Running but unhealthy → poll health until timeout.
+        - Stopped/exited       → docker start <container>, then poll health.
+        - Missing              → docker run with _backend_launch_args, then poll health.
+        - Unknown state        → attempt docker start, then poll health.
+
+        Does NOT rm -f the container (use restart_container for that).
+        Does NOT load or unload models.
+        Raises RuntimeError on failure (with diagnostics).
+        """
+        timeout = max(1.0, float(timeout))
+        health_timeout = timeout if health_timeout is None else max(1.0, float(health_timeout))
+        container = os.environ.get("QZ_CONTAINER", "qwen36turbo")
+        docker = self._docker_command()
+        model_dir = os.environ.get("QZ_MODEL_DIR") or os.path.join(
+            os.environ.get("QZ_ROOT", ""), "var", "models"
+        )
+        if model_dir:
+            os.makedirs(model_dir, exist_ok=True)
+
+        container_state = self._inspect_container_state(container)
+        action_taken = "unknown"
+        start_stdout = ""
+
+        if container_state == "running":
+            action_taken = "already_running"
+            # Fast-path: already running and healthy
+            try:
+                h = self.get_health(timeout=min(5.0, health_timeout))
+                if h.status == 200:
+                    return {
+                        "container": container,
+                        "context_length": int(context_size),
+                        "health_status": h.status,
+                        "health_body": json.loads(h.data.decode("utf-8")) if h.data else {},
+                        "stdout": "",
+                        "last_error": "",
+                        "action": "already_running",
+                        "already_running": True,
+                    }
+            except Exception:
+                pass
+            # Running but health check failed/slow — fall through to health poll
+
+        elif container_state == "stopped":
+            action_taken = "docker_start"
+            start_cmd = docker + ["start", container]
+            proc = subprocess.run(start_cmd, check=False, capture_output=True, text=True)
+            start_stdout = (proc.stdout or "").strip()
+            if proc.returncode != 0:
+                stderr = (proc.stderr or "").strip()
+                detail = "; ".join(p for p in (stderr, start_stdout) if p)
+                raise RuntimeError(
+                    f"backend start failed (docker start): {detail or 'docker start exited ' + str(proc.returncode)}"
+                )
+
+        elif container_state == "missing":
+            action_taken = "docker_run"
+            run_cmd = docker + self._backend_launch_args(context_size)
+            proc = subprocess.run(run_cmd, check=False, capture_output=True, text=True)
+            start_stdout = (proc.stdout or "").strip()
+            if proc.returncode != 0:
+                stderr = (proc.stderr or "").strip()
+                detail = "; ".join(p for p in (stderr, start_stdout) if p)
+                raise RuntimeError(
+                    f"backend start failed (docker run): {detail or 'docker run exited ' + str(proc.returncode)}"
+                )
+
+        else:
+            # Unknown state — attempt docker start and hope for the best
+            action_taken = f"unknown_state_{container_state}"
+            subprocess.run(
+                docker + ["start", container],
+                check=False, capture_output=True, text=True,
+            )
+
+        # Poll /health until 200 or timeout
+        deadline = time.time() + health_timeout
+        last_health = None
+        last_error = ""
+        while time.time() < deadline:
+            try:
+                last_health = self.get_health(
+                    timeout=min(10.0, max(0.1, deadline - time.time()))
+                )
+            except Exception as exc:
+                last_error = str(exc)
+                last_health = None
+                time.sleep(min(1.0, max(0.1, deadline - time.time())))
+                continue
+            if last_health.status == 200:
+                return {
+                    "container": container,
+                    "context_length": int(context_size),
+                    "health_status": last_health.status,
+                    "health_body": (
+                        json.loads(last_health.data.decode("utf-8")) if last_health.data else {}
+                    ),
+                    "stdout": start_stdout,
+                    "last_error": last_error,
+                    "action": action_taken,
+                    "already_running": action_taken == "already_running",
+                }
+            time.sleep(min(1.0, max(0.1, deadline - time.time())))
+
+        logs = self._docker_logs(container)
+        raise RuntimeError(
+            f"backend start timed out (action={action_taken}); "
+            f"health_status={(last_health.status if last_health else 'unknown')}; "
+            f"last_error={last_error or 'none'}; logs={logs}"
+        )
+
     def restart_container(self, context_size: int, timeout: float = 120, health_timeout: float | None = None) -> Dict[str, Any]:
         timeout = max(1.0, float(timeout))
         health_timeout = timeout if health_timeout is None else max(1.0, float(health_timeout))

@@ -858,6 +858,34 @@ scripts/qz-smoke-recovery --confirm 'phrase' --allow-restart-and-reload
 - Normal responses unaffected; other exceptions still propagate
 - Eliminates noisy BrokenPipeError traceback spam when curl times out mid-response
 
+### #48 (done): `start_backend` trigger action
+
+Added `start_backend` to `POST /qz/recovery/trigger`. Non-destructive backend start.
+
+**`start_backend` vs `restart_backend` vs `reload_selected_model`:**
+- `start_backend` — creates or starts the container if absent/stopped; does NOT rm -f; does NOT load model
+- `restart_backend` — destructive replacement (rm -f + run); does NOT load model
+- `reload_selected_model` — loads selected model into already-running backend; does NOT touch container
+
+**Gates:** identical to `restart_backend` — `QZ_RECOVERY_ACTIONS=1`, local request, `reason`, phrase required, not in progress, backoff, planner feasibility.
+
+**`BackendClient.start_container(context_size)`** (new in `qz_backend.py`):
+- Inspects container state via `docker inspect --format {{.State.Status}}`
+- Running + healthy → returns success immediately (`already_running: true`)
+- Running but unhealthy → polls health
+- Stopped/exited → `docker start <container>` + polls health
+- Missing → `docker run` with `_backend_launch_args()` + polls health
+- Does NOT `rm -f` (use `restart_container` for destructive replacement)
+- Helper `_inspect_container_state(container) → "running|stopped|missing|unknown"`
+
+**`_do_start_backend()`:** gets context from model router, calls `backend.start_container()`, updates `model_load_state=idle` on success.
+
+**Planner:** `start_backend` feasible when `backend_state=unreachable`; blocked when healthy/unhealthy (use restart or start instead).
+
+**Smoke:** `scripts/qz-smoke-recovery --allow-start` — triggers, asserts HTTP 200, verifies `backend.reachable=true`.
+
+**Tests:** `tests/test_qz_recovery_trigger.py` — 145 assertions. `tests/test_qz_recovery_plan.py` extended. `start_backend` removed from `UNIMPLEMENTED_TRIGGER_ACTIONS`. `select_model` still blocked (409).
+
 ### #50 (done): Async recovery job model
 
 Added async recovery job support for long-running actions (#50).

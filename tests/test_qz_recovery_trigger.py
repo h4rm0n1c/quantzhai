@@ -39,8 +39,8 @@ class TriggerConstantsTests(unittest.TestCase):
     def test_restart_backend_dangerous(self):
         self.assertIn("restart_backend", DANGEROUS_TRIGGER_ACTIONS)
 
-    def test_start_backend_unimplemented(self):
-        self.assertIn("start_backend", UNIMPLEMENTED_TRIGGER_ACTIONS)
+    def test_start_backend_now_in_dangerous(self):
+        self.assertIn("start_backend", DANGEROUS_TRIGGER_ACTIONS)
 
     def test_reload_now_implemented(self):
         self.assertNotIn("reload_selected_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
@@ -485,14 +485,11 @@ class ValidateTriggerBodyTests(unittest.TestCase):
         # restart_backend is now implemented — body validation passes
         self.assertIsNone(result)
 
-    def test_unimplemented_action_start_backend(self):
+    def test_start_backend_now_valid_body(self):
         result = RequestRouter._validate_recovery_trigger_body(
             {"action": "start_backend", "reason": "x"}
         )
-        self.assertIsNotNone(result)
-        status, error, _, _ = result
-        self.assertEqual(status, 409)
-        self.assertEqual(error, "action_not_implemented")
+        self.assertIsNone(result)
 
     def test_force_true_on_safe_action(self):
         result = RequestRouter._validate_recovery_trigger_body(
@@ -512,11 +509,11 @@ class ValidateTriggerBodyTests(unittest.TestCase):
 
     def test_unimplemented_action_message_mentions_implemented(self):
         result = RequestRouter._validate_recovery_trigger_body(
-            {"action": "start_backend", "reason": "x"}
+            {"action": "select_model", "reason": "x"}
         )
         _, _, _, msg = result
         self.assertIn("refresh_catalog", msg)
-        self.assertIn("clear_failure", msg)
+        self.assertIn("start_backend", msg)
 
 
 # ---------------------------------------------------------------------------
@@ -555,8 +552,11 @@ class UpdatedConstantsTests(unittest.TestCase):
     def test_restart_backend_not_in_unimplemented(self):
         self.assertNotIn("restart_backend", UNIMPLEMENTED_TRIGGER_ACTIONS)
 
-    def test_start_backend_still_unimplemented(self):
-        self.assertIn("start_backend", UNIMPLEMENTED_TRIGGER_ACTIONS)
+    def test_start_backend_now_implemented(self):
+        self.assertNotIn("start_backend", UNIMPLEMENTED_TRIGGER_ACTIONS)
+
+    def test_start_backend_in_dangerous(self):
+        self.assertIn("start_backend", DANGEROUS_TRIGGER_ACTIONS)
 
     def test_reload_selected_model_now_implemented(self):
         self.assertNotIn("reload_selected_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
@@ -694,14 +694,11 @@ class RestartBackendBodyValidationTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(error, "missing_reason")
 
-    def test_start_backend_still_409(self):
+    def test_start_backend_now_valid(self):
         result = RequestRouter._validate_recovery_trigger_body(
             {"action": "start_backend", "reason": "x"}
         )
-        self.assertIsNotNone(result)
-        status, error, _, _ = result
-        self.assertEqual(status, 409)
-        self.assertEqual(error, "action_not_implemented")
+        self.assertIsNone(result)
 
     def test_unimplemented_message_updated(self):
         result = RequestRouter._validate_recovery_trigger_body(
@@ -811,8 +808,8 @@ class ReloadConstantsTests(unittest.TestCase):
     def test_reload_not_in_unimplemented(self):
         self.assertNotIn("reload_selected_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
 
-    def test_start_backend_still_unimplemented(self):
-        self.assertIn("start_backend", UNIMPLEMENTED_TRIGGER_ACTIONS)
+    def test_start_backend_now_implemented(self):
+        self.assertNotIn("start_backend", UNIMPLEMENTED_TRIGGER_ACTIONS)
 
     def test_select_model_still_unimplemented(self):
         self.assertIn("select_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
@@ -903,14 +900,11 @@ class ReloadBodyValidationTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(error, "missing_reason")
 
-    def test_start_backend_still_409(self):
+    def test_start_backend_now_valid(self):
         result = RequestRouter._validate_recovery_trigger_body(
             {"action": "start_backend", "reason": "x"}
         )
-        self.assertIsNotNone(result)
-        status, error, _, _ = result
-        self.assertEqual(status, 409)
-        self.assertEqual(error, "action_not_implemented")
+        self.assertIsNone(result)
 
     def test_select_model_still_409(self):
         result = RequestRouter._validate_recovery_trigger_body(
@@ -920,9 +914,9 @@ class ReloadBodyValidationTests(unittest.TestCase):
         status, error, _, _ = result
         self.assertEqual(status, 409)
 
-    def test_unimplemented_message_updated(self):
+    def test_unimplemented_message_mentions_select_model(self):
         result = RequestRouter._validate_recovery_trigger_body(
-            {"action": "start_backend", "reason": "x"}
+            {"action": "select_model", "reason": "x"}
         )
         _, _, _, msg = result
         self.assertIn("reload_selected_model", msg)
@@ -1147,6 +1141,231 @@ class ReloadPlannerTests(unittest.TestCase):
         )
         self.assertTrue(p["blocked_by_backoff"])
         self.assertFalse(p["feasible"])
+
+
+# ---------------------------------------------------------------------------
+# 26. start_backend constants and validation
+# ---------------------------------------------------------------------------
+
+class StartBackendConstantsTests(unittest.TestCase):
+    def test_start_in_dangerous(self):
+        self.assertIn("start_backend", DANGEROUS_TRIGGER_ACTIONS)
+
+    def test_start_in_implemented(self):
+        self.assertIn("start_backend", IMPLEMENTED_TRIGGER_ACTIONS)
+
+    def test_start_not_unimplemented(self):
+        self.assertNotIn("start_backend", UNIMPLEMENTED_TRIGGER_ACTIONS)
+
+    def test_select_model_still_unimplemented(self):
+        self.assertIn("select_model", UNIMPLEMENTED_TRIGGER_ACTIONS)
+
+    def test_force_allowed_for_start_backend(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "start_backend", "reason": "x", "force": True}
+        )
+        self.assertIsNone(result)
+
+    def test_async_not_supported_for_start_backend(self):
+        from proxy.qz_request_router import ASYNC_SUPPORTED_ACTIONS
+        self.assertNotIn("start_backend", ASYNC_SUPPORTED_ACTIONS)
+
+    def test_unimplemented_message_now_includes_start(self):
+        result = RequestRouter._validate_recovery_trigger_body(
+            {"action": "select_model", "reason": "x"}
+        )
+        _, _, _, msg = result
+        self.assertIn("start_backend", msg)
+
+
+# ---------------------------------------------------------------------------
+# 27. start_backend confirmation phrase
+# ---------------------------------------------------------------------------
+
+class StartBackendConfirmTests(unittest.TestCase):
+    def test_phrase_required_for_start(self):
+        self.assertTrue(RequestRouter._confirm_phrase_required("start_backend"))
+
+    def test_rejected_when_env_unset(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("QZ_RECOVERY_CONFIRM_PHRASE", None)
+            ok, msg = RequestRouter._confirm_phrase_matches({}, "start_backend")
+            self.assertFalse(ok)
+            self.assertIn("QZ_RECOVERY_CONFIRM_PHRASE", msg)
+
+    def test_rejected_wrong_phrase(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {"QZ_RECOVERY_CONFIRM_PHRASE": "go"}):
+            ok, _ = RequestRouter._confirm_phrase_matches({"confirm": "stop"}, "start_backend")
+            self.assertFalse(ok)
+
+    def test_accepted_exact_phrase(self):
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {"QZ_RECOVERY_CONFIRM_PHRASE": "go"}):
+            ok, _ = RequestRouter._confirm_phrase_matches({"confirm": "go"}, "start_backend")
+            self.assertTrue(ok)
+
+
+# ---------------------------------------------------------------------------
+# 28. _do_start_backend with fake handler
+# ---------------------------------------------------------------------------
+
+class DoStartBackendTests(unittest.TestCase):
+    def _make_router(self, backend_ok=True, context_length=131072):
+        inner_router_ref: list = [None]
+
+        class FH:
+            model_load_state = "idle"
+            model_load_error = None
+            model_load_timeout = 30.0
+            restart_called = False
+            start_called = False
+
+            def _model_router(self):
+                return inner_router_ref[0]
+
+        class _FakeBackend:
+            def __init__(self, ok):
+                self._ok = ok
+                self.start_called_with = None
+                self.restart_called = False
+
+            def start_container(self, ctx, **kw):
+                self.start_called_with = ctx
+                if not self._ok:
+                    raise RuntimeError("docker start failed")
+                return {"health_status": 200, "already_running": False}
+
+            def restart_container(self, ctx, **kw):
+                self.restart_called = True
+                return {"health_status": 200}
+
+        class _FakeRouter:
+            def __init__(self, ctx):
+                self._ctx = ctx
+
+            def backend_context_length(self):
+                return self._ctx
+
+        fake_backend = _FakeBackend(backend_ok)
+
+        class _FakeRouterInst(_FakeRouter):
+            pass
+
+        inner_router = _FakeRouterInst(context_length)
+        inner_router_ref[0] = inner_router
+
+        class _FH(FH):
+            def _model_router(self):
+                return inner_router_ref[0]
+
+            def _backend(self, *a, **kw):
+                return fake_backend
+
+        router = RequestRouter.__new__(RequestRouter)
+        router.handler = _FH()
+        return router, fake_backend
+
+    def test_success(self):
+        router, _ = self._make_router(backend_ok=True)
+        ok, error = router._do_start_backend()
+        self.assertTrue(ok)
+        self.assertEqual(error, "")
+
+    def test_calls_start_container(self):
+        router, backend = self._make_router(backend_ok=True, context_length=65536)
+        router._do_start_backend()
+        self.assertEqual(backend.start_called_with, 65536)
+
+    def test_failure(self):
+        router, _ = self._make_router(backend_ok=False)
+        ok, error = router._do_start_backend()
+        self.assertFalse(ok)
+        self.assertIn("docker start failed", error)
+
+    def test_does_not_call_restart_container(self):
+        router, backend = self._make_router(backend_ok=True)
+        router._do_start_backend()
+        self.assertFalse(backend.restart_called)
+
+
+# ---------------------------------------------------------------------------
+# 29. start_backend planner
+# ---------------------------------------------------------------------------
+
+class StartBackendPlannerTests(unittest.TestCase):
+    def _ss(self, backend_state="unreachable", model_state="unknown", recovery_state="available"):
+        return {
+            "schema": "qz.service.status.v1",
+            "proxy_state": "ready",
+            "catalog_state": "ready",
+            "backend_state": backend_state,
+            "model_state": model_state,
+            "request_admission": "rejected_backend_unavailable",
+            "recovery_state": recovery_state,
+            "recoverable": True,
+            "retryable": False,
+            "fatal": False,
+            "last_error": "",
+            "operator_action": "start_backend",
+            "operator_hints": [],
+        }
+
+    def test_feasible_when_unreachable(self):
+        from proxy.qz_recovery_plan import build_recovery_plan
+        p = build_recovery_plan(
+            self._ss(),
+            "start_backend",
+            authority_enabled=True,
+            local_request=True,
+            active_requests=0,
+        )
+        self.assertTrue(p["feasible"])
+
+    def test_blocked_when_backend_healthy(self):
+        from proxy.qz_recovery_plan import build_recovery_plan
+        p = build_recovery_plan(
+            self._ss(backend_state="healthy"),
+            "start_backend",
+            authority_enabled=True,
+            local_request=True,
+            active_requests=0,
+        )
+        self.assertTrue(p["blocked_by_state"])
+        self.assertFalse(p["feasible"])
+
+    def test_blocked_by_authority(self):
+        from proxy.qz_recovery_plan import build_recovery_plan
+        p = build_recovery_plan(
+            self._ss(),
+            "start_backend",
+            authority_enabled=False,
+            local_request=True,
+        )
+        self.assertTrue(p["blocked_by_authority"])
+        self.assertFalse(p["feasible"])
+
+    def test_blocked_by_backoff(self):
+        from proxy.qz_recovery_plan import build_recovery_plan
+        p = build_recovery_plan(
+            self._ss(),
+            "start_backend",
+            authority_enabled=True,
+            local_request=True,
+            backoff_active=True,
+        )
+        self.assertTrue(p["blocked_by_backoff"])
+
+    def test_does_not_interrupt_requests(self):
+        from proxy.qz_recovery_plan import build_recovery_plan
+        p = build_recovery_plan(
+            self._ss(),
+            "start_backend",
+            authority_enabled=True,
+            local_request=True,
+        )
+        self.assertFalse(p["would_interrupt_requests"])
 
 
 if __name__ == "__main__":
