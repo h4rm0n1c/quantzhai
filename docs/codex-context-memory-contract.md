@@ -637,11 +637,14 @@ They must not be logged automatically for every observed request.
 
 Do not store raw prompts or raw request bodies. Do not implement automatic
 ingestion of stream events, tool calls, telemetry events, or recovery state.
-Wait for the StateRecord / memory-write API design before any BrainCaseDB
-write path goes beyond schema initialization.
+Wait for the BrainCase memory tool API design before any BrainCaseDB write path
+goes beyond schema initialization.
 
-#2 is parked pending that design. The substrate skeleton (BrainCaseDB) exists;
-the next step is not automatic parser-fact ingestion.
+The memory architecture is tool-mediated, not DB-first. See
+`docs/braincase-memory-tool-api.md` for the full design.
+
+#2 is parked. The substrate skeleton (BrainCaseDB) exists; the next step is
+Slice A (StateRecord JSON schema fixtures), not automatic parser-fact ingestion.
 
 Slice 1 status:
 

@@ -24,8 +24,10 @@ Codex 0.130 provides session/thread/turn/window/workspace candidate signals.
 QuantZhai owns qz_session_id, qz_turn_id, qz_request_id, workspace_id resolution, and memory_domain policy.
 Capability detection from tools must not grant durable memory access.
 QuantZhai-owned qz_* context must not be injected into forwarded /v1/responses request bodies.
-Phase 1 SQLite stores operational facts only.
-No clever memory, active memory tools, learned preferences, roleplay memory, HSM/archive memory, automatic promotion, or cross-domain sharing in Phase 1.
+BrainCaseDB is the low-level SQLite storage case. It is not a policy layer, telemetry warehouse, request log, or memory_domain registry.
+The memory architecture is tool-mediated, not DB-first. See docs/braincase-memory-tool-api.md.
+Do not add automatic ingestion. All BrainCaseDB write paths must be explicit.
+No automatic promotion, cross-domain sharing, or model-visible memory by default.
 ```
 
 ## Recommended reading path
@@ -76,6 +78,7 @@ No clever memory, active memory tools, learned preferences, roleplay memory, HSM
 | Config and error handling | [Edge case and config contract plan](edge-case-config-contract-plan.md) | Audit/refactor plan for edge cases, compact errors, profile safety, config layering, script sprawl, and the profile-bundle design (qz.profiles.v1, profiles/*.json, memory_domain plumbing). |
 | Current bugfix focus | [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) | Triage, review plan, proposed fixes, and acceptance checks for `/status`, monitor tools, profile tuning, and proxy streaming. |
 | Deferred client/control UX | [qz-codex control plane future plan](qz-codex-control-plane-future.md) | Parked future seam for qz-codex fork/wrapper, /qz control plane, remote single-user mode, nginx/auth, and model/profile loading UX. |
+| Memory architecture | [BrainCase memory tool API](braincase-memory-tool-api.md) | Tool-mediated memory plane design: tool set, harness policy, memory tiers, deterministic helpers, BrainCaseDB role, HSM mapping, and implementation slices. |
 | Memory architecture | [State and memory architecture plan](state-and-memory-architecture-plan.md) | Older typed-memory plan; useful taxonomy, superseded for Codex identity/workspace/domain decisions. |
 | Fixed bug / regression guard | [Stale profile symlink bug](bugs/stale-profile-server-alias.md) | Symlink profile contract, compact invalid-profile errors, and qz-doctor regression checks. |
 | Known bug | [Responses streaming and qz-thoughts bug](bugs/responses-streaming-and-qz-thoughts.md) | Historical/audit plan for Responses SSE forwarding, summary transformation, and noisy live thought rendering. |
@@ -132,8 +135,10 @@ docs/progress-snapshot.md
 Current next engineering target:
 
 ```text
-P1 optional/non-fatal Phase 1 SQLite operational substrate, constrained by
-docs/foundation-audit-before-sqlite.md.
+P1 BrainCase memory tool API — Slice A: StateRecord JSON schema fixtures.
+See docs/braincase-memory-tool-api.md for the full slice plan.
+BrainCaseDB skeleton exists (proxy/qz_braincase_db.py); #2 is parked pending
+Slice A fixture design. Do not add automatic ingestion.
 ```
 
 Then:
@@ -143,29 +148,33 @@ P2 repeated-read v1 advisory signal.
 P3 telemetry filter ergonomics / qz-live-smoke refinements.
 ```
 
-### I want to work on SQLite/state/memory
+### I want to work on memory/state/BrainCaseDB
 
 Read:
 
 ```text
+docs/braincase-memory-tool-api.md      — tool plane design, memory tiers, helpers, slices
+docs/model-state-signal-contract.md    — StateRecord envelope and scope model
+AGENTS.md BrainCase Memory Tool Plane Doctrine
+AGENTS.md BrainCaseDB / Memory Storage Doctrine
 docs/current-architecture-authority.md
 docs/current-task-hierarchy.md
 docs/codex-context-memory-contract.md
-docs/codex-quantzhai-bidirectional-signal-map.md
 docs/foundation-audit-before-sqlite.md
-docs/model-state-signal-contract.md
-docs/codex-0130-live-signal-capture.md
 ```
 
 Focus:
 
 ```text
-Phase 1 stores identity, turns, requests, workspace candidates, resolved workspace bindings, and operational facts.
-Do not implement learned preferences, profile-private memory, HSM/archive memory, recall, renderers, or promotion in Phase 1.
-Do not store giant raw request bodies in SQLite by default.
+The memory architecture is tool-mediated, not DB-first.
+Start from tool semantics, harness policy, memory tiers, and render boundaries.
+BrainCaseDB stores; tools and helpers operate.
+Do not add automatic ingestion.
+Do not start from SQL tables.
+Slice A (StateRecord JSON schema fixtures) must come before Slice B (DB schema).
 Raw captures remain debug artifacts.
-Do not inject qz_session_id/qz_workspace_id/qz_memory_domain/qz_text_verbosity into forwarded request bodies.
-If a future LimbiCore renderer may use a fact, store enough scope/provenance/visibility metadata to keep it safe later.
+Do not inject qz_session_id/qz_workspace_id/qz_memory_domain into forwarded request bodies.
+memory_domain is config-owned; BrainCaseDB must not infer or grant domain values.
 ```
 
 ### I want to work on repeated-read signals
@@ -331,6 +340,7 @@ docs/current-stocktake.md
 docs/runtime-observability-notes.md
 docs/patterns/provenance-telemetry.md
 docs/search-roadmap.md
+docs/braincase-memory-tool-api.md
 docs/state-and-memory-architecture-plan.md
 ```
 

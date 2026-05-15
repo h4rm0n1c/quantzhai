@@ -127,10 +127,19 @@ codex-context-memory-contract.md, and this file, then know what to do next.
 
 ---
 
-## P1: Phase 1 SQLite storage substrate
+## P1: BrainCase memory tool API and storage substrate
 
-Goal: add the optional SQLite storage substrate for parser-derived
-identity/scoping facts without changing model-visible behaviour.
+Goal: design and build the tool-mediated memory plane above BrainCaseDB.
+See `docs/braincase-memory-tool-api.md` for the architecture and slice plan.
+
+The goal is a superhuman memory console:
+
+```text
+LLM thinks -> uses memory tools -> helpers accelerate/constrain mechanics
+-> storage/indexes return exact evidence -> LLM reasons again
+```
+
+Not automatic request logging. Not a DB-of-everything.
 
 Current slice status:
 
@@ -212,31 +221,33 @@ repeated-read v2 persistence
 forwarded qz_* request-body metadata injection
 ```
 
-Acceptance tests:
+Current acceptance (slice 1 only):
 
 ```text
-test_db_opens_optional_and_nonfatal
-test_session_insert_with_codex_ids
-test_turn_insert_groups_multiple_requests
-test_request_insert_body_metadata_summary
-test_workspace_candidate_insert
-test_resolved_workspace_remote_preferred_over_path
-test_workspace_unknown_when_no_candidates
-test_identity_conflict_stored
-test_db_failure_does_not_break_proxy_request
+test_qz_braincase_db.py: 11 tests pass
+BrainCaseDB skeleton exists, disabled by default, schema metadata initialised.
+No automatic ingestion.
+```
+
+Future acceptance (after memory tool API design):
+
+```text
+To be defined after Slice A (JSON schema fixtures) is complete.
+See docs/braincase-memory-tool-api.md for the slice plan.
 ```
 
 Blocked by:
 
 ```text
-Nothing in runtime code. memory_domain plumbing, #40, #42, and the foundation
-audit are done. This is the current P1, constrained to parser-boundary facts.
+Slice A: StateRecord / memory tool API design (JSON schema fixtures, no code).
+Do not start Slice B (DB schema) until Slice A fixtures settle the record shape.
 ```
 
 Best resource:
 
 ```text
-Codex/Claude after refresh.
+docs/braincase-memory-tool-api.md
+docs/model-state-signal-contract.md
 ```
 
 ---
@@ -424,18 +435,30 @@ cross-domain isolation tests
 
 ---
 
-## Next implementation prompt: P1 SQLite slice 2
+## Next implementation prompt: BrainCase memory tool API
 
-**PARKED — do not start until StateRecord / memory-write API design is ready.**
+**PARKED — do not start implementation until Slice A (StateRecord fixtures) is done.**
 
-The substrate skeleton (BrainCaseDB) exists. The next implementation slice is
-not automatic parser-fact ingestion. Before any write paths are added, the
-explicit memory/state write API must be designed. Sessions, turns, and requests
-are provenance/scoping references for actual stored memory/state records — they
-must not be logged automatically for every observed request.
+Read `docs/braincase-memory-tool-api.md` before starting any implementation.
 
-When the design is ready, replace this block with the implementation prompt.
-Until then, the prompt below is reference-only and must not be executed as-is.
+The architecture is tool-mediated, not DB-first:
+
+```text
+LLM + harness -> memory tools -> deterministic helpers -> BrainCaseDB / indexes -> renderers -> scoped model-visible packets
+```
+
+Implementation order:
+1. Slice A: StateRecord JSON schema + fixture tests (docs/fixtures only, no DB)
+2. Slice B: BrainCaseDB schema (state_records, source_refs, record_links, revisions)
+3. Slice C: braincase.search + inspect over fixture records
+4. Slice D: braincase.write/update with explicit tool path
+5. Slice E: braincase.render bounded packet builder
+6. Slice F: harness injection for memory tool-use policy
+
+Do not implement Slice B until Slice A fixtures settle the record shape.
+Do not add automatic ingestion at any slice.
+
+Until Slice A fixtures exist, the reference below is for design context only.
 
 ```text
 PARKED REFERENCE — do not implement until memory-write API design exists.

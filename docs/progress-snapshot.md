@@ -31,7 +31,7 @@ docs/current-stocktake.md
 Current strategic direction:
 
 ```text
-P1 Phase 1 SQLite operational substrate (next)
+P1 BrainCase memory tool API — Slice A fixtures (parked pending design)
 P2 repeated-read v1 advisory signal
 P3 telemetry filter ergonomics / qz-live-smoke refinements
 P4 config/var/script ownership cleanup
@@ -74,20 +74,23 @@ P4 config/var/script ownership cleanup
 
 ## Current blockers and sequencing
 
-### P1: Phase 1 SQLite operational substrate
+### P1: BrainCase memory tool API
 
 Status:
 
 ```text
-Next implementation target. memory_domain plumbing is done and unblocks this.
+BrainCaseDB skeleton landed (proxy/qz_braincase_db.py). #2 parked pending
+BrainCase memory tool API design. See docs/braincase-memory-tool-api.md.
+Next step: Slice A — StateRecord JSON schema fixtures, no DB implementation.
 ```
 
 Scope:
 
 ```text
-Store sessions, turns, requests, workspace candidates, resolved workspaces,
-session/workspace bindings, identity conflicts, and request metadata summaries.
-Optional/non-fatal only. No model-visible memory.
+Tool-mediated memory plane: LLM + harness -> memory tools -> deterministic helpers
+-> BrainCaseDB / indexes -> renderers -> scoped model-visible memory packets.
+Do not add automatic ingestion. No request/session/turn logging.
+No model-visible memory by default.
 ```
 
 ### P2: repeated-read signal
@@ -124,7 +127,7 @@ Still needed, but do not preempt the state spine unless a live breakage demands 
 ## Immediate next priorities
 
 1. **#40: Compaction/stream hang watchdog** — prevents client stuck states.
-2. **#2: Implement optional/non-fatal Phase 1 SQLite operational substrate.**
+2. **#2: BrainCase memory tool API — Slice A fixtures** (parked; see docs/braincase-memory-tool-api.md).
 3. **#51: Promote recovery/backoff state to SQLite** (after #2).
 4. **Implement repeated-read v1 advisory signal** (can start any time).
 

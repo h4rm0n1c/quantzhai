@@ -742,24 +742,31 @@ state. Neither should be allowed to bleed into coding state by default.
 
 ## Phase plan
 
-### Phase 1: SQLite operational substrate
+### Phase 1: BrainCase storage substrate and memory tool API
 
-Store operational facts only:
+**Update 2026-05-15:** The architecture has been clarified. Phase 1 is now
+tool-mediated, not DB-first. See `docs/braincase-memory-tool-api.md` for the
+current design. The "operational substrate" framing below is historical; read it
+as the storage layer behind the memory tool API, not as automatic request/session
+logging.
+
+Phase 1 scope (revised):
 
 ```text
-sessions
-turns
-requests
-request metadata
-workspace candidates
-resolved workspaces
-session/workspace bindings
-identity conflicts
-parser-derived operational facts
+BrainCaseDB skeleton (proxy/qz_braincase_db.py) — landed.
+StateRecord / memory tool API design — Slice A (JSON schema fixtures).
+BrainCaseDB schema for state_records — Slice B (after Slice A settles shape).
+braincase.search + inspect — Slice C.
+braincase.write/update — Slice D.
+braincase.render — Slice E.
 ```
 
-No model-visible durable memory. No active memory tools. No automatic promotion.
-No cross-domain sharing.
+Sessions, turns, requests, workspace candidates, and identity conflicts may
+appear as source refs or provenance attached to actual stored StateRecords —
+not as automatic logs for every observed request.
+
+No model-visible durable memory. No automatic promotion. No cross-domain sharing.
+No automatic ingestion.
 
 File reads/writes and tool signals may become Phase-1-compatible operational
 facts only if captured as scoped internal records. They must not become
@@ -832,10 +839,12 @@ How should roleplay worlds and Human State Machine artifact sets be named and is
 
 ## Immediate effect on Phase 1 SQLite
 
-This document does not change the immediate Phase 1 SQLite plan.
+This document does not change the immediate Phase 1 plan. The BrainCaseDB
+skeleton exists. The next step is Slice A: StateRecord JSON schema fixtures.
 
-Phase 1 should proceed as a boring, optional/non-fatal operational substrate that
-consumes parser-derived facts and does not alter model-visible behaviour.
+Phase 1 should proceed as a boring, optional/non-fatal storage substrate with
+explicit write paths only — not automatic ingestion of observed runtime data.
+See `docs/braincase-memory-tool-api.md` for the updated design.
 
 The contract adds one design constraint for future-proofing:
 

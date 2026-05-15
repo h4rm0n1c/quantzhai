@@ -22,11 +22,13 @@ QuantZhai is ready to start #2 only as a narrow Phase 1 SQLite storage substrate
 It is not ready for broad runtime-signal persistence or model-visible memory.
 
 **Update (post BrainCaseDB rename, 2026-05-15):** The substrate skeleton
-(BrainCaseDB) has landed. #2 is now parked pending StateRecord / memory-write
-API design. The next implementation slice is NOT automatic parser-fact
-ingestion. The parser-boundary storage language in this audit must be read as
-provenance/scoping support attached to explicit memory/state records — not as
-a mandate to log every observed request, turn, or session automatically.
+(BrainCaseDB) has landed. #2 is now parked pending the BrainCase memory tool
+API and StateRecord design. See `docs/braincase-memory-tool-api.md`. The
+memory architecture is tool-mediated, not DB-first. The next implementation
+slice is NOT automatic parser-fact ingestion. The parser-boundary storage
+language in this audit must be read as provenance/scoping support attached to
+explicit memory/state records — not as a mandate to log every observed request,
+turn, or session automatically.
 
 BrainCaseDB must not store data merely because QuantZhai observed it. All
 BrainCaseDB write paths must be explicit. Do not add sessions/turns/requests

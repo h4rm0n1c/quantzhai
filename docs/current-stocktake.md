@@ -80,13 +80,13 @@ Agent rules:         AGENTS.md includes telemetry doctrine
 ### Notes on each
 
 **#2** — The foundational next state work. Slice 1 added the optional/non-fatal
-SQLite storage skeleton (BrainCaseDB) only. **#2 is now parked** pending
-StateRecord / memory-write API design. The next implementation slice is not
+SQLite storage skeleton (BrainCaseDB) only. **#2 is now parked** pending the
+BrainCase memory tool API and StateRecord design. See
+`docs/braincase-memory-tool-api.md`. The memory architecture is tool-mediated,
+not DB-first. The next step is Slice A (StateRecord JSON schema fixtures), not
 automatic parser-fact ingestion. BrainCaseDB must not store data merely because
-QuantZhai observed it — all write paths must be explicit. Sessions, turns, and
-requests are provenance/scoping references for actual stored memory/state
-records; do not preempt the design with automatic request logging. Unlocks #51
-and #46 once the explicit write API and at least one stored-fact type exist.
+QuantZhai observed it — all write paths must be explicit. Unlocks #51 and #46
+once the explicit write API and at least one stored-fact type exist.
 
 **#51** — Recovery backoff state is currently in-memory only. Should be persisted
 once #2 exists. Do not implement before #2.
@@ -272,39 +272,29 @@ Signal/feedback subsystem design (#42)
 
 ## 10. Suggested next agent prompts
 
-### Prompt A: Phase 1 SQLite slice 2 (#2) — PARKED
+### Prompt A: BrainCase memory tool API — Slice A (#2) — PARKED
 
-**#2 is parked. Do not start this prompt until StateRecord / memory-write API
-design is ready.**
+**#2 is parked. Read `docs/braincase-memory-tool-api.md` before starting.**
 
-The substrate skeleton (BrainCaseDB) exists. The next step is not automatic
-parser-fact ingestion. Sessions, turns, and requests listed below are
-provenance/scoping references for actual stored memory/state records — they
-must not be logged automatically for every observed request.
-
-When the explicit memory/state write API design exists, replace this block with
-a concrete implementation prompt.
+The memory architecture is tool-mediated, not DB-first. Do not start from SQL
+tables. Start from Slice A: StateRecord JSON schema fixtures.
 
 ```text
-PARKED REFERENCE — do not implement until explicit memory/state write API design exists.
+PARKED REFERENCE — start with docs/braincase-memory-tool-api.md Slice A.
 
 Read first:
-- docs/foundation-audit-before-sqlite.md  (parser-boundary = provenance support, not request log)
-- docs/current-architecture-authority.md
-- docs/codex-context-memory-contract.md   (see BrainCaseDB write doctrine)
-- docs/current-task-hierarchy.md          (see #2 parked status)
+- docs/braincase-memory-tool-api.md       (full tool plane design and slice plan)
+- docs/model-state-signal-contract.md     (StateRecord envelope)
+- AGENTS.md BrainCase Memory Tool Plane Doctrine
+- AGENTS.md BrainCaseDB / Memory Storage Doctrine
+- docs/codex-context-memory-contract.md   (BrainCaseDB write doctrine)
 - proxy/qz_braincase_db.py
-- proxy/qz_codex_metadata.py
 
-Goal (when design is ready): optional/non-fatal SQLite storage for explicit
-memory/state records, with provenance/scoping references (sessions, turns,
-requests, workspace candidates, resolved workspaces, session_workspace_bindings,
-identity_conflicts) attached only to actual stored state/memory facts.
-Do not log automatically. Do not store raw prompts or request bodies.
-DB failure must not break proxy request handling.
-Do not implement model-visible memory, broad runtime signal history, stream
-telemetry persistence, recovery/backoff persistence, or change forwarded request
-bodies.
+Slice A goal: StateRecord JSON schema + fixture tests. No DB. No SQL.
+Define fixture records covering: fact, decision, procedure, artifact_ref, episode.
+Write schema validation tests against fixtures.
+Do not implement Slice B (DB schema) until Slice A fixtures settle the record shape.
+Do not add automatic ingestion at any slice.
 ```
 
 ### Prompt B: Recovery state persistence (#51, after #2)

@@ -200,6 +200,36 @@ memory/state record the write is scoping or supporting. If no such record
 exists yet, wait for the StateRecord/memory-write API design. Do not preempt
 that design with automatic parser-fact ingestion.
 
+## BrainCase Memory Tool Plane Doctrine
+
+The memory architecture is tool-mediated, not DB-first. See
+`docs/braincase-memory-tool-api.md` for the full design doc.
+
+Hard rules for any agent touching memory, SQLite, or state work:
+
+- **The memory architecture is tool-mediated, not DB-first.** Do not start from SQL tables. Start from tool semantics, harness policy, memory tiers, and render boundaries.
+- **BrainCaseDB stores; tools and helpers operate.** Do not add business logic, policy, or routing to the storage layer.
+- **Deterministic helpers accelerate and constrain mechanics; they do not replace LLM reasoning.** Helpers handle scope routing, dedup, conflict surfacing, and render packing. The LLM reasons about relevance, intent, and correctness.
+- **Do not make raw storage model-visible.** Records are internal until explicitly rendered through braincase.render.
+- **Do not add automatic ingestion.** All BrainCaseDB write paths must be explicit.
+- **memory_domain is config-owned.** BrainCaseDB must not infer, create, normalize, grant, or authorize memory_domain values.
+
+The corrected framing:
+
+```text
+Not: LLM proposes -> deterministic judge decides -> DB stores
+Better: LLM thinks -> uses memory tools -> helpers accelerate/constrain mechanics
+        -> storage/indexes return exact evidence -> LLM reasons again
+```
+
+Before adding any memory/state implementation, read:
+
+```text
+docs/braincase-memory-tool-api.md  — tool plane design, tiers, helpers, slices
+AGENTS.md BrainCaseDB doctrine     — storage hard rules
+docs/model-state-signal-contract.md — StateRecord envelope and scope model
+```
+
 ## Contract-First Fixes
 
 QuantZhai bugs often come from blurred ownership between config, model catalog, profile aliases, backend routing, prompt policy, runtime state, SSE streaming, telemetry, monitors, and generated Codex metadata.
