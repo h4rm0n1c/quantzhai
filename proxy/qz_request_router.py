@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -43,6 +44,7 @@ try:
     from .qz_recovery_plan import ALLOWED_RECOVERY_ACTIONS, build_recovery_plan
     from .qz_recovery_state import RECOVERY_STATE
     from .qz_active_requests import ACTIVE_REQUESTS
+    from .qz_recovery_jobs import RECOVERY_JOBS
     from .qz_search_policy import resolve_search_policy_selection
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import (
@@ -88,6 +90,7 @@ except ImportError:
     from qz_recovery_plan import ALLOWED_RECOVERY_ACTIONS, build_recovery_plan
     from qz_recovery_state import RECOVERY_STATE
     from qz_active_requests import ACTIVE_REQUESTS
+    from qz_recovery_jobs import RECOVERY_JOBS
     from qz_search_policy import resolve_search_policy_selection
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import (
@@ -105,6 +108,7 @@ except ImportError:
 
 SAFE_TRIGGER_ACTIONS: frozenset = frozenset({"refresh_catalog", "clear_failure"})
 DANGEROUS_TRIGGER_ACTIONS: frozenset = frozenset({"restart_backend", "reload_selected_model"})
+ASYNC_SUPPORTED_ACTIONS: frozenset = frozenset({"reload_selected_model"})
 IMPLEMENTED_TRIGGER_ACTIONS: frozenset = SAFE_TRIGGER_ACTIONS | DANGEROUS_TRIGGER_ACTIONS
 UNIMPLEMENTED_TRIGGER_ACTIONS: frozenset = ALLOWED_RECOVERY_ACTIONS - IMPLEMENTED_TRIGGER_ACTIONS
 RECOVERY_TRIGGER_SCHEMA = "qz.recovery.trigger.v1"
@@ -152,6 +156,74 @@ def profile_reasoning_stream_format(selected_model, fallback: str = "raw") -> st
             return normalize_reasoning_stream_format(value, fallback)
 
     return fallback
+
+
+def _async_recovery_worker(
+    router: "RequestRouter",
+    action: str,
+    request_id: str,
+    base_event: dict,
+    rs: object,
+    job_store: object,
+) -> None:
+    """Daemon thread worker for async recovery actions (#50).
+
+    Called after mark_started and the 202 response have been sent.
+    Executes the action, updates RecoveryRuntimeState and RecoveryJobStore,
+    and emits telemetry events. Never raises.
+    """
+    try:
+        if action == "reload_selected_model":
+            ok, error = router._do_reload_selected_model()
+        else:
+            ok, error = False, f"Async not implemented for {action!r}"
+    except Exception as exc:
+        ok, error = False, str(exc)
+
+    try:
+        post_status = router._get_recovery_status_snapshot()
+    except Exception:
+        post_status = None
+
+    if ok:
+        try:
+            rs.mark_completed(action)
+        except Exception:
+            pass
+        try:
+            if job_store is not None:
+                job_store.mark_completed(request_id, post_status=post_status)
+        except Exception:
+            pass
+        try:
+            router._emit_recovery_event("recovery_action_completed", {
+                **base_event, "post_recovery_status": post_status,
+            })
+        except Exception:
+            pass
+    else:
+        try:
+            rs.mark_failed(action, error)
+        except Exception:
+            pass
+        try:
+            if job_store is not None:
+                job_store.mark_failed(request_id, error=error, post_status=post_status)
+        except Exception:
+            pass
+        try:
+            router._emit_recovery_event("recovery_action_failed", {
+                **base_event, "error": error,
+            })
+        except Exception:
+            pass
+        try:
+            if rs.is_backoff_active(action):
+                router._emit_recovery_event("recovery_backoff_started", {
+                    **base_event, "error": error,
+                })
+        except Exception:
+            pass
 
 
 class _MultiRawLog:
@@ -440,10 +512,13 @@ class RequestRouter:
                 runtime_snapshot = rs.snapshot() if rs is not None else None
                 ar = getattr(self.handler, "active_requests", ACTIVE_REQUESTS)
                 ar_snapshot = ar.snapshot() if ar is not None else None
+                jobs = getattr(self.handler, "recovery_jobs", RECOVERY_JOBS)
+                jobs_snapshot = jobs.snapshot() if jobs is not None else None
                 recovery_payload = build_recovery_status(
                     ss,
                     runtime_state=runtime_snapshot,
                     active_requests=ar_snapshot,
+                    recovery_jobs=jobs_snapshot,
                 )
             except Exception as exc:
                 recovery_payload = {
@@ -462,6 +537,10 @@ class RequestRouter:
                     "operator_hints": [],
                 }
             self.handler._send_json(200, recovery_payload)
+            return
+
+        if self.handler.path.startswith("/qz/recovery/jobs/"):
+            self._handle_recovery_job_get()
             return
 
         self.proxy_raw("GET")
@@ -617,6 +696,28 @@ class RequestRouter:
             )
 
         return None  # all fields valid
+
+    def _handle_recovery_job_get(self) -> None:
+        """Handle GET /qz/recovery/jobs/<request_id> — return async job status."""
+        path = self.handler.path
+        request_id = path[len("/qz/recovery/jobs/"):].strip("/")
+        if not request_id:
+            self.handler._send_json(400, self._recovery_error_payload(
+                "missing_request_id",
+                "GET /qz/recovery/jobs/<request_id> requires a request_id in the path.",
+                blocked_by="bad_request",
+            ))
+            return
+        jobs = getattr(self.handler, "recovery_jobs", RECOVERY_JOBS)
+        job = jobs.get(request_id) if jobs is not None else None
+        if job is None:
+            self.handler._send_json(404, self._recovery_error_payload(
+                "job_not_found",
+                f"No async recovery job found with request_id {request_id!r}.",
+                blocked_by="state",
+            ))
+            return
+        self.handler._send_json(200, job)
 
     def _emit_recovery_event(self, event_type: str, payload: dict) -> None:
         """Emit a recovery telemetry event. No-ops safely if telemetry unavailable."""
@@ -851,9 +952,21 @@ class RequestRouter:
             ))
             return
 
-        action = str(body.get("action") or "")
-        reason = str(body.get("reason") or "")
-        force  = bool(body.get("force", False))
+        action          = str(body.get("action") or "")
+        reason          = str(body.get("reason") or "")
+        force           = bool(body.get("force", False))
+        async_requested = bool(body.get("async", False))
+
+        # --- Async support check (early: before runtime/planner) ---
+        if async_requested and action not in ASYNC_SUPPORTED_ACTIONS:
+            self.handler._send_json(400, self._recovery_error_payload(
+                "async_not_supported",
+                f"async=true is currently supported only for {sorted(ASYNC_SUPPORTED_ACTIONS)}. "
+                f"Action {action!r} must use the synchronous trigger path.",
+                action=action,
+                blocked_by="bad_request",
+            ))
+            return
 
         # --- Confirmation phrase check ---
         confirm_ok, confirm_msg = self._confirm_phrase_matches(body, action)
@@ -958,12 +1071,57 @@ class RequestRouter:
             "action": action,
             "reason": reason,
             "force": force,
+            "async": async_requested,
             "active_request_count": active_count_at_start,
             "pre_recovery_status": pre_status,
             "operator_action": action,
             "local_operator_required": True,
             "error": None,
         }
+
+        if async_requested:
+            # --- Async path: accept immediately, run in daemon thread ---
+            job_store = getattr(self.handler, "recovery_jobs", RECOVERY_JOBS)
+            job = job_store.create(
+                request_id=request_id,
+                action=action,
+                pre_status=pre_status,
+                operator_warning=_TRIGGER_WARNINGS.get(action, ""),
+            ) if job_store is not None else {}
+
+            # Mark in-progress before returning so concurrent requests get 423.
+            rs.mark_started(action, request_id=request_id)
+            if job_store is not None:
+                job_store.mark_running(request_id)
+
+            self._emit_recovery_event("recovery_trigger_requested", base_event)
+            self._emit_recovery_event("recovery_action_started", base_event)
+
+            worker = threading.Thread(
+                target=_async_recovery_worker,
+                args=(self, action, request_id, base_event, rs, job_store),
+                daemon=True,
+                name=f"qz-recovery-{action}-{request_id}",
+            )
+            worker.start()
+
+            response = {
+                **self._build_trigger_response(
+                    action=action,
+                    request_id=request_id,
+                    accepted=True,
+                    pre_status=pre_status,
+                    post_status=None,
+                    operator_warning=_TRIGGER_WARNINGS.get(action, ""),
+                    telemetry_event="recovery_action_started",
+                ),
+                "async": True,
+                "job": job,
+            }
+            self.handler._send_json(202, response)
+            return
+
+        # --- Sync path (default) ---
         self._emit_recovery_event("recovery_trigger_requested", base_event)
 
         rs.mark_started(action, request_id=request_id)

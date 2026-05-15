@@ -858,6 +858,41 @@ scripts/qz-smoke-recovery --confirm 'phrase' --allow-restart-and-reload
 - Normal responses unaffected; other exceptions still propagate
 - Eliminates noisy BrokenPipeError traceback spam when curl times out mid-response
 
+### #50 (done): Async recovery job model
+
+Added async recovery job support for long-running actions (#50).
+
+**New module:** `proxy/qz_recovery_jobs.py`
+- `RecoveryJobStore` + `RECOVERY_JOBS` singleton
+- Schema: `qz.recovery.job.v1` / `qz.recovery.jobs.v1`
+- Job states: `queued → running → completed | failed`
+- Thread-safe, in-memory, non-durable, max 50 jobs (pruned)
+
+**New route:** `GET /qz/recovery/jobs/<request_id>`
+- HTTP 200 `qz.recovery.job.v1` when found
+- HTTP 404 `qz.recovery.error.v1` `job_not_found` when unknown
+
+**Async trigger:** `POST /qz/recovery/trigger` with `"async": true`
+- Supported only for `reload_selected_model` (first async action; restart_backend stays sync)
+- Returns HTTP 202 immediately with `qz.recovery.trigger.v1` + `"async": true` + `"job": {...}`
+- Worker thread runs `_do_reload_selected_model()` and updates job store + recovery state
+- `rs.mark_started()` called before thread starts → `recovery_in_progress=true` immediately
+- Concurrent trigger requests get 423 while worker is running
+
+**Error:** `async=true` for unsupported actions → HTTP 400 `async_not_supported` (checked early, before planner)
+
+**Recovery status:** `GET /qz/recovery/status` now includes `"jobs"` snapshot.
+**Control-plane:** `/qz/control-plane` `recovery` field includes `"jobs"` snapshot.
+
+**`build_recovery_status` extended:**
+- New optional param `recovery_jobs=None` — backward-compatible
+
+**Smoke script:** `scripts/qz-smoke-recovery --allow-async-reload`
+- POSTs `async=true` trigger, polls `/qz/recovery/jobs/<id>` until completed/failed/timeout
+
+**Not yet async:** `restart_backend`, `refresh_catalog`, `clear_failure`.
+**No automatic loops. No durable persistence.** In-memory only; resets on proxy restart.
+
 ### Future: durable state (requires #2 SQLite)
 
 - Move attempt history and backoff tracking from in-memory to SQLite.

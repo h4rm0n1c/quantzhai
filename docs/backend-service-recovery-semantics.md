@@ -583,6 +583,15 @@ Two-step smoke flow available with `--allow-restart-and-reload`:
 3. trigger reload_selected_model
 4. verify control-plane backend.reachable + model state
 
+### #50 (done): Async recovery job model
+
+Added async job support for `reload_selected_model` via `POST /qz/recovery/trigger` with `"async": true`.
+Returns HTTP 202 immediately; worker runs in a daemon thread; job state tracked in `RecoveryJobStore`.
+New routes: `GET /qz/recovery/jobs/<request_id>`. New field `"jobs"` in `/qz/recovery/status`.
+Schema: `qz.recovery.job.v1` / `qz.recovery.jobs.v1`. In-memory only; non-durable.
+Other actions (restart_backend, refresh_catalog, clear_failure) remain synchronous.
+`async=true` for unsupported actions → 400 `async_not_supported`.
+
 ### Slice 13b (done): Harden recovery smoke timeout + `_send_json` disconnect
 
 - `_post_json_ext` helper with configurable timeout + stderr capture

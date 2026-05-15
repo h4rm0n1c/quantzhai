@@ -53,6 +53,7 @@ try:
     from .qz_telemetry import DEFAULT_TELEMETRY
     from .qz_recovery_state import RECOVERY_STATE
     from .qz_active_requests import ACTIVE_REQUESTS
+    from .qz_recovery_jobs import RECOVERY_JOBS
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import append_capture, read_json, runtime_log, write_capture
 except ImportError:
@@ -99,6 +100,7 @@ except ImportError:
     from qz_telemetry import DEFAULT_TELEMETRY
     from qz_recovery_state import RECOVERY_STATE
     from qz_active_requests import ACTIVE_REQUESTS
+    from qz_recovery_jobs import RECOVERY_JOBS
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import append_capture, read_json, runtime_log, write_capture
 
@@ -110,6 +112,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
     request_gate = threading.Lock()
     recovery_state = RECOVERY_STATE
     active_requests = ACTIVE_REQUESTS
+    recovery_jobs = RECOVERY_JOBS
     model_catalog = None
     model_catalog_path = None
     backend_client = None

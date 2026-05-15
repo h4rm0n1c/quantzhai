@@ -47,6 +47,7 @@ def build_recovery_status(
     service_status: dict[str, Any],
     runtime_state: dict[str, Any] | None = None,
     active_requests: dict[str, Any] | None = None,
+    recovery_jobs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a qz.recovery.status.v1 payload from a qz.service.status.v1 dict.
 
@@ -56,8 +57,10 @@ def build_recovery_status(
         runtime_state:    Optional qz.recovery.runtime_state.v1 snapshot.
                           When supplied, adds "runtime_state" and per-action "backoff".
         active_requests:  Optional qz.active_requests.v1 snapshot.
-                          When supplied, adds "active_requests" field. Existing callers
-                          without this argument are unaffected.
+                          When supplied, adds "active_requests" field.
+        recovery_jobs:    Optional qz.recovery.jobs.v1 snapshot.
+                          When supplied, adds "jobs" field with recent async job state.
+                          Existing callers without this argument are unaffected.
 
     Returns:
         A qz.recovery.status.v1 dict. Always returns a valid dict; never raises.
@@ -83,6 +86,8 @@ def build_recovery_status(
             result["backoff"] = None
         if active_requests is not None:
             result["active_requests"] = active_requests
+        if recovery_jobs is not None:
+            result["jobs"] = recovery_jobs
         return result
 
     recovery_state = str(service_status.get("recovery_state") or "none")
@@ -143,5 +148,8 @@ def build_recovery_status(
 
     if active_requests is not None:
         result["active_requests"] = active_requests
+
+    if recovery_jobs is not None:
+        result["jobs"] = recovery_jobs
 
     return result
