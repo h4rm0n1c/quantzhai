@@ -9,6 +9,7 @@ from proxy.qz_responses_stream import (
     StreamDecision,
     StreamHopState,
     _reasoning_only_abort_reason,
+    _should_inject_hop_budget_signal,
     _should_suppress_duplicate_response_start,
 )
 from proxy.qz_telemetry import TelemetryBus
@@ -3662,6 +3663,43 @@ class DuplicateResponseStartHelperTests(unittest.TestCase):
         self.assertFalse(
             _should_suppress_duplicate_response_start("done", True)
         )
+
+
+class HopBudgetSignalHelperTests(unittest.TestCase):
+    """Unit tests for _should_inject_hop_budget_signal() — #37 Slice 2D."""
+
+    def test_threshold_minus_one_disables_signal(self):
+        self.assertFalse(_should_inject_hop_budget_signal(0, -1))
+
+    def test_threshold_minus_one_disables_signal_any_remaining(self):
+        self.assertFalse(_should_inject_hop_budget_signal(5, -1))
+
+    def test_threshold_zero_hops_remaining_zero_injects(self):
+        self.assertTrue(_should_inject_hop_budget_signal(0, 0))
+
+    def test_threshold_zero_hops_remaining_one_skips(self):
+        self.assertFalse(_should_inject_hop_budget_signal(1, 0))
+
+    def test_threshold_one_hops_remaining_one_injects(self):
+        self.assertTrue(_should_inject_hop_budget_signal(1, 1))
+
+    def test_threshold_one_hops_remaining_two_skips(self):
+        self.assertFalse(_should_inject_hop_budget_signal(2, 1))
+
+    def test_threshold_three_hops_remaining_zero_injects(self):
+        self.assertTrue(_should_inject_hop_budget_signal(0, 3))
+
+    def test_threshold_three_hops_remaining_three_injects(self):
+        self.assertTrue(_should_inject_hop_budget_signal(3, 3))
+
+    def test_threshold_three_hops_remaining_four_skips(self):
+        self.assertFalse(_should_inject_hop_budget_signal(4, 3))
+
+    def test_negative_hops_remaining_with_positive_threshold_injects(self):
+        # hops_remaining can go negative if hop_index overruns max_hops.
+        # The conservative behaviour is to inject (remaining <= threshold),
+        # consistent with treating a negative remaining as "very tight".
+        self.assertTrue(_should_inject_hop_budget_signal(-1, 0))
 
 
 class StreamDecisionTests(unittest.TestCase):

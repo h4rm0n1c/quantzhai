@@ -226,6 +226,18 @@ def _should_suppress_duplicate_response_start(
     }
 
 
+def _should_inject_hop_budget_signal(hops_remaining: int, threshold: int) -> bool:
+    """Return True if the hop-budget signal should be injected for this hop.
+
+    Pure helper — no I/O, no state mutation.
+    threshold < 0 disables the signal entirely.
+    Signal is injected when hops_remaining <= threshold.
+    """
+    if threshold < 0:
+        return False
+    return hops_remaining <= threshold
+
+
 def _reasoning_only_abort_reason(
     *,
     reasoning_only_sample: str,
@@ -1147,7 +1159,7 @@ class ResponsesStreamRuntime:
         }
 
     def _hop_budget_signal_message(self, hops_remaining: int) -> dict | None:
-        if self.hop_budget_signal_threshold < 0 or hops_remaining > self.hop_budget_signal_threshold:
+        if not _should_inject_hop_budget_signal(hops_remaining, self.hop_budget_signal_threshold):
             return None
         text = (
             f"You have {hops_remaining} continuation hop(s) remaining this turn. "

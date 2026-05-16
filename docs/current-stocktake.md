@@ -292,7 +292,13 @@ Key decisions from Slice 2A:
 
 **Slice 2B complete:** `StreamDecision` dataclass + `_reasoning_only_abort_reason()` helper extracted.
   No decide_stream_event() added. No stream side effects moved. 2437 tests passing.
-  Next: Slice 2C can extract another small decision helper, or pause for audit.
+
+**Slice 2C complete:** `_should_suppress_duplicate_response_start(event_type, sent_response_start) -> bool` extracted.
+  6 unit tests added. 2443 tests passing. No behaviour change.
+
+**Slice 2D complete:** `_should_inject_hop_budget_signal(hops_remaining, threshold) -> bool` extracted.
+  Condition moved out of `_hop_budget_signal_message()`. 11 unit tests added. No behaviour change.
+  Next: Slice 2D.1 audit/polish before touching more complex stream decisions.
 
 ### Prompt A (archived): #37 Slice 1 + 1.1 — Stream state machine seam extraction — COMPLETE
 

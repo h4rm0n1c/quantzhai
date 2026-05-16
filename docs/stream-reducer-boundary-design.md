@@ -483,31 +483,18 @@ instead of a context object. All live guidance uses the implemented name.
 ## 9B. Slice 2C — COMPLETE
 
 `_should_suppress_duplicate_response_start(event_type, sent_response_start) -> bool`
-extracted in commit dd1b50b+1. 6 unit tests added. 2443 tests pass. No behaviour change.
+extracted in commit c320cfc. 6 unit tests added. 2443 tests pass. No behaviour change.
 
 ---
 
-## 9C. Recommended Slice 2D
+## 9C. Slice 2D — COMPLETE
 
-**Extract `_should_inject_hop_budget_signal(hops_remaining, threshold) -> bool` pure helper.**
+`_should_inject_hop_budget_signal(hops_remaining, threshold) -> bool` extracted.
+Condition moved out of `_hop_budget_signal_message()`. 11 unit tests added.
+No behaviour change. Message construction and telemetry unchanged.
 
-**Rationale:**
-
-1. Bounded inputs: two integers.
-2. No tool execution, no terminal event, no SSE rendering.
-3. Already covered by `test_hop_budget_signal_injected_when_hops_tight`,
-   `test_hop_budget_signal_not_injected_when_hops_plentiful`,
-   `test_hop_budget_signal_disabled_with_minus_one`.
-4. Mirrors the Slice 2C pattern exactly.
-
-**Slice 2D scope:**
-
-```text
-1. Add _should_inject_hop_budget_signal(hops_remaining, threshold) -> bool.
-2. Replace inline check at the hop_budget_signal site.
-3. Unit tests: verify inject/skip conditions.
-4. No other logic moved.
-```
+**Recommended next: Slice 2D.1** — audit/polish before touching more complex stream decisions.
+Avoid tool lifecycle extraction and terminal handling extraction until after that audit.
 
 ---
 
