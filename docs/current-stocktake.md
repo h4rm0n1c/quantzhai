@@ -280,7 +280,7 @@ BrainCase retention/lifetime policy (#54)
 
 ## 10. Suggested next agent prompts
 
-### Prompt A: #37 Slice 1 — Stream state machine seam extraction
+### Prompt A: #37 Slice 1 — Stream state machine seam extraction — COMPLETE
 
 **BrainCase feature work is complete (#53/#54 closed). Next: #37 stream seam.**
 

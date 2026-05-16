@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from proxy.qz_proxy_tools import ProxyLocalToolExecutor, ProxyLocalToolRegistry
-from proxy.qz_responses_stream import ClientStreamDisconnected, ResponsesStreamRuntime
+from proxy.qz_responses_stream import ClientStreamDisconnected, ResponsesStreamRuntime, StreamHopState
 from proxy.qz_telemetry import TelemetryBus
 from proxy.qz_tool_lifecycle import ToolContinuationResult
 from proxy.qz_tools import ToolLifecycleSpec
@@ -3507,6 +3507,87 @@ class RepeatedReadStreamingTests(unittest.TestCase):
         """repeated_read_signal must be in REQUEST_LIFECYCLE_EVENT_TYPES (retained)."""
         from proxy.qz_telemetry import REQUEST_LIFECYCLE_EVENT_TYPES
         self.assertIn("repeated_read_signal", REQUEST_LIFECYCLE_EVENT_TYPES)
+
+
+class StreamHopStateTests(unittest.TestCase):
+    """Unit tests for StreamHopState — #37 Slice 1."""
+
+    def _minimal_hop_body(self):
+        return {"input": [{"type": "message", "role": "user",
+                           "content": [{"type": "input_text", "text": "hi"}]}]}
+
+    def test_fresh_defaults_event_lists(self):
+        hs = StreamHopState.fresh(self._minimal_hop_body())
+        self.assertEqual(hs.event_lines, [])
+        self.assertIsNone(hs.event_started_at)
+
+    def test_fresh_next_input_from_hop_body(self):
+        body = self._minimal_hop_body()
+        hs = StreamHopState.fresh(body)
+        self.assertEqual(len(hs.next_input), 1)
+        self.assertEqual(hs.next_input[0]["role"], "user")
+
+    def test_fresh_next_input_empty_when_no_input(self):
+        hs = StreamHopState.fresh({})
+        self.assertEqual(hs.next_input, [])
+
+    def test_fresh_completed_call_is_none(self):
+        hs = StreamHopState.fresh({})
+        self.assertIsNone(hs.completed_call)
+
+    def test_fresh_injection_flags_false(self):
+        hs = StreamHopState.fresh({})
+        self.assertFalse(hs.error_injected)
+        self.assertFalse(hs.signal_injected)
+        self.assertFalse(hs.repair_injected)
+
+    def test_fresh_output_counters_zero(self):
+        hs = StreamHopState.fresh({})
+        self.assertEqual(hs.output_text_chars, 0)
+        self.assertEqual(hs.reasoning_only_chars, 0)
+        self.assertEqual(hs.reasoning_only_sample, "")
+        self.assertEqual(hs.max_output_index, -1)
+
+    def test_fresh_item_seen_flags_false(self):
+        hs = StreamHopState.fresh({})
+        self.assertFalse(hs.visible_output_text_seen)
+        self.assertFalse(hs.assistant_item_seen)
+        self.assertFalse(hs.public_item_seen)
+
+    def test_fresh_tool_call_state_is_new_instance(self):
+        from proxy.qz_tool_lifecycle import StreamToolCallState
+        hs = StreamHopState.fresh({})
+        self.assertIsNotNone(hs.tool_call_state)
+        self.assertIsInstance(hs.tool_call_state, StreamToolCallState)
+
+    def test_fresh_watchdog_state_is_initialised(self):
+        from proxy.qz_stream_watchdog import StreamWatchdogState
+        hs = StreamHopState.fresh({}, stream_no_output_timeout_s=30.0,
+                                   stream_terminal_timeout_s=10.0)
+        self.assertIsNotNone(hs.watchdog_state)
+        self.assertIsInstance(hs.watchdog_state, StreamWatchdogState)
+
+    def test_fresh_stream_obs_acc_has_request_id(self):
+        hs = StreamHopState.fresh({}, request_id="req-test-123")
+        self.assertEqual(hs.stream_obs_acc.get("request_id"), "req-test-123")
+
+    def test_fresh_reasoning_only_timestamps_none(self):
+        hs = StreamHopState.fresh({})
+        self.assertIsNone(hs.reasoning_only_started_at)
+        self.assertIsNone(hs.reasoning_only_last_delta_at)
+
+    def test_two_fresh_calls_return_independent_state(self):
+        hs1 = StreamHopState.fresh({})
+        hs2 = StreamHopState.fresh({})
+        hs1.event_lines.append(b"test")
+        self.assertEqual(hs2.event_lines, [], "fresh() must return independent state")
+
+    def test_fresh_next_input_is_copy_not_reference(self):
+        body = self._minimal_hop_body()
+        hs = StreamHopState.fresh(body)
+        original_item = body["input"][0]
+        hs.next_input.append({"extra": True})
+        self.assertEqual(len(body["input"]), 1, "mutating next_input must not affect hop_body")
 
 
 if __name__ == "__main__":

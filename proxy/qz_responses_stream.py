@@ -4,6 +4,7 @@ import os
 import socket
 import time
 import urllib.request
+from dataclasses import dataclass, field
 
 try:
     from .qz_responses import (
@@ -83,6 +84,69 @@ except ImportError:
         should_trigger_no_output_timeout,
         should_trigger_terminal_timeout,
     )
+
+
+@dataclass
+class StreamHopState:
+    """Per-hop mutable state for the Responses SSE streaming loop.
+
+    Reset at the start of each continuation hop.
+    Does not hold outer-loop state (public_trace, sequence, hop counts, etc.).
+    """
+    tool_call_state: "StreamToolCallState" = field(default_factory=lambda: None)  # set in fresh()
+    event_lines: list = field(default_factory=list)
+    event_started_at: float | None = None
+    next_input: list = field(default_factory=list)
+    completed_call: dict | None = None
+    error_injected: bool = False
+    signal_injected: bool = False
+    repair_injected: bool = False
+    reasoning_only_started_at: float | None = None
+    reasoning_only_last_delta_at: float | None = None
+    reasoning_only_chars: int = 0
+    reasoning_only_sample: str = ""
+    output_text_chars: int = 0
+    visible_output_text_seen: bool = False
+    assistant_item_seen: bool = False
+    public_item_seen: bool = False
+    max_output_index: int = -1
+    stream_obs_acc: dict = field(default_factory=dict)
+    watchdog_state: "StreamWatchdogState" = field(default_factory=lambda: None)  # set in fresh()
+
+    @classmethod
+    def fresh(
+        cls,
+        hop_body: dict,
+        request_id: str = "",
+        stream_no_output_timeout_s: float = 0.0,
+        stream_terminal_timeout_s: float = 0.0,
+    ) -> "StreamHopState":
+        """Return a new StreamHopState initialised with per-hop defaults."""
+        return cls(
+            tool_call_state=StreamToolCallState(),
+            event_lines=[],
+            event_started_at=None,
+            next_input=list(hop_body.get("input") or []),
+            completed_call=None,
+            error_injected=False,
+            signal_injected=False,
+            repair_injected=False,
+            reasoning_only_started_at=None,
+            reasoning_only_last_delta_at=None,
+            reasoning_only_chars=0,
+            reasoning_only_sample="",
+            output_text_chars=0,
+            visible_output_text_seen=False,
+            assistant_item_seen=False,
+            public_item_seen=False,
+            max_output_index=-1,
+            stream_obs_acc={"request_id": request_id},
+            watchdog_state=StreamWatchdogState(
+                timeout_secs=stream_no_output_timeout_s,
+                started_at=time.time(),
+                terminal_timeout_secs=stream_terminal_timeout_s,
+            ),
+        )
 
 
 PRIVATE_FUNCTION_CALL_TIMEOUT_S = float(os.environ.get("QZ_PRIVATE_TOOL_CALL_TIMEOUT_S", "120"))
@@ -1134,49 +1198,32 @@ class ResponsesStreamRuntime:
                                 timeout_secs,
                             )
 
+                    raw_log = self._open_raw_log()
+                    hs = StreamHopState.fresh(
+                        hop_body,
+                        request_id=self.request_id,
+                        stream_no_output_timeout_s=self.stream_no_output_timeout_s,
+                        stream_terminal_timeout_s=self.stream_terminal_timeout_s,
+                    )
+
                     def sync_terminal_read_timeout(now):
-                        if watchdog_state.first_terminal_at is not None:
+                        if hs.watchdog_state.first_terminal_at is not None:
                             restore_read_timeout_once()
                             return
-                        if watchdog_state.first_visible_output_at is None:
+                        if hs.watchdog_state.first_visible_output_at is None:
                             return
                         if self.stream_terminal_timeout_s <= 0:
                             restore_read_timeout_once()
                             return
-                        deadline = watchdog_state.first_visible_output_at + self.stream_terminal_timeout_s
+                        deadline = hs.watchdog_state.first_visible_output_at + self.stream_terminal_timeout_s
                         set_stream_read_timeout(max(0.001, deadline - now))
-
-                    raw_log = self._open_raw_log()
-                    tool_call_state = StreamToolCallState()
-                    event_lines = []
-                    event_started_at = None
-                    next_input = list(hop_body.get("input") or [])
-                    completed_call = None
-                    error_injected = False
-                    signal_injected = False
-                    repair_injected = False
-                    reasoning_only_started_at = None
-                    reasoning_only_last_delta_at = None
-                    reasoning_only_chars = 0
-                    reasoning_only_sample = ""
-                    output_text_chars = 0
-                    visible_output_text_seen = False
-                    assistant_item_seen = False
-                    public_item_seen = False
-                    max_output_index = -1
-                    stream_obs_acc = {"request_id": self.request_id}
-                    watchdog_state = StreamWatchdogState(
-                        timeout_secs=self.stream_no_output_timeout_s,
-                        started_at=time.time(),
-                        terminal_timeout_secs=self.stream_terminal_timeout_s,
-                    )
 
                     while True:
                         try:
                             chunk = self._read_stream_line(resp)
                         except (TimeoutError, socket.timeout) as exc:
-                            timeout_at = self._timeout_check_time(exc, watchdog_state)
-                            if should_trigger_no_output_timeout(watchdog_state, timeout_at):
+                            timeout_at = self._timeout_check_time(exc, hs.watchdog_state)
+                            if should_trigger_no_output_timeout(hs.watchdog_state, timeout_at):
                                 return self._finish_no_output_timeout(
                                     requested_model,
                                     started_at,
@@ -1184,18 +1231,18 @@ class ResponsesStreamRuntime:
                                     final_usage,
                                     public_trace,
                                     summary_started,
-                                    watchdog_state,
+                                    hs.watchdog_state,
                                     timeout_at,
-                                    reasoning_only_chars=reasoning_only_chars,
-                                    visible_output_text_seen=visible_output_text_seen,
-                                    assistant_item_seen=assistant_item_seen,
-                                    completed_call=completed_call,
+                                    reasoning_only_chars=hs.reasoning_only_chars,
+                                    visible_output_text_seen=hs.visible_output_text_seen,
+                                    assistant_item_seen=hs.assistant_item_seen,
+                                    completed_call=hs.completed_call,
                                     sent_terminal=sent_terminal,
                                     sent_done=sent_done,
                                     sequence=sequence,
-                                    stream_obs_acc=stream_obs_acc,
+                                    stream_obs_acc=hs.stream_obs_acc,
                                 )
-                            if should_trigger_terminal_timeout(watchdog_state, timeout_at):
+                            if should_trigger_terminal_timeout(hs.watchdog_state, timeout_at):
                                 return self._finish_terminal_timeout_after_output(
                                     requested_model,
                                     started_at,
@@ -1203,20 +1250,20 @@ class ResponsesStreamRuntime:
                                     final_usage,
                                     public_trace,
                                     summary_started,
-                                    watchdog_state,
+                                    hs.watchdog_state,
                                     timeout_at,
-                                    reasoning_only_chars=reasoning_only_chars,
-                                    visible_output_text_seen=visible_output_text_seen,
-                                    assistant_item_seen=assistant_item_seen,
-                                    completed_call=completed_call,
+                                    reasoning_only_chars=hs.reasoning_only_chars,
+                                    visible_output_text_seen=hs.visible_output_text_seen,
+                                    assistant_item_seen=hs.assistant_item_seen,
+                                    completed_call=hs.completed_call,
                                     sent_terminal=sent_terminal,
                                     sent_done=sent_done,
                                     sequence=sequence,
-                                    stream_obs_acc=stream_obs_acc,
+                                    stream_obs_acc=hs.stream_obs_acc,
                                 )
                             raise
                         if not chunk:
-                            if event_lines:
+                            if hs.event_lines:
                                 chunk = b"\n"
                             else:
                                 break
@@ -1225,55 +1272,55 @@ class ResponsesStreamRuntime:
                             raw_log.write(chunk)
                             raw_log.flush()
 
-                        if event_started_at is None:
-                            event_started_at = time.time()
-                        event_lines.append(chunk)
+                        if hs.event_started_at is None:
+                            hs.event_started_at = time.time()
+                        hs.event_lines.append(chunk)
                         if chunk not in (b"\n", b"\r\n"):
                             continue
 
-                        event_received_at = event_started_at or time.time()
-                        event_type, payload = parse_sse_event_lines(event_lines)
+                        event_received_at = hs.event_started_at or time.time()
+                        event_type, payload = parse_sse_event_lines(hs.event_lines)
                         event_parsed_at = time.time()
-                        event_started_at = None
-                        watchdog_state.mark_event(event_parsed_at)
+                        hs.event_started_at = None
+                        hs.watchdog_state.mark_event(event_parsed_at)
                         accumulate(
-                            stream_obs_acc,
+                            hs.stream_obs_acc,
                             observation_from_event_type(event_type, payload),
                         )
                         if first_output_at is None and event_type not in {"response.created", "response.in_progress"}:
                             first_output_at = time.time()
                         if isinstance(payload, dict) and isinstance(payload.get("output_index"), int):
-                            max_output_index = max(max_output_index, payload["output_index"])
+                            hs.max_output_index = max(hs.max_output_index, payload["output_index"])
                         if isinstance(payload, dict) and isinstance(payload.get("sequence_number"), int):
                             sequence = max(sequence, payload["sequence_number"])
                         if event_type == "response.output_text.delta" and isinstance(payload, dict):
                             delta = payload.get("delta")
                             delta_text = delta if isinstance(delta, str) else ""
-                            output_text_chars += len(delta_text)
+                            hs.output_text_chars += len(delta_text)
                             if delta_text.strip():
-                                visible_output_text_seen = True
-                                watchdog_state.mark_visible_output(event_parsed_at)
+                                hs.visible_output_text_seen = True
+                                hs.watchdog_state.mark_visible_output(event_parsed_at)
                         if event_type in {
                             "response.output_item.added",
                             "response.output_item.done",
                         } and isinstance(payload, dict):
                             item = payload.get("item")
                             if event_type == "response.output_item.done" and _is_completed_assistant_message_item(item):
-                                assistant_item_seen = True
-                                watchdog_state.mark_visible_output(event_parsed_at)
+                                hs.assistant_item_seen = True
+                                hs.watchdog_state.mark_visible_output(event_parsed_at)
                             if event_type == "response.output_item.done" and _is_valid_public_output_item(item):
-                                public_item_seen = True
+                                hs.public_item_seen = True
                         if event_type == "response.completed":
                             response = payload.get("response") if isinstance(payload, dict) else {}
                             if isinstance(response, dict):
                                 final_usage = _normalize_response_usage(response.get("usage"))
                         if is_terminal_stream_event(event_type, payload):
-                            watchdog_state.mark_terminal(event_parsed_at)
+                            hs.watchdog_state.mark_terminal(event_parsed_at)
                             restore_read_timeout_once()
 
                         # No-output watchdog: fires on any event arrival if deadline passed
                         # and no visible output or terminal event has been seen.
-                        if should_trigger_no_output_timeout(watchdog_state, event_parsed_at):
+                        if should_trigger_no_output_timeout(hs.watchdog_state, event_parsed_at):
                             return self._finish_no_output_timeout(
                                 requested_model,
                                 started_at,
@@ -1281,18 +1328,18 @@ class ResponsesStreamRuntime:
                                 final_usage,
                                 public_trace,
                                 summary_started,
-                                watchdog_state,
+                                hs.watchdog_state,
                                 event_parsed_at,
-                                reasoning_only_chars=reasoning_only_chars,
-                                visible_output_text_seen=visible_output_text_seen,
-                                assistant_item_seen=assistant_item_seen,
-                                completed_call=completed_call,
+                                reasoning_only_chars=hs.reasoning_only_chars,
+                                visible_output_text_seen=hs.visible_output_text_seen,
+                                assistant_item_seen=hs.assistant_item_seen,
+                                completed_call=hs.completed_call,
                                 sent_terminal=sent_terminal,
                                 sent_done=sent_done,
                                 sequence=sequence,
-                                stream_obs_acc=stream_obs_acc,
+                                stream_obs_acc=hs.stream_obs_acc,
                             )
-                        if should_trigger_terminal_timeout(watchdog_state, event_parsed_at):
+                        if should_trigger_terminal_timeout(hs.watchdog_state, event_parsed_at):
                             return self._finish_terminal_timeout_after_output(
                                 requested_model,
                                 started_at,
@@ -1300,26 +1347,26 @@ class ResponsesStreamRuntime:
                                 final_usage,
                                 public_trace,
                                 summary_started,
-                                watchdog_state,
+                                hs.watchdog_state,
                                 event_parsed_at,
-                                reasoning_only_chars=reasoning_only_chars,
-                                visible_output_text_seen=visible_output_text_seen,
-                                assistant_item_seen=assistant_item_seen,
-                                completed_call=completed_call,
+                                reasoning_only_chars=hs.reasoning_only_chars,
+                                visible_output_text_seen=hs.visible_output_text_seen,
+                                assistant_item_seen=hs.assistant_item_seen,
+                                completed_call=hs.completed_call,
                                 sent_terminal=sent_terminal,
                                 sent_done=sent_done,
                                 sequence=sequence,
-                                stream_obs_acc=stream_obs_acc,
+                                stream_obs_acc=hs.stream_obs_acc,
                             )
                         sync_terminal_read_timeout(event_parsed_at)
 
-                        completed = tool_call_state.observe(event_type, payload, event_received_at)
+                        completed = hs.tool_call_state.observe(event_type, payload, event_received_at)
                         if is_function_call_stream_event(event_type, payload):
                             # Do not expose executable tool calls until arguments are complete.
                             # Codex currently treats response.output_item.added for function_call
                             # as runnable even when arguments are still streaming, which can execute
                             # an empty-argument command before response.function_call_arguments.done.
-                            abort_reason = tool_call_state.abort_reason(
+                            abort_reason = hs.tool_call_state.abort_reason(
                                 time.time(),
                                 self.private_function_call_timeout_s,
                                 self.private_function_call_delta_limit,
@@ -1341,7 +1388,7 @@ class ResponsesStreamRuntime:
                                     summary_started,
                                     final_usage,
                                     abort_reason,
-                                    tool_call_state.call_name,
+                                    hs.tool_call_state.call_name,
                                     public_index=len(public_trace),
                                     sequence=sequence,
                                 )
@@ -1362,23 +1409,23 @@ class ResponsesStreamRuntime:
                                 "response.reasoning_summary_text.delta",
                             }
                             and isinstance(payload, dict)
-                            and not visible_output_text_seen
-                            and not assistant_item_seen
-                            and not public_item_seen
+                            and not hs.visible_output_text_seen
+                            and not hs.assistant_item_seen
+                            and not hs.public_item_seen
                         ):
-                            if reasoning_only_started_at is None:
-                                reasoning_only_started_at = event_received_at
+                            if hs.reasoning_only_started_at is None:
+                                hs.reasoning_only_started_at = event_received_at
                             delta_text = str(payload.get("delta") or "")
                             if delta_text:
-                                reasoning_only_last_delta_at = event_received_at
-                                if len(reasoning_only_sample) < REASONING_ARTIFACT_SCAN_LIMIT:
-                                    remaining = REASONING_ARTIFACT_SCAN_LIMIT - len(reasoning_only_sample)
-                                    reasoning_only_sample += delta_text[:remaining]
-                            reasoning_only_chars += len(delta_text)
-                            reasoning_only_progress_at = reasoning_only_last_delta_at or reasoning_only_started_at
+                                hs.reasoning_only_last_delta_at = event_received_at
+                                if len(hs.reasoning_only_sample) < REASONING_ARTIFACT_SCAN_LIMIT:
+                                    remaining = REASONING_ARTIFACT_SCAN_LIMIT - len(hs.reasoning_only_sample)
+                                    hs.reasoning_only_sample += delta_text[:remaining]
+                            hs.reasoning_only_chars += len(delta_text)
+                            reasoning_only_progress_at = hs.reasoning_only_last_delta_at or hs.reasoning_only_started_at
                             reasoning_only_idle = max(0.0, time.time() - reasoning_only_progress_at)
                             abort_reason = ""
-                            if _looks_like_reasoning_tool_artifact(reasoning_only_sample):
+                            if _looks_like_reasoning_tool_artifact(hs.reasoning_only_sample):
                                 abort_reason = "artifact_tool_payload"
                             elif (
                                 self.reasoning_only_timeout_s >= 0
@@ -1387,7 +1434,7 @@ class ResponsesStreamRuntime:
                                 abort_reason = "timeout"
                             elif (
                                 self.reasoning_only_char_limit >= 0
-                                and reasoning_only_chars > self.reasoning_only_char_limit
+                                and hs.reasoning_only_chars > self.reasoning_only_char_limit
                             ):
                                 abort_reason = "char_limit"
                             if abort_reason:
@@ -1407,7 +1454,7 @@ class ResponsesStreamRuntime:
                                     summary_started,
                                     final_usage,
                                     abort_reason,
-                                    reasoning_only_chars,
+                                    hs.reasoning_only_chars,
                                     public_index=len(public_trace),
                                     sequence=sequence,
                                 )
@@ -1424,19 +1471,19 @@ class ResponsesStreamRuntime:
                                     fallback=True,
                                 )
                         if completed:
-                            completed_call = completed[0]
-                            completed_key = completed_call.get("id") or completed_call.get("call_id")
-                            public_index = completed_call.get("output_index")
+                            hs.completed_call = completed[0]
+                            completed_key = hs.completed_call.get("id") or hs.completed_call.get("call_id")
+                            public_index = hs.completed_call.get("output_index")
                             if not isinstance(public_index, int):
-                                public_index = max_output_index + 1
+                                public_index = hs.max_output_index + 1
                             public_index += output_index_offset
 
-                            escalation = self._check_sandbox_escalation(completed_call)
+                            escalation = self._check_sandbox_escalation(hs.completed_call)
                             if escalation:
                                 self._emit("tool_escalation_requested", escalation)
 
                             decision = self.proxy_tool_registry.completed_call_decision(
-                                completed_call,
+                                hs.completed_call,
                                 apply_patch_output_style,
                                 dropped_tool_names=dropped_tool_names,
                                 repeated_read_state=repeated_read_state,
@@ -1445,8 +1492,8 @@ class ResponsesStreamRuntime:
                             if decision.kind == "signal":
                                 # Advisory repeated-read signal: inject output upstream,
                                 # continue the hop loop. No public Codex lifecycle event.
-                                next_input.append(decision.signal_result)
-                                signal_injected = True
+                                hs.next_input.append(decision.signal_result)
+                                hs.signal_injected = True
                                 self._emit("repeated_read_signal", decision.signal_metadata or {})
                                 self._emit_stream_event_timing(
                                     event_type, event_received_at, event_parsed_at,
@@ -1458,10 +1505,10 @@ class ResponsesStreamRuntime:
                                 # Inject the error result upstream so the model sees
                                 # it on the next hop. No lifecycle events emitted to
                                 # Codex — the tool never ran.
-                                next_input.append(decision.error_result)
-                                error_injected = True
+                                hs.next_input.append(decision.error_result)
+                                hs.error_injected = True
                                 self._emit("tool_call_error", {
-                                    "tool": completed_call.get("name"),
+                                    "tool": hs.completed_call.get("name"),
                                     "error": (decision.error_result or {}).get("output", ""),
                                 })
                                 self._emit_stream_event_timing(
@@ -1477,7 +1524,7 @@ class ResponsesStreamRuntime:
                                     started_bytes,
                                     proxy_local_item_id,
                                 ) = self._emit_proxy_local_started(
-                                    completed_call,
+                                    hs.completed_call,
                                     public_index,
                                     sequence,
                                 )
@@ -1492,11 +1539,11 @@ class ResponsesStreamRuntime:
                                 )
                                 self._emit(
                                     "tool_call_started",
-                                    self.proxy_tool_registry.telemetry_payload(completed_call),
+                                    self.proxy_tool_registry.telemetry_payload(hs.completed_call),
                                 )
                                 try:
                                     result = self.proxy_tool_registry.execute(
-                                        completed_call,
+                                        hs.completed_call,
                                         ProxyToolExecutionContext(
                                             request_id=self.request_id,
                                             counters=counters,
@@ -1507,7 +1554,7 @@ class ResponsesStreamRuntime:
                                     self._emit(
                                         "tool_call_failed",
                                         self.proxy_tool_registry.telemetry_payload(
-                                            completed_call,
+                                            hs.completed_call,
                                             error=str(exc),
                                         ),
                                     )
@@ -1515,16 +1562,16 @@ class ResponsesStreamRuntime:
                                 self._emit(
                                     "tool_call_completed",
                                     self.proxy_tool_registry.telemetry_payload(
-                                        completed_call,
+                                        hs.completed_call,
                                         result=result,
                                     ),
                                 )
                                 public_item = result.public_item
                                 public_item["id"] = proxy_local_item_id
                                 public_trace.append(public_item)
-                                next_input.extend(result.upstream_items)
+                                hs.next_input.extend(result.upstream_items)
                                 sequence, forwarded_chunks, forwarded_bytes = self._emit_proxy_local_completed(
-                                    completed_call,
+                                    hs.completed_call,
                                     public_item,
                                     public_index,
                                     sequence,
@@ -1544,7 +1591,7 @@ class ResponsesStreamRuntime:
                             result = self.proxy_tool_registry.continuation_result(decision)
                             # Record this public call so within-run repeated-read
                             # tracking works for subsequent tool calls in the same run.
-                            record_tool_call(completed_call, repeated_read_state)
+                            record_tool_call(hs.completed_call, repeated_read_state)
                             public_item = result.public_item
                             public_trace.append(public_item)
                             sequence, forwarded_chunks, forwarded_bytes = self._emit_public_tool_item(public_item, public_index, sequence)
@@ -1577,22 +1624,22 @@ class ResponsesStreamRuntime:
                                 None,
                                 suppressed="function_call",
                             )
-                            event_lines = []
+                            hs.event_lines = []
                             continue
 
                         if (
                             is_terminal_stream_event(event_type, payload)
-                            and completed_call
-                            and self.proxy_tool_registry.is_proxy_local_call(completed_call)
+                            and hs.completed_call
+                            and self.proxy_tool_registry.is_proxy_local_call(hs.completed_call)
                         ):
                             self._emit_stream_event_timing(
                                 event_type,
                                 event_received_at,
                                 event_parsed_at,
                                 None,
-                                suppressed=self.proxy_tool_registry.terminal_suppression_reason(completed_call),
+                                suppressed=self.proxy_tool_registry.terminal_suppression_reason(hs.completed_call),
                             )
-                            event_lines = []
+                            hs.event_lines = []
                             continue
 
                         if event_type == "response.completed" and isinstance(payload, dict):
@@ -1600,12 +1647,12 @@ class ResponsesStreamRuntime:
                             if isinstance(response, dict):
                                 upstream_output_items = len(_response_output_items(response))
                                 completed_reasoning_chars = max(
-                                    int(reasoning_only_chars),
+                                    int(hs.reasoning_only_chars),
                                     _response_reasoning_chars(response),
                                 )
                                 completed_without_visible_answer = (
-                                    not visible_output_text_seen
-                                    and not public_item_seen
+                                    not hs.visible_output_text_seen
+                                    and not hs.public_item_seen
                                     and not _response_has_visible_output_text(response)
                                     and not _response_has_valid_public_item(response)
                                 )
@@ -1620,9 +1667,9 @@ class ResponsesStreamRuntime:
                                     if repair_hops_used < max(0, self.empty_answer_repair_hops):
                                         repair_hop_index = repair_hops_used
                                         repair_hops_used += 1
-                                        working_body = self._apply_empty_answer_repair(hop_body, next_input)
+                                        working_body = self._apply_empty_answer_repair(hop_body, hs.next_input)
                                         pending_repair_hop_index = repair_hop_index
-                                        repair_injected = True
+                                        hs.repair_injected = True
                                         self._emit(
                                             "empty_answer_repair_started",
                                             self._empty_answer_repair_payload(
@@ -1640,7 +1687,7 @@ class ResponsesStreamRuntime:
                                             None,
                                             suppressed="empty_answer_repair_started",
                                         )
-                                        event_lines = []
+                                        hs.event_lines = []
                                         break
 
                                     repair_hop_index = (
@@ -1711,7 +1758,7 @@ class ResponsesStreamRuntime:
                                     None,
                                     suppressed="duplicate_response_start",
                                 )
-                                event_lines = []
+                                hs.event_lines = []
                                 continue
                             sent_response_start = True
 
@@ -1734,8 +1781,8 @@ class ResponsesStreamRuntime:
                                 self._emit_completed(requested_model, public_trace, summary_started, usage=final_usage)
                                 sent_terminal = True
                                 sent_done = True
-                                watchdog_state.mark_terminal(event_parsed_at)
-                                event_lines = []
+                                hs.watchdog_state.mark_terminal(event_parsed_at)
+                                hs.event_lines = []
                                 continue
                             if (
                                 (event_type == "done" or payload == "[DONE]")
@@ -1754,13 +1801,13 @@ class ResponsesStreamRuntime:
                                 self._emit_completed(requested_model, public_trace, summary_started, usage=final_usage)
                                 sent_terminal = True
                                 sent_done = True
-                                watchdog_state.mark_terminal(event_parsed_at)
-                                event_lines = []
+                                hs.watchdog_state.mark_terminal(event_parsed_at)
+                                hs.event_lines = []
                                 continue
                             forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(self._transformed_chunks(
                                 event_type,
                                 payload,
-                                event_lines,
+                                hs.event_lines,
                                 summary_started,
                                 output_index_offset=output_index_offset,
                                 prepend_output=public_trace,
@@ -1778,14 +1825,14 @@ class ResponsesStreamRuntime:
                                 sent_done = True
                             else:
                                 sent_terminal = True
-                            watchdog_state.mark_terminal(event_parsed_at)
-                            event_lines = []
+                            hs.watchdog_state.mark_terminal(event_parsed_at)
+                            hs.event_lines = []
                             continue
 
                         forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(self._transformed_chunks(
                             event_type,
                             payload,
-                            event_lines,
+                            hs.event_lines,
                             summary_started,
                             output_index_offset=output_index_offset,
                             model=requested_model,
@@ -1798,14 +1845,14 @@ class ResponsesStreamRuntime:
                             forwarded_chunks=forwarded_chunks,
                             forwarded_bytes=forwarded_bytes,
                         )
-                        event_lines = []
+                        hs.event_lines = []
                     # Drain remaining SSE events to capture the server's
                     # response.completed usage before resp is closed by the
                     # finally block.  Only runs on proxy-local or error breaks
                     # where the while loop exits before the terminal events.
                     if resp is not None and (
-                        error_injected or signal_injected
-                        or (completed_call and self.proxy_tool_registry.is_proxy_local_call(completed_call))
+                        hs.error_injected or hs.signal_injected
+                        or (hs.completed_call and self.proxy_tool_registry.is_proxy_local_call(hs.completed_call))
                     ):
                         drained_usage = self._drain_stream_for_usage(resp)
                         if drained_usage is not None:
@@ -1817,17 +1864,17 @@ class ResponsesStreamRuntime:
                     if resp is not None:
                         resp.close()
 
-                if repair_injected:
+                if hs.repair_injected:
                     continue
 
-                if error_injected or signal_injected or (completed_call and self.proxy_tool_registry.is_proxy_local_call(completed_call)):
-                    if max_output_index >= 0:
-                        output_index_offset += max_output_index + 1
+                if hs.error_injected or hs.signal_injected or (hs.completed_call and self.proxy_tool_registry.is_proxy_local_call(hs.completed_call)):
+                    if hs.max_output_index >= 0:
+                        output_index_offset += hs.max_output_index + 1
                     # Experimental: carry a compact prior-turn reasoning summary
                     # forward as a lightweight context anchor for the next hop.
                     # Controlled by reasoning_carry_forward; off by default.
-                    if self.reasoning_carry_forward and reasoning_only_sample.strip():
-                        snippet = reasoning_only_sample.strip()[:300]
+                    if self.reasoning_carry_forward and hs.reasoning_only_sample.strip():
+                        snippet = hs.reasoning_only_sample.strip()[:300]
                         carry_msg = {
                             "type": "message",
                             "role": "user",
@@ -1836,20 +1883,20 @@ class ResponsesStreamRuntime:
                                 "text": f"[Prior reasoning summary: {snippet}]",
                             }],
                         }
-                        next_input.insert(0, carry_msg)
+                        hs.next_input.insert(0, carry_msg)
                         self._emit("reasoning_carry_forward", {"chars": len(snippet)})
                     # Ephemeral self-management signals for the next hop.
                     hops_remaining = max_hops - (hop_index + 1)
                     hop_signal = self._hop_budget_signal_message(hops_remaining)
                     if hop_signal is not None:
-                        next_input.append(hop_signal)
+                        hs.next_input.append(hop_signal)
                         self._emit("hop_budget_signal", {
                             "hops_remaining": hops_remaining,
                             "threshold": self.hop_budget_signal_threshold,
                         })
                     ctx_signal = self._context_pressure_signal_message(final_usage)
                     if ctx_signal is not None:
-                        next_input.append(ctx_signal)
+                        hs.next_input.append(ctx_signal)
                         input_tokens = final_usage.get("input_tokens") or 0
                         context_length = (
                             self.selected_model.get("runtime_context_length")
@@ -1861,7 +1908,7 @@ class ResponsesStreamRuntime:
                             "context_length": int(context_length),
                             "threshold": self.context_pressure_signal_threshold,
                         })
-                    working_body["input"] = next_input
+                    working_body["input"] = hs.next_input
                     continue
 
                 if sent_terminal and not sent_done:
@@ -1877,15 +1924,15 @@ class ResponsesStreamRuntime:
 
                 completed_at = time.time()
                 self._merge_manual_stream_observation(
-                    stream_obs_acc,
-                    reasoning_only_chars=reasoning_only_chars,
-                    visible_output_text_seen=visible_output_text_seen,
-                    assistant_item_seen=assistant_item_seen,
-                    completed_call=completed_call,
+                    hs.stream_obs_acc,
+                    reasoning_only_chars=hs.reasoning_only_chars,
+                    visible_output_text_seen=hs.visible_output_text_seen,
+                    assistant_item_seen=hs.assistant_item_seen,
+                    completed_call=hs.completed_call,
                     sent_terminal=sent_terminal,
                     sent_done=sent_done,
                 )
-                hop_obs = observation_from_dict(stream_obs_acc)
+                hop_obs = observation_from_dict(hs.stream_obs_acc)
                 return self._build_result(
                     requested_model,
                     started_at,
