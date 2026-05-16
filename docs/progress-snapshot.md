@@ -80,12 +80,14 @@ Status:
 
 ```text
 Slices A–I.1 complete. #53 CLOSED after close-out audit passed.
+  BrainCaseDB is the first concrete LimbiCore memory substrate, proven in QuantZhai.
+  LimbiCore is the broader umbrella; BrainCaseDB is its first component.
   Exposed tools: braincase.render, braincase.recall, braincase.write_candidate.
   Unexposed: braincase.write/update/search/inspect/promote_candidate.
   Operator CLI: scripts/qz-braincase-review (list/inspect/promote/reject).
   Smoke: scripts/qz-braincase-smoke (12/12 PASS). 2239 tests passing.
-  Follow-up: retention/lifetime policy → new issue (separate from #53).
-  See docs/braincase-memory-tool-api.md.
+  Follow-up: #54 retention/lifetime policy (QuantZhai scope, not HSM/LimbiCore expansion).
+  See docs/braincase-memory-tool-api.md and docs/braincase-architecture-landscape-and-scope.md.
 ```
 
 Scope:

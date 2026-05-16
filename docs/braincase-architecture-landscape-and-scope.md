@@ -1,8 +1,42 @@
 # BrainCase Architecture: Landscape and Scope Assessment
 
 Date: 2026-05-15
+Updated: 2026-05-16
 
 Status: assessment document. Not a design spec or implementation guide.
+
+---
+
+## LimbiCore positioning
+
+BrainCaseDB is a **LimbiCore technology**.
+
+LimbiCore is the broader umbrella for tool-mediated memory, state, perception,
+and integrity infrastructure for agent runtimes. It is not fully designed or
+fully implemented. BrainCaseDB is currently its first concrete component.
+
+LimbiCore may later include more than BrainCaseDB. Future components could cover:
+
+- **State compilers** — task-scoped runtime packet assembly from stored state
+- **Perception/index layers** — signal indexing and retrieval from captures/artifacts
+- **Render/packet compilers** — bounded output assembly with redaction and tier policy
+- **Provenance/integrity gates** — tracing claims to sources, contradiction detection
+- **Review/promotion workflows** — structured candidate-to-active pipeline
+- **Memory routing helpers** — tier-aware query planning across domains
+
+None of that means these layers need to be built now, or that HSM implementation
+starts now. LimbiCore is a positioning concept, not an active build plan.
+
+**QuantZhai is the first practical runtime/testbed for LimbiCore technology.**
+BrainCaseDB should remain useful and stable inside QuantZhai even as the broader
+LimbiCore concept evolves. QuantZhai is the grounding environment, not a
+prototype to be discarded.
+
+**HSM is long-range research and design pressure, not the current implementation
+target.** HSM provides philosophical discipline — evidence-vs-inference boundaries,
+update gates, provenance rigour — but quiescent state, affective triggers, anchor
+modelling, and human identity emulation are not part of BrainCaseDB v1 or the
+current QuantZhai roadmap.
 
 ---
 
@@ -22,8 +56,8 @@ review for future decision-making.
 
 ### The working system
 
-After slices A–I.1, BrainCaseDB is a working proof-of-concept memory substrate
-for agent runtimes. It has:
+After slices A–I.1, BrainCaseDB is the first concrete LimbiCore memory substrate,
+currently proven inside QuantZhai. It has:
 
 **Storage layer:**
 - SQLite-backed `qz_braincase_state_records` — the core state/memory store
@@ -41,7 +75,10 @@ for agent runtimes. It has:
 - 9 memory tiers: working_state, session_state, project_state, semantic_memory,
   procedural_memory, episodic_memory, artifact_memory, perceptual_index,
   preference_constraint_memory
-- memory_domain isolation (coding / hsm / roleplay / personal / utility / isolated)
+- memory_domain isolation — **configured example domains** such as:
+  coding / hsm / roleplay / personal / utility / isolated
+  These are operator-configured values, not built-in registry entries.
+  BrainCaseDB stores the supplied domain as-is and does not grant or authorize them.
 
 **Model-facing tools (behind feature flags):**
 
@@ -99,10 +136,29 @@ for agent runtimes. It has:
 
 Understanding boundaries is as important as understanding capabilities.
 
+**Not all of LimbiCore:**
+BrainCaseDB is the first concrete LimbiCore component, but it is not the whole
+family. LimbiCore may later include state compilers, perception layers, integrity
+gates, and render pipeline tooling beyond what BrainCaseDB provides. BrainCaseDB
+is the storage/review/render substrate that later LimbiCore components will build
+on — it is not the finished LimbiCore architecture.
+
+**Not the future perception/state/compiler layer:**
+The state compiler, perception index, and runtime packet compiler described in
+HSM and in long-range LimbiCore concepts are not yet built and are not part of
+BrainCaseDB v1.
+
+**Not HSM runtime state:**
+BrainCaseDB does not implement quiescent state, affective memory clusters,
+anchor models, or human state continuity. Those are HSM-scope constructs for
+a future project, not a QuantZhai requirement.
+
 **Not HSM:**
-BrainCaseDB is a coding-agent memory substrate. It does not implement quiescent
-state, affective trigger modelling, anchor theory, or human identity emulation.
-It is not an upload project. It is not character continuity infrastructure.
+BrainCaseDB is a LimbiCore coding-agent memory substrate. It does not implement
+quiescent state, affective trigger modelling, anchor theory, or human identity
+emulation. It is not an upload project. It is not character continuity
+infrastructure. HSM is a separate long-range project that may eventually draw on
+LimbiCore/BrainCaseDB, but HSM implementation is not starting in QuantZhai now.
 
 **Not a human upload system:**
 BrainCaseDB stores durable project facts, constraints, procedures, and
@@ -316,17 +372,29 @@ and run. BrainCaseDB does not address this and should not.
 ### The correct mental model
 
 ```text
-HSM:    evidence archive → extract → provenance → human state compiler
-          → model execution → integrity loop → durable state update
-          Goal: coherent emulation of a human subject over time
+LimbiCore (long-range family):
+  BrainCaseDB (storage/review/render) — built, proven in QuantZhai
+  State compiler                      — future LimbiCore component
+  Perception/index layer              — future LimbiCore component
+  Runtime packet compiler             — future LimbiCore component
+  Provenance/integrity gates          — future LimbiCore component
 
-BrainCaseDB:  LLM + harness → memory tools → deterministic helpers
-              → BrainCaseDB → renderers → scoped model-visible packets
-              Goal: reliable, explicit, bounded agent project memory
+HSM (long-range research/design pressure):
+  evidence archive → extract → provenance → human state compiler
+  → model execution → integrity loop → durable state update
+  Goal: coherent emulation of a human subject over time
+  Not a QuantZhai implementation target now.
+
+QuantZhai (first LimbiCore testbed):
+  LLM + harness → memory tools → deterministic helpers
+  → BrainCaseDB → renderers → scoped model-visible packets
+  Goal: reliable, explicit, bounded agent project memory
 ```
 
-BrainCaseDB is a building block that HSM may eventually use as part of its
-storage substrate (using `memory_domain="hsm"` for isolation). It is not HSM.
+BrainCaseDB is the first LimbiCore building block. HSM may eventually use it
+as part of its storage substrate (using `memory_domain="hsm"` for isolation),
+but that is a future HSM-repo decision. BrainCaseDB is not HSM, and LimbiCore
+is not HSM implementation scope.
 
 ---
 
@@ -470,7 +538,8 @@ QuantZhai agent memory substrate — not HSM state machinery.
 
 ## 7. Scope boundary definition
 
-BrainCaseDB is a **proof-of-concept memory substrate for agent runtimes**.
+BrainCaseDB is the **first concrete LimbiCore memory substrate**, currently
+proven inside QuantZhai as a coding-agent project memory system.
 
 It is specifically designed for:
 - Local coding-agent memory (project constraints, procedures, decisions)
