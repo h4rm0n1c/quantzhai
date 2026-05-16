@@ -1,0 +1,104 @@
+{
+  "schema": "braincase/retention-policy@1",
+  "_comment": "Default BrainCase retention policy for QuantZhai / LimbiCore agent-memory records. Policy is multi-axis: retention + tier + record_type + status are all considered. No automatic ingestion. No raw DELETE. No promotion of candidates. No model-facing prune tools. BrainCaseDB does not enforce this policy; the operator prune CLI loads and applies it. memory_domain values in rules are match strings, not registry entries.",
+  "default_action": "keep",
+  "stale_action": "stale",
+  "rules": [
+    {
+      "name": "candidate_ephemeral_expiry",
+      "_comment": "Unreviewed ephemeral candidates retire after 7 days.",
+      "match": {
+        "status": "candidate",
+        "retention": "ephemeral"
+      },
+      "stale_after": "24h",
+      "expire_after": "7d",
+      "action": "retire",
+      "reason": "retention_expired_candidate"
+    },
+    {
+      "name": "candidate_session_expiry",
+      "_comment": "Unreviewed session candidates retire after 14 days.",
+      "match": {
+        "status": "candidate",
+        "retention": "session"
+      },
+      "stale_after": "3d",
+      "expire_after": "14d",
+      "action": "retire",
+      "reason": "retention_expired_candidate"
+    },
+    {
+      "name": "candidate_project_stale",
+      "_comment": "Unreviewed project candidates surface stale-review after 14 days; retire after 60 days.",
+      "match": {
+        "status": "candidate",
+        "retention": "project"
+      },
+      "stale_after": "14d",
+      "expire_after": "60d",
+      "action": "retire",
+      "reason": "retention_expired_candidate"
+    },
+    {
+      "name": "candidate_durable_review_overdue",
+      "_comment": "Unreviewed durable candidates surface review-overdue after 30 days. Never auto-retire: operator must explicitly act.",
+      "match": {
+        "status": "candidate",
+        "retention": "durable"
+      },
+      "stale_after": "30d",
+      "expire_after": null,
+      "action": "stale",
+      "reason": "candidate_review_overdue"
+    },
+    {
+      "name": "active_ephemeral_expiry",
+      "_comment": "Active ephemeral records surface stale after 48h; eligible for operator prune after 7 days.",
+      "match": {
+        "status": "active",
+        "retention": "ephemeral"
+      },
+      "stale_after": "48h",
+      "expire_after": "7d",
+      "action": "retire",
+      "reason": "active_ephemeral_expired"
+    },
+    {
+      "name": "active_session_stale",
+      "_comment": "Active session records surface stale after 7 days. Operator prune after 30 days (stale only; operator decides retirement).",
+      "match": {
+        "status": "active",
+        "retention": "session"
+      },
+      "stale_after": "7d",
+      "expire_after": "30d",
+      "action": "stale",
+      "reason": "active_session_stale"
+    },
+    {
+      "name": "active_project_stale",
+      "_comment": "Active project records surface stale-review after 90 days. No automatic retirement; operator action required.",
+      "match": {
+        "status": "active",
+        "retention": "project"
+      },
+      "stale_after": "90d",
+      "expire_after": null,
+      "action": "stale",
+      "reason": "active_project_stale"
+    },
+    {
+      "name": "active_durable_keep",
+      "_comment": "Active durable records are never auto-retired by age. Only explicit operator retire/supersede applies. This rule prevents any prune CLI from touching durable active records.",
+      "match": {
+        "status": "active",
+        "retention": "durable"
+      },
+      "stale_after": null,
+      "expire_after": null,
+      "action": "keep",
+      "reason": "durable_keep"
+    }
+  ]
+}

@@ -80,6 +80,7 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 | Deferred client/control UX | [qz-codex control plane future plan](qz-codex-control-plane-future.md) | Parked future seam for qz-codex fork/wrapper, /qz control plane, remote single-user mode, nginx/auth, and model/profile loading UX. |
 | Memory architecture | [BrainCase memory tool API](braincase-memory-tool-api.md) | Tool-mediated memory plane design: tool set, harness policy, memory tiers, deterministic helpers, BrainCaseDB role, HSM mapping, and implementation slices. |
 | Memory scope | [BrainCase architecture landscape and scope](braincase-architecture-landscape-and-scope.md) | LimbiCore positioning, what BrainCaseDB is and is not, comparison to RAG/MemGPT/Mem0 systems, HSM influence vs. deferred scope, QuantZhai as first LimbiCore testbed, architectural judgement, and next-work recommendations. |
+| Memory retention | [BrainCase retention policy](braincase-retention-policy.md) | #54 Slice A design: multi-axis retention policy matrix, candidate/active/durable lifecycle rules, operator CLI design, no-DELETE contract, HSM scope exclusion. |
 | Memory architecture | [State and memory architecture plan](state-and-memory-architecture-plan.md) | Older typed-memory plan; useful taxonomy, superseded for Codex identity/workspace/domain decisions. |
 | Fixed bug / regression guard | [Stale profile symlink bug](bugs/stale-profile-server-alias.md) | Symlink profile contract, compact invalid-profile errors, and qz-doctor regression checks. |
 | Known bug | [Responses streaming and qz-thoughts bug](bugs/responses-streaming-and-qz-thoughts.md) | Historical/audit plan for Responses SSE forwarding, summary transformation, and noisy live thought rendering. |
@@ -164,7 +165,8 @@ Read:
 
 ```text
 docs/braincase-memory-tool-api.md      — tool plane design, memory tiers, helpers, slices A–I.1
-docs/braincase-architecture-landscape-and-scope.md — scope boundary, comparison, HSM influence, next work
+docs/braincase-architecture-landscape-and-scope.md — scope boundary, LimbiCore positioning, comparison, HSM deferred scope
+docs/braincase-retention-policy.md          — retention policy matrix design (#54 Slice A)
 docs/model-state-signal-contract.md    — StateRecord envelope and scope model
 AGENTS.md BrainCase Memory Tool Plane Doctrine
 AGENTS.md BrainCaseDB / Memory Storage Doctrine

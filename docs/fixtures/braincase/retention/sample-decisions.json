@@ -1,0 +1,35 @@
+[
+  {
+    "_comment": "Keep: active durable record — never auto-retired by age. Matched rule: active_durable_keep.",
+    "record_id": "rec_durable_keep_001",
+    "action": "keep",
+    "reason": "durable_keep",
+    "age_ms": 7776000000,
+    "age_since_update_ms": 7776000000,
+    "matched_rule": "active_durable_keep",
+    "dry_run": true,
+    "warnings": []
+  },
+  {
+    "_comment": "Stale: active project record past stale_after threshold. Operator must decide what to do.",
+    "record_id": "rec_project_stale_001",
+    "action": "stale",
+    "reason": "active_project_stale",
+    "age_ms": 8640000000,
+    "age_since_update_ms": 8640000000,
+    "matched_rule": "active_project_stale",
+    "dry_run": true,
+    "warnings": ["record has not been updated in 100d; consider review"]
+  },
+  {
+    "_comment": "Retire: candidate ephemeral record past expire_after threshold. Will be retired with retire_state_record() when --apply given.",
+    "record_id": "rec_cand_ephemeral_expired_001",
+    "action": "retire",
+    "reason": "retention_expired_candidate",
+    "age_ms": 691200000,
+    "age_since_update_ms": 691200000,
+    "matched_rule": "candidate_ephemeral_expiry",
+    "dry_run": true,
+    "warnings": []
+  }
+]
