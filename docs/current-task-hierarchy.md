@@ -530,7 +530,13 @@ Slice G: what was done
 - No automatic ingestion. No raw StateRecords. Disabled DB → safe warning.
 - Tests: 124 tests in test_qz_braincase_tools.py, all passing
 
-Slice H.4 adds the smoke-test script. Next slice: operator review/promote tooling.
+Slice H.4 adds the smoke-test script.
+
+#54 BrainCase retention/lifetime policy:
+  Slice A (design):   COMPLETE — docs/braincase-retention-policy.md + fixtures + 40 design tests (2279 total)
+  Slice B (evaluator): COMPLETE — proxy/qz_braincase_retention.py pure evaluator + 62 runtime tests (2341 total)
+  Next: Slice C — dry-run/report surface (retention-report + prune --dry-run) in scripts/qz-braincase-review.
+        No DB writes in Slice C. Slice D adds --apply retire path.
 Do not expose braincase.write/update/search/inspect/promote_candidate directly.
 No automatic ingestion at any step.
 

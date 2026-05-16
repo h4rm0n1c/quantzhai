@@ -307,7 +307,10 @@ Slice H.4 COMPLETE: BrainCase smoke-test script scripts/qz-braincase-smoke (2183
 Slice I   COMPLETE: operator review/promote CLI scripts/qz-braincase-review (2223 total)
 Slice I.1 COMPLETE: status-filtered candidate listing so hidden candidates surface (2239 total)
 
-Next slice: retention/lifetime policy or close #53 if acceptance complete.
+#54 BrainCase retention/lifetime policy:
+  Slice A: COMPLETE — policy matrix design + fixtures + 40 tests (2279 total)
+  Slice B: COMPLETE — proxy/qz_braincase_retention.py pure evaluator + 62 tests (2341 total)
+  Next: Slice C dry-run/report surface. Slice D --apply retire path.
 - No automatic ingestion at any step.
 ```
 

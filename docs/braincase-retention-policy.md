@@ -351,15 +351,40 @@ These failure modes are documented so future implementors can design against the
 
 ---
 
-## 11. Slice B / implementation next steps
+## 11. Slice B — COMPLETE: pure retention evaluator
 
-After this design (Slice A) is reviewed, Slice B should:
+Slice B implemented `proxy/qz_braincase_retention.py`:
 
-1. Implement `retention_decision_for_record()` pure function in a new module
-   (`proxy/qz_braincase_retention.py` or similar).
-2. Load default policy from the fixture or from a configurable path.
-3. Add `prune` and `retention-report` subcommands to `scripts/qz-braincase-review`.
-4. Write tests covering decision logic and CLI behaviour.
+```text
+parse_duration_ms(value) -> int | None
+  Parses "60s", "15m", "24h", "7d", "30d" etc. into milliseconds.
+  Returns None for None, invalid, negative, or unsupported unit.
+  No exceptions for ordinary invalid input.
+
+load_default_retention_policy() -> dict
+  Loads docs/fixtures/braincase/retention/default-policy.json.
+  Returns a fresh copy on each call.
+  Falls back to minimal safe policy if fixture unavailable.
+
+retention_decision_for_record(record, *, now_ms, policy) -> dict
+  Pure function. Deterministic. No DB writes. Not model-facing.
+  Returns: {record_id, action, reason, age_ms, age_since_update_ms,
+            matched_rule, dry_run=True, warnings}
+  action is always keep | stale | retire.
+  delete/promote/activate/render are forced to keep with a warning.
+  Active durable records are always kept (hard override).
+  Retired/superseded records return already_inactive.
+  Threshold logic: expire_after → rule action; stale_after (pre-expiry) → stale;
+    neither → keep ("within_retention_window").
+```
+
+Tests: tests/test_qz_braincase_retention.py — 62 tests. Full suite: 2341.
+
+Slice C should add a dry-run/report surface:
+  qz-braincase-review retention-report (dry-run output only)
+  qz-braincase-review prune --dry-run (candidate/ephemeral expiry reporting)
+
+Slice D should add the apply path (retire_state_record() calls, operator --apply).
 
 **Schema change recommendation:** The v1 design avoids schema changes.
 If stale marking is needed in a future slice, consider adding
