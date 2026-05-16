@@ -1,45 +1,45 @@
 #!/usr/bin/env python3
-"""Slices F/G/G.1: BrainCase harness/tool plane — braincase.render + braincase.recall.
+"""Slices F/G/G.1/H.2: BrainCase harness/tool plane.
 
-Feature flag: QZ_BRAINCASE_TOOLS_ENABLED (default: disabled).
+Exposed tools:
+  braincase.render   — bounded RenderPacket from stored records
+  braincase.recall   — tier-routed recall returning RenderPacket
+  braincase.write_candidate — candidate-only StateRecord write (Slice H.2)
 
-When disabled (default):
-  - No tool definitions are injected into body["tools"].
-  - No harness policy text is added to the turn harness.
-  - No runtime behaviour changes.
-  - Forwarded /v1/responses bodies are not mutated.
-
-When enabled:
-  - braincase.render and braincase.recall are injected into body["tools"].
-  - Compact harness policy text is added to the turn harness.
-  - braincase_render_tool() dispatches to braincase_render_packet().
-  - braincase_recall_tool() dispatches to braincase_recall_packet().
-  - DB availability is checked at execution time; disabled DB returns a
-    safe warning packet rather than failing the proxy request.
-
-braincase.recall semantics (Slices G/G.1):
-  Recall is tier-routed retrieval → scoped filtering → bounded RenderPacket.
-  It is NOT a raw dump, not a search-all, not a cross-domain recall.
-  Predefined recall modes control which memory tiers are searched.
-  RenderPacket is the only model-visible memory output.
+Feature flags:
+  QZ_BRAINCASE_TOOLS_ENABLED          — controls render + recall
+  QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED — controls write_candidate
+    Requires BOTH flags to be true for write_candidate to be active.
+    Default disabled for both.
 
 Not exposed (intentionally):
-  braincase.search, braincase.inspect, braincase.write, braincase.update.
-  These remain internal until future slices define their semantics and
-  operator exposure policies.
+  braincase.write, braincase.update, braincase.search, braincase.inspect,
+  braincase.promote_candidate.
+
+braincase.write_candidate semantics (Slice H.2):
+  Stores a candidate-only StateRecord for operator review.
+  Forced: status=candidate, visibility=internal. Always.
+  Reject-first: if model supplies status/visibility → error, no storage.
+  Defensive backstop: candidate/internal forced before any DB write.
+  Claim/summary must not contain raw prompt/log/session content.
+  Result is WriteCandidateResult, not RenderPacket.
+  Candidate records are not returned by braincase.render or braincase.recall.
+  No automatic ingestion.
 
 This module does NOT:
   - add automatic ingestion
   - persist requests, turns, sessions, telemetry, or stream events
   - expose raw StateRecords to the model
   - inject memory without an explicit tool/harness path
-  - change forwarded /v1/responses bodies when the flag is disabled
+  - change forwarded /v1/responses bodies when the flags are disabled
+  - make candidate records active or renderable
 """
 from __future__ import annotations
 
 import json
 import os
 import time
+import uuid
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -54,8 +54,52 @@ except ImportError:
     from qz_tool_lifecycle import ToolContinuationResult
 
 QZ_BRAINCASE_TOOLS_ENABLED_ENV = "QZ_BRAINCASE_TOOLS_ENABLED"
+QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED_ENV = "QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED"
 
 _RENDER_PACKET_SCHEMA = "braincase/render-packet@1"
+_WRITE_CANDIDATE_RESULT_SCHEMA = "braincase/write-candidate-result@1"
+
+# Raw content markers that must not appear in claim or summary (v1 guard rail).
+# These indicate raw prompt/log/session blobs rather than durable memory facts.
+_RAW_CONTENT_MARKERS: tuple[str, ...] = (
+    "raw_request_body",
+    "raw_prompt",
+    "User:",
+    "Assistant:",
+    "[Turn",
+    "tool_call",
+    "function_call",
+    "telemetry_event",
+    "stream_event",
+)
+
+# Forbidden top-level tool input fields for write_candidate.
+_WRITE_CANDIDATE_FORBIDDEN_ARGS: frozenset[str] = frozenset({
+    "status",
+    "visibility",
+    "raw_prompt",
+    "raw_request_body",
+    "request_body",
+    "full_log",
+    "telemetry_event",
+    "stream_event",
+})
+
+_VALID_TIERS: frozenset[str] = frozenset({
+    "working_state", "session_state", "project_state",
+    "semantic_memory", "procedural_memory", "episodic_memory",
+    "artifact_memory", "perceptual_index", "preference_constraint_memory",
+})
+
+_VALID_RECORD_TYPES: frozenset[str] = frozenset({
+    "constraint", "preference", "project_decision", "project_state",
+    "procedure", "artifact_reference", "diagnostic", "open_question",
+    "identity_note", "correction", "episode", "recent_topic",
+})
+
+_VALID_RETENTIONS: frozenset[str] = frozenset({
+    "ephemeral", "session", "project", "durable",
+})
 
 # ---------------------------------------------------------------------------
 # Recall mode tier routing (Slice G)
@@ -263,16 +307,110 @@ BRAINCASE_RECALL_TOOL_DEF: dict = {
     },
 }
 
+BRAINCASE_WRITE_CANDIDATE_TOOL_DEF: dict = {
+    "type": "function",
+    "name": "braincase.write_candidate",
+    "description": (
+        "Creates a candidate-only BrainCase StateRecord for later operator review. "
+        "Always stores status=candidate and visibility=internal. "
+        "Does not create active or renderable memory. "
+        "Does not ingest raw prompts, request bodies, telemetry, or logs. "
+        "Does not expose raw StateRecords. "
+        "Candidate records are not visible through braincase.render or braincase.recall. "
+        "Use only for durable facts, project decisions, constraints, procedures, or reusable preferences. "
+        "Do not use for ordinary chatter, transient observations, every turn, telemetry, or raw logs. "
+        "memory_domain must be supplied from configured context."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "purpose": {
+                "type": "string",
+                "description": "What this candidate record is for (e.g. 'project_constraint', 'procedure'). Required.",
+            },
+            "memory_domain": {
+                "type": "string",
+                "description": "Configured memory isolation domain. Must be from configured context. Do not guess.",
+            },
+            "tier": {
+                "type": "string",
+                "description": (
+                    "Memory tier: working_state, session_state, project_state, "
+                    "semantic_memory, procedural_memory, episodic_memory, "
+                    "artifact_memory, perceptual_index, preference_constraint_memory."
+                ),
+                "enum": sorted(_VALID_TIERS),
+            },
+            "record_type": {
+                "type": "string",
+                "description": (
+                    "Record type: constraint, preference, project_decision, project_state, "
+                    "procedure, artifact_reference, diagnostic, open_question, "
+                    "identity_note, correction, episode, recent_topic."
+                ),
+                "enum": sorted(_VALID_RECORD_TYPES),
+            },
+            "claim": {
+                "type": "string",
+                "description": "Durable claim or assertion. Must not include raw prompts, session logs, or request bodies.",
+                "maxLength": 2000,
+            },
+            "summary": {
+                "type": "string",
+                "description": "Brief recall-readable summary. Must not include raw prompts or logs.",
+                "maxLength": 1000,
+            },
+            "confidence": {
+                "type": "number",
+                "description": "Confidence 0.0–1.0. Default 0.5.",
+                "minimum": 0.0,
+                "maximum": 1.0,
+                "default": 0.5,
+            },
+            "importance": {
+                "type": "number",
+                "description": "Importance for future ranking 0.0–1.0. Default 0.5.",
+                "minimum": 0.0,
+                "maximum": 1.0,
+                "default": 0.5,
+            },
+            "retention": {
+                "type": "string",
+                "description": "Intended lifetime. Default project.",
+                "enum": sorted(_VALID_RETENTIONS),
+                "default": "project",
+            },
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional tags for search/retrieval.",
+            },
+            "source_refs": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional source_ref_id strings providing provenance.",
+            },
+            "why_it_matters": {
+                "type": "string",
+                "description": "Optional explanation for the reviewer (max 500 chars).",
+                "maxLength": 500,
+            },
+            "review_note": {
+                "type": "string",
+                "description": "Optional note for the operator reviewer (max 500 chars).",
+                "maxLength": 500,
+            },
+        },
+        "required": ["purpose", "memory_domain", "tier", "record_type", "claim", "summary"],
+        "additionalProperties": False,
+    },
+}
+
 # ---------------------------------------------------------------------------
-# Harness policy text (updated for Slice G)
+# Harness policy text
 # ---------------------------------------------------------------------------
 
-BRAINCASE_HARNESS_POLICY: str = """\
-## BrainCase Memory Tools
-
-BrainCase memory is opt-in and tool-mediated. Use only when scoped project/domain
-memory would meaningfully help the current task.
-
+_HARNESS_READ_SECTION: str = """\
 **braincase.recall** — use for scoped task/project memory when exact records are not known.
 - Choose a recall_mode: task (default), project, procedure, artifact, open_loops.
 - Supply memory_domain explicitly from configured session context.
@@ -285,44 +423,100 @@ memory would meaningfully help the current task.
 - Prefer when you know what specific records to render.
 - Supply memory_domain explicitly.
 
-Both tools return RenderPacket only. rendered_text and source_record_ids are
-the only model-visible output. Raw records are never exposed.
+Both return RenderPacket only. rendered_text and source_record_ids are the only
+model-visible output. Raw records are never exposed."""
 
+_HARNESS_WRITE_CANDIDATE_SECTION: str = """\
+**braincase.write_candidate** — use only for durable facts worth operator review.
+- Use for stable project constraints, decisions, reusable procedures, or preferences.
+- Do NOT use for ordinary chatter, transient observations, every turn, raw logs, or telemetry.
+- Supply memory_domain from configured session context.
+- Do not try to set status or visibility — they are forced to candidate/internal.
+- Returns WriteCandidateResult (not a RenderPacket). Candidate is NOT immediately recalled.
+- Operator review is required before memory becomes active/renderable.
+
+Not yet exposed: braincase.write, braincase.update, braincase.search,
+braincase.inspect, braincase.promote_candidate."""
+
+_HARNESS_READ_ONLY_FOOTER: str = """\
 Not yet exposed: braincase.write, braincase.update, braincase.search,
 braincase.inspect. These remain internal until future slices define their
 semantics and operator exposure policies."""
+
+BRAINCASE_HARNESS_POLICY: str = (
+    "## BrainCase Memory Tools\n\n"
+    "BrainCase memory is opt-in and tool-mediated. Use only when scoped project/domain\n"
+    "memory would meaningfully help the current task.\n\n"
+    + _HARNESS_READ_SECTION
+    + "\n\n"
+    + _HARNESS_READ_ONLY_FOOTER
+)
+
+BRAINCASE_HARNESS_POLICY_WITH_WRITE: str = (
+    "## BrainCase Memory Tools\n\n"
+    "BrainCase memory is opt-in and tool-mediated. Use only when scoped project/domain\n"
+    "memory would meaningfully help the current task.\n\n"
+    + _HARNESS_READ_SECTION
+    + "\n\n"
+    + _HARNESS_WRITE_CANDIDATE_SECTION
+)
 
 # ---------------------------------------------------------------------------
 # Feature flag
 # ---------------------------------------------------------------------------
 
+def _env_truthy(source: dict, key: str) -> bool:
+    return str(source.get(key, "")).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
 def is_braincase_tools_enabled(env: dict | None = None) -> bool:
     """Return True if QZ_BRAINCASE_TOOLS_ENABLED is set to a truthy value."""
+    return _env_truthy(os.environ if env is None else env, QZ_BRAINCASE_TOOLS_ENABLED_ENV)
+
+
+def is_braincase_write_candidate_enabled(env: dict | None = None) -> bool:
+    """Return True when BOTH QZ_BRAINCASE_TOOLS_ENABLED and
+    QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED are set to truthy values.
+
+    write_candidate requires both flags because write exposure is higher-risk
+    than read. Operators enabling render/recall should not automatically enable
+    candidate writes.
+    """
     source = os.environ if env is None else env
-    value = source.get(QZ_BRAINCASE_TOOLS_ENABLED_ENV, "")
-    return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    return (
+        _env_truthy(source, QZ_BRAINCASE_TOOLS_ENABLED_ENV)
+        and _env_truthy(source, QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED_ENV)
+    )
 
 
 def get_braincase_tool_definitions(env: dict | None = None) -> list[dict]:
-    """Return braincase tool definitions when the feature flag is enabled.
+    """Return braincase tool definitions based on enabled flags.
 
-    Returns [] when disabled (default).
-    When enabled, returns [BRAINCASE_RENDER_TOOL_DEF, BRAINCASE_RECALL_TOOL_DEF].
+    Returns [] when QZ_BRAINCASE_TOOLS_ENABLED is disabled (default).
+    Returns [render, recall] when only QZ_BRAINCASE_TOOLS_ENABLED is true.
+    Returns [render, recall, write_candidate] when both flags are true.
 
-    braincase.search, inspect, write, update are never included.
+    braincase.write, update, search, inspect, promote_candidate are never included.
     """
     if not is_braincase_tools_enabled(env):
         return []
-    return [BRAINCASE_RENDER_TOOL_DEF, BRAINCASE_RECALL_TOOL_DEF]
+    defs = [BRAINCASE_RENDER_TOOL_DEF, BRAINCASE_RECALL_TOOL_DEF]
+    if is_braincase_write_candidate_enabled(env):
+        defs.append(BRAINCASE_WRITE_CANDIDATE_TOOL_DEF)
+    return defs
 
 
 def get_braincase_harness_policy(env: dict | None = None) -> str | None:
-    """Return the compact BrainCase harness policy text when the flag is enabled.
+    """Return the BrainCase harness policy text based on enabled flags.
 
-    Returns None when disabled (default).
+    Returns None when QZ_BRAINCASE_TOOLS_ENABLED is not set (default).
+    Returns read-only policy when only QZ_BRAINCASE_TOOLS_ENABLED is true.
+    Returns read+write_candidate policy when both flags are true.
     """
     if not is_braincase_tools_enabled(env):
         return None
+    if is_braincase_write_candidate_enabled(env):
+        return BRAINCASE_HARNESS_POLICY_WITH_WRITE
     return BRAINCASE_HARNESS_POLICY
 
 # ---------------------------------------------------------------------------
@@ -638,6 +832,172 @@ def _warning_packet(
     }
 
 # ---------------------------------------------------------------------------
+# braincase.write_candidate executor (Slice H.2)
+# ---------------------------------------------------------------------------
+
+def braincase_write_candidate_tool(db: "BrainCaseDB", args: dict) -> dict:
+    """Execute braincase.write_candidate for the given args dict.
+
+    Returns a WriteCandidateResult dict. Never raises.
+    Does not produce a RenderPacket.
+    Forced: status=candidate, visibility=internal. Always.
+    Reject-first: forbidden fields → error, no storage.
+    Claim/summary raw log detection: hard error, no storage.
+    No automatic ingestion.
+    """
+    try:
+        from .qz_braincase_write import braincase_write_state_record
+    except ImportError:
+        from qz_braincase_write import braincase_write_state_record
+
+    if not isinstance(args, dict):
+        args = {}
+
+    ts = int(time.time() * 1000)
+
+    def _error_result(errors: list[str]) -> dict:
+        return {
+            "ok": False,
+            "stored": False,
+            "record_id": None,
+            "status": "candidate",
+            "visibility": "internal",
+            "review_required": True,
+            "warnings": [],
+            "errors": errors,
+            "dedup_hint": None,
+            "conflict_hint": None,
+        }
+
+    # 1. Reject forbidden top-level fields (reject-first)
+    forbidden_present = sorted(_WRITE_CANDIDATE_FORBIDDEN_ARGS & set(args.keys()))
+    if forbidden_present:
+        return _error_result([f"forbidden_field: {f}" for f in forbidden_present])
+
+    # 2. Required field validation
+    purpose = args.get("purpose")
+    memory_domain = args.get("memory_domain")
+    tier = args.get("tier")
+    record_type = args.get("record_type")
+    claim = args.get("claim")
+    summary = args.get("summary")
+
+    if not purpose or not isinstance(purpose, str) or not purpose.strip():
+        return _error_result(["purpose_required"])
+    if not memory_domain or not isinstance(memory_domain, str) or not memory_domain.strip():
+        return _error_result(["memory_domain_required"])
+    if not tier or not isinstance(tier, str) or not tier.strip():
+        return _error_result(["tier_required"])
+    if not record_type or not isinstance(record_type, str) or not record_type.strip():
+        return _error_result(["record_type_required"])
+    if not claim or not isinstance(claim, str) or not claim.strip():
+        return _error_result(["claim_required"])
+    if not summary or not isinstance(summary, str) or not summary.strip():
+        return _error_result(["summary_required"])
+
+    # 3. Raw log/prompt smuggling detection in claim and summary (hard error)
+    def _contains_raw_marker(text: str) -> str | None:
+        for marker in _RAW_CONTENT_MARKERS:
+            if marker in text:
+                return marker
+        return None
+
+    marker = _contains_raw_marker(claim)
+    if marker:
+        return _error_result([
+            f"claim_content_rejected: raw log/prompt content detected ({marker!r})"
+        ])
+    marker = _contains_raw_marker(summary)
+    if marker:
+        return _error_result([
+            f"summary_content_rejected: raw log/prompt content detected ({marker!r})"
+        ])
+
+    # 4. Clamp / default optional fields
+    confidence = args.get("confidence", 0.5)
+    if not isinstance(confidence, (int, float)) or isinstance(confidence, bool) \
+            or not (0.0 <= float(confidence) <= 1.0):
+        confidence = 0.5
+    confidence = float(confidence)
+
+    importance = args.get("importance", 0.5)
+    if not isinstance(importance, (int, float)) or isinstance(importance, bool) \
+            or not (0.0 <= float(importance) <= 1.0):
+        importance = 0.5
+    importance = float(importance)
+
+    retention = args.get("retention", "project")
+    if not isinstance(retention, str) or retention not in _VALID_RETENTIONS:
+        retention = "project"
+
+    tags_raw = args.get("tags", [])
+    tags = [t for t in (tags_raw if isinstance(tags_raw, list) else []) if isinstance(t, str)]
+
+    srefs_raw = args.get("source_refs", [])
+    source_refs = [s for s in (srefs_raw if isinstance(srefs_raw, list) else []) if isinstance(s, str)]
+
+    # 5. Build bounded review metadata (no raw args, no prompt/request bodies)
+    review_meta: dict = {}
+    for key, maxlen in (("why_it_matters", 500), ("review_note", 500), ("purpose", 200)):
+        val = args.get(key) if key != "purpose" else purpose
+        if isinstance(val, str) and val.strip():
+            review_meta[key] = val[:maxlen]
+
+    # 6. Construct StateRecord with forced candidate/internal (defensive backstop)
+    record_id = f"rec_cand_{ts}_{uuid.uuid4().hex[:8]}"
+    record = {
+        "record_id": record_id,
+        "schema": "braincase/state-record@1",
+        "memory_domain": memory_domain,
+        "tier": tier,
+        "record_type": record_type,
+        "claim": claim[:2000],
+        "summary": summary[:1000],
+        "status": "candidate",    # FORCED — model cannot change this
+        "visibility": "internal", # FORCED — model cannot change this
+        "confidence": confidence,
+        "importance": importance,
+        "retention": retention,
+        "created_at_ms": ts,
+        "updated_at_ms": ts,
+        "source_refs": source_refs,
+        "tags": tags,
+        "supersedes": None,
+        "superseded_by": None,
+        "metadata": review_meta if review_meta else None,
+    }
+
+    # 7. Write via existing helper path (handles redaction, scope, dedup, conflict)
+    write_result = braincase_write_state_record(db, record, source_refs=None)
+
+    # 8. Convert helper result to bounded WriteCandidateResult (not RenderPacket)
+    stored = bool(write_result.get("stored"))
+    errors = list(write_result.get("errors") or [])
+    warnings = list(write_result.get("warnings") or [])
+
+    dedup_hint: str | None = None
+    conflict_hint: str | None = None
+    if stored:
+        dedup = write_result.get("dedup") or {}
+        dedup_hint = "possible_duplicate" if dedup.get("duplicates") else "no_duplicates"
+        conflicts = write_result.get("conflicts") or {}
+        conflict_hint = "possible_conflict" if conflicts.get("conflicts") else "no_conflicts"
+
+    return {
+        "ok": write_result.get("ok", False),
+        "stored": stored,
+        "record_id": record_id if stored else None,
+        "status": "candidate",
+        "visibility": "internal",
+        "review_required": True,
+        "warnings": warnings,
+        "errors": errors,
+        "dedup_hint": dedup_hint,
+        "conflict_hint": conflict_hint,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Proxy-local tool executors (Slice G.2)
 # ---------------------------------------------------------------------------
 
@@ -777,27 +1137,60 @@ class BraincaseRecallProxyToolExecutor(_BraincaseBaseExecutor):
         return self._make_result(call, packet)
 
 
+class BraincaseWriteCandidateProxyToolExecutor(_BraincaseBaseExecutor):
+    """Proxy-local executor for braincase.write_candidate tool calls.
+
+    Returns WriteCandidateResult as function_call_output JSON.
+    Forced status=candidate, visibility=internal.
+    Reject-first for forbidden fields. Hard error for raw log in claim/summary.
+    No raw StateRecords. No automatic ingestion.
+    """
+
+    function_name = "braincase.write_candidate"
+    lifecycle = ToolLifecycleSpec(
+        name="braincase.write_candidate",
+        execution="proxy_local",
+        public_item_type="function_call_output",
+        telemetry_name="braincase_write_candidate",
+        continuation_hops=1,
+    )
+
+    def execute(
+        self,
+        call: dict,
+        context: "ProxyToolExecutionContext",
+    ) -> "ToolContinuationResult":
+        db = self._get_db()
+        args = self._parse_args(call)
+        result = braincase_write_candidate_tool(db, args)
+        return self._make_result(call, result)
+
+
 def make_braincase_tool_executors(
     db: "BrainCaseDB | None" = None,
     env: "dict | None" = None,
 ) -> list:
-    """Return BrainCase proxy-local executors when QZ_BRAINCASE_TOOLS_ENABLED is set.
+    """Return BrainCase proxy-local executors based on enabled flags.
 
     env: optional dict to check instead of os.environ (useful for tests).
          Omit or pass None to use os.environ (production default).
 
-    Returns [] when disabled (default). When enabled, returns executors for
-    braincase.render and braincase.recall.
+    Returns [] when QZ_BRAINCASE_TOOLS_ENABLED is not set.
+    Returns [render, recall] when only QZ_BRAINCASE_TOOLS_ENABLED is true.
+    Returns [render, recall, write_candidate] when both flags are true.
 
-    write/update/search/inspect are never included.
+    write/update/search/inspect/promote_candidate are never included.
     No automatic ingestion. No raw StateRecord exposure.
     """
     if not is_braincase_tools_enabled(env):
         return []
-    return [
+    executors: list = [
         BraincaseRenderProxyToolExecutor(db=db),
         BraincaseRecallProxyToolExecutor(db=db),
     ]
+    if is_braincase_write_candidate_enabled(env):
+        executors.append(BraincaseWriteCandidateProxyToolExecutor(db=db))
+    return executors
 
 
 # ---------------------------------------------------------------------------

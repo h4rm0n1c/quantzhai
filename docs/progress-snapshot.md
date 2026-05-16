@@ -80,12 +80,12 @@ Status:
 
 ```text
 Slices A–H (and C.1, D.1, G.1–G.3) complete.
-  Slice H: braincase.write_candidate design (docs/tests only, no runtime yet).
+  Slice H.2: braincase.write_candidate runtime implemented.
   Candidate-only writes: status=candidate, visibility=internal, always.
   Separate flag: QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED (default disabled).
   Review/promotion: deferred to operator tooling.
   write/update/search/inspect still not exposed. 2062 tests.
-  Next: implement braincase.write_candidate.
+  Next: operator review/promote tooling or live smoke polish.
   See docs/braincase-memory-tool-api.md.
 ```
 

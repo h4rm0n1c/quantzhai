@@ -649,9 +649,9 @@ internal render packet builder (qz_braincase_render.py — render_pack,
 braincase_render_packet); braincase.render tool surface (qz_braincase_tools.py).
 Slices F–H: braincase.render and braincase.recall exposed.
 Feature flag: QZ_BRAINCASE_TOOLS_ENABLED (default: disabled).
-Slice H design: braincase.write_candidate (design only, no runtime yet).
-  Forced status=candidate, visibility=internal.
-  Separate flag: QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED (default disabled).
+Slice H.2: braincase.write_candidate runtime implemented.
+  Requires both QZ_BRAINCASE_TOOLS_ENABLED + QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED.
+  Forced status=candidate, visibility=internal. Reject-first.
   Candidate records are not model-visible via render/recall.
 write/update/search/inspect remain unexposed (no implementation yet).
 No automatic ingestion at any slice.

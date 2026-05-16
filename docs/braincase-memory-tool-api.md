@@ -1054,7 +1054,75 @@ Fix 5 — WriteCandidateResult clarifications:
 Tests: tests/test_braincase_write_candidate_design.py updated.
   New test classes: RejectFirstPolicyTests, MemoryDomainAuthorityTests,
   HsmWordingTests, RawLogInClaimFixtureTests, WriteCandidateResultBoundsTests.
-Full suite: 2080+ tests
+Full suite: 2089 tests
+```
+
+### Slice H.2: braincase.write_candidate runtime implementation — COMPLETE
+
+```text
+New in proxy/qz_braincase_tools.py:
+
+QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED_ENV constant.
+is_braincase_write_candidate_enabled(env) — True only when BOTH
+  QZ_BRAINCASE_TOOLS_ENABLED and QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED are set.
+  Rationale: write is higher-risk than read; separate explicit opt-in.
+
+BRAINCASE_WRITE_CANDIDATE_TOOL_DEF — function tool definition:
+  name: braincase.write_candidate
+  required: purpose, memory_domain, tier, record_type, claim, summary
+  optional: confidence, importance, retention, tags, source_refs,
+            why_it_matters, review_note
+  forbidden by schema: status, visibility, raw_prompt, raw_request_body,
+                       request_body, full_log, telemetry_event, stream_event
+  additionalProperties: false
+
+braincase_write_candidate_tool(db, args) -> WriteCandidateResult:
+  1. Reject forbidden top-level fields (reject-first, error no storage).
+  2. Validate required fields.
+  3. Detect raw log/prompt markers in claim/summary (hard error no storage).
+     Markers: raw_request_body, raw_prompt, User:, Assistant:, [Turn,
+              tool_call, function_call, telemetry_event, stream_event
+  4. Clamp/default confidence, importance, retention, tags, source_refs.
+  5. Build bounded review metadata from purpose/why_it_matters/review_note.
+  6. Construct StateRecord with FORCED status=candidate, visibility=internal.
+  7. Call braincase_write_state_record() (existing helpers: redaction_check,
+     scope_resolve, source_link, dedup_check, conflict_check).
+  8. Return WriteCandidateResult (not RenderPacket).
+
+WriteCandidateResult shape:
+  ok, stored, record_id, status="candidate", visibility="internal",
+  review_required=True, warnings, errors, dedup_hint, conflict_hint.
+  No rendered_text, packet_id, raw StateRecord, raw SourceRefs.
+  dedup_hint/conflict_hint are string codes, not raw DB dicts.
+
+BraincaseWriteCandidateProxyToolExecutor:
+  function_name: braincase.write_candidate
+  lifecycle: proxy_local, continuation_hops=1
+
+get_braincase_tool_definitions() now returns:
+  []                         when QZ_BRAINCASE_TOOLS_ENABLED=false
+  [render, recall]           when only QZ_BRAINCASE_TOOLS_ENABLED=true
+  [render, recall, wc]       when both flags are true
+
+get_braincase_harness_policy() now returns:
+  None                       when QZ_BRAINCASE_TOOLS_ENABLED=false
+  read-only policy           when only QZ_BRAINCASE_TOOLS_ENABLED=true
+  read+write_candidate policy when both flags are true
+
+make_braincase_tool_executors() now includes write_candidate executor
+  only when both flags are enabled.
+
+Candidate isolation:
+  braincase.render and braincase.recall exclude candidates because
+  eligible_for_render() requires status=active, visibility=renderable.
+  No schema change needed.
+
+Exposed (Slice H.2): braincase.render, braincase.recall, braincase.write_candidate.
+Not exposed: braincase.write, braincase.update, braincase.search,
+             braincase.inspect, braincase.promote_candidate.
+
+New test file: tests/test_qz_braincase_write_candidate.py — 57 tests.
+Full suite: 2146 tests.
 ```
 
 ---

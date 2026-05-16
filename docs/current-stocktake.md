@@ -293,6 +293,8 @@ Slice G.1 COMPLETE: tier-bounded retrieval + deterministic enum order (1983 tota
 Slice G.2 COMPLETE: proxy-local dispatch for braincase.render+recall (2018 total)
 Slice G.3 COMPLETE: dispatch test hardening; env param on factory (2021 total)
 Slice H   COMPLETE: candidate-only write exposure design (2062 total)
+Slice H.1 COMPLETE: doctrine polished (2089 total)
+Slice H.2 COMPLETE: braincase.write_candidate runtime (2146 total)
             Proposed tool: braincase.write_candidate (not yet implemented)
             Forced: status=candidate, visibility=internal
             Flag: QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED (separate from render/recall flag)

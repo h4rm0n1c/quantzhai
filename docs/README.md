@@ -136,13 +136,13 @@ Current next engineering target:
 
 ```text
 P1 BrainCase — Slices A–H (and C.1, D.1, G.1–G.3) complete.
-Slice H: braincase.write_candidate design (docs/tests only, no runtime yet).
+Slice H.2: braincase.write_candidate runtime implemented.
 Proposed tool: braincase.write_candidate — forces status=candidate, visibility=internal.
 Separate flag: QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED (independent of render/recall flag).
 braincase.render and braincase.recall exposed when QZ_BRAINCASE_TOOLS_ENABLED (default disabled).
 RenderPacket is the only model-visible memory output.
 write/update/search/inspect not yet exposed. 2062 tests.
-Next: implement braincase.write_candidate.
+Next: operator review/promote tooling or live smoke polish.
 No automatic ingestion.
 See docs/braincase-memory-tool-api.md for the full slice plan.
 ```
