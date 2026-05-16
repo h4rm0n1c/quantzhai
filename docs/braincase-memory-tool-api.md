@@ -846,6 +846,147 @@ function_call_output shape:
 Tests: tests/test_qz_braincase_tools.py — 176 tests, 2018 total
 ```
 
+### Slice G.3: dispatch test hardening — COMPLETE
+
+```text
+make_braincase_tool_executors(db=None, env=None) — env parameter added so
+  tests call the real production function without patch.dict.
+Module-level test shadow removed from test_qz_braincase_tools.py.
+test_production_factory_not_shadowed() guards against re-shadowing.
+Continuation regression tests: test_continuation_path_render_with_seeded_record
+  and test_continuation_path_recall_with_seeded_record walk the full
+  completed_call_decision → continuation_result path.
+
+Tests: 179 tests, 2021 total
+```
+
+### Slice H: candidate-only write exposure design — COMPLETE
+
+```text
+Design only. No runtime exposure yet.
+
+Proposed model-facing write tool: braincase.write_candidate
+  NOT braincase.write — direct active/renderable writes are forbidden from
+  the model-facing tool plane.
+
+Rationale:
+  Candidate-only writes allow the model to help curate memory without
+  risking poisoned recall or self-authored doctrine. Active/durable memory
+  still requires explicit operator review/promotion. This preserves the
+  explicit memory discipline.
+
+Forced policy (enforced by proxy, not by model):
+  status     = "candidate"    always, regardless of model intent
+  visibility = "internal"     always, regardless of model intent
+  Candidate records are stored but not model-visible via render/recall.
+  Existing render eligibility (status=active, visibility=renderable) already
+  excludes candidates without any schema change.
+
+Tool input schema (model-facing fields):
+  Required:
+    purpose           string    what this candidate record is for
+    memory_domain     string    configured isolation domain (from session context)
+    tier              string    one of the defined memory tiers
+    record_type       string    semantic classification
+    claim             string    durable assertion (maxLength 2000)
+    summary           string    brief recall-readable summary (maxLength 1000)
+
+  Optional:
+    confidence        number    0.0–1.0, default 0.5
+    importance        number    0.0–1.0, default 0.5
+    retention         string    ephemeral|session|project|durable, default "project"
+    tags              array     string tags for FTS/tag-index
+    source_refs       array     source_ref_id strings (looked up from DB)
+    why_it_matters    string    model's explanation for reviewer (maxLength 500)
+    review_note       string    note for operator reviewer (maxLength 500)
+
+  Forbidden (additionalProperties: false + executor defence):
+    status            model must not supply — forced to "candidate"
+    visibility        model must not supply — forced to "internal"
+    raw_prompt, raw_request_body, request_body,
+    full_log, telemetry_event, stream_event
+
+  If model supplies status/visibility:
+    Schema enforcement: additionalProperties:false rejects them at input level.
+    Executor defence: strips them, forces candidate/internal, adds warning
+      "status_overridden_to_candidate" / "visibility_overridden_to_internal".
+    Either way: the write still uses status=candidate, visibility=internal.
+
+WriteCandidateResult (not a RenderPacket):
+  {
+    "ok": bool,
+    "stored": bool,
+    "record_id": str | null,
+    "status": "candidate",           always
+    "visibility": "internal",        always
+    "review_required": true,         always
+    "warnings": list[str],
+    "errors": list[str],
+    "dedup_hint": "no_duplicates" | "possible_duplicate" | null,
+    "conflict_hint": "no_conflicts"  | "possible_conflict"  | null
+  }
+  No raw StateRecord dump. No source blob. No prompt/request body.
+  dedup_hint and conflict_hint are string codes, not raw DB dicts.
+
+Execution helper path (future implementation):
+  parse tool args
+  → construct candidate StateRecord (force status=candidate, visibility=internal)
+  → redaction_check()     blocks forbidden raw fields
+  → scope_resolve()       blocks missing/invalid memory_domain
+  → source_link()         links source_refs; missing refs are warnings only
+  → dedup_check()         hint only, does not block
+  → conflict_check()      hint only, does not block
+  → braincase_write_state_record()
+  → return WriteCandidateResult
+
+Review/promotion path (future, not Slice H):
+  Candidate → active/renderable requires explicit operator review.
+  Future tooling: braincase.review_candidates, braincase.promote_candidate,
+                  or CLI: qz-braincase-review
+  Promotion must: verify memory_domain, re-run redaction_check,
+    surface dedup/conflict warnings, optionally allow editing,
+    set status=active, set visibility=renderable/internal by operator choice,
+    record revision/provenance.
+  Promotion is NOT accessible to the model in Slice H.
+
+Feature flag:
+  QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED (separate from QZ_BRAINCASE_TOOLS_ENABLED)
+  Default disabled even when render/recall are enabled.
+  Rationale: write exposure is higher-risk than read. Operators enabling
+    render/recall for a session may not want to enable candidate writes.
+    Separate explicit opt-in prevents accidental write exposure.
+
+Candidate isolation:
+  braincase.render and braincase.recall must exclude candidates.
+  eligible_for_render() already requires status=active and visibility=renderable,
+  so no schema change is needed to isolate candidates.
+  A model cannot write a candidate then immediately recall it as memory.
+
+Abuse/failure cases:
+  missing memory_domain     → error, no storage
+  unknown memory_domain     → error (scope_resolve), no storage
+  missing claim/summary     → error, no storage
+  forbidden raw fields      → error (redaction_check), no storage
+  duplicate candidate       → warning (dedup_hint), write still proceeds
+  conflict with active rec  → warning (conflict_hint), write still proceeds
+  source_refs missing       → warning (source_link), write still proceeds
+  DB disabled               → error, no storage, no exception
+  malformed JSON args        → error before execution
+  model tries status=active → schema rejects or executor overrides + warning
+  model tries to store log  → redaction_check or claim content policy warns
+  model tries every turn    → harness must teach: write_candidate is for
+    durable facts only, not every observation or transient result
+
+Fixtures:
+  docs/fixtures/braincase/write-candidate/tool-input-valid.json
+  docs/fixtures/braincase/write-candidate/result-valid.json
+  docs/fixtures/braincase/write-candidate/tool-input-forbidden-active.json
+  docs/fixtures/braincase/write-candidate/tool-input-forbidden-raw-prompt.json
+
+Tests: tests/test_braincase_write_candidate_design.py — 41 structural tests
+Full suite: 2062 tests
+```
+
 ---
 
 ## Open questions

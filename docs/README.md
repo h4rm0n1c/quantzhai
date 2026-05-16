@@ -135,13 +135,14 @@ docs/progress-snapshot.md
 Current next engineering target:
 
 ```text
-P1 BrainCase — Slices A–G.2 (and C.1, D.1) complete.
-Slice G.2: braincase.render + braincase.recall wired into proxy-local tool dispatch.
-Tool calls return function_call_output with RenderPacket JSON.
-braincase.render and braincase.recall both exposed when QZ_BRAINCASE_TOOLS_ENABLED (default disabled).
+P1 BrainCase — Slices A–H (and C.1, D.1, G.1–G.3) complete.
+Slice H: braincase.write_candidate design (docs/tests only, no runtime yet).
+Proposed tool: braincase.write_candidate — forces status=candidate, visibility=internal.
+Separate flag: QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED (independent of render/recall flag).
+braincase.render and braincase.recall exposed when QZ_BRAINCASE_TOOLS_ENABLED (default disabled).
 RenderPacket is the only model-visible memory output.
-write/update/search/inspect remain internal.
-Next: operator-reviewed write exposure or recall policy polish.
+write/update/search/inspect not yet exposed. 2062 tests.
+Next: implement braincase.write_candidate.
 No automatic ingestion.
 See docs/braincase-memory-tool-api.md for the full slice plan.
 ```

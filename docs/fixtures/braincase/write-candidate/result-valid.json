@@ -1,0 +1,13 @@
+{
+  "_comment": "Expected WriteCandidateResult for a successful braincase.write_candidate execution. status is always 'candidate'. visibility is always 'internal'. review_required is always true. dedup_hint and conflict_hint are simplified codes, not raw DB dicts. No raw StateRecord dump. No source blob. No prompt/request body.",
+  "ok": true,
+  "stored": true,
+  "record_id": "rec_1778803200000_anchor_constraint_coding",
+  "status": "candidate",
+  "visibility": "internal",
+  "review_required": true,
+  "warnings": [],
+  "errors": [],
+  "dedup_hint": "no_duplicates",
+  "conflict_hint": "no_conflicts"
+}

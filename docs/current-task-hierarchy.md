@@ -507,6 +507,8 @@ Slice F:   COMPLETE — qz_braincase_tools.py + braincase.render tool surface + 
 Slice G:   COMPLETE — braincase.recall semantics + tier routing + 124 tests (1966 total)
 Slice G.1: COMPLETE — tier-bounded retrieval + deterministic enum + 141 tests (1983 total)
 Slice G.2: COMPLETE — proxy-local dispatch for render+recall + 176 tests (2018 total)
+Slice G.3: COMPLETE — dispatch test hardening + env param for factory (2021 total)
+Slice H:   COMPLETE — candidate-only write exposure design (41 structural tests, 2062 total)
 ```
 
 Slice G: what was done
@@ -522,7 +524,8 @@ Slice G: what was done
 - No automatic ingestion. No raw StateRecords. Disabled DB → safe warning.
 - Tests: 124 tests in test_qz_braincase_tools.py, all passing
 
-Next slice: operator-reviewed write exposure (braincase.write) or recall policy polish.
+Slice H defines the write path. Next implementation slice: implement braincase.write_candidate
+behind QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED. Do not expose braincase.write directly.
 No automatic ingestion at any step.
 
 Full reference below for Slice C context:

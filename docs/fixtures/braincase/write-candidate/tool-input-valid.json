@@ -1,0 +1,16 @@
+{
+  "_comment": "Valid braincase.write_candidate tool input. All fields here are model-visible inputs. status and visibility are NOT present — they are forced by the proxy (status=candidate, visibility=internal). Fields purpose, memory_domain, tier, record_type, claim, and summary are required.",
+  "purpose": "anchor_constraint",
+  "memory_domain": "coding",
+  "tier": "preference_constraint_memory",
+  "record_type": "constraint",
+  "claim": "All typed function signatures must use explicit return type annotations. Never omit the return type on public functions.",
+  "summary": "Explicit return type annotations required on all public functions.",
+  "confidence": 0.9,
+  "importance": 0.7,
+  "retention": "project",
+  "tags": ["python", "typing", "constraints"],
+  "source_refs": [],
+  "why_it_matters": "The codebase has CI checks for type coverage; missing annotations cause failures.",
+  "review_note": "Verified in CLAUDE.md and confirmed by prior session context."
+}

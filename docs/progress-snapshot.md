@@ -79,13 +79,13 @@ P4 config/var/script ownership cleanup
 Status:
 
 ```text
-Slices A–G (and C.1, D.1, G.1) complete.
-  Slices G/G.1/G.2: recall semantics, tier retrieval, and proxy-local dispatch.
-  braincase.render + braincase.recall wired into proxy-local tool loop.
-  Tool calls return function_call_output containing RenderPacket JSON.
-  write/update/search/inspect remain unexposed. No automatic ingestion.
-  QZ_BRAINCASE_TOOLS_ENABLED default disabled. 2018 tests passing.
-  Next: operator-reviewed write exposure or live smoke polish.
+Slices A–H (and C.1, D.1, G.1–G.3) complete.
+  Slice H: braincase.write_candidate design (docs/tests only, no runtime yet).
+  Candidate-only writes: status=candidate, visibility=internal, always.
+  Separate flag: QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED (default disabled).
+  Review/promotion: deferred to operator tooling.
+  write/update/search/inspect still not exposed. 2062 tests.
+  Next: implement braincase.write_candidate.
   See docs/braincase-memory-tool-api.md.
 ```
 

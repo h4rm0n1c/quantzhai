@@ -1,0 +1,18 @@
+{
+  "_comment": "FORBIDDEN input — model trying to store a raw prompt body or log. This is rejected by redaction_check() before any storage. The claim and summary fields must not contain raw request bodies. The tool schema forbids raw_prompt, raw_request_body, request_body, full_log, telemetry_event, stream_event as top-level fields via additionalProperties:false. Even if claim content looks like a log, redaction_check() should surface a warning if it detects obvious raw content patterns.",
+  "_rejection_reason": "raw_prompt is a forbidden field (redaction_check). The claim must not be a raw request body, prompt blob, or telemetry event.",
+  "_expected_result": {
+    "ok": false,
+    "stored": false,
+    "errors": ["forbidden_field: raw_prompt"],
+    "status": "candidate",
+    "visibility": "internal",
+    "review_required": true
+  },
+  "memory_domain": "coding",
+  "tier": "episodic_memory",
+  "record_type": "episode",
+  "claim": "The user asked to refactor the auth module.",
+  "summary": "Auth module refactor request.",
+  "raw_prompt": "User: Can you refactor the auth module to use JWT?\nAssistant: Sure, let me ..."
+}

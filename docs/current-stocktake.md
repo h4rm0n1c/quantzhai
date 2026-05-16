@@ -291,11 +291,20 @@ Slice F   COMPLETE: qz_braincase_tools.py + braincase.render tool surface + 64 t
 Slice G   COMPLETE: braincase.recall semantics + 5 recall modes + tier routing (1966 total)
 Slice G.1 COMPLETE: tier-bounded retrieval + deterministic enum order (1983 total)
 Slice G.2 COMPLETE: proxy-local dispatch for braincase.render+recall (2018 total)
+Slice G.3 COMPLETE: dispatch test hardening; env param on factory (2021 total)
+Slice H   COMPLETE: candidate-only write exposure design (2062 total)
+            Proposed tool: braincase.write_candidate (not yet implemented)
+            Forced: status=candidate, visibility=internal
+            Flag: QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED (separate from render/recall flag)
+            Review/promotion: deferred to operator tooling
+            No automatic ingestion. write/update/search/inspect still not exposed.
             Exposed: braincase.render + braincase.recall when QZ_BRAINCASE_TOOLS_ENABLED.
             write/update/search/inspect remain unexposed.
             No automatic ingestion.
 
-Next slice: operator-reviewed write exposure (braincase.write) or recall policy polish.
+Next implementation slice: implement braincase.write_candidate (Slice H design).
+  Use QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED flag (separate from render/recall flag).
+  Do not expose braincase.write directly.
 - No automatic ingestion at any step.
 ```
 

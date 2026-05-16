@@ -647,11 +647,13 @@ Slices A–F (and C.1, D.1) are complete: schemas/fixtures; BrainCaseDB schema v
 search/inspect/FTS5; FTS reindex; write/update helpers (qz_braincase_write.py);
 internal render packet builder (qz_braincase_render.py — render_pack,
 braincase_render_packet); braincase.render tool surface (qz_braincase_tools.py).
-Slices F+G: braincase.render and braincase.recall are exposed.
+Slices F–H: braincase.render and braincase.recall exposed.
 Feature flag: QZ_BRAINCASE_TOOLS_ENABLED (default: disabled).
-braincase.recall uses predefined recall modes (task/project/procedure/artifact/open_loops)
-with tier routing and returns RenderPackets only.
-write/update/search/inspect remain unexposed.
+Slice H design: braincase.write_candidate (design only, no runtime yet).
+  Forced status=candidate, visibility=internal.
+  Separate flag: QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED (default disabled).
+  Candidate records are not model-visible via render/recall.
+write/update/search/inspect remain unexposed (no implementation yet).
 No automatic ingestion at any slice.
 
 Slice 1 status:

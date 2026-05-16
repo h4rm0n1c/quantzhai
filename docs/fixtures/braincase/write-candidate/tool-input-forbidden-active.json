@@ -1,0 +1,19 @@
+{
+  "_comment": "FORBIDDEN input — model trying to create an active/renderable record directly. This is rejected by the tool. The tool schema uses additionalProperties:false so status and visibility are not accepted as input fields. If the execution path is reached defensively, status is forced to 'candidate' and visibility is forced to 'internal', and a warning is added. The model can never create active or renderable records through braincase.write_candidate. Active/renderable status requires operator review and promotion.",
+  "_rejection_reason": "status='active' and visibility='renderable' are not valid tool input fields. The tool schema does not accept them. The proxy forces status='candidate' and visibility='internal' regardless.",
+  "_expected_result": {
+    "ok": false,
+    "stored": false,
+    "errors": ["forbidden_field: status", "forbidden_field: visibility"],
+    "status": "candidate",
+    "visibility": "internal",
+    "review_required": true
+  },
+  "memory_domain": "coding",
+  "tier": "project_state",
+  "record_type": "project_decision",
+  "claim": "The team has decided to use PostgreSQL instead of SQLite.",
+  "summary": "PostgreSQL selected as the production database.",
+  "status": "active",
+  "visibility": "renderable"
+}
