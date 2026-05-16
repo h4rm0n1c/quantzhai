@@ -512,6 +512,7 @@ Slice H:   COMPLETE — candidate-only write exposure design (41 structural test
 Slice H.1: COMPLETE — doctrine polished (68 design tests, 2089 total)
 Slice H.2: COMPLETE — braincase.write_candidate runtime (57 runtime tests, 2146 total)
 Slice H.3: COMPLETE — runtime polish: tier/record_type validation, case-insensitive markers (2164 total)
+Slice H.4: COMPLETE — BrainCase smoke-test script scripts/qz-braincase-smoke (2183 total)
 ```
 
 Slice G: what was done
@@ -527,8 +528,7 @@ Slice G: what was done
 - No automatic ingestion. No raw StateRecords. Disabled DB → safe warning.
 - Tests: 124 tests in test_qz_braincase_tools.py, all passing
 
-Slice H.2 implements braincase.write_candidate. Next slice: operator review/promote
-tooling, or live smoke polish of the BrainCase tool loop end-to-end.
+Slice H.4 adds the smoke-test script. Next slice: operator review/promote tooling.
 Do not expose braincase.write/update/search/inspect/promote_candidate directly.
 No automatic ingestion at any step.
 

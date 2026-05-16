@@ -1155,6 +1155,41 @@ Tests: test_qz_braincase_write_candidate.py — 75 tests (18 new in H.3).
 Full suite: 2164 tests.
 ```
 
+### Slice H.4: BrainCase tool-loop smoke test — COMPLETE
+
+```text
+New script: scripts/qz-braincase-smoke
+
+Smoke checks (12 total, all verified PASS):
+  1. default flags expose no BrainCase tools
+  2. read flag exposes render+recall only
+  3. both flags expose render+recall+write_candidate
+  4. write/update/search/inspect/promote never exposed
+  5. render returned RenderPacket with seeded record
+  6. recall returned RenderPacket with seeded record
+  7. write_candidate returned WriteCandidateResult
+  8. candidate stored as candidate/internal in DB
+  9. render does not return the candidate record
+  10. recall does not return the candidate record
+  11. no raw StateRecord leaked in any output
+  12. no automatic ingestion from render/recall calls
+
+Usage:
+  scripts/qz-braincase-smoke
+  scripts/qz-braincase-smoke --verbose
+  scripts/qz-braincase-smoke --db-path /tmp/test.sqlite3 [--keep-db]
+
+Uses a temporary DB. Never touches var/ DB by default.
+Executes through ProxyLocalToolRegistry.completed_call_decision()
+  and ProxyLocalToolRegistry.continuation_result() — not direct tool calls.
+Exit code: 0 on all pass, 1 on any fail.
+
+Fixed docs/current-stocktake.md H.3 stale count (2180+ → 2164).
+
+New test file: tests/test_qz_braincase_smoke_script.py — 19 tests.
+Full suite: 2183 tests.
+```
+
 ---
 
 ## Open questions

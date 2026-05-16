@@ -84,8 +84,9 @@ Slices A–H (and C.1, D.1, G.1–G.3) complete.
   Candidate-only writes: status=candidate, visibility=internal, always.
   Separate flag: QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED (default disabled).
   Review/promotion: deferred to operator tooling.
-  write/update/search/inspect still not exposed. 2062 tests.
-  Next: operator review/promote tooling or live smoke polish.
+  write/update/search/inspect still not exposed. 2183 tests.
+  Smoke script: scripts/qz-braincase-smoke — 12 checks, all pass.
+  Next: operator review/promote tooling.
   See docs/braincase-memory-tool-api.md.
 ```
 

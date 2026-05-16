@@ -1,0 +1,426 @@
+#!/usr/bin/env python3
+"""BrainCase tool-loop smoke test.
+
+Proves the BrainCase tool plane works end-to-end through the proxy-local
+tool registry without a live server. Uses a temporary DB and injected env
+dicts; never touches the real var/ DB.
+
+Exit code: 0 on all PASS, 1 on any FAIL.
+
+Usage:
+    scripts/qz-braincase-smoke
+    scripts/qz-braincase-smoke --verbose
+    scripts/qz-braincase-smoke --db-path /tmp/bc-smoke-test.sqlite3
+    scripts/qz-braincase-smoke --keep-db
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+# Allow running from repo root without installing as a package.
+_REPO = Path(__file__).resolve().parents[1]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+
+from proxy.qz_braincase_db import BrainCaseDB
+from proxy.qz_braincase_tools import (
+    QZ_BRAINCASE_TOOLS_ENABLED_ENV,
+    QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED_ENV,
+    get_braincase_tool_definitions,
+    make_braincase_tool_executors,
+)
+from proxy.qz_proxy_tools import ProxyLocalToolRegistry, ProxyToolExecutionContext
+
+
+# ---------------------------------------------------------------------------
+# Environment shorthands
+# ---------------------------------------------------------------------------
+
+_NO_FLAGS: dict = {}
+_READ_ONLY: dict = {QZ_BRAINCASE_TOOLS_ENABLED_ENV: "true"}
+_BOTH_FLAGS: dict = {
+    QZ_BRAINCASE_TOOLS_ENABLED_ENV: "true",
+    QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED_ENV: "true",
+}
+
+
+# ---------------------------------------------------------------------------
+# Fake web runtime (smoke test doesn't exercise web search)
+# ---------------------------------------------------------------------------
+
+class _FakeWebRuntime:
+    def execute_web_search_call(self, call, counters, seen_sigs, request_id=""):
+        return (
+            {"id": "wsc_smoke", "type": "web_search_call", "status": "completed",
+             "call_id": call.get("call_id")},
+            {"type": "function_call_output", "call_id": call.get("call_id"),
+             "output": "{}"},
+            [],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Result helpers
+# ---------------------------------------------------------------------------
+
+class SmokeResults:
+    def __init__(self, verbose: bool = False):
+        self._passes: list[str] = []
+        self._fails: list[str] = []
+        self._verbose = verbose
+
+    def ok(self, label: str, detail: str = "") -> None:
+        self._passes.append(label)
+        msg = f"PASS {label}"
+        if self._verbose and detail:
+            msg += f"\n     {detail}"
+        print(msg)
+
+    def fail(self, label: str, reason: str = "") -> None:
+        self._fails.append(label)
+        msg = f"FAIL {label}"
+        if reason:
+            msg += f": {reason}"
+        print(msg, file=sys.stderr)
+
+    def summary(self) -> int:
+        total = len(self._passes) + len(self._fails)
+        print(f"\n{len(self._passes)}/{total} checks passed", end="")
+        if self._fails:
+            print(f" — {len(self._fails)} FAILED")
+            return 1
+        print(" — all OK")
+        return 0
+
+
+# ---------------------------------------------------------------------------
+# DB / record helpers
+# ---------------------------------------------------------------------------
+
+def _make_db(db_path: Path) -> BrainCaseDB:
+    db = BrainCaseDB(path=db_path, enabled=True)
+    if not db.init():
+        raise RuntimeError(f"BrainCaseDB init failed: {db.last_error}")
+    return db
+
+
+def _seed_renderable(db: BrainCaseDB) -> str:
+    """Seed one active/renderable record. Returns its record_id."""
+    ts = int(time.time() * 1000)
+    record_id = f"rec_smoke_{ts}"
+    rec = {
+        "record_id": record_id,
+        "schema": "braincase/state-record@1",
+        "memory_domain": "coding",
+        "tier": "project_state",
+        "record_type": "constraint",
+        "claim": "BrainCase smoke test: explicit return types are required.",
+        "summary": "Smoke test seeded record — renderable.",
+        "status": "active",
+        "visibility": "renderable",
+        "confidence": 1.0,
+        "importance": 0.9,
+        "retention": "project",
+        "created_at_ms": ts,
+        "updated_at_ms": ts,
+        "source_refs": [],
+        "tags": ["smoke", "test"],
+        "supersedes": None,
+        "superseded_by": None,
+        "metadata": None,
+    }
+    if not db.put_state_record(rec):
+        raise RuntimeError(f"Failed to seed record: {db.last_error}")
+    return record_id
+
+
+def _make_call(name: str, args: dict, call_id: str = "smoke_call_001") -> dict:
+    return {
+        "type": "function_call",
+        "name": name,
+        "call_id": call_id,
+        "id": call_id,
+        "arguments": json.dumps(args),
+    }
+
+
+def _execute_through_registry(
+    reg: ProxyLocalToolRegistry,
+    call: dict,
+) -> dict:
+    """Execute a function_call through the registry and return the parsed output."""
+    decision = reg.completed_call_decision(call, "custom")
+    if decision.kind != "proxy_local":
+        raise AssertionError(
+            f"Expected proxy_local decision for {call['name']!r}, got {decision.kind!r}"
+        )
+    ctx = ProxyToolExecutionContext(request_id="smoke-req")
+    result = reg.continuation_result(decision, ctx)
+    raw_output = result.public_item.get("output", "{}")
+    return json.loads(raw_output)
+
+
+# ---------------------------------------------------------------------------
+# Smoke checks
+# ---------------------------------------------------------------------------
+
+def run_smoke(db_path: Path, verbose: bool = False) -> int:
+    r = SmokeResults(verbose=verbose)
+
+    # 1. Default flags → no BrainCase tools
+    defs_none = get_braincase_tool_definitions(env=_NO_FLAGS)
+    names_none = [d["name"] for d in defs_none]
+    bc_names = ("braincase.render", "braincase.recall", "braincase.write_candidate")
+    if not any(n in names_none for n in bc_names):
+        r.ok("default flags expose no BrainCase tools")
+    else:
+        r.fail("default flags expose no BrainCase tools",
+               f"unexpected tools: {[n for n in names_none if n in bc_names]}")
+
+    # 2. Read flag only → render + recall, no write_candidate
+    defs_read = get_braincase_tool_definitions(env=_READ_ONLY)
+    names_read = [d["name"] for d in defs_read]
+    if "braincase.render" in names_read and "braincase.recall" in names_read \
+            and "braincase.write_candidate" not in names_read:
+        r.ok("read flag exposes render+recall only")
+    else:
+        r.fail("read flag exposes render+recall only", f"tools: {names_read}")
+
+    # 3. Both flags → render + recall + write_candidate
+    defs_both = get_braincase_tool_definitions(env=_BOTH_FLAGS)
+    names_both = [d["name"] for d in defs_both]
+    if set(names_both) == {"braincase.render", "braincase.recall", "braincase.write_candidate"}:
+        r.ok("both flags expose render+recall+write_candidate")
+    else:
+        r.fail("both flags expose render+recall+write_candidate", f"tools: {names_both}")
+
+    # 4. write/update/search/inspect/promote never exposed
+    forbidden = ("braincase.write", "braincase.update", "braincase.search",
+                 "braincase.inspect", "braincase.promote_candidate")
+    leaked = [n for env in (_NO_FLAGS, _READ_ONLY, _BOTH_FLAGS)
+              for n in [d["name"] for d in get_braincase_tool_definitions(env=env)]
+              if n in forbidden]
+    if not leaked:
+        r.ok("write/update/search/inspect/promote never exposed")
+    else:
+        r.fail("write/update/search/inspect/promote never exposed",
+               f"leaked: {leaked}")
+
+    # --- DB-backed checks ---
+    try:
+        db = _make_db(db_path)
+    except RuntimeError as exc:
+        r.fail("DB init", str(exc))
+        return r.summary()
+
+    seeded_id = _seed_renderable(db)
+
+    web = _FakeWebRuntime()
+    reg_read = ProxyLocalToolRegistry(make_braincase_tool_executors(db=db, env=_READ_ONLY))
+    reg_both = ProxyLocalToolRegistry(make_braincase_tool_executors(db=db, env=_BOTH_FLAGS))
+
+    # 5. render returns RenderPacket with seeded record
+    try:
+        render_out = _execute_through_registry(
+            reg_read,
+            _make_call("braincase.render", {"purpose": "smoke", "memory_domain": "coding"},
+                       "smoke_render"),
+        )
+        if render_out.get("schema") == "braincase/render-packet@1" \
+                and seeded_id in render_out.get("source_record_ids", []):
+            r.ok("render returned RenderPacket with seeded record",
+                 f"packet_id={render_out.get('packet_id')}")
+        else:
+            r.fail("render returned RenderPacket with seeded record",
+                   f"schema={render_out.get('schema')!r}, ids={render_out.get('source_record_ids')}")
+    except Exception as exc:
+        r.fail("render returned RenderPacket", str(exc))
+
+    # 6. recall returns RenderPacket with seeded record
+    try:
+        recall_out = _execute_through_registry(
+            reg_read,
+            _make_call("braincase.recall",
+                       {"purpose": "smoke", "memory_domain": "coding", "recall_mode": "task"},
+                       "smoke_recall"),
+        )
+        if recall_out.get("schema") == "braincase/render-packet@1" \
+                and seeded_id in recall_out.get("source_record_ids", []):
+            r.ok("recall returned RenderPacket with seeded record")
+        else:
+            r.fail("recall returned RenderPacket with seeded record",
+                   f"schema={recall_out.get('schema')!r}, ids={recall_out.get('source_record_ids')}")
+    except Exception as exc:
+        r.fail("recall returned RenderPacket", str(exc))
+
+    # 7. write_candidate returns WriteCandidateResult
+    try:
+        wc_args = {
+            "purpose": "smoke_test",
+            "memory_domain": "coding",
+            "tier": "project_state",
+            "record_type": "constraint",
+            "claim": "Smoke test candidate constraint for BrainCase toolplane verification.",
+            "summary": "Candidate record created by smoke test.",
+        }
+        wc_out = _execute_through_registry(
+            reg_both,
+            _make_call("braincase.write_candidate", wc_args, "smoke_wc"),
+        )
+        if wc_out.get("ok") and wc_out.get("status") == "candidate" \
+                and wc_out.get("visibility") == "internal" \
+                and wc_out.get("review_required"):
+            r.ok("write_candidate returned WriteCandidateResult",
+                 f"record_id={wc_out.get('record_id')}")
+            candidate_id = wc_out.get("record_id")
+        else:
+            r.fail("write_candidate returned WriteCandidateResult",
+                   f"ok={wc_out.get('ok')}, status={wc_out.get('status')!r}, "
+                   f"errors={wc_out.get('errors')}")
+            candidate_id = None
+    except Exception as exc:
+        r.fail("write_candidate returned WriteCandidateResult", str(exc))
+        candidate_id = None
+
+    # 8. candidate stored as candidate/internal in DB
+    if candidate_id:
+        rec = db.get_state_record(candidate_id)
+        if rec and rec.get("status") == "candidate" and rec.get("visibility") == "internal":
+            r.ok("candidate stored as candidate/internal in DB")
+        else:
+            r.fail("candidate stored as candidate/internal in DB",
+                   f"record={rec!r}")
+    else:
+        r.fail("candidate stored as candidate/internal in DB", "no record_id from write")
+
+    # 9. render does not return the candidate
+    try:
+        render_after = _execute_through_registry(
+            reg_both,
+            _make_call("braincase.render",
+                       {"purpose": "isolation_check", "memory_domain": "coding"},
+                       "smoke_render2"),
+        )
+        ids_after = render_after.get("source_record_ids", [])
+        if candidate_id and candidate_id not in ids_after:
+            r.ok("render does not return the candidate record")
+        elif candidate_id is None:
+            r.ok("render does not return the candidate record (no candidate written)")
+        else:
+            r.fail("render does not return the candidate record",
+                   f"candidate {candidate_id!r} appeared in render ids: {ids_after}")
+    except Exception as exc:
+        r.fail("render does not return the candidate record", str(exc))
+
+    # 10. recall does not return the candidate
+    try:
+        recall_after = _execute_through_registry(
+            reg_both,
+            _make_call("braincase.recall",
+                       {"purpose": "isolation_check", "memory_domain": "coding",
+                        "recall_mode": "task"},
+                       "smoke_recall2"),
+        )
+        ids_recall = recall_after.get("source_record_ids", [])
+        if candidate_id and candidate_id not in ids_recall:
+            r.ok("recall does not return the candidate record")
+        elif candidate_id is None:
+            r.ok("recall does not return the candidate record (no candidate written)")
+        else:
+            r.fail("recall does not return the candidate record",
+                   f"candidate {candidate_id!r} appeared in recall ids: {ids_recall}")
+    except Exception as exc:
+        r.fail("recall does not return the candidate record", str(exc))
+
+    # 11. no raw StateRecord leaked in any output.
+    # RenderPacket legitimately contains: packet_id, schema, purpose, memory_domain,
+    # generated_at_ms, budget_tokens, rendered_text, source_record_ids, omitted_count,
+    # warnings, metadata.  It must NOT contain raw StateRecord content fields.
+    # WriteCandidateResult legitimately contains: ok, stored, record_id, status,
+    # visibility, review_required, warnings, errors, dedup_hint, conflict_hint.
+    _RENDER_PACKET_VALID = frozenset({
+        "packet_id", "schema", "purpose", "memory_domain", "generated_at_ms",
+        "budget_tokens", "rendered_text", "source_record_ids", "omitted_count",
+        "warnings", "metadata",
+    })
+    _WRITE_CANDIDATE_VALID = frozenset({
+        "ok", "stored", "record_id", "status", "visibility", "review_required",
+        "warnings", "errors", "dedup_hint", "conflict_hint",
+    })
+    leaked_fields: list[str] = []
+    for label, out, valid_keys in (
+        ("render", render_out, _RENDER_PACKET_VALID),
+        ("recall", recall_out, _RENDER_PACKET_VALID),
+        ("write_candidate", wc_out, _WRITE_CANDIDATE_VALID),
+    ):
+        unexpected = sorted(set(out.keys()) - valid_keys)
+        for field in unexpected:
+            leaked_fields.append(f"{label}.{field}")
+    if not leaked_fields:
+        r.ok("no raw StateRecord leaked in any output")
+    else:
+        r.fail("no raw StateRecord leaked in any output", f"unexpected fields: {leaked_fields}")
+
+    # 12. no automatic ingestion — count records before vs after calling read tools again
+    before_count = len(db.list_state_records(memory_domain="coding", limit=200))
+    _execute_through_registry(
+        reg_both,
+        _make_call("braincase.render",
+                   {"purpose": "ingestion_check", "memory_domain": "coding"},
+                   "smoke_ingest"),
+    )
+    _execute_through_registry(
+        reg_both,
+        _make_call("braincase.recall",
+                   {"purpose": "ingestion_check", "memory_domain": "coding",
+                    "recall_mode": "task"},
+                   "smoke_ingest2"),
+    )
+    after_count = len(db.list_state_records(memory_domain="coding", limit=200))
+    if after_count == before_count:
+        r.ok("no automatic ingestion from render/recall calls")
+    else:
+        r.fail("no automatic ingestion from render/recall calls",
+               f"count went from {before_count} to {after_count}")
+
+    db.close()
+    return r.summary()
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="BrainCase tool-loop smoke test",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--db-path", help="Path to smoke-test DB (default: temp file)")
+    parser.add_argument("--keep-db", action="store_true",
+                        help="Keep DB file after smoke (only meaningful with --db-path)")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Print extra details for each check")
+    args = parser.parse_args()
+
+    if args.db_path:
+        db_path = Path(args.db_path)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        exit_code = run_smoke(db_path, verbose=args.verbose)
+        if not args.keep_db and db_path.exists():
+            db_path.unlink()
+    else:
+        with tempfile.TemporaryDirectory() as td:
+            exit_code = run_smoke(Path(td) / "braincase-smoke.sqlite3",
+                                  verbose=args.verbose)
+
+    return exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
