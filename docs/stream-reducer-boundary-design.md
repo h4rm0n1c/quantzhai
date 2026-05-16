@@ -480,28 +480,32 @@ instead of a context object. All live guidance uses the implemented name.
 
 ---
 
-## 9B. Recommended Slice 2C
+## 9B. Slice 2C — COMPLETE
 
-**Extract `_should_suppress_duplicate_response_start()` pure helper.**
+`_should_suppress_duplicate_response_start(event_type, sent_response_start) -> bool`
+extracted in commit dd1b50b+1. 6 unit tests added. 2443 tests pass. No behaviour change.
+
+---
+
+## 9C. Recommended Slice 2D
+
+**Extract `_should_inject_hop_budget_signal(hops_remaining, threshold) -> bool` pure helper.**
 
 **Rationale:**
 
-1. Bounded inputs: one boolean flag (`sent_response_start`) and one string
-   (`event_type`). No tool execution, no terminal timeout behaviour.
+1. Bounded inputs: two integers.
+2. No tool execution, no terminal event, no SSE rendering.
+3. Already covered by `test_hop_budget_signal_injected_when_hops_tight`,
+   `test_hop_budget_signal_not_injected_when_hops_plentiful`,
+   `test_hop_budget_signal_disabled_with_minus_one`.
+4. Mirrors the Slice 2C pattern exactly.
 
-2. Already tested by `test_web_search_continuation_suppresses_duplicate_response_start`.
-
-3. Safer than touching function-call/tool lifecycle next.
-
-**Slice 2C scope:**
+**Slice 2D scope:**
 
 ```text
-1. Add _should_suppress_duplicate_response_start(event_type, sent_response_start) -> bool.
-
-2. Replace the inline check at the duplicate_response_start_suppression site.
-
-3. Unit test: verify suppress vs forward conditions.
-
+1. Add _should_inject_hop_budget_signal(hops_remaining, threshold) -> bool.
+2. Replace inline check at the hop_budget_signal site.
+3. Unit tests: verify inject/skip conditions.
 4. No other logic moved.
 ```
 

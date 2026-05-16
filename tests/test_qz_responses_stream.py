@@ -9,6 +9,7 @@ from proxy.qz_responses_stream import (
     StreamDecision,
     StreamHopState,
     _reasoning_only_abort_reason,
+    _should_suppress_duplicate_response_start,
 )
 from proxy.qz_telemetry import TelemetryBus
 from proxy.qz_tool_lifecycle import ToolContinuationResult
@@ -3627,6 +3628,40 @@ class StreamHopStateTests(unittest.TestCase):
         hs1.next_input.append("extra")
         self.assertNotIn("extra", hs2.next_input)
 
+
+
+class DuplicateResponseStartHelperTests(unittest.TestCase):
+    """Unit tests for _should_suppress_duplicate_response_start() — #37 Slice 2C."""
+
+    def test_response_created_duplicate_suppressed(self):
+        self.assertTrue(
+            _should_suppress_duplicate_response_start("response.created", True)
+        )
+
+    def test_response_in_progress_duplicate_suppressed(self):
+        self.assertTrue(
+            _should_suppress_duplicate_response_start("response.in_progress", True)
+        )
+
+    def test_response_created_first_not_suppressed(self):
+        self.assertFalse(
+            _should_suppress_duplicate_response_start("response.created", False)
+        )
+
+    def test_response_in_progress_first_not_suppressed(self):
+        self.assertFalse(
+            _should_suppress_duplicate_response_start("response.in_progress", False)
+        )
+
+    def test_unrelated_event_not_suppressed_even_if_sent(self):
+        self.assertFalse(
+            _should_suppress_duplicate_response_start("response.output_text.delta", True)
+        )
+
+    def test_done_event_not_suppressed(self):
+        self.assertFalse(
+            _should_suppress_duplicate_response_start("done", True)
+        )
 
 
 class StreamDecisionTests(unittest.TestCase):

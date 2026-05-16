@@ -210,6 +210,22 @@ class StreamDecision:
     warnings: list = field(default_factory=list)
 
 
+def _should_suppress_duplicate_response_start(
+    event_type: str,
+    sent_response_start: bool,
+) -> bool:
+    """Return True if this response-start event is a duplicate that should be suppressed.
+
+    Pure helper — no I/O, no state mutation.
+    response.created and response.in_progress are forwarded only once per hop;
+    subsequent arrivals are suppressed with reason "duplicate_response_start".
+    """
+    return sent_response_start and event_type in {
+        "response.created",
+        "response.in_progress",
+    }
+
+
 def _reasoning_only_abort_reason(
     *,
     reasoning_only_sample: str,
@@ -1844,7 +1860,7 @@ class ResponsesStreamRuntime:
                                     )
 
                         if event_type in {"response.created", "response.in_progress"}:
-                            if sent_response_start:
+                            if _should_suppress_duplicate_response_start(event_type, sent_response_start):
                                 self._emit_stream_event_timing(
                                     event_type,
                                     event_received_at,
