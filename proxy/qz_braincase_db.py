@@ -420,6 +420,61 @@ class BrainCaseDB:
             self.last_error = f"{type(exc).__name__}: {exc}"
             return False
 
+    def promote_state_record(
+        self,
+        record_id: str,
+        *,
+        new_status: str,
+        new_visibility: str,
+        reason: str,
+        now_ms: int | None = None,
+    ) -> bool:
+        """Update a candidate StateRecord's status and visibility, recording a promotion revision.
+
+        This is a mechanical DB primitive. Policy enforcement (candidate check,
+        redaction, dedup, conflict) is the caller's responsibility (qz_braincase_review.py).
+
+        Returns False on disabled DB, record not found, or error.
+        """
+        if not self.enabled:
+            return False
+        if self._conn is None or not self.available:
+            if self._conn is None and not self.init():
+                return False
+        try:
+            assert self._conn is not None
+            ts = now_ms if now_ms is not None else int(time.time() * 1000)
+            old = self.get_state_record(record_id)
+            if old is None:
+                self.last_error = f"Record not found: {record_id}"
+                return False
+            prev_json = json.dumps(old)
+            new_snapshot = dict(old, status=new_status, visibility=new_visibility,
+                                updated_at_ms=ts)
+            new_json = json.dumps(new_snapshot)
+            self._conn.execute(
+                """
+                INSERT INTO qz_braincase_record_revisions(
+                    record_id, operation, previous_record_json, new_record_json, reason, created_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (record_id, "promote", prev_json, new_json, reason, ts),
+            )
+            self._conn.execute(
+                """
+                UPDATE qz_braincase_state_records
+                SET status = ?, visibility = ?, updated_at_ms = ?
+                WHERE record_id = ?
+                """,
+                (new_status, new_visibility, ts, record_id),
+            )
+            self._conn.commit()
+            self.last_error = None
+            return True
+        except Exception as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            return False
+
     def supersede_state_record(
         self,
         old_record_id: str,

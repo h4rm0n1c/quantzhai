@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+"""Operator review CLI for BrainCase candidate StateRecords — Slice I.
+
+Commands:
+  list                List candidate records awaiting review.
+  inspect <id>        Show full details of a record.
+  promote <id>        Promote a candidate to active/renderable (or active/internal).
+  reject <id>         Retire a candidate as rejected.
+
+Promotion is NOT model-facing. Only the operator can promote candidates.
+No model tool can call these commands.
+
+Usage examples:
+  scripts/qz-braincase-review list
+  scripts/qz-braincase-review list --memory-domain coding --limit 20 --json
+  scripts/qz-braincase-review inspect rec_cand_123_abc
+  scripts/qz-braincase-review promote rec_cand_123_abc
+  scripts/qz-braincase-review promote rec_cand_123_abc --visibility internal --reason "Confirmed by ops"
+  scripts/qz-braincase-review promote rec_cand_123_abc --dry-run
+  scripts/qz-braincase-review reject rec_cand_123_abc --reason "Not needed"
+  scripts/qz-braincase-review reject rec_cand_123_abc --dry-run
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[1]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+
+from proxy.qz_braincase_db import BrainCaseDB, default_db_path
+from proxy.qz_braincase_review import (
+    inspect_candidate_record,
+    list_candidate_records,
+    promote_candidate_record,
+    reject_candidate_record,
+)
+
+
+# ---------------------------------------------------------------------------
+# DB helpers
+# ---------------------------------------------------------------------------
+
+def _open_db(db_path_str: str | None) -> BrainCaseDB:
+    if db_path_str:
+        path = Path(db_path_str)
+    else:
+        path = default_db_path()
+    db = BrainCaseDB(path=path, enabled=True)
+    if not db.init():
+        print(f"Error: BrainCaseDB init failed: {db.last_error}", file=sys.stderr)
+        sys.exit(1)
+    return db
+
+
+# ---------------------------------------------------------------------------
+# list command
+# ---------------------------------------------------------------------------
+
+def cmd_list(args: argparse.Namespace) -> int:
+    db = _open_db(args.db_path)
+    records = list_candidate_records(
+        db,
+        memory_domain=args.memory_domain or None,
+        limit=args.limit,
+    )
+    db.close()
+
+    if args.json:
+        print(json.dumps(records, indent=2))
+        return 0
+
+    if not records:
+        print("No candidate records found.")
+        return 0
+
+    # Human-readable table
+    header = f"{'record_id':<40} {'domain':<12} {'tier':<28} {'type':<18} {'imp':>5}"
+    print(header)
+    print("-" * len(header))
+    for r in records:
+        claim_preview = (r.get("claim") or "")[:60]
+        rid = (r.get("record_id") or "")[:40]
+        domain = (r.get("memory_domain") or "")[:12]
+        tier = (r.get("tier") or "")[:28]
+        rtype = (r.get("record_type") or "")[:18]
+        imp = f"{r.get('importance', 0.0):.2f}"
+        print(f"{rid:<40} {domain:<12} {tier:<28} {rtype:<18} {imp:>5}")
+        if claim_preview:
+            print(f"  {claim_preview}")
+    print(f"\n{len(records)} candidate(s)")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# inspect command
+# ---------------------------------------------------------------------------
+
+def cmd_inspect(args: argparse.Namespace) -> int:
+    db = _open_db(args.db_path)
+    result = inspect_candidate_record(db, args.record_id)
+    db.close()
+
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("ok") else 1
+
+    if not result.get("ok"):
+        print(f"Error: {result.get('error')}", file=sys.stderr)
+        return 1
+
+    rec = result.get("record", {})
+    print(f"record_id   : {rec.get('record_id')}")
+    print(f"status      : {rec.get('status')}")
+    print(f"visibility  : {rec.get('visibility')}")
+    print(f"memory_domain: {rec.get('memory_domain')}")
+    print(f"tier        : {rec.get('tier')}")
+    print(f"record_type : {rec.get('record_type')}")
+    print(f"confidence  : {rec.get('confidence')}")
+    print(f"importance  : {rec.get('importance')}")
+    print(f"retention   : {rec.get('retention')}")
+    print(f"tags        : {rec.get('tags')}")
+    print(f"claim       :\n  {rec.get('claim')}")
+    print(f"summary     :\n  {rec.get('summary')}")
+    meta = rec.get("metadata") or {}
+    if isinstance(meta, dict):
+        if meta.get("why_it_matters"):
+            print(f"why_it_matters: {meta['why_it_matters']}")
+        if meta.get("review_note"):
+            print(f"review_note : {meta['review_note']}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# promote command
+# ---------------------------------------------------------------------------
+
+def cmd_promote(args: argparse.Namespace) -> int:
+    db = _open_db(args.db_path)
+    result = promote_candidate_record(
+        db,
+        args.record_id,
+        visibility=args.visibility,
+        reason=args.reason or "operator promotion",
+        dry_run=args.dry_run,
+        allowed_memory_domains=([args.memory_domain] if args.memory_domain else None),
+    )
+    db.close()
+
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("ok") else 1
+
+    if not result.get("ok"):
+        print(f"Error promoting {args.record_id}:", file=sys.stderr)
+        for e in result.get("errors", []):
+            print(f"  {e}", file=sys.stderr)
+        return 1
+
+    prefix = "DRY-RUN: would promote" if args.dry_run else "Promoted"
+    print(f"{prefix} {args.record_id}")
+    print(f"  status     : {result.get('status')}")
+    print(f"  visibility : {result.get('visibility')}")
+    for w in result.get("warnings", []):
+        print(f"  warning    : {w}")
+    if result.get("dedup_hint") and result["dedup_hint"] != "no_duplicates":
+        print(f"  dedup      : {result['dedup_hint']}")
+    if result.get("conflict_hint") and result["conflict_hint"] != "no_conflicts":
+        print(f"  conflict   : {result['conflict_hint']}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# reject command
+# ---------------------------------------------------------------------------
+
+def cmd_reject(args: argparse.Namespace) -> int:
+    db = _open_db(args.db_path)
+    result = reject_candidate_record(
+        db,
+        args.record_id,
+        reason=args.reason or "operator rejected candidate",
+        dry_run=args.dry_run,
+    )
+    db.close()
+
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("ok") else 1
+
+    if not result.get("ok"):
+        print(f"Error rejecting {args.record_id}:", file=sys.stderr)
+        for e in result.get("errors", []):
+            print(f"  {e}", file=sys.stderr)
+        return 1
+
+    prefix = "DRY-RUN: would reject" if args.dry_run else "Rejected"
+    print(f"{prefix} {args.record_id} (status → {result.get('status')})")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Operator review CLI for BrainCase candidate records",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    # list
+    p_list = sub.add_parser("list", help="List candidate records")
+    p_list.add_argument("--db-path", help="BrainCaseDB path (default: var/qz-state.sqlite3)")
+    p_list.add_argument("--memory-domain", help="Filter by memory_domain")
+    p_list.add_argument("--limit", type=int, default=50)
+    p_list.add_argument("--json", action="store_true")
+
+    # inspect
+    p_inspect = sub.add_parser("inspect", help="Inspect a record")
+    p_inspect.add_argument("record_id")
+    p_inspect.add_argument("--db-path")
+    p_inspect.add_argument("--json", action="store_true")
+
+    # promote
+    p_promote = sub.add_parser("promote", help="Promote a candidate record")
+    p_promote.add_argument("record_id")
+    p_promote.add_argument("--db-path")
+    p_promote.add_argument("--visibility", choices=["renderable", "internal"],
+                           default="renderable")
+    p_promote.add_argument("--memory-domain", help="Guard: must match record domain")
+    p_promote.add_argument("--reason")
+    p_promote.add_argument("--dry-run", action="store_true")
+    p_promote.add_argument("--json", action="store_true")
+
+    # reject
+    p_reject = sub.add_parser("reject", help="Reject (retire) a candidate record")
+    p_reject.add_argument("record_id")
+    p_reject.add_argument("--db-path")
+    p_reject.add_argument("--reason")
+    p_reject.add_argument("--dry-run", action="store_true")
+    p_reject.add_argument("--json", action="store_true")
+
+    args = parser.parse_args()
+
+    if args.command == "list":
+        return cmd_list(args)
+    elif args.command == "inspect":
+        return cmd_inspect(args)
+    elif args.command == "promote":
+        return cmd_promote(args)
+    elif args.command == "reject":
+        return cmd_reject(args)
+    else:
+        parser.print_help()
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

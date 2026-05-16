@@ -303,10 +303,10 @@ Slice H.2 COMPLETE: braincase.write_candidate runtime (2146 total)
             No automatic ingestion.
 Slice H.3 COMPLETE: runtime polish (tier/record_type validation, case-insensitive
             raw marker detection, _make_result docstring) (2164 total)
-Slice H.4 COMPLETE: BrainCase smoke-test script scripts/qz-braincase-smoke (2183+ total)
+Slice H.4 COMPLETE: BrainCase smoke-test script scripts/qz-braincase-smoke (2183 total)
+Slice I   COMPLETE: operator review/promote CLI scripts/qz-braincase-review (2223 total)
 
-Next slice: operator review/promote tooling or live smoke polish.
-  Do not expose braincase.write/update/search/inspect/promote_candidate directly.
+Next slice: retention/lifetime policy or close #53 if acceptance complete.
 - No automatic ingestion at any step.
 ```
 

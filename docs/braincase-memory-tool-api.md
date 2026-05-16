@@ -1190,6 +1190,44 @@ New test file: tests/test_qz_braincase_smoke_script.py — 19 tests.
 Full suite: 2183 tests.
 ```
 
+### Slice I: Operator review/promote tooling — COMPLETE
+
+```text
+New module: proxy/qz_braincase_review.py
+  list_candidate_records(db, *, memory_domain, limit) → bounded summaries
+  inspect_candidate_record(db, record_id) → full safe fields
+  promote_candidate_record(db, record_id, *, visibility, reason, dry_run,
+    allowed_memory_domains, ...) → PromotionResult
+  reject_candidate_record(db, record_id, *, reason, dry_run) → RejectResult
+
+  Promotion path: candidate/internal → operator review → active/renderable
+    or active/internal. Re-runs redaction_check (hard block).
+    Re-runs dedup_check + conflict_check (hints, non-blocking).
+    Dry-run supported. Records revision with operation="promote".
+  Rejection path: candidate → retired. Uses retire_state_record(). Dry-run.
+
+New DB primitive: BrainCaseDB.promote_state_record(record_id, *, new_status,
+  new_visibility, reason, now_ms). Mechanical update + revision. Policy
+  enforcement stays in qz_braincase_review.py.
+
+New CLI: scripts/qz-braincase-review
+  list    [--memory-domain] [--limit] [--json]
+  inspect <id> [--json]
+  promote <id> [--visibility renderable|internal] [--reason] [--dry-run] [--json]
+  reject  <id> [--reason] [--dry-run] [--json]
+  All commands use --db-path (default: var/qz-state.sqlite3).
+
+Promotion is NOT model-facing. No model tool calls these functions.
+braincase.promote_candidate is not exposed as a model tool.
+Promoted renderable records become eligible for braincase.render/recall.
+Promoted internal records remain excluded from braincase.render/recall.
+Rejected (retired) records remain excluded.
+No automatic ingestion.
+
+Tests: tests/test_qz_braincase_review.py — 40 tests.
+Full suite: 2223 tests.
+```
+
 ---
 
 ## Open questions

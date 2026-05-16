@@ -142,7 +142,7 @@ Separate flag: QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED (independent of render/recal
 braincase.render and braincase.recall exposed when QZ_BRAINCASE_TOOLS_ENABLED (default disabled).
 RenderPacket is the only model-visible memory output.
 write/update/search/inspect not yet exposed. 2062 tests.
-Next: operator review/promote tooling or live smoke polish.
+Next: retention/lifetime policy or #53 close-out.
 No automatic ingestion.
 See docs/braincase-memory-tool-api.md for the full slice plan.
 ```
