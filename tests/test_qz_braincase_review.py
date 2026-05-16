@@ -525,5 +525,224 @@ class ReviewExposureTests(unittest.TestCase):
             self.assertEqual(before, after)
 
 
+
+# =============================================================================
+# SLICE I.1: status-filtered candidate listing
+# =============================================================================
+
+class ListCandidateAccuracyTests(unittest.TestCase):
+    """Candidates must not be hidden by newer active/retired records."""
+
+    def test_finds_candidate_hidden_behind_many_newer_active_records(self):
+        """The bug this fixes: large active result set ate the over-fetch limit."""
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            # Seed the old candidate first (lower created_at_ms)
+            early_ts = int(time.time() * 1000) - 100_000
+            old_cand = _make_record("rec_old_candidate", status="candidate",
+                                    visibility="internal")
+            old_cand["created_at_ms"] = early_ts
+            old_cand["updated_at_ms"] = early_ts
+            db.put_state_record(old_cand)
+
+            # Seed many newer active records that would fill any broad limit
+            for i in range(30):
+                rec = _make_record(f"rec_active_{i:03d}", status="active",
+                                   visibility="renderable")
+                db.put_state_record(rec)
+
+            results = list_candidate_records(db, limit=10)
+            ids = [r["record_id"] for r in results]
+            self.assertIn("rec_old_candidate", ids,
+                          "Candidate hidden behind newer active records must still appear")
+
+    def test_finds_multiple_candidates_despite_many_non_candidates(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            for i in range(20):
+                rec = _make_record(f"rec_active_{i:03d}", status="active",
+                                   visibility="renderable")
+                db.put_state_record(rec)
+            for i in range(3):
+                _seed_candidate(db, f"rec_cand_{i:03d}")
+
+            results = list_candidate_records(db, limit=10)
+            cand_ids = {r["record_id"] for r in results}
+            for i in range(3):
+                self.assertIn(f"rec_cand_{i:03d}", cand_ids)
+
+    def test_list_returns_only_candidate_status(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            _seed_candidate(db, "rec_c1")
+            _seed_active(db, "rec_a1")
+            results = list_candidate_records(db)
+            for r in results:
+                self.assertEqual(r.get("status"), "candidate",
+                                 "list_candidate_records must return only candidate records")
+
+    def test_list_respects_memory_domain_filter(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            _seed_candidate(db, "rec_coding_c", memory_domain="coding")
+            _seed_candidate(db, "rec_hsm_c", memory_domain="hsm")
+            results = list_candidate_records(db, memory_domain="coding")
+            ids = [r["record_id"] for r in results]
+            self.assertIn("rec_coding_c", ids)
+            self.assertNotIn("rec_hsm_c", ids)
+
+    def test_list_respects_limit_after_status_filtering(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            for i in range(10):
+                _seed_candidate(db, f"rec_many_{i:03d}")
+            results = list_candidate_records(db, limit=3)
+            self.assertLessEqual(len(results), 3)
+
+    def test_list_does_not_return_active_records(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            _seed_active(db, "rec_act_only")
+            results = list_candidate_records(db)
+            ids = [r["record_id"] for r in results]
+            self.assertNotIn("rec_act_only", ids)
+
+    def test_list_does_not_return_retired_records(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            rid = _seed_candidate(db, "rec_then_retired")
+            db.retire_state_record(rid, "retire for test")
+            results = list_candidate_records(db)
+            ids = [r["record_id"] for r in results]
+            self.assertNotIn("rec_then_retired", ids)
+
+    def test_list_returns_empty_when_db_disabled(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _disabled_db(td)
+            results = list_candidate_records(db)
+            self.assertEqual(results, [])
+
+
+class ListCLIAccuracyTests(unittest.TestCase):
+    """CLI list uses the corrected status-filtered path."""
+
+    def _run(self, *args) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(_REVIEW_SCRIPT)] + list(args),
+            capture_output=True, text=True, cwd=str(_REPO),
+        )
+
+    def test_cli_list_finds_hidden_candidate(self):
+        """CLI list must surface a candidate even when active records are newer."""
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            early_ts = int(time.time() * 1000) - 100_000
+            old_cand = _make_record("rec_cli_hidden", status="candidate",
+                                    visibility="internal")
+            old_cand["created_at_ms"] = early_ts
+            old_cand["updated_at_ms"] = early_ts
+            db.put_state_record(old_cand)
+            for i in range(20):
+                rec = _make_record(f"rec_cli_active_{i:03d}", status="active",
+                                   visibility="renderable")
+                db.put_state_record(rec)
+            db.close()
+
+            db_path = str(Path(td) / "state.sqlite3")
+            result = self._run("list", "--db-path", db_path)
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("rec_cli_hidden", result.stdout)
+
+    def test_cli_list_json_includes_hidden_candidate(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            early_ts = int(time.time() * 1000) - 100_000
+            old_cand = _make_record("rec_cli_json_hidden", status="candidate",
+                                    visibility="internal")
+            old_cand["created_at_ms"] = early_ts
+            old_cand["updated_at_ms"] = early_ts
+            db.put_state_record(old_cand)
+            for i in range(20):
+                rec = _make_record(f"rec_json_active_{i:03d}", status="active",
+                                   visibility="renderable")
+                db.put_state_record(rec)
+            db.close()
+
+            db_path = str(Path(td) / "state.sqlite3")
+            result = self._run("list", "--db-path", db_path, "--json")
+            self.assertEqual(result.returncode, 0)
+            parsed = json.loads(result.stdout)
+            ids = [r["record_id"] for r in parsed]
+            self.assertIn("rec_cli_json_hidden", ids)
+
+
+class ListByStatusDBTests(unittest.TestCase):
+    """BrainCaseDB.list_state_records_by_status — targeted DB-level coverage."""
+
+    def test_filters_status_exactly(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            _seed_candidate(db, "rec_cand_status")
+            _seed_active(db, "rec_act_status")
+            results = db.list_state_records_by_status(status="candidate")
+            ids = [r["record_id"] for r in results]
+            self.assertIn("rec_cand_status", ids)
+            self.assertNotIn("rec_act_status", ids)
+
+    def test_filters_memory_domain_exactly(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            _seed_candidate(db, "rec_domain_coding", memory_domain="coding")
+            _seed_candidate(db, "rec_domain_hsm", memory_domain="hsm")
+            results = db.list_state_records_by_status(
+                status="candidate", memory_domain="coding"
+            )
+            ids = [r["record_id"] for r in results]
+            self.assertIn("rec_domain_coding", ids)
+            self.assertNotIn("rec_domain_hsm", ids)
+
+    def test_filters_tier_exactly(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            _seed_candidate(db, "rec_tier_ps", tier="project_state")
+            _seed_candidate(db, "rec_tier_ws", tier="working_state")
+            results = db.list_state_records_by_status(
+                status="candidate", tier="project_state"
+            )
+            ids = [r["record_id"] for r in results]
+            self.assertIn("rec_tier_ps", ids)
+            self.assertNotIn("rec_tier_ws", ids)
+
+    def test_applies_limit_after_status_filtering(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            for i in range(10):
+                _seed_candidate(db, f"rec_limit_{i:03d}")
+            results = db.list_state_records_by_status(status="candidate", limit=3)
+            self.assertLessEqual(len(results), 3)
+
+    def test_disabled_db_returns_empty(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _disabled_db(td)
+            results = db.list_state_records_by_status(status="candidate")
+            self.assertEqual(results, [])
+
+    def test_no_model_tools_added(self):
+        from proxy.qz_braincase_tools import (
+            get_braincase_tool_definitions,
+            QZ_BRAINCASE_TOOLS_ENABLED_ENV,
+            QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED_ENV,
+        )
+        env = {
+            QZ_BRAINCASE_TOOLS_ENABLED_ENV: "true",
+            QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED_ENV: "true",
+        }
+        names = [d["name"] for d in get_braincase_tool_definitions(env=env)]
+        for forbidden in ("braincase.search", "braincase.inspect",
+                          "braincase.promote_candidate", "braincase.write",
+                          "braincase.update"):
+            self.assertNotIn(forbidden, names)
+
+
 if __name__ == "__main__":
     unittest.main()

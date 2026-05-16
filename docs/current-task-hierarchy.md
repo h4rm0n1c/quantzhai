@@ -514,6 +514,7 @@ Slice H.2: COMPLETE — braincase.write_candidate runtime (57 runtime tests, 214
 Slice H.3: COMPLETE — runtime polish: tier/record_type validation, case-insensitive markers (2164 total)
 Slice H.4: COMPLETE — BrainCase smoke-test script scripts/qz-braincase-smoke (2183 total)
 Slice I:   COMPLETE — operator review/promote CLI scripts/qz-braincase-review (2223 total)
+Slice I.1: COMPLETE — status-filtered candidate listing; hidden candidates now surface (2239 total)
 ```
 
 Slice G: what was done

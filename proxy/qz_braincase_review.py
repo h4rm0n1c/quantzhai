@@ -72,16 +72,18 @@ def list_candidate_records(
     if not db.enabled:
         return []
 
-    all_recs = db.list_state_records(
+    # Use status-filtered retrieval so candidate records cannot be hidden behind
+    # newer active/retired records that would fill the limit before candidates.
+    candidates = db.list_state_records_by_status(
+        status="candidate",
         memory_domain=memory_domain,
-        limit=max(limit * 4, 200),  # over-fetch to filter by candidate status
+        limit=limit,
     )
-
-    candidates = [r for r in all_recs if r.get("status") == "candidate"][:limit]
 
     return [
         {
             "record_id": r.get("record_id"),
+            "status": r.get("status"),
             "memory_domain": r.get("memory_domain"),
             "tier": r.get("tier"),
             "record_type": r.get("record_type"),

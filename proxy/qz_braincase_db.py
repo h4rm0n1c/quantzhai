@@ -378,6 +378,49 @@ class BrainCaseDB:
             self.last_error = f"{type(exc).__name__}: {exc}"
             return []
 
+    def list_state_records_by_status(
+        self,
+        *,
+        status: str,
+        memory_domain: str | None = None,
+        tier: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Return stored StateRecords filtered by exact status match.
+
+        Applies the status filter in the SQL query so active/retired records
+        cannot starve candidate records that happen to be older.
+
+        Returns [] on disabled DB or error. memory_domain and tier are matched
+        exactly if supplied. No cross-domain access.
+        Not model-facing — operator/internal review plumbing only.
+        """
+        if not self.enabled:
+            return []
+        if self._conn is None or not self.available:
+            if self._conn is None and not self.init():
+                return []
+        try:
+            assert self._conn is not None
+            clauses: list[str] = ["status = ?"]
+            params: list[Any] = [status]
+            if memory_domain is not None:
+                clauses.append("memory_domain = ?")
+                params.append(memory_domain)
+            if tier is not None:
+                clauses.append("tier = ?")
+                params.append(tier)
+            where = "WHERE " + " AND ".join(clauses)
+            rows = self._conn.execute(
+                f"SELECT * FROM qz_braincase_state_records {where} "
+                f"ORDER BY created_at_ms DESC LIMIT ?",
+                params + [limit],
+            ).fetchall()
+            return self._rows_to_records(rows)
+        except Exception as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            return []
+
     def retire_state_record(
         self,
         record_id: str,
