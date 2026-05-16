@@ -280,7 +280,19 @@ BrainCase retention/lifetime policy (#54)
 
 ## 10. Suggested next agent prompts
 
-### Prompt A: #37 Slice 1 + 1.1 — Stream state machine seam extraction — COMPLETE
+### Prompt A: #37 Slices 1, 1.1, 2A — Stream seam extraction and reducer boundary design — COMPLETE
+
+**Slice 2A added:** `docs/stream-reducer-boundary-design.md`
+
+Key decisions from Slice 2A:
+- Reducer returns decisions; `qz_responses_stream.py` performs side effects.
+- 16 decision types inventoried; reasoning-only abort is the best first extraction.
+- `StreamDecision` dataclass + pure `_is_reasoning_only_abort()` helper recommended for Slice 2B.
+- Existing 121 stream tests cover most decisions; carry_forward_reasoning has a coverage gap.
+
+Next: Slice 2B — `StreamDecision` dataclass + pure reasoning-only abort helper.
+
+### Prompt A (archived): #37 Slice 1 + 1.1 — Stream state machine seam extraction — COMPLETE
 
 **BrainCase feature work is complete (#53/#54 closed). Next: #37 stream seam.**
 
