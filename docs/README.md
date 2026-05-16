@@ -135,15 +135,18 @@ docs/progress-snapshot.md
 Current next engineering target:
 
 ```text
-P1 BrainCase — Slices A–H (and C.1, D.1, G.1–G.3) complete.
-Slice H.2: braincase.write_candidate runtime implemented.
-Proposed tool: braincase.write_candidate — forces status=candidate, visibility=internal.
-Separate flag: QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED (independent of render/recall flag).
-braincase.render and braincase.recall exposed when QZ_BRAINCASE_TOOLS_ENABLED (default disabled).
-RenderPacket is the only model-visible memory output.
-write/update/search/inspect not yet exposed. 2239 tests.
-#53 CLOSED — close-out audit passed. Retention/lifetime policy → follow-up issue.
-No automatic ingestion.
+P1 BrainCase — Slices A–I.1 complete. #53 CLOSED.
+Model-facing tools (behind feature flags, default disabled):
+  braincase.render       — QZ_BRAINCASE_TOOLS_ENABLED
+  braincase.recall       — QZ_BRAINCASE_TOOLS_ENABLED
+  braincase.write_candidate — both flags required
+Model-visible result types:
+  RenderPacket          for render/recall
+  WriteCandidateResult  for write_candidate (candidate/internal forced)
+Still unexposed: braincase.write, update, search, inspect, promote_candidate.
+Operator CLI: scripts/qz-braincase-review list/inspect/promote/reject.
+Smoke: scripts/qz-braincase-smoke 12/12 PASS. Tests: 2239 passing.
+Follow-up: #54 retention/lifetime policy. No automatic ingestion.
 See docs/braincase-memory-tool-api.md for the full slice plan.
 ```
 

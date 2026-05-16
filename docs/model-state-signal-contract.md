@@ -843,9 +843,11 @@ This document does not change the BrainCase implementation. Slices A–F are
 complete. BrainCaseDB is an optional/non-fatal storage substrate with explicit
 write paths only — not automatic ingestion of observed runtime data.
 
-braincase.render is the first model-visible tool (QZ_BRAINCASE_TOOLS_ENABLED,
-default disabled). RenderPacket is the only model-visible memory output.
-recall/write/update/search/inspect remain unexposed.
+Exposed model-facing tools (slices A–I.1, #53 closed):
+  braincase.render, braincase.recall (QZ_BRAINCASE_TOOLS_ENABLED),
+  braincase.write_candidate (both flags required, candidate/internal forced).
+Result types: RenderPacket (render/recall), WriteCandidateResult (write_candidate).
+write/update/search/inspect/promote_candidate remain unexposed.
 
 See `docs/braincase-memory-tool-api.md` for the full design.
 
