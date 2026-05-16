@@ -1125,6 +1125,36 @@ New test file: tests/test_qz_braincase_write_candidate.py — 57 tests.
 Full suite: 2146 tests.
 ```
 
+### Slice H.3: write_candidate runtime polish — COMPLETE
+
+```text
+proxy/qz_braincase_tools.py:
+  braincase_write_candidate_tool() now validates tier and record_type
+  against _VALID_TIERS and _VALID_RECORD_TYPES at runtime (in addition to
+  the tool schema enum). Invalid values → ok=false, stored=false, error.
+  Defensive: executor is self-protecting even when called directly.
+
+  Raw marker detection is now case-insensitive.
+  Both text and marker are lower-cased before matching.
+  Examples now rejected: user:, USER:, ASSISTANT:, RAW_REQUEST_BODY,
+  Function_Call, TOOL_CALL, TELEMETRY_EVENT, STREAM_EVENT.
+
+  _BraincaseBaseExecutor._make_result() docstring corrected:
+    "Wrap a tool result dict" (was: "Wrap a RenderPacket dict").
+    Covers both RenderPacket and WriteCandidateResult.
+
+docs/current-stocktake.md: stale H.2 description updated (removed
+  "not yet implemented" and "Proposed tool" lines; corrected exposure
+  summary and next-slice note).
+
+No behaviour change to render/recall.
+No new tools exposed.
+write/update/search/inspect/promote_candidate remain unexposed.
+
+Tests: test_qz_braincase_write_candidate.py — 75 tests (18 new in H.3).
+Full suite: 2164 tests.
+```
+
 ---
 
 ## Open questions

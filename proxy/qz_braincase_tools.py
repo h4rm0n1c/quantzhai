@@ -888,17 +888,23 @@ def braincase_write_candidate_tool(db: "BrainCaseDB", args: dict) -> dict:
         return _error_result(["memory_domain_required"])
     if not tier or not isinstance(tier, str) or not tier.strip():
         return _error_result(["tier_required"])
+    if tier not in _VALID_TIERS:
+        return _error_result([f"invalid_tier: {tier}"])
     if not record_type or not isinstance(record_type, str) or not record_type.strip():
         return _error_result(["record_type_required"])
+    if record_type not in _VALID_RECORD_TYPES:
+        return _error_result([f"invalid_record_type: {record_type}"])
     if not claim or not isinstance(claim, str) or not claim.strip():
         return _error_result(["claim_required"])
     if not summary or not isinstance(summary, str) or not summary.strip():
         return _error_result(["summary_required"])
 
-    # 3. Raw log/prompt smuggling detection in claim and summary (hard error)
+    # 3. Raw log/prompt smuggling detection in claim and summary (hard error).
+    # Case-insensitive: both the text and the marker are lower-cased for matching.
     def _contains_raw_marker(text: str) -> str | None:
+        lower = text.lower()
         for marker in _RAW_CONTENT_MARKERS:
-            if marker in text:
+            if marker.lower() in lower:
                 return marker
         return None
 
@@ -1061,8 +1067,11 @@ class _BraincaseBaseExecutor:
             "status": "in_progress",
         }
 
-    def _make_result(self, call: dict, packet: dict) -> "ToolContinuationResult":
-        """Wrap a RenderPacket dict into a ToolContinuationResult.
+    def _make_result(self, call: dict, result_dict: dict) -> "ToolContinuationResult":
+        """Wrap a tool result dict into a ToolContinuationResult.
+
+        Handles both RenderPacket (render/recall) and WriteCandidateResult
+        (write_candidate) — any JSON-serialisable dict works.
 
         public_item: the function_call_output emitted to the Codex client.
         upstream_items: (function_call, function_call_output) sent to the backend
@@ -1070,7 +1079,7 @@ class _BraincaseBaseExecutor:
         """
         call_id = call.get("call_id") or call.get("id") or ""
         item_id = call.get("id") or call_id
-        output = json.dumps(packet, ensure_ascii=False)
+        output = json.dumps(result_dict, ensure_ascii=False)
         output_item: dict = {
             "id": item_id,
             "type": "function_call_output",

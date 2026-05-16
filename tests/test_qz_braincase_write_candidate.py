@@ -556,5 +556,186 @@ class WriteCandidateNoIngestionTests(unittest.TestCase):
             self.assertEqual(len(before), len(after))
 
 
+
+# =============================================================================
+# SLICE H.3: tier/record_type validation + case-insensitive markers
+# =============================================================================
+
+class WriteCandidateValidationPolishTests(unittest.TestCase):
+    """Fix 2: tier and record_type validation; Fix 3: case-insensitive markers."""
+
+    # --- tier validation ---
+
+    def test_invalid_tier_returns_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            args = dict(_VALID_ARGS, tier="nonexistent_tier")
+            result = braincase_write_candidate_tool(db, args)
+            self.assertFalse(result["ok"])
+            self.assertFalse(result["stored"])
+            self.assertTrue(any("invalid_tier" in e for e in result["errors"]))
+
+    def test_invalid_tier_no_db_write(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            before = db.list_state_records(memory_domain="coding", limit=100)
+            braincase_write_candidate_tool(db, dict(_VALID_ARGS, tier="bad_tier"))
+            after = db.list_state_records(memory_domain="coding", limit=100)
+            self.assertEqual(len(before), len(after))
+
+    def test_invalid_tier_result_still_candidate_internal(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            result = braincase_write_candidate_tool(db, dict(_VALID_ARGS, tier="bad_tier"))
+            self.assertEqual(result["status"], "candidate")
+            self.assertEqual(result["visibility"], "internal")
+            self.assertTrue(result["review_required"])
+
+    # --- record_type validation ---
+
+    def test_invalid_record_type_returns_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            args = dict(_VALID_ARGS, record_type="diary_entry")
+            result = braincase_write_candidate_tool(db, args)
+            self.assertFalse(result["ok"])
+            self.assertFalse(result["stored"])
+            self.assertTrue(any("invalid_record_type" in e for e in result["errors"]))
+
+    def test_invalid_record_type_no_db_write(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            before = db.list_state_records(memory_domain="coding", limit=100)
+            braincase_write_candidate_tool(db, dict(_VALID_ARGS, record_type="raw_log"))
+            after = db.list_state_records(memory_domain="coding", limit=100)
+            self.assertEqual(len(before), len(after))
+
+    def test_invalid_record_type_result_still_candidate_internal(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            result = braincase_write_candidate_tool(db, dict(_VALID_ARGS, record_type="bad_type"))
+            self.assertEqual(result["status"], "candidate")
+            self.assertEqual(result["visibility"], "internal")
+            self.assertTrue(result["review_required"])
+
+    # --- case-insensitive raw marker detection in claim ---
+
+    def test_lowercase_user_colon_in_claim_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            args = dict(_VALID_ARGS, claim="user: can you refactor the auth module?")
+            result = braincase_write_candidate_tool(db, args)
+            self.assertFalse(result["ok"])
+            self.assertFalse(result["stored"])
+            self.assertTrue(any("claim_content_rejected" in e for e in result["errors"]))
+
+    def test_uppercase_USER_colon_in_claim_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            args = dict(_VALID_ARGS, claim="USER: please do the thing")
+            result = braincase_write_candidate_tool(db, args)
+            self.assertFalse(result["ok"])
+            self.assertFalse(result["stored"])
+
+    def test_lowercase_assistant_in_summary_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            args = dict(_VALID_ARGS, summary="assistant: sure, I'll help")
+            result = braincase_write_candidate_tool(db, args)
+            self.assertFalse(result["ok"])
+            self.assertFalse(result["stored"])
+            self.assertTrue(any("summary_content_rejected" in e for e in result["errors"]))
+
+    def test_uppercase_raw_request_body_in_claim_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            args = dict(_VALID_ARGS, claim="RAW_REQUEST_BODY was logged here")
+            result = braincase_write_candidate_tool(db, args)
+            self.assertFalse(result["ok"])
+            self.assertFalse(result["stored"])
+
+    def test_mixed_case_function_call_in_claim_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            args = dict(_VALID_ARGS, claim="FUNCTION_CALL was executed with args")
+            result = braincase_write_candidate_tool(db, args)
+            self.assertFalse(result["ok"])
+            self.assertFalse(result["stored"])
+
+    def test_mixed_case_tool_call_in_claim_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            args = dict(_VALID_ARGS, claim="Tool_Call invoked the exec_command")
+            result = braincase_write_candidate_tool(db, args)
+            self.assertFalse(result["ok"])
+            self.assertFalse(result["stored"])
+
+    def test_case_insensitive_marker_stores_nothing(self):
+        """Case-insensitive rejection must not create any DB record."""
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            before = db.list_state_records(memory_domain="coding", limit=100)
+            braincase_write_candidate_tool(db, dict(_VALID_ARGS,
+                claim="TELEMETRY_EVENT captured here"))
+            braincase_write_candidate_tool(db, dict(_VALID_ARGS,
+                claim="Stream_Event seen in log"))
+            after = db.list_state_records(memory_domain="coding", limit=100)
+            self.assertEqual(len(before), len(after))
+
+    # --- valid write still works after polish ---
+
+    def test_valid_write_still_stores_candidate(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            result = braincase_write_candidate_tool(db, dict(_VALID_ARGS))
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["stored"])
+            self.assertEqual(result["status"], "candidate")
+            self.assertEqual(result["visibility"], "internal")
+
+    # --- result shape still correct ---
+
+    def test_result_not_render_packet(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            result = braincase_write_candidate_tool(db, dict(_VALID_ARGS))
+            for field in _RENDER_PACKET_FIELDS:
+                self.assertNotIn(field, result)
+
+    # --- unexposed tools unchanged ---
+
+    def test_write_update_search_inspect_promote_never_exposed(self):
+        from proxy.qz_braincase_tools import get_braincase_tool_definitions
+        for env in (_BOTH_FLAGS_ENV, _READ_ONLY_ENV, _DISABLED_ENV):
+            defs = get_braincase_tool_definitions(env=env)
+            names = [d["name"] for d in defs]
+            for forbidden in ("braincase.write", "braincase.update",
+                              "braincase.search", "braincase.inspect",
+                              "braincase.promote_candidate"):
+                self.assertNotIn(forbidden, names)
+
+    # --- candidate isolation still holds ---
+
+    def test_candidate_not_returned_by_render_after_polish(self):
+        from proxy.qz_braincase_tools import braincase_render_tool
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            result = braincase_write_candidate_tool(db, dict(_VALID_ARGS))
+            record_id = result.get("record_id")
+            render = braincase_render_tool(db, {"purpose": "t", "memory_domain": "coding"})
+            self.assertNotIn(record_id, render.get("source_record_ids", []))
+
+    def test_candidate_not_returned_by_recall_after_polish(self):
+        from proxy.qz_braincase_tools import braincase_recall_tool
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            result = braincase_write_candidate_tool(db, dict(_VALID_ARGS))
+            record_id = result.get("record_id")
+            recall = braincase_recall_tool(db, {
+                "purpose": "t", "memory_domain": "coding", "recall_mode": "task"
+            })
+            self.assertNotIn(record_id, recall.get("source_record_ids", []))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -511,6 +511,7 @@ Slice G.3: COMPLETE — dispatch test hardening + env param for factory (2021 to
 Slice H:   COMPLETE — candidate-only write exposure design (41 structural tests, 2062 total)
 Slice H.1: COMPLETE — doctrine polished (68 design tests, 2089 total)
 Slice H.2: COMPLETE — braincase.write_candidate runtime (57 runtime tests, 2146 total)
+Slice H.3: COMPLETE — runtime polish: tier/record_type validation, case-insensitive markers (2164 total)
 ```
 
 Slice G: what was done

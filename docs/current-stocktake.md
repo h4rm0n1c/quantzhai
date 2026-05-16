@@ -295,18 +295,17 @@ Slice G.3 COMPLETE: dispatch test hardening; env param on factory (2021 total)
 Slice H   COMPLETE: candidate-only write exposure design (2062 total)
 Slice H.1 COMPLETE: doctrine polished (2089 total)
 Slice H.2 COMPLETE: braincase.write_candidate runtime (2146 total)
-            Proposed tool: braincase.write_candidate (not yet implemented)
+            Exposed: braincase.render + braincase.recall (QZ_BRAINCASE_TOOLS_ENABLED)
+                     braincase.write_candidate (BOTH flags required)
             Forced: status=candidate, visibility=internal
-            Flag: QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED (separate from render/recall flag)
-            Review/promotion: deferred to operator tooling
-            No automatic ingestion. write/update/search/inspect still not exposed.
-            Exposed: braincase.render + braincase.recall when QZ_BRAINCASE_TOOLS_ENABLED.
-            write/update/search/inspect remain unexposed.
+            Reject-first: status/visibility supplied → error, no storage
+            write/update/search/inspect/promote_candidate remain unexposed.
             No automatic ingestion.
+Slice H.3 COMPLETE: runtime polish (tier/record_type validation, case-insensitive
+            raw marker detection, _make_result docstring) (2180+ total)
 
-Next implementation slice: implement braincase.write_candidate (Slice H design).
-  Use QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED flag (separate from render/recall flag).
-  Do not expose braincase.write directly.
+Next slice: operator review/promote tooling or live smoke polish.
+  Do not expose braincase.write/update/search/inspect/promote_candidate directly.
 - No automatic ingestion at any step.
 ```
 
