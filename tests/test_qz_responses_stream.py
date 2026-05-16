@@ -3585,9 +3585,41 @@ class StreamHopStateTests(unittest.TestCase):
     def test_fresh_next_input_is_copy_not_reference(self):
         body = self._minimal_hop_body()
         hs = StreamHopState.fresh(body)
-        original_item = body["input"][0]
         hs.next_input.append({"extra": True})
         self.assertEqual(len(body["input"]), 1, "mutating next_input must not affect hop_body")
+
+    def test_fresh_returns_independent_tool_call_state(self):
+        """Two fresh states must have distinct StreamToolCallState instances."""
+        from proxy.qz_tool_lifecycle import StreamToolCallState
+        hs1 = StreamHopState.fresh({})
+        hs2 = StreamHopState.fresh({})
+        self.assertIsNot(hs1.tool_call_state, hs2.tool_call_state,
+                         "fresh() must create independent StreamToolCallState instances")
+
+    def test_fresh_returns_independent_watchdog_state(self):
+        """Two fresh states must have distinct StreamWatchdogState instances."""
+        from proxy.qz_stream_watchdog import StreamWatchdogState
+        hs1 = StreamHopState.fresh({}, stream_no_output_timeout_s=30.0)
+        hs2 = StreamHopState.fresh({}, stream_no_output_timeout_s=30.0)
+        self.assertIsNot(hs1.watchdog_state, hs2.watchdog_state,
+                         "fresh() must create independent StreamWatchdogState instances")
+
+    def test_fresh_returns_independent_stream_obs_acc(self):
+        """Two fresh states must have distinct stream_obs_acc dicts."""
+        hs1 = StreamHopState.fresh({}, request_id="r1")
+        hs2 = StreamHopState.fresh({}, request_id="r2")
+        self.assertIsNot(hs1.stream_obs_acc, hs2.stream_obs_acc)
+        hs1.stream_obs_acc["extra"] = True
+        self.assertNotIn("extra", hs2.stream_obs_acc)
+
+    def test_fresh_returns_independent_next_input_lists(self):
+        """Two fresh states with the same hop_body must have independent next_input lists."""
+        body = {"input": [{"type": "message", "role": "user"}]}
+        hs1 = StreamHopState.fresh(body)
+        hs2 = StreamHopState.fresh(body)
+        self.assertIsNot(hs1.next_input, hs2.next_input)
+        hs1.next_input.append("extra")
+        self.assertNotIn("extra", hs2.next_input)
 
 
 if __name__ == "__main__":

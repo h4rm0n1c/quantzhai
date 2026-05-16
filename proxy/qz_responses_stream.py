@@ -90,28 +90,42 @@ except ImportError:
 class StreamHopState:
     """Per-hop mutable state for the Responses SSE streaming loop.
 
-    Reset at the start of each continuation hop.
-    Does not hold outer-loop state (public_trace, sequence, hop counts, etc.).
+    Bundles the mutable locals that are reset at the start of each
+    continuation hop. Does not hold outer-loop state such as
+    public_trace, sequence, hop counts, or the evolving request body.
+
+    Production code must use StreamHopState.fresh(...) to construct
+    an instance so all dependent defaults are initialised correctly.
+    Direct construction via StreamHopState(...) is only appropriate
+    in tests that explicitly verify field-level behaviour.
     """
-    tool_call_state: "StreamToolCallState" = field(default_factory=lambda: None)  # set in fresh()
+    # SSE frame accumulator
+    tool_call_state: "StreamToolCallState" = field(default_factory=lambda: None)
     event_lines: list = field(default_factory=list)
     event_started_at: float | None = None
+    # Items to forward to the next hop
     next_input: list = field(default_factory=list)
+    # Completed function_call seen this hop (if any)
     completed_call: dict | None = None
+    # Injection flags (reset each hop)
     error_injected: bool = False
     signal_injected: bool = False
     repair_injected: bool = False
+    # Reasoning-only detection state
     reasoning_only_started_at: float | None = None
     reasoning_only_last_delta_at: float | None = None
     reasoning_only_chars: int = 0
     reasoning_only_sample: str = ""
+    # Output accounting
     output_text_chars: int = 0
     visible_output_text_seen: bool = False
     assistant_item_seen: bool = False
     public_item_seen: bool = False
     max_output_index: int = -1
+    # Stream observation accumulator (dict keyed by request_id + event counts)
     stream_obs_acc: dict = field(default_factory=dict)
-    watchdog_state: "StreamWatchdogState" = field(default_factory=lambda: None)  # set in fresh()
+    # Watchdog for no-output and terminal timeouts
+    watchdog_state: "StreamWatchdogState" = field(default_factory=lambda: None)
 
     @classmethod
     def fresh(
@@ -121,7 +135,11 @@ class StreamHopState:
         stream_no_output_timeout_s: float = 0.0,
         stream_terminal_timeout_s: float = 0.0,
     ) -> "StreamHopState":
-        """Return a new StreamHopState initialised with per-hop defaults."""
+        """Return a new StreamHopState initialised with per-hop defaults.
+
+        Preserves the exact defaults from the pre-extraction local variable block.
+        hop_body["input"] is shallow-copied into next_input.
+        """
         return cls(
             tool_call_state=StreamToolCallState(),
             event_lines=[],
