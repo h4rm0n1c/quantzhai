@@ -37,12 +37,14 @@ try:
         dedup_check,
         redaction_check,
     )
+    from .qz_braincase_retention import retention_decision_for_record
 except ImportError:
     from qz_braincase_write import (
         conflict_check,
         dedup_check,
         redaction_check,
     )
+    from qz_braincase_retention import retention_decision_for_record
 
 _SAFE_INSPECT_FIELDS = frozenset({
     "record_id", "schema", "memory_domain", "tier", "record_type",
@@ -321,4 +323,109 @@ def reject_candidate_record(
         "status": "retired",
         "warnings": [],
         "errors": [],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Retention report (Slice C) — dry-run only, no DB writes
+# ---------------------------------------------------------------------------
+
+def retention_report_records(
+    db: "BrainCaseDB",
+    *,
+    now_ms: int,
+    policy: dict,
+    memory_domain: str | None = None,
+    status: str | None = None,
+    retention: str | None = None,
+    action: str | None = None,
+    limit: int = 100,
+) -> dict:
+    """Evaluate stored StateRecords against the retention policy and return a report.
+
+    Pure reporting: no DB writes, no record mutation, no retire_state_record() calls.
+    dry_run is always True.
+
+    Filters applied:
+      memory_domain — exact match at retrieval
+      status        — exact match at retrieval (uses list_state_records_by_status)
+      retention     — exact match post-retrieval
+      action        — filter decisions by keep/stale/retire
+
+    counts cover all retention-filtered records (before action filter).
+    decisions contains only action-filtered records, up to limit.
+    """
+    if not db.enabled:
+        return {
+            "ok": False,
+            "dry_run": True,
+            "error": "braincase_db_disabled",
+            "records_seen": 0,
+            "records_returned": 0,
+            "counts": {"keep": 0, "stale": 0, "retire": 0},
+            "decisions": [],
+            "warnings": [],
+        }
+
+    # Over-fetch for post-evaluation filtering; 4× provides useful headroom
+    fetch_limit = max(limit * 4, 200)
+    if status:
+        records = db.list_state_records_by_status(
+            status=status,
+            memory_domain=memory_domain,
+            limit=fetch_limit,
+        )
+    else:
+        records = db.list_state_records(
+            memory_domain=memory_domain,
+            limit=fetch_limit,
+        )
+
+    records_seen = len(records)
+    counts: dict = {"keep": 0, "stale": 0, "retire": 0}
+    decisions: list = []
+    report_warnings: list = []
+
+    for rec in records:
+        # Apply retention class filter before evaluation
+        if retention is not None and rec.get("retention") != retention:
+            continue
+
+        decision = retention_decision_for_record(rec, now_ms=now_ms, policy=policy)
+        action_val = decision["action"]
+        counts[action_val] = counts.get(action_val, 0) + 1
+
+        # Apply action filter
+        if action is not None and action_val != action:
+            continue
+
+        if len(decisions) >= limit:
+            continue  # Count but don't add to decisions
+
+        # Bounded decision entry — no raw StateRecord dump
+        decisions.append({
+            "record_id": decision.get("record_id"),
+            "action": action_val,
+            "reason": decision.get("reason"),
+            "matched_rule": decision.get("matched_rule"),
+            "age_ms": decision.get("age_ms"),
+            "age_since_update_ms": decision.get("age_since_update_ms"),
+            "memory_domain": rec.get("memory_domain"),
+            "tier": rec.get("tier"),
+            "record_type": rec.get("record_type"),
+            "status": rec.get("status"),
+            "retention": rec.get("retention"),
+            "visibility": rec.get("visibility"),
+            "summary": (rec.get("summary") or "")[:100],
+            "warnings": decision.get("warnings") or [],
+        })
+
+    return {
+        "ok": True,
+        "dry_run": True,
+        "records_seen": records_seen,
+        "records_returned": len(decisions),
+        "counts": counts,
+        "decisions": decisions,
+        "warnings": report_warnings,
     }

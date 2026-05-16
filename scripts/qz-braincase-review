@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""Operator review CLI for BrainCase candidate StateRecords — Slice I.
+"""Operator review CLI for BrainCase candidate StateRecords.
 
 Commands:
-  list                List candidate records awaiting review.
-  inspect <id>        Show full details of a record.
-  promote <id>        Promote a candidate to active/renderable (or active/internal).
-  reject <id>         Retire a candidate as rejected.
+  list                     List candidate records awaiting review.
+  inspect <id>             Show full details of a record.
+  promote <id>             Promote a candidate to active/renderable (or active/internal).
+  reject <id>              Retire a candidate as rejected.
+  retention-report         Dry-run retention policy evaluation (no DB writes).
+  prune --dry-run          Alias for retention-report filtered to retire candidates.
 
 Promotion is NOT model-facing. Only the operator can promote candidates.
 No model tool can call these commands.
+retention-report and prune --dry-run are read-only (no DB mutation).
+prune --apply is not implemented in Slice C.
 
 Usage examples:
   scripts/qz-braincase-review list
@@ -19,6 +23,11 @@ Usage examples:
   scripts/qz-braincase-review promote rec_cand_123_abc --dry-run
   scripts/qz-braincase-review reject rec_cand_123_abc --reason "Not needed"
   scripts/qz-braincase-review reject rec_cand_123_abc --dry-run
+  scripts/qz-braincase-review retention-report
+  scripts/qz-braincase-review retention-report --memory-domain coding --status candidate --json
+  scripts/qz-braincase-review retention-report --action retire --limit 50
+  scripts/qz-braincase-review prune --dry-run
+  scripts/qz-braincase-review prune --dry-run --memory-domain coding --retention ephemeral
 """
 from __future__ import annotations
 
@@ -32,13 +41,17 @@ _REPO = Path(__file__).resolve().parents[1]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
+import time as _time
+
 from proxy.qz_braincase_db import BrainCaseDB, default_db_path
 from proxy.qz_braincase_review import (
     inspect_candidate_record,
     list_candidate_records,
     promote_candidate_record,
     reject_candidate_record,
+    retention_report_records,
 )
+from proxy.qz_braincase_retention import load_default_retention_policy
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +217,115 @@ def cmd_reject(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# retention-report command (Slice C — dry-run only, no DB writes)
+# ---------------------------------------------------------------------------
+
+def _format_age(ms: int | None) -> str:
+    if ms is None:
+        return "?"
+    days = ms // 86_400_000
+    hours = (ms % 86_400_000) // 3_600_000
+    if days > 0:
+        return f"{days}d"
+    return f"{hours}h"
+
+
+def _load_policy(policy_path_str: str | None) -> dict:
+    if policy_path_str:
+        try:
+            data = json.loads(Path(policy_path_str).read_text())
+            if isinstance(data, dict):
+                return data
+        except Exception as exc:
+            print(f"Warning: could not load policy from {policy_path_str!r}: {exc}",
+                  file=sys.stderr)
+    return load_default_retention_policy()
+
+
+def cmd_retention_report(args: argparse.Namespace) -> int:
+    db = _open_db(args.db_path)
+    policy = _load_policy(getattr(args, "policy_path", None))
+    now_ms = int(_time.time() * 1000)
+
+    report = retention_report_records(
+        db,
+        now_ms=now_ms,
+        policy=policy,
+        memory_domain=getattr(args, "memory_domain", None) or None,
+        status=getattr(args, "status", None) or None,
+        retention=getattr(args, "retention", None) or None,
+        action=getattr(args, "action", None) or None,
+        limit=getattr(args, "limit", 100),
+    )
+    db.close()
+
+    if args.json:
+        print(json.dumps(report, indent=2))
+        return 0 if report.get("ok") else 1
+
+    if not report.get("ok"):
+        print(f"Error: {report.get('error')}", file=sys.stderr)
+        return 1
+
+    db_label = args.db_path or "(default)"
+    counts = report.get("counts", {})
+    print("BrainCase retention report (dry-run)")
+    print(f"DB: {db_label}")
+    print(f"records seen: {report['records_seen']}")
+    print(f"returned: {report['records_returned']}")
+    print(
+        f"counts: keep={counts.get('keep', 0)} "
+        f"stale={counts.get('stale', 0)} "
+        f"retire={counts.get('retire', 0)}"
+    )
+
+    decisions = report.get("decisions", [])
+    if decisions:
+        print()
+        header = f"{'ACTION':<7} {'AGE':<6} {'RETENTION':<10} {'STATUS':<10} {'DOMAIN':<8} {'TIER':<22} {'RECORD_ID':<28} SUMMARY"
+        print(header)
+        print("-" * min(len(header), 120))
+        for d in decisions:
+            age = _format_age(d.get("age_since_update_ms"))
+            ret = (d.get("retention") or "?")[:9]
+            st = (d.get("status") or "?")[:9]
+            dom = (d.get("memory_domain") or "?")[:7]
+            tier = (d.get("tier") or "?")[:21]
+            rid = (d.get("record_id") or "?")[:27]
+            summ = (d.get("summary") or "")[:40]
+            print(f"{d['action']:<7} {age:<6} {ret:<10} {st:<10} {dom:<8} {tier:<22} {rid:<28} {summ}")
+    else:
+        print("\nNo records matched.")
+
+    for w in report.get("warnings", []):
+        print(f"Warning: {w}", file=sys.stderr)
+
+    return 0
+
+
+def cmd_prune(args: argparse.Namespace) -> int:
+    """Prune subcommand — dry-run only in Slice C."""
+    dry_run = getattr(args, "dry_run", False)
+    apply_flag = getattr(args, "apply", False)
+
+    if apply_flag:
+        print("Error: --apply is not implemented in Slice C. "
+              "Use --dry-run to preview. Slice D will add the apply path.",
+              file=sys.stderr)
+        return 1
+
+    if not dry_run:
+        print("Error: Slice C supports dry-run only. "
+              "Pass --dry-run to preview what would be retired.",
+              file=sys.stderr)
+        return 1
+
+    # --dry-run: run as a retention-report filtered to retire actions
+    args.action = "retire"
+    return cmd_retention_report(args)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -246,6 +368,33 @@ def main() -> int:
     p_reject.add_argument("--dry-run", action="store_true")
     p_reject.add_argument("--json", action="store_true")
 
+    # retention-report (Slice C — dry-run only)
+    p_report = sub.add_parser("retention-report",
+                               help="Dry-run retention policy report (no DB writes)")
+    p_report.add_argument("--db-path")
+    p_report.add_argument("--memory-domain")
+    p_report.add_argument("--status", choices=["candidate", "active", "retired", "superseded"])
+    p_report.add_argument("--retention", choices=["ephemeral", "session", "project", "durable"])
+    p_report.add_argument("--action", choices=["keep", "stale", "retire"])
+    p_report.add_argument("--limit", type=int, default=100)
+    p_report.add_argument("--policy-path", help="Path to custom retention policy JSON")
+    p_report.add_argument("--json", action="store_true")
+
+    # prune (Slice C — dry-run only; --apply not yet implemented)
+    p_prune = sub.add_parser("prune",
+                              help="Dry-run prune preview (--apply not yet in Slice C)")
+    p_prune.add_argument("--dry-run", action="store_true",
+                         help="Required in Slice C; --apply is not implemented yet")
+    p_prune.add_argument("--apply", action="store_true",
+                         help="Not implemented in Slice C (will error)")
+    p_prune.add_argument("--db-path")
+    p_prune.add_argument("--memory-domain")
+    p_prune.add_argument("--status", choices=["candidate", "active", "retired", "superseded"])
+    p_prune.add_argument("--retention", choices=["ephemeral", "session", "project", "durable"])
+    p_prune.add_argument("--limit", type=int, default=100)
+    p_prune.add_argument("--policy-path")
+    p_prune.add_argument("--json", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "list":
@@ -256,6 +405,10 @@ def main() -> int:
         return cmd_promote(args)
     elif args.command == "reject":
         return cmd_reject(args)
+    elif args.command == "retention-report":
+        return cmd_retention_report(args)
+    elif args.command == "prune":
+        return cmd_prune(args)
     else:
         parser.print_help()
         return 1

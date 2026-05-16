@@ -381,8 +381,14 @@ retention_decision_for_record(record, *, now_ms, policy) -> dict
 Tests: tests/test_qz_braincase_retention.py — 62 tests. Full suite: 2341.
 
 Slice C should add a dry-run/report surface:
-  qz-braincase-review retention-report (dry-run output only)
-  qz-braincase-review prune --dry-run (candidate/ephemeral expiry reporting)
+  qz-braincase-review retention-report (dry-run output only)  ← COMPLETE (Slice C)
+  qz-braincase-review prune --dry-run (alias for retire-filtered report)  ← COMPLETE (Slice C)
+
+Slice C: COMPLETE — scripts/qz-braincase-review retention-report + prune --dry-run.
+  - retention_report_records() helper in proxy/qz_braincase_review.py
+  - Filters: --memory-domain --status --retention --action --limit --json
+  - prune --apply is explicitly rejected with a clear message
+  - No DB writes. No retire_state_record() calls.
 
 Slice D should add the apply path (retire_state_record() calls, operator --apply).
 
