@@ -67,27 +67,32 @@ Agent rules:         AGENTS.md includes telemetry doctrine
 
 | # | Title | Classification |
 |---|---|---|
-| #2 | Add optional Phase 1 SQLite storage substrate | **parked** (slice 1 skeleton landed; waiting for StateRecord/memory-write design) |
-| #51 | Promote recovery/backoff runtime state to SQLite | **blocked-by-#2** |
-| #46 | Replace qz-write-runtime-state launcher trace | **blocked-by-#2** (or startup-telemetry) |
-| #37 | Architectural seam extraction plan | **architectural/refactor** (small targeted seams only) |
-| #5 | Config/var/script ownership cleanup | **optional-polish** (do not preempt state work) |
+| #2 | Add optional Phase 1 SQLite storage substrate | **parked** (BrainCaseDB done via #53/#54; #2 may be closed or refocused) |
+| #53 | BrainCase memory tool API | **CLOSED** (Slices A–I.1 complete; 2406 tests) |
+| #54 | BrainCase retention/lifetime policy | **CLOSED** (Slices A–D complete; 2406 tests) |
+| #37 | Architectural seam extraction plan | **NEXT** — stream state machine seam is Slice 1 target |
+| #51 | Promote recovery/backoff runtime state to SQLite | **deferred** until operational-store decision |
+| #46 | Replace qz-write-runtime-state launcher trace | **deferred** until startup-telemetry replacement |
+| #5 | Config/var/script ownership cleanup | **optional-polish** (do not preempt #37) |
 | #39 | Split search routing policy into search.json | **optional-polish** (resume when search work resumes) |
 | #52 | Backend-confirmed VRAM allocator metrics | **upstream-blocked** (TurboQuant side) |
 | #8 | RFC: NetTTS survival-weighted compaction | **research/later** |
-| #7 | What next: LimbiCore seam, memory_domain, SQLite | **planning/stale** (mostly superseded by #2) |
+| #7 | What next: LimbiCore seam, memory_domain, SQLite | **deferred** — superseded by #53/#54; informational only |
 
 ### Notes on each
 
-**#2** — Storage substrate. Slices A–F (and C.1, D.1) are complete. #2
-remains the storage substrate only. Details:
-(schemas/fixtures; BrainCaseDB v3; search/inspect/FTS5; FTS reindex; explicit
-write/update helpers in qz_braincase_write.py; internal render packet builder
-in qz_braincase_render.py; braincase.render tool surface in qz_braincase_tools.py).
-Slice F done: braincase.render is the first model-visible tool
-(QZ_BRAINCASE_TOOLS_ENABLED, default disabled). Next slice: define recall semantics
-or operator-reviewed write exposure. Unlocks #51 and #46 when more slices land.
-See `docs/braincase-memory-tool-api.md`.
+**#2** — BrainCaseDB storage substrate. #53 and #54 delivered the full BrainCase
+tool plane (render/recall/write_candidate) and retention policy on top of it.
+#2 may be closed or converted to a tracking issue; BrainCaseDB is stable and
+proven. Do not add new BrainCase features here. BrainCase work is paused.
+See `docs/braincase-memory-tool-api.md`, `docs/braincase-retention-policy.md`.
+
+**#53** — CLOSED. BrainCase memory tool API: render/recall/write_candidate,
+operator review CLI, candidate write, retention policy evaluator, prune CLI.
+2406 tests. BrainCaseDB is the first concrete LimbiCore technology.
+
+**#54** — CLOSED. BrainCase retention policy: multi-axis matrix, pure evaluator,
+retention-report dry-run surface, prune --apply retire path. 2406 tests.
 
 **#51** — Recovery backoff state is currently in-memory only. Should be persisted
 once #2 exists. Do not implement before #2.
@@ -95,9 +100,9 @@ once #2 exists. Do not implement before #2.
 **#46** — qz-write-runtime-state is a launcher trace only, not live-status truth.
 Removal blocked until a startup-telemetry or SQLite replacement path exists.
 
-**#37** — Large architectural description. Do not treat as a mandate for a big
-rewrite. Extract small targeted seams when touching relevant modules. Never
-rewrite behaviour purely for structure.
+**#37** — **NEXT priority.** Architectural seam extraction, starting with the
+stream state machine seam. See "Prompt A" below for Slice 1 plan.
+Do not do a grand rewrite. One seam at a time, test-backed.
 
 **#5** — Config/var cleanup is ongoing and never fully done. Do not preempt #2
 for it.
@@ -117,18 +122,16 @@ now track. Keep as historical planning record; do not implement from it directly
 ## 4. Dependency map
 
 ```
-#2 Phase 1 SQLite                   → no hard dependencies; unblocked
-  \
-   -> #51 recovery state persistence
-   -> #46 launcher trace removal
-   -> #4 (repeated-read v2 persistence, later)
-   -> #P6 LimbiCore rendered state packets (much later)
-
-#37 seam extraction                 → guide it from active work, not upfront
-#5  config cleanup                  → incremental; do not preempt #2
-#39 search config split             → when search work resumes
-#52 backend allocator metrics       → upstream-blocked; no action needed now
-#8  compaction RFC                  → research; no implementation dependency
+#53 / #54  BrainCase memory + retention          CLOSED
+#37  stream seam extraction (Slice 1)            NEXT — no hard dependencies
+  \-> #37 Slice 2+  further seam extraction
+  \-> #51 recovery state persistence             deferred / operational-store decision
+  \-> #46 launcher trace removal                 deferred / startup-telemetry
+#5  config cleanup                               incremental; do not preempt #37
+#39 search config split                          when search work resumes
+#52 backend allocator metrics                    upstream-blocked
+#8  compaction RFC                               research; no implementation dependency
+#7  LimbiCore/SQLite planning                    deferred; superseded by #53/#54
 ```
 
 ---
@@ -136,31 +139,25 @@ now track. Keep as historical planning record; do not implement from it directly
 ## 5. Recommended next work order
 
 ```
-A. #2   BrainCase memory/state records (next slice)
-        Slices A–F complete. BrainCaseDB exists; braincase.render is exposed.
-        Next: define braincase.recall semantics or operator write exposure.
-        BrainCaseDB stores StateRecords/SourceRefs only — NOT sessions/turns/
-        requests as operational logs. See docs/braincase-memory-tool-api.md.
+A. #37  Stream state machine seam extraction (Slice 1) — NEXT
+        BrainCase feature work is paused (#53/#54 closed).
+        Start here: extract per-hop state from qz_responses_stream.py.
+        See Prompt A below for the full Slice 1 plan.
 
 B. #51  Recovery/backoff state persistence
-        IMPORTANT: BrainCaseDB is NOT the target. Recovery/backoff state is
-        operational runtime state and needs a separate persistence decision.
-        Do not implement into BrainCaseDB tables.
+        Deferred until operational-store decision.
+        BrainCaseDB is NOT the target. Needs a separate lightweight store.
 
 C. #46  Remove qz-write-runtime-state
-        Clean once startup telemetry or #2 replacement is established.
+        Deferred until startup-telemetry replacement exists.
 
-D. #37  Seam extraction (incremental slices only)
-        Extract seams when touching relevant modules above.
-        Do not do a grand rewrite.
+D. #5   Config/var/script cleanup
+        Ongoing. Do not preempt #37.
 
-E. #5   Config/var/script cleanup
-        Ongoing. Do not preempt the state spine.
-
-F. #39  Search config split
+E. #39  Search config split
         When search work resumes.
 
-G. #52  Backend allocator metrics
+F. #52  Backend allocator metrics
         Upstream-blocked. No action needed in QuantZhai.
 ```
 
@@ -215,6 +212,16 @@ Stream/compaction hang watchdog (#40)
 Signal/feedback subsystem design (#42)
   → Closed. Use qz_feedback for future bounded adoption, but do not migrate
     stream/runtime signals before #2.
+
+BrainCase memory tool API (#53)
+  → CLOSED. render/recall/write_candidate + operator review CLI. 2406 tests.
+  → BrainCaseDB is the first concrete LimbiCore technology.
+  → Do not add new BrainCase model-facing tools without a new issue.
+
+BrainCase retention/lifetime policy (#54)
+  → CLOSED. Multi-axis policy, pure evaluator, dry-run report, prune --apply.
+  → 2406 tests. Retention is operator-controlled, not automatic.
+  → Do not add automatic ingestion or background jobs.
 ```
 
 ---
@@ -273,59 +280,105 @@ Signal/feedback subsystem design (#42)
 
 ## 10. Suggested next agent prompts
 
-### Prompt A: BrainCase Slice F — harness/tool exposure (#53)
+### Prompt A: #37 Slice 1 — Stream state machine seam extraction
 
-**Slices A through E (and C.1, D.1) are complete. Slice F may now start.**
+**BrainCase feature work is complete (#53/#54 closed). Next: #37 stream seam.**
 
-Read `docs/braincase-memory-tool-api.md` before starting.
+This is the first slice of architectural seam extraction. It does not change
+external behaviour. It extracts mutable per-hop state from the streaming loop
+into a named struct so the state machine is explicit and independently testable.
+
+#### Background
+
+`proxy/qz_responses_stream.py` is 1975 lines with 53 functions. The streaming
+loop in `ResponsesStreamRuntime.run()` manages two layers of mutable state:
+
+**Outer-loop state** (persists across continuation hops):
+- `continuation_hop` — hop counter
+- `public_trace` — accumulated model-visible output items
+- `summary_started` — set of reasoning summary IDs already emitted
+- `sequence` — SSE sequence counter
+- `hop_body` — current request body for this hop
+- `first_output_at`, `final_usage`, `sent_terminal`, `sent_done`
+
+**Per-hop state** (reset at each hop start, ~lines 1150–1166):
+- `tool_call_state` — StreamToolCallState() accumulator
+- `event_lines`, `event_started_at` — SSE frame accumulator
+- `next_input` — items to carry to next hop
+- `completed_call` — current function_call being executed
+- `error_injected`, `signal_injected`, `repair_injected` — injection flags
+- `reasoning_only_*` vars — reasoning-only detection state
+- `output_text_chars`, `visible_output_text_seen` — output character accounting
+- `assistant_item_seen`, `public_item_seen` — output presence flags
+- `max_output_index` — highest output_index seen
+- `stream_obs_acc` — stream observation accumulator
+- `watchdog_state` — StreamWatchdogState for timeouts
+
+#### Target seam
+
+Extract per-hop state into a dataclass: `StreamHopState` (or `_HopState`).
+
+Benefits:
+- Makes the state machine explicit without changing behaviour
+- Allows unit tests that set up a hop state directly and verify transitions
+- Makes `_run_responses_streaming_locally` easier to read
+- Clarifies what resets between hops vs. what persists
+
+#### Existing tests protecting behaviour
 
 ```text
-Slice A   COMPLETE: schemas + fixtures + 44 tests
-Slice B   COMPLETE: BrainCaseDB schema v3, put/get/list/retire/supersede
-Slice C   COMPLETE: query_plan/search/inspect + FTS5 (80 total)
-Slice C.1 COMPLETE: rebuild_fts_index / FTS backfill (92 total)
-Slice D   COMPLETE: qz_braincase_write.py helpers + write/update paths (1744 total)
-Slice D.1 COMPLETE: conflict marker detection tightened
-Slice E   COMPLETE: qz_braincase_render.py + render_pack/braincase_render_packet + 53 tests (1819 total)
-Slice F   COMPLETE: qz_braincase_tools.py + braincase.render tool surface + 64 tests (1906 total)
-Slice G   COMPLETE: braincase.recall semantics + 5 recall modes + tier routing (1966 total)
-Slice G.1 COMPLETE: tier-bounded retrieval + deterministic enum order (1983 total)
-Slice G.2 COMPLETE: proxy-local dispatch for braincase.render+recall (2018 total)
-Slice G.3 COMPLETE: dispatch test hardening; env param on factory (2021 total)
-Slice H   COMPLETE: candidate-only write exposure design (2062 total)
-Slice H.1 COMPLETE: doctrine polished (2089 total)
-Slice H.2 COMPLETE: braincase.write_candidate runtime (2146 total)
-            Exposed: braincase.render + braincase.recall (QZ_BRAINCASE_TOOLS_ENABLED)
-                     braincase.write_candidate (BOTH flags required)
-            Forced: status=candidate, visibility=internal
-            Reject-first: status/visibility supplied → error, no storage
-            write/update/search/inspect/promote_candidate remain unexposed.
-            No automatic ingestion.
-Slice H.3 COMPLETE: runtime polish (tier/record_type validation, case-insensitive
-            raw marker detection, _make_result docstring) (2164 total)
-Slice H.4 COMPLETE: BrainCase smoke-test script scripts/qz-braincase-smoke (2183 total)
-Slice I   COMPLETE: operator review/promote CLI scripts/qz-braincase-review (2223 total)
-Slice I.1 COMPLETE: status-filtered candidate listing so hidden candidates surface (2239 total)
-
-#54 BrainCase retention/lifetime policy:
-  Slice A: COMPLETE — policy matrix design + fixtures + 40 tests (2279 total)
-  Slice B: COMPLETE — proxy/qz_braincase_retention.py pure evaluator + 62 tests (2341 total)
-  Slice C: COMPLETE — scripts/qz-braincase-review retention-report + prune --dry-run (2372 total)
-  Slice D: COMPLETE — prune --apply retire path, apply_retention_prune() helper (2404 total)
-  Audit: COMPLETE — stale test fixed, re-evaluation tests added, #54 CLOSED (2406 total)
-- No automatic ingestion at any step.
+tests/test_qz_responses_stream.py   — primary stream behaviour coverage
+tests/test_qz_streaming.py          — SSE event helpers
+tests/test_qz_sse.py                — SSE transform coverage
+tests/test_qz_request_mutation_regression.py  — body mutation boundary
 ```
 
-### Prompt B: Recovery state persistence (#51, after #2)
+Run all four before and after the extraction.
+
+#### Behaviours that must remain unchanged
+
+- Continuation hop count and budget enforcement
+- Tool call detection and execution (proxy-local and native)
+- Error/signal/repair injection flags and their effects
+- Reasoning-only detection and fallback
+- Watchdog timeout triggering (no-output and terminal)
+- SSE event sequence numbering
+- public_trace assembly and final response emission
+- Stream terminal classification
+- Output text accounting and context pressure detection
+
+#### Slice 1 implementation plan
 
 ```text
-Promote #47 in-memory recovery/backoff state to a persistent store.
-NOTE: BrainCaseDB is NOT the target. Recovery/backoff is operational runtime
-state; it needs a separate persistence decision, not BrainCaseDB tables.
+1. Add StreamHopState dataclass to qz_responses_stream.py:
+   - fields: all per-hop local variables listed above
+   - factory method: StreamHopState.fresh(hop_body) that initialises defaults
+   - no logic, just state
+
+2. Replace the ~15 local variable declarations at hop start with:
+   hop_state = StreamHopState.fresh(hop_body)
+
+3. Replace references to local vars with hop_state.* within the hop scope.
+   Keep outer-loop vars (public_trace, sequence, etc.) unchanged.
+
+4. Tests: add one test that instantiates StreamHopState directly and verifies
+   fresh() produces expected defaults.
+
+5. Run all four test files above. Zero behaviour change permitted.
+```
+
+Do not move logic. Do not rename functions. Do not change the streaming protocol.
+This is a pure state-bundling refactor.
 
 Read first:
-- docs/backend-service-recovery-semantics.md
-- proxy/qz_recovery_state.py
-- #51 issue body
-- #2 implementation (must be done first)
+- proxy/qz_responses_stream.py lines 1084–1175 (streaming loop outer + hop start)
+- tests/test_qz_responses_stream.py
+- #37 issue body
+
+### Prompt B: Recovery state persistence (#51)
+
+```text
+Deferred until an operational-store decision is made.
+BrainCaseDB is NOT the target.
+Read docs/backend-service-recovery-semantics.md and #51 when resuming.
 ```

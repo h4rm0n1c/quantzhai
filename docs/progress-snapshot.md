@@ -31,16 +31,18 @@ docs/current-stocktake.md
 Current strategic direction:
 
 ```text
-P1 BrainCase memory tool API — Slice F harness/tool exposure (next)
+P1 #37 Stream state machine seam extraction (Slice 1) — NEXT
 P2 repeated-read v1 advisory signal
-P3 telemetry filter ergonomics / qz-live-smoke refinements
+P3 #51/#46 operational-state persistence (deferred until store decision)
 P4 config/var/script ownership cleanup
 ```
 
+BrainCase feature work paused: #53 and #54 are closed. 2406 tests passing.
+
 ## Area estimates
 
-- **Core usable stack:** 93%
-  Known-good local flow exists. Suite is green at 1442 tests.
+- **Core usable stack:** 94%
+  Known-good local flow. Suite is green at 2406 tests.
   Live smoke (`scripts/qz-live-smoke`) validates the end-to-end path reliably.
 - **Config/model/profile correctness:** 89%
   qz.profiles.v1 is the active format. memory_domain is wired from profile
@@ -61,10 +63,11 @@ P4 config/var/script ownership cleanup
   Reasoning-effort prompts simplified. Hop/context pressure signals, compaction
   bridge, and profile eval work are delivered. Repeated-read v1 plan is approved;
   not yet implemented.
-- **State/memory substrate:** 30%
-  Parser/context boundary exists and is source-grounded. `memory_domain` is
-  wired from profile config and resolves to isolated when not explicitly set.
-  SQLite Phase 1 is planned but not implemented.
+- **State/memory substrate:** 75%
+  BrainCaseDB is the first concrete LimbiCore technology (#53/#54 closed).
+  render/recall/write_candidate tools live; operator review and retention CLI live.
+  Retention policy enforced via operator prune. No automatic ingestion.
+  Remaining: operational-state store (#51/#46 deferred), #37 stream seam.
 - **Docs/tests/replay:** 95%
   Docs refreshed post-stabilisation. Active task hierarchy and progress snapshot
   are current. Runtime observability notes describe the live stack smoke and
