@@ -542,5 +542,68 @@ class SliceDRegressionTests(unittest.TestCase):
                          "apply_retention_prune must not directly execute SQL")
 
 
+
+# =============================================================================
+# Stronger re-evaluation test (audit checklist item 10)
+# =============================================================================
+
+class ReEvaluationProtectionTests(unittest.TestCase):
+    """Prove that apply re-fetches and re-evaluates before retiring.
+
+    Scenario: The initial report says 'retire' for a record.
+    Between report and apply, the record is manually retired (status changes).
+    Apply must skip it because re-evaluation returns 'already_inactive'.
+    """
+
+    def test_apply_skips_record_retired_between_report_and_apply(self):
+        """Record retired externally between report and apply phases is skipped."""
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            now_ms = _now()
+            db.put_state_record(_rec("r_externally_retired", "candidate", "ephemeral",
+                                     age_days=8, now_ms=now_ms))
+
+            # Phase 1: verify initial decision would be retire
+            from proxy.qz_braincase_retention import retention_decision_for_record
+            rec = db.get_state_record("r_externally_retired")
+            decision = retention_decision_for_record(rec, now_ms=now_ms,
+                                                     policy=load_default_retention_policy())
+            self.assertEqual(decision["action"], "retire",
+                             "Precondition: initial decision must be retire")
+
+            # Simulate external retirement before apply
+            db.retire_state_record("r_externally_retired", "external retirement before apply")
+
+            # Now apply — must skip because re-evaluation returns already_inactive
+            result = apply_retention_prune(db, now_ms=now_ms,
+                                           policy=load_default_retention_policy(),
+                                           dry_run=False)
+
+            retired_ids = [r["record_id"] for r in result["retired"]]
+            self.assertNotIn("r_externally_retired", retired_ids,
+                             "Record retired externally must be skipped by apply")
+
+    def test_apply_skips_record_whose_policy_decision_changed(self):
+        """Record that moved to a safe policy (keep) between phases is skipped."""
+        with tempfile.TemporaryDirectory() as td:
+            db = _fresh_db(td)
+            now_ms = _now()
+            db.put_state_record(_rec("r_decision_changed", "candidate", "ephemeral",
+                                     age_days=8, now_ms=now_ms))
+
+            # The policy used for apply has no rules (everything keeps)
+            empty_policy = {"schema": "braincase/retention-policy@1",
+                            "default_action": "keep", "rules": []}
+
+            result = apply_retention_prune(db, now_ms=now_ms,
+                                           policy=empty_policy, dry_run=False)
+
+            retired_ids = [r["record_id"] for r in result["retired"]]
+            self.assertNotIn("r_decision_changed", retired_ids,
+                             "Record whose policy changed to keep must not be retired")
+            rec = db.get_state_record("r_decision_changed")
+            self.assertEqual(rec["status"], "candidate")
+
+
 if __name__ == "__main__":
     unittest.main()

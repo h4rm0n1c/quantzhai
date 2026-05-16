@@ -356,13 +356,13 @@ class RetentionReportCLITests(unittest.TestCase):
             self.assertEqual(result.returncode, 0,
                              f"prune --dry-run failed:\n{result.stderr}")
 
-    def test_prune_apply_fails_with_message(self):
+    def test_prune_apply_exits_zero(self):
+        """prune --apply is implemented in Slice D and must exit 0 on a valid DB."""
         with tempfile.TemporaryDirectory() as td:
             db_path = str(Path(td) / "state.sqlite3")
             result = self._run("prune", "--apply", "--db-path", db_path)
-            self.assertNotEqual(result.returncode, 0,
-                                "prune --apply must fail in Slice C")
-            self.assertIn("not implemented", result.stderr.lower())
+            self.assertEqual(result.returncode, 0,
+                             f"prune --apply must exit 0: {result.stderr}")
 
     def test_prune_without_dry_run_fails(self):
         with tempfile.TemporaryDirectory() as td:

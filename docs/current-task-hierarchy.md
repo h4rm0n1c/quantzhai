@@ -532,11 +532,12 @@ Slice G: what was done
 
 Slice H.4 adds the smoke-test script.
 
-#54 BrainCase retention/lifetime policy:
-  Slice A (design):   COMPLETE — docs/braincase-retention-policy.md + fixtures + 40 design tests (2279 total)
-  Slice B (evaluator): COMPLETE — proxy/qz_braincase_retention.py pure evaluator + 62 runtime tests (2341 total)
-  Next: Slice C — dry-run/report surface (retention-report + prune --dry-run) in scripts/qz-braincase-review.
-        No DB writes in Slice C. Slice D adds --apply retire path.
+#54 BrainCase retention/lifetime policy — CLOSED after audit:
+  Slice A: COMPLETE — policy matrix design + fixtures + 40 tests (2279 total)
+  Slice B: COMPLETE — pure evaluator (2341 total)
+  Slice B.1: COMPLETE — fail-closed rule matching (2346 total)
+  Slice C: COMPLETE — retention-report + prune --dry-run (2372 total)
+  Slice D: COMPLETE — prune --apply retire path (2404 total)
 Do not expose braincase.write/update/search/inspect/promote_candidate directly.
 No automatic ingestion at any step.
 
