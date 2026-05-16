@@ -477,10 +477,14 @@ Homeostasis
   Not implemented now.
 ```
 
-HSM (Human State Machine / archive) is a specific memory_domain, not a separate
-storage system. HSM records use the same StateRecord envelope with
-memory_domain=hsm. HSM requires explicit provenance, confidence scoring, and
-import/export boundaries — it must not silently absorb coding or session state.
+HSM (Human State Machine / archive) may be represented as a configured
+memory_domain value such as "hsm". It is not a separate storage system and is
+not hard-coded into BrainCaseDB. HSM records use the same StateRecord envelope.
+BrainCaseDB does not grant HSM any special authority — "hsm" is only an example
+configured memory_domain value. HSM work requires explicit provenance, confidence
+scoring, and import/export boundaries — it must not silently absorb coding or
+session state. The memory_domain isolation suffices for HSM separation; no
+separate BrainCaseDB instance is needed.
 
 ---
 
@@ -901,16 +905,26 @@ Tool input schema (model-facing fields):
     review_note       string    note for operator reviewer (maxLength 500)
 
   Forbidden (additionalProperties: false + executor defence):
-    status            model must not supply — forced to "candidate"
-    visibility        model must not supply — forced to "internal"
+    status            not a valid tool input field
+    visibility        not a valid tool input field
     raw_prompt, raw_request_body, request_body,
     full_log, telemetry_event, stream_event
 
   If model supplies status/visibility:
-    Schema enforcement: additionalProperties:false rejects them at input level.
-    Executor defence: strips them, forces candidate/internal, adds warning
-      "status_overridden_to_candidate" / "visibility_overridden_to_internal".
-    Either way: the write still uses status=candidate, visibility=internal.
+    Primary behaviour: schema rejects them (additionalProperties:false →
+      error, no storage). The write is rejected before any record is built.
+    Defensive invariant: if execution reaches record construction despite
+      hostile/malformed input, status and visibility are forced to
+      "candidate" / "internal" before any DB write. This is a backstop
+      that prevents poisoning — it is NOT a permissive acceptance path.
+    There is no successful write with override-and-warning for these fields.
+
+  claim / summary content policy:
+    claim and summary must not contain raw prompt blobs, raw request/session
+    logs, or tool-output bodies. Obvious raw log markers in claim or summary
+    are a hard error, no storage. This is not a warning path.
+    Future operator-only import tooling may allow vetted external content,
+    but the model-facing tool does not.
 
 WriteCandidateResult (not a RenderPacket):
   {
@@ -962,29 +976,85 @@ Candidate isolation:
   so no schema change is needed to isolate candidates.
   A model cannot write a candidate then immediately recall it as memory.
 
+memory_domain authority:
+  memory_domain is config/caller-owned, not BrainCaseDB-owned.
+  BrainCaseDB stores the supplied configured value as-is.
+  BrainCaseDB does not define, infer, normalize, grant, or authorize
+  memory_domain values. It has no memory_domain registry.
+  scope_resolve() checks whether the supplied domain is within the
+  caller-supplied allowed domain context. "Outside allowed domain" means
+  outside the operator/proxy-configured allowed set, NOT "unknown to
+  BrainCaseDB" — BrainCaseDB has no such registry.
+
 Abuse/failure cases:
-  missing memory_domain     → error, no storage
-  unknown memory_domain     → error (scope_resolve), no storage
-  missing claim/summary     → error, no storage
-  forbidden raw fields      → error (redaction_check), no storage
-  duplicate candidate       → warning (dedup_hint), write still proceeds
-  conflict with active rec  → warning (conflict_hint), write still proceeds
-  source_refs missing       → warning (source_link), write still proceeds
-  DB disabled               → error, no storage, no exception
-  malformed JSON args        → error before execution
-  model tries status=active → schema rejects or executor overrides + warning
-  model tries to store log  → redaction_check or claim content policy warns
-  model tries every turn    → harness must teach: write_candidate is for
-    durable facts only, not every observation or transient result
+  missing memory_domain          → error, no storage
+  memory_domain outside caller-supplied
+  configured/allowed domain set  → error (scope_resolve), no storage
+  missing claim/summary          → error, no storage
+  claim/summary with raw log/prompt/session content
+                                 → hard error (claim content check), no storage
+  forbidden raw top-level fields → hard error (redaction_check), no storage
+  model tries status=active or visibility=renderable
+                                 → schema rejects (primary); defensive force
+                                   to candidate/internal applies as backstop
+                                   but is not an acceptance path
+  duplicate candidate            → warning (dedup_hint), write still proceeds
+  conflict with active record    → warning (conflict_hint), write still proceeds
+  source_refs missing            → warning (source_link), write still proceeds
+  DB disabled                    → error, no storage, no exception
+  malformed JSON args            → error before execution
+  model tries to store every turn → harness teaches: write_candidate is for
+    durable facts only, not observations, transient results, or session logs
 
 Fixtures:
   docs/fixtures/braincase/write-candidate/tool-input-valid.json
   docs/fixtures/braincase/write-candidate/result-valid.json
   docs/fixtures/braincase/write-candidate/tool-input-forbidden-active.json
   docs/fixtures/braincase/write-candidate/tool-input-forbidden-raw-prompt.json
+  docs/fixtures/braincase/write-candidate/tool-input-forbidden-raw-log-in-claim.json  (Slice H.1)
 
-Tests: tests/test_braincase_write_candidate_design.py — 41 structural tests
-Full suite: 2062 tests
+Tests: tests/test_braincase_write_candidate_design.py — 41 structural tests (Slice H)
+  updated to 55+ tests in Slice H.1
+Full suite: 2062+ tests
+```
+
+### Slice H.1: candidate-write doctrine polished — COMPLETE
+
+```text
+Docs/fixtures/tests only. No runtime write tool implementation.
+
+Fix 1 — Reject-first status/visibility policy:
+  Clarified: model supplying status/visibility is REJECTED (ok=false, stored=false).
+  Defensive force of candidate/internal is a backstop that fires before any
+  DB write, but is not an acceptance path. No "successful write with override".
+  Removed "status_overridden_to_candidate" / "visibility_overridden_to_internal"
+  warning names — these implied a permissive path that does not exist.
+
+Fix 2 — memory_domain authority:
+  memory_domain is config/caller-owned. BrainCaseDB has no registry.
+  "Outside allowed domain" means outside the caller-supplied configured set.
+  scope_resolve() checks against caller-supplied allowed domains, not a DB list.
+  Added memory_domain authority block to Abuse/failure cases.
+
+Fix 3 — HSM wording:
+  "HSM is a specific memory_domain" replaced with:
+  "HSM may be represented as a configured memory_domain value such as 'hsm'".
+  BrainCaseDB has no special HSM handling. "hsm" is only an example value.
+  Open question 7 resolved.
+
+Fix 4 — Raw log/prompt smuggling in claim/summary:
+  "claim content policy warns" replaced with hard error doctrine.
+  Obvious raw log/prompt markers in claim or summary → hard error, no storage.
+  New fixture: tool-input-forbidden-raw-log-in-claim.json
+
+Fix 5 — WriteCandidateResult clarifications:
+  Confirmed not a RenderPacket. Not memory recall. No raw StateRecord dump.
+  dedup_hint / conflict_hint remain string codes (not raw DB dicts).
+
+Tests: tests/test_braincase_write_candidate_design.py updated.
+  New test classes: RejectFirstPolicyTests, MemoryDomainAuthorityTests,
+  HsmWordingTests, RawLogInClaimFixtureTests, WriteCandidateResultBoundsTests.
+Full suite: 2080+ tests
 ```
 
 ---
@@ -1001,8 +1071,9 @@ Full suite: 2062 tests
 6. RESOLVED: Harness injection mechanism: braincase policy text appended to harness_blocks
    in normalize_responses_input_for_qwen() (same as model-profile turn harnesses).
    Tool definition is injected into body["tools"] in the same function.
-7. Does HSM work need a separate BrainCaseDB instance, or does memory_domain=hsm isolation suffice?
-   (Current working assumption: memory_domain isolation suffices; use memory_domain="hsm".)
+7. RESOLVED: HSM uses memory_domain isolation, not a separate BrainCaseDB instance.
+   "hsm" is a configured memory_domain example value. BrainCaseDB has no special
+   HSM handling. See Slice H.1 doctrine in the HSM/LimbiCore mapping section.
 8. Should braincase.search expose SQL mode directly, or keep SQL fully behind query_plan?
 9. What is the right conflict_check strategy — exact field match, semantic similarity, or LLM pass?
 10. Does retention_hint need a decay function, or is lifetime explicit enough?

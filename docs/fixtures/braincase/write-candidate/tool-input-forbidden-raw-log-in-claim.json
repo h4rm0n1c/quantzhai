@@ -1,0 +1,18 @@
+{
+  "_comment": "FORBIDDEN input — model trying to smuggle a raw prompt/log blob through the claim field. Top-level forbidden fields (raw_prompt, raw_request_body, etc.) are caught by redaction_check. Obvious raw prompt/request/log/tool-output markers inside claim or summary are caught by a claim content check. Both are hard errors with no storage. Claim/summary are not tunnels for raw logs.",
+  "_rejection_reason": "claim contains an obvious raw prompt/session-log marker. This is a hard error, not a warning. Raw session logs must not be stored as memory claims, even through claim/summary fields.",
+  "_policy": "claim-content-check: hard error, no storage. Not a warning. Future operator-only import tooling may allow vetted external content, but the model-facing tool does not.",
+  "_expected_result": {
+    "ok": false,
+    "stored": false,
+    "errors": ["claim_content_rejected: raw log/prompt content detected in claim"],
+    "status": "candidate",
+    "visibility": "internal",
+    "review_required": true
+  },
+  "memory_domain": "coding",
+  "tier": "episodic_memory",
+  "record_type": "episode",
+  "claim": "User: Can you refactor the auth module? [Turn 1 of session abc123]\nAssistant: Sure, I'll start with the JWT handler. Here's my analysis...\n[raw_request_body: {\"model\": \"qwen\", \"input\": [...]}]",
+  "summary": "Auth module refactor discussion — raw session log stored as claim."
+}

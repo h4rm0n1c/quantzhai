@@ -1,6 +1,7 @@
 {
-  "_comment": "FORBIDDEN input — model trying to create an active/renderable record directly. This is rejected by the tool. The tool schema uses additionalProperties:false so status and visibility are not accepted as input fields. If the execution path is reached defensively, status is forced to 'candidate' and visibility is forced to 'internal', and a warning is added. The model can never create active or renderable records through braincase.write_candidate. Active/renderable status requires operator review and promotion.",
-  "_rejection_reason": "status='active' and visibility='renderable' are not valid tool input fields. The tool schema does not accept them. The proxy forces status='candidate' and visibility='internal' regardless.",
+  "_comment": "FORBIDDEN input — model trying to create an active/renderable record directly. PRIMARY BEHAVIOUR: rejected. The tool schema uses additionalProperties:false, so status and visibility are not accepted as tool input fields; the write is rejected with errors before storage. DEFENSIVE BACKSTOP: if execution somehow reaches record construction despite malformed/hostile input, status and visibility are forced to 'candidate' and 'internal' before any DB write. This backstop prevents poisoning but is not an acceptance path — the primary check must have already rejected the write.",
+  "_rejection_reason": "status and visibility are not valid tool input fields. The schema rejects them via additionalProperties:false. The primary response is ok=false, stored=false. The defensive force of candidate/internal is a backstop, not a successful write with warnings.",
+  "_policy": "reject-first: forbidden fields on input → error, no storage. Defensive invariant: candidate/internal always forced before any DB write, regardless.",
   "_expected_result": {
     "ok": false,
     "stored": false,
