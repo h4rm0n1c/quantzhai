@@ -440,47 +440,70 @@ The following must not change during reducer extraction. Each is a
 
 ---
 
-## 9. Recommended Slice 2B
+## 9. Slice 2B — COMPLETE
 
-**Extract a pure `_reasoning_only_abort_reason()` helper and add `StreamDecision` dataclass.**
+**Status: Implemented in commit 38df0e9.**
+
+`StreamDecision` dataclass and `_reasoning_only_abort_reason()` pure helper
+were added to `proxy/qz_responses_stream.py`. 14 new unit tests cover all
+three abort paths, priority ordering, disabled states, exact boundary
+conditions, and edge cases. 2437 tests pass. No behaviour change.
+
+**What was implemented:**
+
+```text
+1. StreamDecision dataclass — reducer vocabulary object (not yet consumed broadly).
+
+2. _reasoning_only_abort_reason(
+       *,
+       reasoning_only_sample: str,
+       reasoning_only_chars: int,
+       reasoning_only_progress_at: float | None,
+       now: float,
+       reasoning_only_timeout_s: float,
+       reasoning_only_char_limit: int,
+   ) -> str | None
+   Returns "artifact_tool_payload" | "timeout" | "char_limit" | None.
+   Pure: no I/O, no state mutation, no self, time injected via `now`.
+   Exact semantics preserved: strict > comparisons, disabled at < 0,
+   artifact check has highest priority.
+
+3. Inline abort_reason block replaced with call to helper.
+   reasoning_only_idle local variable removed (moved inside helper).
+```
+
+**Note on naming:** The pre-implementation plan (Slice 2A) used the name
+`_is_reasoning_only_abort(hs, ctx)`. The implemented name
+`_reasoning_only_abort_reason(...)` is better — it returns the reason
+string, not just a boolean, and takes explicit keyword-only parameters
+instead of a context object. All live guidance uses the implemented name.
+
+---
+
+## 9B. Recommended Slice 2C
+
+**Extract `_should_suppress_duplicate_response_start()` pure helper.**
 
 **Rationale:**
 
-1. The reasoning-only abort decision has clean, bounded inputs:
-   `hs.reasoning_only_*` fields + three scalar thresholds + `time.time()`.
-   The three abort paths (`artifact_tool_payload`, `timeout`, `char_limit`)
-   are already tested end-to-end.
+1. Bounded inputs: one boolean flag (`sent_response_start`) and one string
+   (`event_type`). No tool execution, no terminal timeout behaviour.
 
-2. It is the most self-contained decision in the loop — it does not
-   interact with tool execution, SSE rendering, or sequence numbering.
+2. Already tested by `test_web_search_continuation_suppresses_duplicate_response_start`.
 
-3. Adding `StreamDecision` as a dataclass (no logic, no side effects)
-   establishes the vocabulary without changing any behaviour.
+3. Safer than touching function-call/tool lifecycle next.
 
-**Slice 2B scope:**
+**Slice 2C scope:**
 
 ```text
-1. Add StreamDecision dataclass (kinds defined in §5.3 as string constants,
-   no logic, no imports of execution code).
+1. Add _should_suppress_duplicate_response_start(event_type, sent_response_start) -> bool.
 
-2. Extract _is_reasoning_only_abort(hs, ctx) -> str | None:
-   Returns the abort reason string if reasoning-only abort applies,
-   else None. Pure function. Takes StreamHopState + relevant thresholds.
+2. Replace the inline check at the duplicate_response_start_suppression site.
 
-3. Unit test: verify all three abort conditions return correct reason.
+3. Unit test: verify suppress vs forward conditions.
 
-4. Inline call in qz_responses_stream.py remains unchanged in behaviour;
-   the inline block is replaced with a call to _is_reasoning_only_abort().
-
-5. No other logic moved.
+4. No other logic moved.
 ```
-
-**Alternative options (lower value):**
-
-- Option 1 (add `StreamDecision` only): Too small to move the needle.
-- Option 3 (extract hop_budget or context_pressure decision): These are
-  already very simple one-liners and test coverage is good, but they lack
-  the architectural interest of reasoning-only abort.
 
 ---
 

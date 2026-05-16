@@ -287,7 +287,7 @@ BrainCase retention/lifetime policy (#54)
 Key decisions from Slice 2A:
 - Reducer returns decisions; `qz_responses_stream.py` performs side effects.
 - 16 decision types inventoried; reasoning-only abort is the best first extraction.
-- `StreamDecision` dataclass + pure `_is_reasoning_only_abort()` helper recommended for Slice 2B.
+- `StreamDecision` dataclass + pure `_reasoning_only_abort_reason()` helper recommended for Slice 2B.
 - Existing 121 stream tests cover most decisions; carry_forward_reasoning has a coverage gap.
 
 **Slice 2B complete:** `StreamDecision` dataclass + `_reasoning_only_abort_reason()` helper extracted.
