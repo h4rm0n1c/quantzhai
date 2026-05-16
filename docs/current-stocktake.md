@@ -311,7 +311,8 @@ Slice I.1 COMPLETE: status-filtered candidate listing so hidden candidates surfa
   Slice A: COMPLETE — policy matrix design + fixtures + 40 tests (2279 total)
   Slice B: COMPLETE — proxy/qz_braincase_retention.py pure evaluator + 62 tests (2341 total)
   Slice C: COMPLETE — scripts/qz-braincase-review retention-report + prune --dry-run (2372 total)
-  Next: Slice C dry-run/report surface. Slice D --apply retire path.
+  Slice D: COMPLETE — prune --apply retire path, apply_retention_prune() helper (2404 total)
+  Next: close-out audit for #54 or small polish if issues found.
 - No automatic ingestion at any step.
 ```
 

@@ -429,3 +429,171 @@ def retention_report_records(
         "decisions": decisions,
         "warnings": report_warnings,
     }
+
+
+# ---------------------------------------------------------------------------
+# Retention apply prune (Slice D) — explicit operator action, uses retire_state_record()
+# ---------------------------------------------------------------------------
+
+def apply_retention_prune(
+    db: "BrainCaseDB",
+    *,
+    now_ms: int,
+    policy: dict,
+    memory_domain: str | None = None,
+    status: str | None = None,
+    retention: str | None = None,
+    limit: int = 100,
+    reason: str = "operator retention prune",
+    dry_run: bool = False,
+) -> dict:
+    """Evaluate retention policy and, when dry_run=False, retire eligible records.
+
+    When dry_run=True:
+      Delegates to retention_report_records(action="retire").
+      No DB writes.
+
+    When dry_run=False:
+      1. Evaluates records using retention_report_records(action="retire").
+      2. For each candidate retire decision, re-evaluates the record immediately.
+      3. Only calls retire_state_record() when the re-evaluation still returns
+         action="retire".
+      4. Skips: changed decision, already-inactive, active+durable, missing.
+
+    Safety rules (all enforced here, beyond evaluator):
+      - Never retires active+durable records (hard override).
+      - Never retires stale or keep records.
+      - Re-evaluates each record before writing (prevents stale decisions).
+      - All retirements use retire_state_record() — no raw DELETE, no SQL UPDATE.
+      - No visibility change.
+      - No promotion.
+      - No automatic ingestion.
+
+    Returns a bounded result dict. No raw StateRecord dumps.
+    """
+    if dry_run:
+        return retention_report_records(
+            db,
+            now_ms=now_ms,
+            policy=policy,
+            memory_domain=memory_domain,
+            status=status,
+            retention=retention,
+            action="retire",
+            limit=limit,
+        )
+
+    if not db.enabled:
+        return {
+            "ok": False,
+            "dry_run": False,
+            "error": "braincase_db_disabled",
+            "records_seen": 0,
+            "records_returned": 0,
+            "retired_count": 0,
+            "skipped_count": 0,
+            "retired": [],
+            "skipped": [],
+            "warnings": [],
+            "errors": ["braincase_db_disabled"],
+        }
+
+    # Phase 1: get candidate retire decisions (dry-run report)
+    report = retention_report_records(
+        db,
+        now_ms=now_ms,
+        policy=policy,
+        memory_domain=memory_domain,
+        status=status,
+        retention=retention,
+        action="retire",
+        limit=limit,
+    )
+
+    if not report.get("ok"):
+        return {
+            "ok": False,
+            "dry_run": False,
+            "error": report.get("error", "report_failed"),
+            "records_seen": 0,
+            "records_returned": 0,
+            "retired_count": 0,
+            "skipped_count": 0,
+            "retired": [],
+            "skipped": [],
+            "warnings": [],
+            "errors": [report.get("error", "report_failed")],
+        }
+
+    retired: list = []
+    skipped: list = []
+    errors: list = []
+    warnings: list = list(report.get("warnings") or [])
+
+    # Phase 2: re-evaluate and apply
+    for decision in report.get("decisions", []):
+        record_id = decision.get("record_id")
+        if not record_id:
+            skipped.append({"record_id": None, "reason": "missing_record_id"})
+            continue
+
+        # Fetch current record for re-evaluation
+        current_rec = db.get_state_record(record_id)
+        if current_rec is None:
+            skipped.append({"record_id": record_id, "reason": "missing_record"})
+            continue
+
+        # Hard safety: never retire active+durable (belt-and-suspenders)
+        if current_rec.get("status") == "active" and current_rec.get("retention") == "durable":
+            skipped.append({"record_id": record_id, "reason": "active_durable_protected"})
+            continue
+
+        # Hard safety: never retire already-inactive records
+        if current_rec.get("status") in ("retired", "superseded"):
+            skipped.append({"record_id": record_id, "reason": "already_inactive"})
+            continue
+
+        # Re-evaluate immediately before applying (prevents stale decisions)
+        re_decision = retention_decision_for_record(current_rec, now_ms=now_ms, policy=policy)
+        if re_decision.get("action") != "retire":
+            skipped.append({
+                "record_id": record_id,
+                "reason": f"decision_changed:{re_decision.get('action')}",
+            })
+            continue
+
+        # Build retirement reason string
+        retire_reason = (
+            f"{reason} | rule:{re_decision.get('matched_rule') or 'none'} "
+            f"| policy_reason:{re_decision.get('reason') or 'none'}"
+        )
+
+        ok = db.retire_state_record(record_id, retire_reason, now_ms=now_ms)
+        if ok:
+            retired.append({
+                "record_id": record_id,
+                "previous_status": current_rec.get("status"),
+                "new_status": "retired",
+                "reason": retire_reason,
+                "matched_rule": re_decision.get("matched_rule"),
+                "retention": current_rec.get("retention"),
+                "status": current_rec.get("status"),
+                "memory_domain": current_rec.get("memory_domain"),
+            })
+        else:
+            err = db.last_error or "retire_state_record failed"
+            errors.append(f"{record_id}: {err}")
+            skipped.append({"record_id": record_id, "reason": f"db_error:{err}"})
+
+    return {
+        "ok": len(errors) == 0,
+        "dry_run": False,
+        "records_seen": report.get("records_seen", 0),
+        "records_returned": report.get("records_returned", 0),
+        "retired_count": len(retired),
+        "skipped_count": len(skipped),
+        "retired": retired,
+        "skipped": skipped,
+        "warnings": warnings,
+        "errors": errors,
+    }

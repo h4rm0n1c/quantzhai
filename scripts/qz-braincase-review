@@ -12,7 +12,8 @@ Commands:
 Promotion is NOT model-facing. Only the operator can promote candidates.
 No model tool can call these commands.
 retention-report and prune --dry-run are read-only (no DB mutation).
-prune --apply is not implemented in Slice C.
+prune --apply retires records whose retention decision is action=retire.
+  Uses retire_state_record(). Records revision history. No raw DELETE.
 
 Usage examples:
   scripts/qz-braincase-review list
@@ -50,6 +51,7 @@ from proxy.qz_braincase_review import (
     promote_candidate_record,
     reject_candidate_record,
     retention_report_records,
+    apply_retention_prune,
 )
 from proxy.qz_braincase_retention import load_default_retention_policy
 
@@ -304,25 +306,92 @@ def cmd_retention_report(args: argparse.Namespace) -> int:
 
 
 def cmd_prune(args: argparse.Namespace) -> int:
-    """Prune subcommand — dry-run only in Slice C."""
+    """Prune subcommand — dry-run preview or explicit --apply retire path."""
     dry_run = getattr(args, "dry_run", False)
     apply_flag = getattr(args, "apply", False)
 
-    if apply_flag:
-        print("Error: --apply is not implemented in Slice C. "
-              "Use --dry-run to preview. Slice D will add the apply path.",
+    if not dry_run and not apply_flag:
+        print("Error: Pass --dry-run to preview or --apply to retire eligible records.",
               file=sys.stderr)
         return 1
 
-    if not dry_run:
-        print("Error: Slice C supports dry-run only. "
-              "Pass --dry-run to preview what would be retired.",
-              file=sys.stderr)
+    if dry_run and apply_flag:
+        print("Error: --dry-run and --apply are mutually exclusive.", file=sys.stderr)
         return 1
 
-    # --dry-run: run as a retention-report filtered to retire actions
-    args.action = "retire"
-    return cmd_retention_report(args)
+    db = _open_db(args.db_path)
+    policy = _load_policy(getattr(args, "policy_path", None))
+    now_ms = int(_time.time() * 1000)
+    reason = getattr(args, "reason", None) or "operator retention prune"
+
+    result = apply_retention_prune(
+        db,
+        now_ms=now_ms,
+        policy=policy,
+        memory_domain=getattr(args, "memory_domain", None) or None,
+        status=getattr(args, "status", None) or None,
+        retention=getattr(args, "retention", None) or None,
+        limit=getattr(args, "limit", 100),
+        reason=reason,
+        dry_run=dry_run,
+    )
+    db.close()
+
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("ok") else 1
+
+    if not result.get("ok"):
+        print(f"Error: {result.get('error', 'unknown')}", file=sys.stderr)
+        for e in result.get("errors", []):
+            print(f"  {e}", file=sys.stderr)
+        return 1
+
+    # Dry-run: delegate display to retention-report style output
+    if dry_run:
+        db_label = args.db_path or "(default)"
+        counts = result.get("counts", {})
+        print("BrainCase retention prune dry-run")
+        print(f"DB: {db_label}")
+        print(f"records seen: {result.get('records_seen', 0)}")
+        print(f"would retire: {result.get('records_returned', 0)}")
+        decisions = result.get("decisions", [])
+        if decisions:
+            print()
+            header = f"{'ACTION':<7} {'AGE':<6} {'RETENTION':<10} {'STATUS':<10} {'DOMAIN':<8} {'TIER':<22} {'RECORD_ID':<28}"
+            print(header)
+            print("-" * min(len(header), 100))
+            for d in decisions:
+                age = _format_age(d.get("age_since_update_ms"))
+                print(f"{'retire':<7} {age:<6} {(d.get('retention') or ''):<10} "
+                      f"{(d.get('status') or ''):<10} {(d.get('memory_domain') or ''):<8} "
+                      f"{(d.get('tier') or ''):<22} {(d.get('record_id') or ''):<28}")
+        else:
+            print("No eligible records found.")
+        return 0
+
+    # Apply output
+    db_label = args.db_path or "(default)"
+    print("BrainCase retention prune apply")
+    print(f"DB: {db_label}")
+    print(f"retired: {result.get('retired_count', 0)}")
+    print(f"skipped: {result.get('skipped_count', 0)}")
+
+    retired = result.get("retired", [])
+    if retired:
+        print()
+        header = f"{'RETIRED':<8} {'RECORD_ID':<36} {'RETENTION':<10} {'WAS_STATUS':<12} {'DOMAIN':<8} {'RULE'}"
+        print(header)
+        print("-" * min(len(header), 120))
+        for r in retired:
+            print(f"{'yes':<8} {(r.get('record_id') or ''):<36} "
+                  f"{(r.get('retention') or ''):<10} {(r.get('previous_status') or ''):<12} "
+                  f"{(r.get('memory_domain') or ''):<8} {r.get('matched_rule') or ''}")
+
+    for w in result.get("warnings", []):
+        print(f"Warning: {w}", file=sys.stderr)
+
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -380,19 +449,20 @@ def main() -> int:
     p_report.add_argument("--policy-path", help="Path to custom retention policy JSON")
     p_report.add_argument("--json", action="store_true")
 
-    # prune (Slice C — dry-run only; --apply not yet implemented)
+    # prune (Slice D — dry-run preview or explicit apply)
     p_prune = sub.add_parser("prune",
-                              help="Dry-run prune preview (--apply not yet in Slice C)")
+                              help="Retention policy prune (--dry-run or --apply)")
     p_prune.add_argument("--dry-run", action="store_true",
-                         help="Required in Slice C; --apply is not implemented yet")
+                         help="Preview what would be retired (no DB writes)")
     p_prune.add_argument("--apply", action="store_true",
-                         help="Not implemented in Slice C (will error)")
+                         help="Retire eligible records (uses retire_state_record)")
     p_prune.add_argument("--db-path")
     p_prune.add_argument("--memory-domain")
     p_prune.add_argument("--status", choices=["candidate", "active", "retired", "superseded"])
     p_prune.add_argument("--retention", choices=["ephemeral", "session", "project", "durable"])
     p_prune.add_argument("--limit", type=int, default=100)
     p_prune.add_argument("--policy-path")
+    p_prune.add_argument("--reason", help="Reason recorded in retirement revision")
     p_prune.add_argument("--json", action="store_true")
 
     args = parser.parse_args()

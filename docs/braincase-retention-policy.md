@@ -390,7 +390,7 @@ Slice C: COMPLETE — scripts/qz-braincase-review retention-report + prune --dry
   - prune --apply is explicitly rejected with a clear message
   - No DB writes. No retire_state_record() calls.
 
-Slice D should add the apply path (retire_state_record() calls, operator --apply).
+Slice D: COMPLETE (see above). Slice D adds explicit prune --apply retire path.
 
 **Schema change recommendation:** The v1 design avoids schema changes.
 If stale marking is needed in a future slice, consider adding
