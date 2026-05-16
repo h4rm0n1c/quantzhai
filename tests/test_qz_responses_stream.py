@@ -3,7 +3,13 @@ import unittest
 from pathlib import Path
 
 from proxy.qz_proxy_tools import ProxyLocalToolExecutor, ProxyLocalToolRegistry
-from proxy.qz_responses_stream import ClientStreamDisconnected, ResponsesStreamRuntime, StreamHopState
+from proxy.qz_responses_stream import (
+    ClientStreamDisconnected,
+    ResponsesStreamRuntime,
+    StreamDecision,
+    StreamHopState,
+    _reasoning_only_abort_reason,
+)
 from proxy.qz_telemetry import TelemetryBus
 from proxy.qz_tool_lifecycle import ToolContinuationResult
 from proxy.qz_tools import ToolLifecycleSpec
@@ -3620,6 +3626,180 @@ class StreamHopStateTests(unittest.TestCase):
         self.assertIsNot(hs1.next_input, hs2.next_input)
         hs1.next_input.append("extra")
         self.assertNotIn("extra", hs2.next_input)
+
+
+
+class StreamDecisionTests(unittest.TestCase):
+    """Unit tests for StreamDecision dataclass — #37 Slice 2B."""
+
+    def test_stream_decision_defaults(self):
+        d = StreamDecision(kind="continue")
+        self.assertEqual(d.kind, "continue")
+        self.assertEqual(d.reason, "")
+        self.assertEqual(d.suppress_reason, "")
+        self.assertEqual(d.upstream_items_to_append, [])
+        self.assertIsNone(d.public_item_hint)
+        self.assertIsNone(d.terminal_hint)
+        self.assertIsNone(d.repair_hop_index)
+        self.assertIsNone(d.carry_forward_snippet)
+        self.assertIsNone(d.hop_budget_signal)
+        self.assertIsNone(d.context_pressure_signal)
+        self.assertEqual(d.telemetry_hint, "")
+        self.assertEqual(d.warnings, [])
+
+    def test_stream_decision_lists_are_independent(self):
+        d1 = StreamDecision(kind="continue")
+        d2 = StreamDecision(kind="continue")
+        d1.upstream_items_to_append.append("x")
+        d1.warnings.append("w")
+        self.assertEqual(d2.upstream_items_to_append, [])
+        self.assertEqual(d2.warnings, [])
+
+    def test_stream_decision_kind_set_explicitly(self):
+        d = StreamDecision(kind="abort_reasoning_only", reason="timeout")
+        self.assertEqual(d.kind, "abort_reasoning_only")
+        self.assertEqual(d.reason, "timeout")
+
+
+class ReasoningOnlyAbortHelperTests(unittest.TestCase):
+    """Unit tests for _reasoning_only_abort_reason() — #37 Slice 2B.
+
+    Verifies that extraction preserved exact comparison semantics and priority.
+    """
+
+    # A sample that triggers the artifact detector: starts like JSON, has patch-shape markers
+    _ARTIFACT_SAMPLE = (
+        '{"operation": "update_file", "path": "/foo.py", '
+        '"diff": "--- a/foo.py\\n+++ b/foo.py\\n@@ -1 +1 @@\\n-old\\n+new"}'
+    )
+
+    def test_artifact_wins_over_timeout(self):
+        """Artifact check has highest priority."""
+        result = _reasoning_only_abort_reason(
+            reasoning_only_sample=self._ARTIFACT_SAMPLE,
+            reasoning_only_chars=9999,
+            reasoning_only_progress_at=0.0,
+            now=9999.0,  # idle >> timeout
+            reasoning_only_timeout_s=1.0,
+            reasoning_only_char_limit=1,
+        )
+        self.assertEqual(result, "artifact_tool_payload")
+
+    def test_artifact_wins_over_char_limit(self):
+        result = _reasoning_only_abort_reason(
+            reasoning_only_sample=self._ARTIFACT_SAMPLE,
+            reasoning_only_chars=9999,
+            reasoning_only_progress_at=None,
+            now=0.0,
+            reasoning_only_timeout_s=-1.0,
+            reasoning_only_char_limit=1,
+        )
+        self.assertEqual(result, "artifact_tool_payload")
+
+    def test_timeout_returns_timeout(self):
+        result = _reasoning_only_abort_reason(
+            reasoning_only_sample="normal text",
+            reasoning_only_chars=10,
+            reasoning_only_progress_at=0.0,
+            now=200.0,  # idle = 200 > timeout = 120
+            reasoning_only_timeout_s=120.0,
+            reasoning_only_char_limit=-1,
+        )
+        self.assertEqual(result, "timeout")
+
+    def test_char_limit_returns_char_limit(self):
+        result = _reasoning_only_abort_reason(
+            reasoning_only_sample="normal text",
+            reasoning_only_chars=101,
+            reasoning_only_progress_at=None,
+            now=0.0,
+            reasoning_only_timeout_s=-1.0,
+            reasoning_only_char_limit=100,
+        )
+        self.assertEqual(result, "char_limit")
+
+    def test_disabled_timeout_negative_one_does_not_abort(self):
+        result = _reasoning_only_abort_reason(
+            reasoning_only_sample="normal text",
+            reasoning_only_chars=10,
+            reasoning_only_progress_at=0.0,
+            now=9999.0,
+            reasoning_only_timeout_s=-1.0,
+            reasoning_only_char_limit=-1,
+        )
+        self.assertIsNone(result)
+
+    def test_disabled_char_limit_negative_one_does_not_abort(self):
+        result = _reasoning_only_abort_reason(
+            reasoning_only_sample="normal text",
+            reasoning_only_chars=9999,
+            reasoning_only_progress_at=0.0,
+            now=0.1,
+            reasoning_only_timeout_s=-1.0,
+            reasoning_only_char_limit=-1,
+        )
+        self.assertIsNone(result)
+
+    def test_timeout_exact_boundary_does_not_abort(self):
+        """idle == timeout_s must NOT abort — code uses strict > not >=."""
+        timeout_s = 120.0
+        result = _reasoning_only_abort_reason(
+            reasoning_only_sample="normal text",
+            reasoning_only_chars=10,
+            reasoning_only_progress_at=0.0,
+            now=timeout_s,  # idle == timeout_s exactly
+            reasoning_only_timeout_s=timeout_s,
+            reasoning_only_char_limit=-1,
+        )
+        self.assertIsNone(result, "idle == timeout_s must not abort (uses strict >)")
+
+    def test_char_limit_exact_boundary_does_not_abort(self):
+        """chars == limit must NOT abort — code uses strict > not >=."""
+        limit = 100
+        result = _reasoning_only_abort_reason(
+            reasoning_only_sample="normal text",
+            reasoning_only_chars=limit,  # exactly at limit
+            reasoning_only_progress_at=None,
+            now=0.0,
+            reasoning_only_timeout_s=-1.0,
+            reasoning_only_char_limit=limit,
+        )
+        self.assertIsNone(result, "chars == limit must not abort (uses strict >)")
+
+    def test_none_progress_at_skips_timeout_check(self):
+        """If progress_at is None, timeout check must be skipped safely."""
+        result = _reasoning_only_abort_reason(
+            reasoning_only_sample="normal text",
+            reasoning_only_chars=10,
+            reasoning_only_progress_at=None,
+            now=9999.0,
+            reasoning_only_timeout_s=1.0,  # enabled
+            reasoning_only_char_limit=-1,
+        )
+        self.assertIsNone(result)
+
+    def test_no_conditions_returns_none(self):
+        result = _reasoning_only_abort_reason(
+            reasoning_only_sample="normal safe text",
+            reasoning_only_chars=10,
+            reasoning_only_progress_at=1000.0,
+            now=1001.0,  # only 1s idle, timeout=120
+            reasoning_only_timeout_s=120.0,
+            reasoning_only_char_limit=1000,
+        )
+        self.assertIsNone(result)
+
+    def test_timeout_zero_aborts_immediately(self):
+        """timeout_s = 0 is enabled; any idle > 0 aborts."""
+        result = _reasoning_only_abort_reason(
+            reasoning_only_sample="normal text",
+            reasoning_only_chars=10,
+            reasoning_only_progress_at=0.0,
+            now=0.001,  # tiny idle > 0
+            reasoning_only_timeout_s=0.0,
+            reasoning_only_char_limit=-1,
+        )
+        self.assertEqual(result, "timeout")
 
 
 if __name__ == "__main__":

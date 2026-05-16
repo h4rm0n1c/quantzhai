@@ -290,7 +290,9 @@ Key decisions from Slice 2A:
 - `StreamDecision` dataclass + pure `_is_reasoning_only_abort()` helper recommended for Slice 2B.
 - Existing 121 stream tests cover most decisions; carry_forward_reasoning has a coverage gap.
 
-Next: Slice 2B — `StreamDecision` dataclass + pure reasoning-only abort helper.
+**Slice 2B complete:** `StreamDecision` dataclass + `_reasoning_only_abort_reason()` helper extracted.
+  No decide_stream_event() added. No stream side effects moved. 2437 tests passing.
+  Next: Slice 2C can extract another small decision helper, or pause for audit.
 
 ### Prompt A (archived): #37 Slice 1 + 1.1 — Stream state machine seam extraction — COMPLETE
 

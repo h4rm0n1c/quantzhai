@@ -167,6 +167,88 @@ class StreamHopState:
         )
 
 
+@dataclass
+class StreamDecision:
+    """Vocabulary object for future stream reducer decisions.
+
+    A future reducer will return StreamDecision instances describing what
+    qz_responses_stream.py should do next. The stream runtime remains the
+    sole side-effect owner: it reads from this decision and acts.
+
+    This slice introduces the dataclass only. qz_responses_stream.py does not
+    yet consume StreamDecision broadly; it is used only in the narrow seam
+    extracted so far.
+
+    Decision kinds (string constants, not an enum):
+      "continue"                  no decision needed; render normally
+      "forward_event"             forward this event to client
+      "suppress_event"            do not forward; discard
+      "finish_no_output_timeout"  terminate, emit timeout fallback
+      "finish_terminal_timeout"   terminate, emit terminal fallback
+      "abort_reasoning_only"      emit reasoning-only fallback, return
+      "abort_tool_call"           emit stuck-tool fallback, return
+      "inject_signal"             append signal to next_input, break hop
+      "inject_tool_error"         append error to next_input, break hop
+      "run_proxy_local_tool"      execute tool locally, break hop
+      "forward_public_tool"       emit public tool item, emit terminal
+      "start_empty_answer_repair" trigger repair hop
+      "emit_terminal"             emit terminal event and [DONE]
+      "start_next_hop"            prepare next hop with updated inputs
+      "finish_result"             assemble and return final result
+    """
+    kind: str
+    reason: str = ""
+    suppress_reason: str = ""
+    upstream_items_to_append: list = field(default_factory=list)
+    public_item_hint: dict | None = None
+    terminal_hint: dict | None = None
+    repair_hop_index: int | None = None
+    carry_forward_snippet: str | None = None
+    hop_budget_signal: dict | None = None
+    context_pressure_signal: dict | None = None
+    telemetry_hint: str = ""
+    warnings: list = field(default_factory=list)
+
+
+def _reasoning_only_abort_reason(
+    *,
+    reasoning_only_sample: str,
+    reasoning_only_chars: int,
+    reasoning_only_progress_at: float | None,
+    now: float,
+    reasoning_only_timeout_s: float,
+    reasoning_only_char_limit: int,
+) -> str | None:
+    """Return the reasoning-only abort reason string, or None if no abort.
+
+    Pure helper — no I/O, no side effects, no state mutation.
+
+    Abort priority (matches inline logic order):
+      1. artifact_tool_payload — sample looks like a tool-call artifact
+      2. timeout              — idle time > reasoning_only_timeout_s (disabled if < 0)
+      3. char_limit           — chars > reasoning_only_char_limit (disabled if < 0)
+
+    Comparisons are strict (>) to preserve pre-extraction semantics.
+    """
+    if _looks_like_reasoning_tool_artifact(reasoning_only_sample):
+        return "artifact_tool_payload"
+
+    if (
+        reasoning_only_timeout_s >= 0
+        and reasoning_only_progress_at is not None
+        and (now - reasoning_only_progress_at) > reasoning_only_timeout_s
+    ):
+        return "timeout"
+
+    if (
+        reasoning_only_char_limit >= 0
+        and reasoning_only_chars > reasoning_only_char_limit
+    ):
+        return "char_limit"
+
+    return None
+
+
 PRIVATE_FUNCTION_CALL_TIMEOUT_S = float(os.environ.get("QZ_PRIVATE_TOOL_CALL_TIMEOUT_S", "120"))
 PRIVATE_FUNCTION_CALL_DELTA_LIMIT = int(os.environ.get("QZ_PRIVATE_TOOL_CALL_DELTA_LIMIT", "1200"))
 REASONING_ONLY_TIMEOUT_S = float(os.environ.get("QZ_REASONING_ONLY_TIMEOUT_S", "120"))
@@ -1441,20 +1523,14 @@ class ResponsesStreamRuntime:
                                     hs.reasoning_only_sample += delta_text[:remaining]
                             hs.reasoning_only_chars += len(delta_text)
                             reasoning_only_progress_at = hs.reasoning_only_last_delta_at or hs.reasoning_only_started_at
-                            reasoning_only_idle = max(0.0, time.time() - reasoning_only_progress_at)
-                            abort_reason = ""
-                            if _looks_like_reasoning_tool_artifact(hs.reasoning_only_sample):
-                                abort_reason = "artifact_tool_payload"
-                            elif (
-                                self.reasoning_only_timeout_s >= 0
-                                and reasoning_only_idle > self.reasoning_only_timeout_s
-                            ):
-                                abort_reason = "timeout"
-                            elif (
-                                self.reasoning_only_char_limit >= 0
-                                and hs.reasoning_only_chars > self.reasoning_only_char_limit
-                            ):
-                                abort_reason = "char_limit"
+                            abort_reason = _reasoning_only_abort_reason(
+                                reasoning_only_sample=hs.reasoning_only_sample,
+                                reasoning_only_chars=hs.reasoning_only_chars,
+                                reasoning_only_progress_at=reasoning_only_progress_at,
+                                now=time.time(),
+                                reasoning_only_timeout_s=self.reasoning_only_timeout_s,
+                                reasoning_only_char_limit=self.reasoning_only_char_limit,
+                            ) or ""
                             if abort_reason:
                                 self._emit_stream_event_timing(
                                     event_type,
