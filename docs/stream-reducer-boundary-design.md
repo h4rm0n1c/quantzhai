@@ -493,8 +493,25 @@ extracted in commit c320cfc. 6 unit tests added. 2443 tests pass. No behaviour c
 Condition moved out of `_hop_budget_signal_message()`. 11 unit tests added.
 No behaviour change. Message construction and telemetry unchanged.
 
-**Recommended next: Slice 2D.1** — audit/polish before touching more complex stream decisions.
-Avoid tool lifecycle extraction and terminal handling extraction until after that audit.
+---
+
+## 9D. Slice 2D.1 — COMPLETE
+
+Audit of helpers extracted in Slices 2B–2D.
+
+**Audit results:**
+
+- All three helpers confirmed module-level, pure, side-effect free.
+- `StreamDecision` confirmed vocabulary-only; not broadly consumed; no `decide_stream_event()` exists.
+- Behaviour preservation confirmed for all helpers (exact comparison semantics, disabled-at-negative, None-safe progress_at).
+- 155 stream tests pass. Coverage for all helpers present.
+- No runtime code changes required.
+
+**Recommended next: Slice 2E** — extract `_should_inject_context_pressure_signal(input_tokens, context_length, threshold) -> bool`.
+
+Rationale: bounded inputs (two numbers + a float threshold), no tool execution, no terminal event, no SSE rendering. Logic lives in `_context_pressure_signal_message()` and is cleanly separable. Same extraction pattern as Slice 2D.
+
+Avoid tool lifecycle extraction, terminal event extraction, and watchdog extraction until later.
 
 ---
 

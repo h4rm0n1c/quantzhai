@@ -298,7 +298,10 @@ Key decisions from Slice 2A:
 
 **Slice 2D complete:** `_should_inject_hop_budget_signal(hops_remaining, threshold) -> bool` extracted.
   Condition moved out of `_hop_budget_signal_message()`. 11 unit tests added. No behaviour change.
-  Next: Slice 2D.1 audit/polish before touching more complex stream decisions.
+
+**Slice 2D.1 complete:** Audit of Slices 2B–2D helpers. All helpers confirmed pure and behaviour-preserving.
+  No runtime code changes. 2453 tests passing.
+  Next: Slice 2E — extract `_should_inject_context_pressure_signal(input_tokens, context_length, threshold)`.
 
 ### Prompt A (archived): #37 Slice 1 + 1.1 — Stream state machine seam extraction — COMPLETE
 
