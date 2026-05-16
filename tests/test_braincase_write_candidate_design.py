@@ -1,7 +1,8 @@
 """Structural design tests for Slices H and H.1: braincase.write_candidate.
 
 These tests validate the fixture files and design invariants.
-They do NOT test any runtime implementation — the tool is not yet implemented.
+The runtime implementation landed in Slice H.2 (proxy/qz_braincase_tools.py).
+These tests continue to validate the design fixtures and doctrine.
 
 Slice H invariants:
 - Valid tool input does NOT contain status or visibility fields.

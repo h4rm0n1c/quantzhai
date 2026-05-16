@@ -141,8 +141,8 @@ Proposed tool: braincase.write_candidate — forces status=candidate, visibility
 Separate flag: QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED (independent of render/recall flag).
 braincase.render and braincase.recall exposed when QZ_BRAINCASE_TOOLS_ENABLED (default disabled).
 RenderPacket is the only model-visible memory output.
-write/update/search/inspect not yet exposed. 2062 tests.
-Next: retention/lifetime policy or #53 close-out.
+write/update/search/inspect not yet exposed. 2239 tests.
+#53 CLOSED — close-out audit passed. Retention/lifetime policy → follow-up issue.
 No automatic ingestion.
 See docs/braincase-memory-tool-api.md for the full slice plan.
 ```

@@ -79,14 +79,12 @@ P4 config/var/script ownership cleanup
 Status:
 
 ```text
-Slices A–H (and C.1, D.1, G.1–G.3) complete.
-  Slice H.2: braincase.write_candidate runtime implemented.
-  Candidate-only writes: status=candidate, visibility=internal, always.
-  Separate flag: QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED (default disabled).
-  Review/promotion: deferred to operator tooling.
-  write/update/search/inspect still not exposed. 2223 tests. Review CLI: scripts/qz-braincase-review.
-  Smoke: scripts/qz-braincase-smoke (12 checks). Review CLI: scripts/qz-braincase-review.
-  Next: retention/lifetime policy or close #53 if acceptance complete.
+Slices A–I.1 complete. #53 CLOSED after close-out audit passed.
+  Exposed tools: braincase.render, braincase.recall, braincase.write_candidate.
+  Unexposed: braincase.write/update/search/inspect/promote_candidate.
+  Operator CLI: scripts/qz-braincase-review (list/inspect/promote/reject).
+  Smoke: scripts/qz-braincase-smoke (12/12 PASS). 2239 tests passing.
+  Follow-up: retention/lifetime policy → new issue (separate from #53).
   See docs/braincase-memory-tool-api.md.
 ```
 
