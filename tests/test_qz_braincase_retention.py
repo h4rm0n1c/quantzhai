@@ -583,5 +583,77 @@ class FixtureRelationshipTests(unittest.TestCase):
         self.assertIn("retire", actions)
 
 
+
+# ---------------------------------------------------------------------------
+# Slice B.1: unknown match field hardening
+# ---------------------------------------------------------------------------
+
+class UnknownMatchFieldTests(unittest.TestCase):
+    """Unknown match fields must not cause a rule to match (fail closed)."""
+
+    def _policy_with_match(self, match: dict) -> dict:
+        return {
+            "schema": "braincase/retention-policy@1",
+            "default_action": "keep",
+            "rules": [
+                {
+                    "name": "typo_rule",
+                    "match": match,
+                    "stale_after": None,
+                    "expire_after": "1s",
+                    "action": "retire",
+                    "reason": "typo_rule_fired",
+                }
+            ],
+        }
+
+    def test_typo_memory_domian_does_not_match(self):
+        now_ms = _now()
+        rec = _record(memory_domain="coding", age_days=5, now_ms=now_ms)
+        policy = self._policy_with_match({"memory_domian": "coding"})  # typo
+        result = retention_decision_for_record(rec, now_ms=now_ms, policy=policy)
+        self.assertNotEqual(result["matched_rule"], "typo_rule",
+                            "Typo 'memory_domian' must not cause rule to match")
+        self.assertEqual(result["action"], "keep")
+
+    def test_typo_retentoin_does_not_match(self):
+        now_ms = _now()
+        rec = _record(retention="ephemeral", age_days=5, now_ms=now_ms)
+        policy = self._policy_with_match({"retentoin": "ephemeral"})  # typo
+        result = retention_decision_for_record(rec, now_ms=now_ms, policy=policy)
+        self.assertNotEqual(result["matched_rule"], "typo_rule")
+        self.assertEqual(result["action"], "keep")
+
+    def test_malformed_field_does_not_cause_broad_retirement(self):
+        """A rule with an unknown field must not retire records it shouldn't touch."""
+        now_ms = _now()
+        rec = _record(status="active", retention="durable", age_days=365,
+                      now_ms=now_ms)
+        # Try to retire durable active via a typo rule that would otherwise match
+        policy = self._policy_with_match({"statuz": "active", "retentoin": "durable"})
+        result = retention_decision_for_record(rec, now_ms=now_ms, policy=policy)
+        self.assertEqual(result["action"], "keep")
+        self.assertNotEqual(result["reason"], "typo_rule_fired")
+
+    def test_only_typo_rule_returns_default_keep(self):
+        """When the only rule has a typo and does not match, default_action=keep applies."""
+        now_ms = _now()
+        rec = _record(status="candidate", retention="ephemeral",
+                      age_days=30, now_ms=now_ms)
+        policy = self._policy_with_match({"memory_domian": "coding"})
+        result = retention_decision_for_record(rec, now_ms=now_ms, policy=policy)
+        self.assertEqual(result["action"], "keep")
+        self.assertEqual(result["reason"], "no_matching_rule")
+
+    def test_valid_rule_still_matches(self):
+        """A correctly spelt rule still matches after the hardening."""
+        now_ms = _now()
+        rec = _record(memory_domain="coding", age_days=5, now_ms=now_ms)
+        policy = self._policy_with_match({"memory_domain": "coding"})
+        result = retention_decision_for_record(rec, now_ms=now_ms, policy=policy)
+        self.assertEqual(result["matched_rule"], "typo_rule",
+                         "Correctly spelt rule must still match")
+
+
 if __name__ == "__main__":
     unittest.main()

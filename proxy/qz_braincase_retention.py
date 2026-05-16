@@ -179,7 +179,11 @@ def _rule_matches(rule: dict, record: dict) -> bool:
                 if not isinstance(srefs, list) or not srefs:
                     return False
 
-        # Unknown match fields: ignore (forward-compatible)
+        else:
+            # Unknown match field (e.g. typo "memory_domian").
+            # Fail closed: do not match rather than silently ignoring,
+            # because an ignored typo can make a rule match too broadly.
+            return False
 
     return True
 
