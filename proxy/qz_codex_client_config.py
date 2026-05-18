@@ -46,7 +46,15 @@ def _proxy_base_url(suffix: str = "") -> str:
 
 
 def _catalog_path() -> Path:
-    """Return the path to the generated Codex model catalog JSON file."""
+    """Return the server-side path to the generated Codex model catalog JSON file.
+
+    Uses QZ_VAR_DIR (falling back to <repo_root>/var) and NOT CODEX_HOME.
+    CODEX_HOME is a Codex CLI client launcher concept; in remote mode (Slice C2)
+    the client launcher will set CODEX_HOME to its own local directory. The server
+    endpoint must serve the server-generated catalog regardless of that client
+    setting, and must match the path reported by /qz/config/effective
+    (qz_config_report.py uses var_dir / "codex-home" without CODEX_HOME).
+    """
     root_raw = os.environ.get("QZ_ROOT")
     if root_raw:
         root = Path(root_raw).expanduser().resolve()
@@ -56,10 +64,7 @@ def _catalog_path() -> Path:
     var_raw = os.environ.get("QZ_VAR_DIR")
     var_dir = Path(var_raw).expanduser() if var_raw else root / "var"
 
-    codex_home_raw = os.environ.get("CODEX_HOME")
-    codex_home = Path(codex_home_raw).expanduser() if codex_home_raw else var_dir / "codex-home"
-
-    return codex_home / "model-catalogs" / CODEX_MODEL_CATALOG_FILENAME
+    return var_dir / "codex-home" / "model-catalogs" / CODEX_MODEL_CATALOG_FILENAME
 
 
 def _catalog_file_meta(path: Path) -> Dict[str, Any]:

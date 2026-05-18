@@ -2114,6 +2114,15 @@ test_qz_codex_common_unchanged_after_c1 (bash -n passes, no script edits)
 20 focused tests in `tests/test_qz_codex_client_config.py`. 2541 tests passing.
 No qz-codex-common changes. No file writes. No routing changes. No secrets exposed.
 
+### Slice C1.1 — COMPLETE
+
+Audit confirmed: all existing audit items clean (no secrets, correct base_url, bounded
+payloads, GET-only routes). One real issue found and fixed: `_catalog_path()` was using
+`CODEX_HOME` env var. `CODEX_HOME` is a Codex CLI client launcher concept; in remote C2
+mode the client launcher would set it to its local directory, which must not redirect the
+server endpoint. Fixed to use `QZ_VAR_DIR / "codex-home"` consistently with
+`qz_config_report.py`. 7 new audit tests. 2548 tests passing. No script changes.
+
 ### Slice C1.1: endpoint audit/polish (after C1)
 
 Verify before touching qz-codex-common:

@@ -316,5 +316,142 @@ class CodexClientConfigWireApiTests(unittest.TestCase):
             self.assertNotIn("sk-secret-value-must-never-appear", json.dumps(payload))
 
 
+class CodexClientConfigC11AuditTests(unittest.TestCase):
+    """Audit tests added in Slice C1.1."""
+
+    def setUp(self):
+        self._saved = _save_env()
+
+    def tearDown(self):
+        _restore_env(self._saved)
+
+    def _set_minimal_env(self, tmp):
+        root = Path(tmp)
+        var_dir = root / "var"
+        var_dir.mkdir(parents=True)
+        os.environ["QZ_ROOT"] = str(root)
+        os.environ["QZ_VAR_DIR"] = str(var_dir)
+        os.environ.pop("CODEX_HOME", None)
+        return root, var_dir
+
+    def test_catalog_path_ignores_codex_home(self):
+        """CODEX_HOME (client launcher concept) must not redirect server catalog path."""
+        from proxy.qz_codex_client_config import _catalog_path
+        with tempfile.TemporaryDirectory() as tmp:
+            root, var_dir = self._set_minimal_env(tmp)
+            unrelated_codex_home = Path(tmp) / "unrelated-client-home"
+            unrelated_codex_home.mkdir(parents=True)
+            os.environ["CODEX_HOME"] = str(unrelated_codex_home)
+
+            path = _catalog_path()
+
+            # Must be under QZ_VAR_DIR/codex-home, not under CODEX_HOME
+            self.assertIn("var", str(path))
+            self.assertNotIn("unrelated-client-home", str(path))
+
+    def test_catalog_path_uses_qz_var_dir(self):
+        """Server catalog path follows QZ_VAR_DIR, not CODEX_HOME."""
+        from proxy.qz_codex_client_config import _catalog_path
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            custom_var = root / "custom-var"
+            custom_var.mkdir(parents=True)
+            os.environ["QZ_ROOT"] = str(root)
+            os.environ["QZ_VAR_DIR"] = str(custom_var)
+            os.environ.pop("CODEX_HOME", None)
+
+            path = _catalog_path()
+
+            self.assertTrue(str(path).startswith(str(custom_var)))
+
+    def test_codex_home_set_does_not_affect_client_config_catalog_metadata(self):
+        """Catalog warning/metadata reflect QZ_VAR_DIR path, not CODEX_HOME path."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root, var_dir = self._set_minimal_env(tmp)
+            # Write catalog under var_dir/codex-home (server path)
+            catalog_dir = var_dir / "codex-home" / "model-catalogs"
+            catalog_dir.mkdir(parents=True)
+            (catalog_dir / CODEX_MODEL_CATALOG_FILENAME).write_text('{"models":[]}\n', encoding="utf-8")
+            # Set CODEX_HOME to an unrelated path with no catalog
+            unrelated = Path(tmp) / "client-home"
+            unrelated.mkdir()
+            os.environ["CODEX_HOME"] = str(unrelated)
+
+            payload = codex_client_config_payload()
+
+            # Should find the catalog (under var_dir, not CODEX_HOME)
+            self.assertIn("sha256_12", payload["model_catalog"])
+            self.assertIn("mtime_ms", payload["model_catalog"])
+            warning_codes = [w.get("warning") for w in payload["warnings"]]
+            self.assertNotIn("missing_codex_catalog", warning_codes)
+
+    def test_catalog_url_uses_same_host_port_as_provider_base_url(self):
+        """model_catalog.url and provider.base_url share the same host:port."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._set_minimal_env(tmp)
+            os.environ["QZ_PROXY_HOST"] = "192.168.1.99"
+            os.environ["QZ_PROXY_PORT"] = "9876"
+
+            payload = codex_client_config_payload()
+            provider_base = payload["provider"]["base_url"]
+            catalog_url = payload["model_catalog"]["url"]
+
+            # Both must use the same host and port
+            self.assertIn("192.168.1.99:9876", provider_base)
+            self.assertIn("192.168.1.99:9876", catalog_url)
+
+    def test_client_config_does_not_include_catalog_content(self):
+        """client-config payload contains only metadata, not the full catalog JSON."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root, var_dir = self._set_minimal_env(tmp)
+            catalog_dir = var_dir / "codex-home" / "model-catalogs"
+            catalog_dir.mkdir(parents=True)
+            models_sentinel = "UNIQUE_MODELS_CONTENT_SHOULD_NOT_APPEAR_IN_CLIENT_CONFIG"
+            catalog = {"models": [{"slug": models_sentinel}]}
+            (catalog_dir / CODEX_MODEL_CATALOG_FILENAME).write_text(
+                json.dumps(catalog), encoding="utf-8"
+            )
+
+            payload = codex_client_config_payload()
+            payload_json = json.dumps(payload)
+
+            self.assertNotIn(models_sentinel, payload_json)
+            # Confirm sha256_12 is present (metadata) without content
+            self.assertIn("sha256_12", payload["model_catalog"])
+
+    def test_large_catalog_gets_hash_skipped(self):
+        """Catalog file >64 KiB gets hash_skipped: 'too_large' in client-config."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root, var_dir = self._set_minimal_env(tmp)
+            catalog_dir = var_dir / "codex-home" / "model-catalogs"
+            catalog_dir.mkdir(parents=True)
+            # Write a catalog that is just over 64 KiB
+            large_content = '{"models":' + '[{"slug":"x"}]' * 5000 + '}'
+            large_bytes = large_content.encode("utf-8")
+            (catalog_dir / CODEX_MODEL_CATALOG_FILENAME).write_bytes(large_bytes)
+
+            if len(large_bytes) <= 65536:
+                self.skipTest("generated content was not large enough — test assumption wrong")
+
+            payload = codex_client_config_payload()
+            mc = payload["model_catalog"]
+
+            self.assertIsNone(mc.get("sha256_12"))
+            self.assertEqual(mc.get("hash_skipped"), "too_large")
+            self.assertIn("mtime_ms", mc)
+
+    def test_invalid_catalog_endpoint_returns_bounded_error(self):
+        """Malformed catalog JSON gives error code, not exception or stack trace."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root, var_dir = self._set_minimal_env(tmp)
+            catalog_dir = var_dir / "codex-home" / "model-catalogs"
+            catalog_dir.mkdir(parents=True)
+            (catalog_dir / CODEX_MODEL_CATALOG_FILENAME).write_bytes(b"not valid json {{{{")
+
+            result, error = codex_model_catalog_content()
+            self.assertIsNone(result)
+            self.assertEqual(error, "invalid_codex_catalog")
+
+
 if __name__ == "__main__":
     unittest.main()
