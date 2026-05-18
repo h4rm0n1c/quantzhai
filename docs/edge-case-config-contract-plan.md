@@ -1597,23 +1597,269 @@ test_no_model_routing_change
 
 ---
 
-### Non-goals
+## qz-codex-common thinning: remote topology correction (#57 Slice A.1-design)
+
+Date: 2026-05-19. Status: design correction — no runtime implementation.
+
+Slice A-design (Option C, keep launcher-local) is **only valid for the co-located
+topology** where qz-codex runs on the same host as QuantZhai. It is not a complete
+answer for remote or LAN-separated launcher mode.
+
+This section corrects that assumption and defines the remote-topology problem.
+
+---
+
+### Supported topology table
+
+| Topology | qz-codex location | Shared filesystem | CODEX_HOME | config.toml base_url | model_catalog_json |
+|---|---|---|---|---|---|
+| **A. Co-located** | Same host as QuantZhai | Yes — `$QZ_ROOT/var/codex-home` | Server-local | `127.0.0.1` works | Server local path works |
+| **B. Remote LAN** | Different machine | No (unless NFS/sshfs) | Client-local | `127.0.0.1` WRONG — needs server IP | Server absolute path WRONG |
+| **C. Shared filesystem** | Different machine, mounts server `var/` | Yes | Server path via mount | OK if template patched | OK if catalog path accessible |
+
+**Option C (keep TOML parsing, launcher-local) is correct only for topology A.**
+For topology B, additional bootstrap is needed.
+
+---
+
+### Remote topology blockers found in code
+
+Code-confirmed issues for remote launcher (topology B):
+
+```text
+1. config.toml provider base_url hardcoded as "http://127.0.0.1:18180/v1"
+   Source: config/example/codex-config.toml line 16
+   Problem: remote client copied template has wrong base_url for its local config
+
+2. model_catalog_json written as absolute server path
+   Source: qz_codex_catalog.generate() → catalog_dst.write_text(...)
+           catalog_line = f'model_catalog_json = "{catalog_dst}"'
+   Problem: server path not accessible on remote client machine
+
+3. CODEX_HOME set to $QZ_ROOT/var/codex-home
+   Source: qz-codex-common line 117
+   Problem: $QZ_ROOT on remote client may not exist or may be a different layout
+
+4. Initial config.toml copy from $QZ_ROOT/config/example/codex-config.toml
+   Source: qz-codex-common line 17-18
+   Problem: works only if remote client has a local copy of the QuantZhai repo
+             or if CODEX_HOME/config.toml is pre-configured manually
+```
+
+**model_provider** (from Slice A-design) is a secondary concern; the two primary
+blockers for remote mode are `base_url` and `model_catalog_json`.
+
+---
+
+### What remains correct in Slice A-design
+
+```text
+- model_provider is not proxy routing policy (still true)
+- Option C is still valid for co-located topology (still true)
+- Initial config.toml copy is legitimate bootstrap for co-located mode (still true)
+- QZ_CODEX_MODEL_PROVIDER env var override exists (still true)
+- CODEX_OSS_BASE_URL is already derived from QZ_PROXY_HOST:QZ_PROXY_PORT (correct)
+```
+
+---
+
+### Remote client bootstrap requirements
+
+For a remote qz-codex to work without a shared filesystem, it needs:
+
+```text
+From server at bootstrap time:
+  provider slug ("quantzhai")
+  provider base_url reflecting server IP/hostname (not 127.0.0.1)
+  wire_api (e.g. "responses")
+  auth approach — env_key name without the secret value
+  model catalog JSON content (or a URL to fetch it)
+  current recommended model slug
+
+Local actions (client-owned):
+  write local CODEX_HOME/config.toml patched with server base_url
+  write local CODEX_HOME/model-catalogs/qwenzhai-models.json
+  set CODEX_HOME, CODEX_SQLITE_HOME, CODEX_OSS_BASE_URL
+  keep/manage auth env var (LOCAL_QWEN_API_KEY)
+```
+
+The server must NOT expose:
+- API key values
+- Internal secrets
+- Prompt file contents
+- Model file paths unless safe
+
+---
+
+### Revised option comparison (remote-safe)
+
+**Option R1: Extend /qz/config/effective with a codex_client block**
+
+Pros: no new endpoint, observability + bootstrap together.
+Cons: effective config payload is already large; remote script must parse it.
+The `effective` endpoint is designed for operator inspection, not for machine
+bootstrapping. Scripts should not depend on the shape of a diagnostic report.
+**Not recommended for primary remote bootstrap.**
+
+**Option R2: Add dedicated /qz/codex/client-config endpoint**
+
+Pros: purpose-built for remote bootstrap; bounded payload; separates diagnostic
+report from client bootstrap; Codex-client-facing endpoint.
+Cons: new endpoint surface; must not become proxy-owned policy.
+**Recommended for remote bootstrap. Design-only for now.**
+
+**Option R3: Serve generated catalog over HTTP + keep provider config local**
+
+Pros: catalog accessible over HTTP without shared filesystem; simpler client config.
+Cons: `base_url` in config.toml still needs to be patched; client still needs
+an initial config.toml bootstrap from somewhere. Doesn't fully solve the problem.
+**Useful as part of R2 solution (catalog URL in client-config payload).**
+
+**Option R4: Require manual remote config / shared filesystem**
+
+Pros: no code.
+Cons: poor UX; breaks the remote Codex use case.
+**Not acceptable as the only solution.**
+
+---
+
+### Proposed future /qz/codex/client-config endpoint
+
+Design-only. Do not implement in this slice.
+
+```json
+GET /qz/codex/client-config
+
+Response:
+{
+  "ok": true,
+  "schema": "qz.codex.client_config.v1",
+  "topology_hint": "remote_supported",
+  "model_provider": "quantzhai",
+  "provider": {
+    "name": "QuantZhai",
+    "base_url": "http://<QZ_PROXY_HOST>:<QZ_PROXY_PORT>/v1",
+    "wire_api": "responses",
+    "env_key": "LOCAL_QWEN_API_KEY"
+  },
+  "model_catalog": {
+    "mode": "url",
+    "url": "http://<QZ_PROXY_HOST>:<QZ_PROXY_PORT>/qz/codex/model-catalog",
+    "sha256_12": "abc123def456",
+    "mtime_ms": 1716000000000
+  },
+  "default_model": "Qwen3.6-...",
+  "warnings": []
+}
+```
+
+Safety rules:
+- `env_key` exposes the key name only, never the key value
+- `base_url` uses the configured `QZ_PROXY_HOST:QZ_PROXY_PORT`, not hardcoded `127.0.0.1`
+- Model catalog is served by URL or inline; no server-local absolute paths
+- Generated catalog remains cache/view; routing stays proxy-owned
+- No prompt file contents
+
+---
+
+### Catalog delivery for remote clients
+
+Two approaches (Slice B must choose and verify against Codex CLI expectations):
+
+**Approach 1: /qz/codex/model-catalog HTTP endpoint**
+Server serves the generated catalog JSON over HTTP. Remote client fetches it
+and writes to local CODEX_HOME/model-catalogs/. Simpler for the client.
+Risk: requires Codex CLI to support HTTP or file-based catalog (unclear).
+
+**Approach 2: Inline catalog in client-config payload**
+Server includes catalog JSON in the `/qz/codex/client-config` response.
+Client writes it to local CODEX_HOME. Avoids a second HTTP call.
+Risk: payload may be large depending on model count.
+
+**Action for Slice B:** verify what `model_catalog_json` value Codex CLI accepts
+(local file only, or HTTP URL, or both) before choosing approach.
+
+---
+
+### Revised future Slice B boundary
+
+**Slice B may:**
+```text
+- Add GET /qz/codex/client-config endpoint (or chosen name)
+- Expose provider, base_url derived from QZ_PROXY_HOST, wire_api, env_key name
+- Include model catalog URL or inline content
+- Add GET /qz/codex/model-catalog endpoint if needed
+- Update qz-codex-common to use client-config endpoint for remote mode
+- Keep local (co-located) mode working as-is — fallback to TOML if no endpoint
+- Add tests: no secrets, correct base_url, catalog delivery, local mode unchanged
+```
+
+**Slice B must not:**
+```text
+- Break co-located qz-codex (topology A must still work)
+- Remove TOML parsing fallback without proven replacement
+- Move CODEX_HOME or generated paths (see #56)
+- Rename slugs/profiles/models
+- Change routing
+- Expose API key values
+- Rewrite qz-codex-common from scratch
+```
+
+---
+
+### Test plan for future Slice B (revised)
+
+```text
+test_client_config_endpoint_has_schema_and_provider
+  GET /qz/codex/client-config returns ok=true, schema, model_provider
+
+test_client_config_base_url_uses_proxy_host_port
+  base_url reflects QZ_PROXY_HOST and QZ_PROXY_PORT, not 127.0.0.1
+
+test_client_config_no_api_key_values
+  env_key is present (key name only); no auth token/secret in payload
+
+test_client_config_model_catalog_present
+  model_catalog block or URL present; sha256_12 and mtime_ms included
+
+test_client_config_missing_catalog_produces_bounded_warning
+  generated catalog missing → warnings includes bounded message; no exception
+
+test_local_mode_unaffected
+  co-located qz-codex still works with TOML and local CODEX_HOME after Slice B
+
+test_remote_mode_can_write_local_codex_home
+  given client-config response, can produce valid local config.toml and catalog
+
+test_no_routing_change
+  proxy routing unchanged; catalog still cache/view after new endpoint added
+
+test_shell_syntax_qz_codex_common
+  bash -n scripts/qz-codex-common passes
+```
+
+---
+
+### Updated non-goals
 
 ```text
 Not #56 var/generated path migration.
-Not a rewrite of qz-codex-common.
+Not a rewrite of qz-codex-common from scratch.
 Not a Codex config format migration.
 Not a model routing redesign.
 Not operational persistence (#51/#46).
 Not BrainCase/LimbiCore.
 Not #37 stream seam work.
-Not a standalone /qz/config/model_provider endpoint.
-Not removing the config.toml bootstrap copy.
+Not exposing API key values.
+Not breaking co-located launcher mode.
+Not removing config.toml bootstrap copy.
 ```
 
 ---
 
 ## Next steps
+
+1. Treat this plan as a living document.
 
 1. Treat this plan as a living document.
 2. Start with an audit of data paths, failure modes, and config/state files.

@@ -32,7 +32,7 @@ Current strategic direction:
 
 ```text
 P1 #37 Stream seam extraction (Slices 1–2F.1 complete) — pause before next seam
-P2 Config/var/script cleanup (#5) — CLOSED; #57 A-design: model_provider is Codex-client config, keep launcher-local
+P2 Config/var/script cleanup (#5) — CLOSED; #57 A.1-design: remote topology + /qz/codex/client-config proposed
 P3 #51/#46 operational-state persistence (deferred until store decision)
 P4 Search config split (#39) — when search work resumes
 ```
