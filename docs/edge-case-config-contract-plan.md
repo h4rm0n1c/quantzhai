@@ -1412,6 +1412,207 @@ Follow-up issues opened:
 
 ---
 
+## qz-codex-common thinning design (#57 Slice A-design)
+
+Date: 2026-05-19. Status: design only — no runtime implementation.
+
+This section defines what qz-codex-common still owns, whether `model_provider`
+TOML parsing should move to a proxy endpoint, and what a future implementation
+slice may or must not do.
+
+---
+
+### Current qz-codex-common ownership map
+
+| Responsibility | Current owner | Classification |
+|---|---|---|
+| CODEX_HOME directory creation (`mkdir -p`) | `qz-codex-common` | Legitimate bootstrap |
+| Initial `config.toml` copy from template | `qz-codex-common` | Legitimate bootstrap |
+| `POST /qz/models/refresh` call | `qz-codex-common` → proxy | Correct — proxy owns catalog state |
+| `model_provider` read from `config.toml` | `qz-codex-common` (Python regex) | **Launcher-local Codex client config** |
+| `CODEX_HOME`, `CODEX_SQLITE_HOME`, `CODEX_OSS_BASE_URL` env setup | `qz-codex-common` | Legitimate launcher |
+| Codex CLI invocation (`-c "model_provider=..."`) | `qz-codex-common` | Legitimate launcher |
+| `/qz/control-plane` health display on error | `qz-codex-common` | Legitimate diagnostics |
+
+There is **no authority duplication** remaining. The proxy owns catalog state;
+`qz-codex-common` owns Codex CLI launch mechanics.
+
+---
+
+### model_provider current flow
+
+`config/example/codex-config.toml` (template, tracked in git):
+```toml
+model_provider = "quantzhai"
+[model_providers.quantzhai]
+name = "QuantZhai"
+base_url = "http://127.0.0.1:18180/v1"
+wire_api = "responses"
+env_key = "LOCAL_QWEN_API_KEY"
+...
+```
+
+1. On first `qz-codex` launch, `qz-codex-common` copies this template to
+   `var/codex-home/config.toml`. `model_provider = "quantzhai"` is set there.
+
+2. `POST /qz/models/refresh` → `qz_codex_catalog.generate()` patches `config.toml`
+   in-place: adds/updates `model_catalog_json = "..."`, removes stale context-window
+   lines. **It does NOT touch `model_provider`.**
+
+3. `qz_prepare_codex_home()` extracts `model_provider` via Python regex (reads lines
+   before the first `[section]` header, matches `model_provider = "..."`).
+
+4. The extracted value is stored as `QZ_CODEX_MODEL_PROVIDER` and passed to Codex CLI
+   as `-c "model_provider=\"$QZ_CODEX_MODEL_PROVIDER\""`.
+
+**Key finding:** `model_provider` is a **Codex CLI client concept** — it tells the
+Codex CLI which `[model_providers.*]` block to use and which API base URL to hit.
+The proxy has no awareness of it and no reason to expose it. There is no ownership
+duplication; the parsing is local Codex client config plumbing.
+
+---
+
+### Option comparison
+
+**Option A: Add `/qz/config/model_provider` endpoint**
+
+Pros: script stops parsing TOML; provider surfaced as proxy observation.
+Cons: Creates a weird ownership inversion — proxy would read a Codex CLI config file
+it doesn't otherwise consume. `model_provider` is not proxy policy; having the proxy
+expose it implies authority it doesn't have.
+**Not recommended.**
+
+**Option B: Extend `/qz/config/effective` with a `codex` block**
+
+Pros: No new endpoint; provider visible in existing observability report; parsing
+in Python (more robust than bash regex).
+Cons: Requires `/qz/config/effective` to read and parse `config.toml` TOML format.
+Script would need to query the endpoint and extract the value (adds proxy dependency
+to an operation that currently works without a proxy call). More complex for a minor
+improvement.
+**Acceptable as a future option if TOML parsing becomes brittle, but not urgent.**
+
+**Option C: Keep TOML parsing, document as launcher-local**
+
+Pros: No code churn. `model_provider` is genuinely a Codex CLI concept. The Python
+snippet is simple and stable (reads lines before first `[section]` header). Operator
+can override with `QZ_CODEX_MODEL_PROVIDER` env var without any proxy interaction.
+Cons: Regex remains, but it is minimal and well-isolated.
+**Recommended for now.**
+
+---
+
+### Recommendation: Option C — keep launcher-local, document the boundary
+
+`model_provider` is a Codex CLI client setting, not proxy policy. The TOML parsing
+is an acceptable launcher implementation detail. It should be clearly commented in
+the script as client-config plumbing, not as policy.
+
+**If the parsing ever becomes brittle** (e.g., config.toml format changes, TOML
+quoting edge cases emerge), the lowest-risk upgrade path is **Option B**: extend
+`/qz/config/effective` to include a bounded `codex` observability block parsed from
+`config.toml`. This keeps parsing in Python, in a tested endpoint, and does not
+invert ownership.
+
+The `QZ_CODEX_MODEL_PROVIDER` env var override is already supported and documented
+as the operator escape hatch.
+
+---
+
+### Initial config.toml copy analysis
+
+`qz-codex-common` copies `config/example/codex-config.toml` to
+`var/codex-home/config.toml` on first run. This is a **legitimate bootstrap step**:
+
+- `qz_codex_catalog.generate()` patches but does NOT create `config.toml`; if the
+  file is absent, `generate()` starts with an empty string and only writes
+  `model_catalog_json = "..."`. The full provider config block would be missing.
+- Having the proxy create `config.toml` from template would require the proxy to
+  own Codex client config initialization — a concern outside its remit.
+
+**Leave the initial copy as-is.** It is not authority duplication.
+
+---
+
+### Future Slice B boundary (if ever warranted)
+
+A future Slice B should only be implemented if the TOML parsing becomes brittle or
+an operator explicitly requests provider visibility in the effective config report.
+
+**Slice B may:**
+```text
+- Add a bounded "codex" block to /qz/config/effective output:
+    {
+      "codex": {
+        "model_provider": "quantzhai",
+        "source_path": ".../var/codex-home/config.toml",
+        "source_layer": "generated",
+        "config_state": "file"  (or "missing"/"malformed")
+      }
+    }
+  Parsing in Python, safe failure returns bounded warning.
+- Update qz-codex-common to read from this endpoint instead of local TOML.
+  Fallback to TOML parsing if proxy is unavailable (since proxy is required anyway,
+  fallback may be optional).
+- Add focused tests for the new block.
+```
+
+**Slice B must not:**
+```text
+- Remove config.toml bootstrap copy
+- Move CODEX_HOME
+- Move generated artifacts (see #56)
+- Rename model_provider setting name or slugs
+- Change model routing
+- Rewrite qz-codex-common
+- Add a standalone /qz/config/model_provider endpoint
+```
+
+---
+
+### Test plan for future Slice B
+
+```text
+test_effective_config_codex_block_present
+  codex block present in /qz/config/effective payload
+
+test_effective_config_codex_model_provider_reads_from_config_toml
+  config.toml with model_provider = "quantzhai" → codex.model_provider == "quantzhai"
+
+test_effective_config_codex_block_missing_config_toml
+  config.toml absent → codex.config_state == "missing", bounded warning
+
+test_effective_config_codex_block_malformed_config_toml
+  config.toml unparseable → safe failure, bounded warning, no exception
+
+test_effective_config_codex_block_does_not_expose_api_keys
+  no env_key values or secrets in codex block
+
+test_shell_syntax_qz_codex_common_unchanged
+  bash -n scripts/qz-codex-common passes
+
+test_no_model_routing_change
+  proxy routing unaffected by codex block addition
+```
+
+---
+
+### Non-goals
+
+```text
+Not #56 var/generated path migration.
+Not a rewrite of qz-codex-common.
+Not a Codex config format migration.
+Not a model routing redesign.
+Not operational persistence (#51/#46).
+Not BrainCase/LimbiCore.
+Not #37 stream seam work.
+Not a standalone /qz/config/model_provider endpoint.
+Not removing the config.toml bootstrap copy.
+```
+
+---
+
 ## Next steps
 
 1. Treat this plan as a living document.

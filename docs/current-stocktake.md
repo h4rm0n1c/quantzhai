@@ -85,7 +85,8 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 | #37 | Architectural seam extraction plan | **PAUSED** — Slices 1–2E.1 complete; next seam needs design micro-slice |
 | #51 | Promote recovery/backoff runtime state to SQLite | **deferred** until operational-store decision |
 | #46 | Replace qz-write-runtime-state launcher trace | **deferred** until startup-telemetry replacement |
-| #5 | Config/var/script ownership cleanup | **CLOSED** (Slices A–C.1 complete; acceptance criteria satisfied; follow-ups opened for migration/thinning) |
+| #5 | Config/var/script ownership cleanup | **CLOSED** (#56, #57 opened for migration/thinning follow-ups) |
+| #57 | qz-codex-common thinning | **design** (Slice A-design complete: model_provider is Codex-client config, keep launcher-local) |
 | #39 | Split search routing policy into search.json | **optional-polish** (resume when search work resumes) |
 | #52 | Backend-confirmed VRAM allocator metrics | **upstream-blocked** (TurboQuant side) |
 | #8 | RFC: NetTTS survival-weighted compaction | **research/later** |
