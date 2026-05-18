@@ -1389,6 +1389,27 @@ only override files that actually exist on disk. Previously the list was hardcod
 both names regardless of which files were present. 3 new tests lock the behaviour.
 2521 total tests passing. No routing/ownership/path changes.
 
+### #5 close-out (2026-05-19)
+
+**Issue #5 CLOSED.** All original acceptance criteria satisfied:
+
+```text
+Effective config reports source layer, path, classification, missing/stale warnings.  PASS
+/qz/models/refresh regenerates Codex catalog without qz-up restart.                  PASS
+Updating user model overrides and calling refresh applies them without restart.       PASS
+Generated catalog remains consistent with proxy model state.                          PASS
+No new permanent one-off shell scripts added.                                         PASS
+```
+
+qz-codex-common is already a thin client (calls POST /qz/models/refresh; no local
+catalog generation; no model-inventory.json reads). Remaining script-owned duties
+(directory setup, initial config.toml copy, model_provider read) are legitimate
+launcher mechanics, not ownership duplication.
+
+Follow-up issues opened:
+- Generated artifact path migration design (var/generated/)
+- qz-codex-common thinning design (model_provider proxy endpoint, config.toml handling)
+
 ---
 
 ## Next steps
