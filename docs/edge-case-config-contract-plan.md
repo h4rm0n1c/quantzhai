@@ -1860,8 +1860,6 @@ Not removing config.toml bootstrap copy.
 ## Next steps
 
 1. Treat this plan as a living document.
-
-1. Treat this plan as a living document.
 2. Start with an audit of data paths, failure modes, and config/state files.
 3. Prioritise minimal error-report improvements before the larger config restructure.
 4. Hide or compactly fail invalid profiles before touching broader layout.
