@@ -60,6 +60,8 @@ def _file_meta(path: Path) -> Dict[str, Any]:
                 result["sha256_12"] = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
             except Exception:
                 pass
+        else:
+            result["hash_skipped"] = "too_large"
         return result
     except Exception:
         return {}

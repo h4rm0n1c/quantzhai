@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from proxy.qz_config_report import EFFECTIVE_CONFIG_SCHEMA, effective_config_payload
+from proxy.qz_config_report import EFFECTIVE_CONFIG_SCHEMA, _file_meta, effective_config_payload
 
 
 class EffectiveConfigReportTests(unittest.TestCase):
@@ -628,6 +628,29 @@ class SourceFileMetaTests(unittest.TestCase):
                 self.assertEqual(paths["model_inventory_cache"]["source_layer"], "generated")
         finally:
             self._restore_env(saved)
+
+    def test_file_at_hash_boundary_is_hashed(self):
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            f.write(b"x" * 65536)
+            path = Path(f.name)
+        try:
+            meta = _file_meta(path)
+            self.assertIsNotNone(meta.get("sha256_12"), "file at boundary should be hashed")
+            self.assertEqual(len(meta["sha256_12"]), 12)
+            self.assertNotIn("hash_skipped", meta)
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_file_over_hash_boundary_is_not_hashed(self):
+        with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+            f.write(b"x" * 65537)
+            path = Path(f.name)
+        try:
+            meta = _file_meta(path)
+            self.assertIsNone(meta.get("sha256_12"), "file over boundary must not be hashed")
+            self.assertEqual(meta.get("hash_skipped"), "too_large")
+        finally:
+            path.unlink(missing_ok=True)
 
     def test_existing_keys_unchanged(self):
         """Existing _record() fields remain present after file-meta extension."""
