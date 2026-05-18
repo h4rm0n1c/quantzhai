@@ -408,5 +408,247 @@ class ProfilesV1ConfigReportTests(unittest.TestCase):
                     os.environ[k] = v
 
 
+class SourceFileMetaTests(unittest.TestCase):
+    """Tests for file metadata fields and source warnings — #5 Slice A."""
+
+    _ENV_KEYS = (
+        "QZ_ROOT", "QZ_VAR_DIR", "QZ_MODEL_OVERRIDES",
+        "QZ_MODEL_INVENTORY_CACHE", "QZ_CAPTURE_MODE",
+        "SEARXNG_POLICY", "SEARXNG_CAPABILITIES",
+        "QZ_LOAD_EXAMPLE_MODEL_OVERRIDES",
+    )
+
+    def _save_env(self):
+        return {k: os.environ.get(k) for k in self._ENV_KEYS}
+
+    def _restore_env(self, saved):
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def _minimal_root(self, tmp):
+        root = Path(tmp)
+        var_dir = root / "var"
+        (root / "config" / "default").mkdir(parents=True)
+        (root / "config" / "example").mkdir(parents=True)
+        (root / "proxy").mkdir()
+        var_dir.mkdir(parents=True)
+        os.environ["QZ_ROOT"] = str(root)
+        os.environ["QZ_VAR_DIR"] = str(var_dir)
+        os.environ.pop("QZ_MODEL_OVERRIDES", None)
+        os.environ.pop("QZ_CAPTURE_MODE", None)
+        os.environ.pop("SEARXNG_POLICY", None)
+        os.environ.pop("SEARXNG_CAPABILITIES", None)
+        os.environ.pop("QZ_LOAD_EXAMPLE_MODEL_OVERRIDES", None)
+        return root, var_dir
+
+    def test_existing_source_file_has_mtime_size_hash(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                overrides_path = root / "config" / "default" / "model-overrides.json"
+                overrides_path.write_text('{"models":{}}\n', encoding="utf-8")
+
+                payload = effective_config_payload()
+                paths = {item["name"]: item for item in payload["paths"]}
+                rec = paths["model_overrides_default"]
+
+                self.assertEqual(rec["state"], "file")
+                self.assertIn("mtime_ms", rec)
+                self.assertIn("size_bytes", rec)
+                self.assertIn("sha256_12", rec)
+                self.assertIsInstance(rec["mtime_ms"], int)
+                self.assertGreater(rec["mtime_ms"], 0)
+                self.assertIsInstance(rec["size_bytes"], int)
+                self.assertGreater(rec["size_bytes"], 0)
+                self.assertIsNotNone(rec["sha256_12"])
+                self.assertEqual(len(rec["sha256_12"]), 12)
+        finally:
+            self._restore_env(saved)
+
+    def test_missing_file_has_no_mtime_or_size(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+
+                payload = effective_config_payload()
+                paths = {item["name"]: item for item in payload["paths"]}
+                rec = paths["model_overrides_user"]
+
+                self.assertEqual(rec["state"], "missing")
+                self.assertNotIn("mtime_ms", rec)
+                self.assertNotIn("size_bytes", rec)
+                self.assertNotIn("sha256_12", rec)
+        finally:
+            self._restore_env(saved)
+
+    def test_sha256_12_is_twelve_chars_when_present(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                (root / "config" / "default" / "model-overrides.json").write_text(
+                    '{"models":{"a.gguf":{"label":"test"}}}\n', encoding="utf-8"
+                )
+
+                payload = effective_config_payload()
+                paths = {item["name"]: item for item in payload["paths"]}
+                sha = paths["model_overrides_default"].get("sha256_12")
+
+                self.assertIsNotNone(sha)
+                self.assertEqual(len(sha), 12)
+        finally:
+            self._restore_env(saved)
+
+    def test_no_full_file_content_in_record(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                sentinel = "SENTINEL_CONTENT_SHOULD_NOT_APPEAR"
+                (root / "config" / "default" / "model-overrides.json").write_text(
+                    f'{{"models":{{"secret":"{sentinel}"}}}}\n', encoding="utf-8"
+                )
+
+                payload = effective_config_payload()
+                payload_json = json.dumps(payload)
+
+                self.assertNotIn(sentinel, payload_json)
+        finally:
+            self._restore_env(saved)
+
+    def test_missing_user_overrides_warns_when_env_var_set(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                missing_path = root / "config" / "user" / "my-overrides.json"
+                os.environ["QZ_MODEL_OVERRIDES"] = str(missing_path)
+
+                payload = effective_config_payload()
+                warning_codes = [w.get("warning") for w in payload["warnings"]]
+
+                self.assertIn("missing_user_model_overrides", warning_codes)
+        finally:
+            self._restore_env(saved)
+
+    def test_present_user_overrides_do_not_warn_even_with_env_var(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                user_dir = root / "config" / "user"
+                user_dir.mkdir(parents=True)
+                overrides_path = user_dir / "model-overrides.json"
+                overrides_path.write_text('{"models":{}}\n', encoding="utf-8")
+                os.environ["QZ_MODEL_OVERRIDES"] = str(overrides_path)
+
+                payload = effective_config_payload()
+                warning_codes = [w.get("warning") for w in payload["warnings"]]
+
+                self.assertNotIn("missing_user_model_overrides", warning_codes)
+        finally:
+            self._restore_env(saved)
+
+    def test_missing_prompt_file_appears_in_toplevel_warnings(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                # A default overrides file that references a prompt file that won't exist.
+                (root / "config" / "default" / "model-overrides.json").write_text(
+                    '{"models":{"a.gguf":{"system_prompt_file":"config/user/prompts/a.md"}}}\n',
+                    encoding="utf-8",
+                )
+
+                payload = effective_config_payload()
+                warning_codes = [w.get("warning") for w in payload["warnings"]]
+
+                self.assertIn("missing_prompt_file", warning_codes)
+        finally:
+            self._restore_env(saved)
+
+    def test_missing_codex_catalog_warns(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+
+                payload = effective_config_payload()
+                warning_codes = [w.get("warning") for w in payload["warnings"]]
+
+                self.assertIn("missing_codex_catalog", warning_codes)
+        finally:
+            self._restore_env(saved)
+
+    def test_missing_codex_config_warns(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+
+                payload = effective_config_payload()
+                warning_codes = [w.get("warning") for w in payload["warnings"]]
+
+                self.assertIn("missing_codex_config", warning_codes)
+        finally:
+            self._restore_env(saved)
+
+    def test_present_codex_catalog_does_not_warn(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                catalog_dir = var_dir / "codex-home" / "model-catalogs"
+                catalog_dir.mkdir(parents=True)
+                (catalog_dir / "qwenzhai-models.json").write_text('{"models":[]}\n', encoding="utf-8")
+
+                payload = effective_config_payload()
+                warning_codes = [w.get("warning") for w in payload["warnings"]]
+
+                self.assertNotIn("missing_codex_catalog", warning_codes)
+        finally:
+            self._restore_env(saved)
+
+    def test_generated_paths_classified_as_generated(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+
+                payload = effective_config_payload()
+                paths = {item["name"]: item for item in payload["paths"]}
+
+                self.assertEqual(paths["codex_model_catalog"]["source_layer"], "generated")
+                self.assertEqual(paths["codex_config"]["source_layer"], "generated")
+                self.assertEqual(paths["model_inventory_cache"]["source_layer"], "generated")
+        finally:
+            self._restore_env(saved)
+
+    def test_existing_keys_unchanged(self):
+        """Existing _record() fields remain present after file-meta extension."""
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                (root / "config" / "default" / "model-overrides.json").write_text(
+                    '{"models":{}}\n', encoding="utf-8"
+                )
+
+                payload = effective_config_payload()
+                paths = {item["name"]: item for item in payload["paths"]}
+                rec = paths["model_overrides_default"]
+
+                for key in ("name", "path", "state", "source_layer", "classification",
+                            "env_var", "env_value", "default", "active", "note"):
+                    self.assertIn(key, rec, f"existing key missing: {key}")
+        finally:
+            self._restore_env(saved)
+
+
 if __name__ == "__main__":
     unittest.main()

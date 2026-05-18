@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -40,6 +41,30 @@ def _path_state(path: Path) -> str:
     return "missing"
 
 
+def _file_meta(path: Path) -> Dict[str, Any]:
+    """Return bounded file metadata for a path that exists as a file.
+
+    Safe failure: returns an empty dict rather than raising when stat/hash fails.
+    sha256_12 is computed only for files at most 64 KiB to avoid hashing large
+    binaries or model files.
+    """
+    try:
+        st = path.stat()
+        result: Dict[str, Any] = {
+            "mtime_ms": int(st.st_mtime * 1000),
+            "size_bytes": st.st_size,
+            "sha256_12": None,
+        }
+        if st.st_size <= 65536:
+            try:
+                result["sha256_12"] = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+            except Exception:
+                pass
+        return result
+    except Exception:
+        return {}
+
+
 def _record(
     name: str,
     path: Path,
@@ -52,10 +77,11 @@ def _record(
     note: str = "",
 ) -> Dict[str, Any]:
     env_value = os.environ.get(env_var) if env_var else None
-    return {
+    state = _path_state(path)
+    record: Dict[str, Any] = {
         "name": name,
         "path": str(path),
-        "state": _path_state(path),
+        "state": state,
         "source_layer": source_layer,
         "classification": classification,
         "env_var": env_var,
@@ -64,6 +90,9 @@ def _record(
         "active": bool(active),
         "note": note,
     }
+    if state == "file":
+        record.update(_file_meta(path))
+    return record
 
 
 def _setting_record(
@@ -358,12 +387,46 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
             "path": str(searxng_policy),
             "warning": "active search policy is under docs; move to config/default with compatibility path",
         })
+    records_by_name = {r["name"]: r for r in records}
     for record in records:
         if record["active"] and record["state"] == "missing" and record["name"] in {
             "model_dir",
             "searxng_policy",
         }:
             warnings.append({"path": record["path"], "warning": f"{record['name']} is active but missing"})
+
+    # User model overrides explicitly configured via env but file is missing.
+    if os.environ.get("QZ_MODEL_OVERRIDES") and records_by_name.get("model_overrides_user", {}).get("state") == "missing":
+        warnings.append({
+            "name": "model_overrides_user",
+            "path": str(model_overrides),
+            "warning": "missing_user_model_overrides",
+        })
+
+    # Prompt files referenced by config but not found on disk.
+    for missing_path in prompt_file_summary.get("missing", []):
+        warnings.append({
+            "path": missing_path,
+            "warning": "missing_prompt_file",
+        })
+
+    # Generated Codex catalog missing — Codex cannot connect without it.
+    if records_by_name.get("codex_model_catalog", {}).get("state") == "missing":
+        warnings.append({
+            "name": "codex_model_catalog",
+            "path": records_by_name["codex_model_catalog"]["path"],
+            "warning": "missing_codex_catalog",
+            "note": "run /qz/models/refresh to regenerate",
+        })
+
+    # Generated Codex config missing — Codex cannot connect without it.
+    if records_by_name.get("codex_config", {}).get("state") == "missing":
+        warnings.append({
+            "name": "codex_config",
+            "path": records_by_name["codex_config"]["path"],
+            "warning": "missing_codex_config",
+            "note": "run /qz/models/refresh to regenerate",
+        })
 
     proxy_initialization = None
     if handler is not None:
