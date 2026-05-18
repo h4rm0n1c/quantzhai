@@ -97,32 +97,40 @@ except Exception:
 
   mv "$_catalog_tmp" "$_catalog_file"
 
-  # 5. Write/patch local config.toml with remote server values.
+  # 5. Write/patch local config.toml with remote server values (atomic write).
   #    Only env_key name is written; never the key value.
+  #    Values are TOML-safe escaped via json.dumps (handles quotes, backslashes, etc.).
   local _config_toml="$CODEX_HOME/config.toml"
+  local _config_toml_tmp="${_config_toml}.tmp.$$"
 
   if [[ -f "$_config_toml" && ! -f "${_config_toml}.pre-qz-remote.bak" ]]; then
     cp "$_config_toml" "${_config_toml}.pre-qz-remote.bak"
   fi
 
-  python3 - "$_config_toml" \
-    "$_model_provider" "$_provider_name" "$_base_url" \
-    "$_wire_api" "$_env_key" "$_catalog_file" <<'PY'
-import re, sys
+  if ! python3 - "$_config_toml" "$_config_toml_tmp" \
+      "$_model_provider" "$_provider_name" "$_base_url" \
+      "$_wire_api" "$_env_key" "$_catalog_file" <<'PY'
+import json, re, sys
 from pathlib import Path
 
-dst          = Path(sys.argv[1])
-provider     = sys.argv[2]
-name         = sys.argv[3]
-base_url     = sys.argv[4]
-wire_api     = sys.argv[5]
-env_key      = sys.argv[6]   # key NAME only — never the key value
-catalog_file = sys.argv[7]
+def toml_str(s):
+    # json.dumps produces TOML-safe double-quoted strings: backslash and
+    # double-quote are escaped; control characters are escaped.
+    return json.dumps(str(s))
+
+src         = Path(sys.argv[1])  # existing config.toml to read (may not exist)
+dst_tmp     = Path(sys.argv[2])  # temp file to write (bash will mv to final path)
+provider    = sys.argv[3]
+name        = sys.argv[4]
+base_url    = sys.argv[5]
+wire_api    = sys.argv[6]
+env_key     = sys.argv[7]        # key NAME only — never the key value
+catalog     = sys.argv[8]
 
 existing = ""
-if dst.is_file():
+if src.is_file():
     try:
-        existing = dst.read_text(encoding="utf-8")
+        existing = src.read_text(encoding="utf-8")
     except Exception:
         existing = ""
 
@@ -135,13 +143,13 @@ existing = re.sub(
     '', existing, flags=re.DOTALL,
 ).strip()
 
-header = f'model_provider = "{provider}"\nmodel_catalog_json = "{catalog_file}"\n'
+header = f'model_provider = {toml_str(provider)}\nmodel_catalog_json = {toml_str(catalog)}\n'
 block  = (
     f'\n[model_providers.{provider}]\n'
-    f'name = "{name}"\n'
-    f'base_url = "{base_url}"\n'
-    f'wire_api = "{wire_api}"\n'
-    f'env_key = "{env_key}"\n'
+    f'name = {toml_str(name)}\n'
+    f'base_url = {toml_str(base_url)}\n'
+    f'wire_api = {toml_str(wire_api)}\n'
+    f'env_key = {toml_str(env_key)}\n'
 )
 
 parts = [header]
@@ -149,9 +157,20 @@ if existing:
     parts.append('\n' + existing)
 parts.append(block)
 
-dst.parent.mkdir(parents=True, exist_ok=True)
-dst.write_text(''.join(parts).rstrip('\n') + '\n', encoding='utf-8')
+dst_tmp.parent.mkdir(parents=True, exist_ok=True)
+dst_tmp.write_text(''.join(parts).rstrip('\n') + '\n', encoding='utf-8')
 PY
+  then
+    rm -f "$_config_toml_tmp"
+    printf 'qz-codex remote: failed to generate config.toml content\n' >&2
+    return 1
+  fi
+
+  if ! mv "$_config_toml_tmp" "$_config_toml" 2>/dev/null; then
+    rm -f "$_config_toml_tmp"
+    printf 'qz-codex remote: failed to install config.toml\n' >&2
+    return 1
+  fi
 
   # 6. Export env vars for the Codex CLI launcher
   export CODEX_HOME

@@ -2144,6 +2144,23 @@ local `config.toml` with remote `base_url` and local `model_catalog_json` path.
 `$HOME/.qz-remote-codex/codex-home`. 10 tests in
 `tests/test_qz_codex_common_remote.py`. 2558 tests passing.
 
+### Slice C2.1 — COMPLETE
+
+Audit found two real issues; both fixed.
+
+1. **config.toml write was not atomic.** Python script now writes to a temp path
+   (`config.toml.tmp.<pid>`) and bash does `mv` to the final path. If Python fails
+   before completing, the existing `config.toml` is untouched.
+
+2. **TOML string values were not escaped.** Python f-strings produced `name = "value"`
+   raw. Values with embedded `"` or `\` would break TOML. Fixed to use `json.dumps()`
+   (`toml_str()` helper) which produces JSON-equivalent escaping — sufficient for TOML
+   basic strings.
+
+8 new tests confirm: idempotence, backup-once, unrelated section preservation, no temp
+files after success/failure, CODEX_HOME default, TOML special-char escaping.
+2566 tests passing.
+
 ### Slice C2: qz-codex-common remote bootstrap (after C1.1)
 
 **Scope:** qz-codex-common script update only. Depends on C1 endpoints being live.

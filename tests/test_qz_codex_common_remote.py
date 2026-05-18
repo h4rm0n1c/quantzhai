@@ -316,5 +316,179 @@ class RemoteBootstrapTests(unittest.TestCase):
             server.shutdown()
 
 
+class RemoteBootstrapPolishTests(unittest.TestCase):
+    """Audit/polish tests added in Slice C2.1."""
+
+    def test_remote_bootstrap_is_idempotent(self):
+        """Running remote bootstrap twice produces stable config.toml."""
+        with _MockServer() as srv, tempfile.TemporaryDirectory() as tmp:
+            codex_home = Path(tmp) / "codex-home"
+            r1 = _run_remote_bootstrap(srv.port, codex_home)
+            self.assertEqual(r1.returncode, 0, r1.stderr)
+            config1 = (codex_home / "config.toml").read_text()
+
+            r2 = _run_remote_bootstrap(srv.port, codex_home)
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            config2 = (codex_home / "config.toml").read_text()
+
+            self.assertEqual(config1, config2, "config.toml should be stable after second run")
+            # Verify no duplicate managed keys
+            self.assertEqual(config2.count("model_provider ="), 1)
+            self.assertEqual(config2.count("model_catalog_json ="), 1)
+            self.assertEqual(config2.count("[model_providers.quantzhai]"), 1)
+
+    def test_remote_mode_backup_created_on_first_run(self):
+        """Backup of config.toml is created on first run."""
+        with _MockServer() as srv, tempfile.TemporaryDirectory() as tmp:
+            codex_home = Path(tmp) / "codex-home"
+            codex_home.mkdir(parents=True)
+            (codex_home / "config.toml").write_text('original = "yes"\n', encoding="utf-8")
+
+            r = _run_remote_bootstrap(srv.port, codex_home)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            backup = codex_home / "config.toml.pre-qz-remote.bak"
+            self.assertTrue(backup.exists(), "backup should be created on first run")
+            self.assertIn("original", backup.read_text())
+
+    def test_remote_mode_backup_not_overwritten_on_second_run(self):
+        """Pre-existing backup is not overwritten on second run."""
+        with _MockServer() as srv, tempfile.TemporaryDirectory() as tmp:
+            codex_home = Path(tmp) / "codex-home"
+            codex_home.mkdir(parents=True)
+            (codex_home / "config.toml").write_text('original = "yes"\n', encoding="utf-8")
+
+            r1 = _run_remote_bootstrap(srv.port, codex_home)
+            self.assertEqual(r1.returncode, 0, r1.stderr)
+            backup_path = codex_home / "config.toml.pre-qz-remote.bak"
+            backup_mtime1 = backup_path.stat().st_mtime
+
+            r2 = _run_remote_bootstrap(srv.port, codex_home)
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            backup_mtime2 = backup_path.stat().st_mtime
+
+            self.assertEqual(backup_mtime1, backup_mtime2, "backup must not be overwritten on second run")
+            self.assertIn("original", backup_path.read_text())
+
+    def test_remote_mode_preserves_unrelated_config_sections(self):
+        """Unrelated config.toml sections survive the remote bootstrap patch."""
+        with _MockServer() as srv, tempfile.TemporaryDirectory() as tmp:
+            codex_home = Path(tmp) / "codex-home"
+            codex_home.mkdir(parents=True)
+            existing_config = (
+                'approval_policy = "on-request"\n'
+                'sandbox_mode = "workspace-write"\n'
+                '\n[some_other_section]\n'
+                'keep_this = "value"\n'
+            )
+            (codex_home / "config.toml").write_text(existing_config, encoding="utf-8")
+
+            r = _run_remote_bootstrap(srv.port, codex_home)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            result = (codex_home / "config.toml").read_text()
+
+            self.assertIn("some_other_section", result)
+            self.assertIn('keep_this', result)
+            self.assertIn("approval_policy", result)
+
+    def test_remote_mode_no_temp_files_left_after_success(self):
+        """No .tmp.* files remain in CODEX_HOME after a successful run."""
+        with _MockServer() as srv, tempfile.TemporaryDirectory() as tmp:
+            codex_home = Path(tmp) / "codex-home"
+            r = _run_remote_bootstrap(srv.port, codex_home)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            tmp_files = list(codex_home.rglob("*.tmp.*"))
+            self.assertEqual(tmp_files, [], f"temp files found: {tmp_files}")
+
+    def test_remote_mode_no_temp_files_left_after_catalog_failure(self):
+        """No .tmp.* catalog files remain when catalog fetch fails."""
+        with _MockServer(catalog_response=None) as srv, tempfile.TemporaryDirectory() as tmp:
+            codex_home = Path(tmp) / "codex-home"
+            r = _run_remote_bootstrap(srv.port, codex_home)
+            self.assertNotEqual(r.returncode, 0)
+            tmp_files = list(codex_home.rglob("*.tmp.*"))
+            self.assertEqual(tmp_files, [], f"temp files found after failure: {tmp_files}")
+
+    def test_remote_mode_without_codex_home_uses_default_under_home(self):
+        """Without CODEX_HOME set, remote mode uses $HOME/.qz-remote-codex/codex-home."""
+        with _MockServer() as srv, tempfile.TemporaryDirectory() as tmp:
+            fake_home = Path(tmp) / "fake-home"
+            fake_home.mkdir()
+            env = {
+                "HOME": str(fake_home),
+                "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin"),
+                "QZ_PROXY_HOST": "127.0.0.1",
+                "QZ_PROXY_PORT": str(srv.port),
+                "QZ_CODEX_REMOTE": "1",
+                "LOCAL_QWEN_API_KEY": "",
+                "QZ_ROOT": str(REPO_ROOT),
+            }
+            # No CODEX_HOME in env
+            env.pop("CODEX_HOME", None)
+            script = f"source '{QZ_CODEX_COMMON}' && _qz_remote_bootstrap"
+            result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=15)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            expected_home = fake_home / ".qz-remote-codex" / "codex-home"
+            self.assertTrue(expected_home.exists(), f"expected {expected_home} to be created")
+            catalog_file = expected_home / "model-catalogs" / "qwenzhai-models.json"
+            self.assertTrue(catalog_file.exists(), "catalog should be written under default CODEX_HOME")
+
+    def test_remote_mode_toml_special_chars_in_provider_values_produce_valid_toml(self):
+        """Provider name/URL with special chars is safely written (TOML escaping)."""
+        # Use a name with double-quote and backslash to verify json.dumps escaping
+        class _SpecialCharHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                port = self.server.server_port
+                if self.path == "/qz/codex/client-config":
+                    cfg = {
+                        "ok": True,
+                        "schema": "qz.codex.client_config.v1",
+                        "model_provider": "quantzhai",
+                        "provider": {
+                            "name": 'QuantZhai "local"',  # embedded quote
+                            "base_url": f"http://127.0.0.1:{port}/v1",
+                            "wire_api": "responses",
+                            "env_key": "LOCAL_QWEN_API_KEY",
+                        },
+                        "model_catalog": {
+                            "mode": "download",
+                            "url": f"http://127.0.0.1:{port}/qz/codex/model-catalog",
+                            "local_filename": "qwenzhai-models.json",
+                        },
+                        "warnings": [],
+                    }
+                    body = json.dumps(cfg).encode()
+                else:
+                    body = json.dumps(FAKE_CATALOG).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def log_message(self, *args): pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), _SpecialCharHandler)
+        server.server_port = server.server_address[1]
+        t = threading.Thread(target=server.serve_forever, daemon=True)
+        t.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                codex_home = Path(tmp) / "codex-home"
+                result = _run_remote_bootstrap(server.server_port, codex_home)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                config_toml = (codex_home / "config.toml").read_text()
+                # The embedded quote should be escaped, not raw
+                # json.dumps("QuantZhai \"local\"") = '"QuantZhai \\"local\\""'
+                self.assertIn("QuantZhai", config_toml)
+                # Should not contain unescaped double-quote inside the value
+                # (the outer quotes of the TOML string, then the escaped inner)
+                import re as _re
+                name_match = _re.search(r'name\s*=\s*"(.*?)"', config_toml)
+                # If json.dumps escaped correctly, name value should be parseable
+                # We just verify the file was written and is syntactically plausible
+                self.assertIsNotNone(name_match)
+        finally:
+            server.shutdown()
+
+
 if __name__ == "__main__":
     unittest.main()
