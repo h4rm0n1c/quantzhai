@@ -15,6 +15,7 @@ from proxy.qz_stream_watchdog import (
     build_timeout_telemetry_payload,
     should_trigger_no_output_timeout,
     should_trigger_terminal_timeout,
+    stream_timeout_kind,
 )
 from proxy.qz_stream_terminal import (
     STREAM_TERMINAL_SCHEMA,
@@ -780,6 +781,38 @@ class SerialiseTests(unittest.TestCase):
             state.mark_event(0.0)
             payload = build_timeout_telemetry_payload(state, terminal, now=10.0)
             json.dumps(payload)
+
+
+class StreamTimeoutKindHelperTests(unittest.TestCase):
+    """Unit tests for stream_timeout_kind() — #37 Slice 2F."""
+
+    def test_no_output_kind_returned_when_no_output_predicate_fires(self):
+        state = _state(timeout_secs=5.0, started_at=0.0)
+        state.mark_event(0.0)
+        self.assertEqual(stream_timeout_kind(state, now=5.0), "no_output")
+
+    def test_terminal_kind_returned_when_terminal_predicate_fires(self):
+        state = _state(timeout_secs=0.0, terminal_timeout_secs=5.0, started_at=0.0)
+        state.mark_visible_output(0.0)
+        self.assertEqual(stream_timeout_kind(state, now=5.0), "terminal")
+
+    def test_no_output_takes_priority_over_terminal(self):
+        # Both conditions would fire independently, but no_output wins.
+        state = _state(timeout_secs=5.0, terminal_timeout_secs=5.0, started_at=0.0)
+        state.mark_event(0.0)
+        # Do not mark visible output → no_output can fire; terminal cannot (no visible output).
+        # Verify no_output fires first.
+        self.assertEqual(stream_timeout_kind(state, now=5.0), "no_output")
+
+    def test_none_returned_when_neither_fires(self):
+        state = _state(timeout_secs=10.0, terminal_timeout_secs=10.0, started_at=0.0)
+        state.mark_event(0.0)
+        self.assertIsNone(stream_timeout_kind(state, now=1.0))
+
+    def test_none_returned_when_both_disabled(self):
+        state = _state(timeout_secs=0.0, terminal_timeout_secs=0.0, started_at=0.0)
+        state.mark_event(0.0)
+        self.assertIsNone(stream_timeout_kind(state, now=9999.0))
 
 
 if __name__ == "__main__":

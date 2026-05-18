@@ -44,6 +44,7 @@ try:
         build_timeout_telemetry_payload,
         should_trigger_no_output_timeout,
         should_trigger_terminal_timeout,
+        stream_timeout_kind,
     )
 except ImportError:
     from qz_responses import (
@@ -83,6 +84,7 @@ except ImportError:
         build_timeout_telemetry_payload,
         should_trigger_no_output_timeout,
         should_trigger_terminal_timeout,
+        stream_timeout_kind,
     )
 
 
@@ -1372,7 +1374,8 @@ class ResponsesStreamRuntime:
                             chunk = self._read_stream_line(resp)
                         except (TimeoutError, socket.timeout) as exc:
                             timeout_at = self._timeout_check_time(exc, hs.watchdog_state)
-                            if should_trigger_no_output_timeout(hs.watchdog_state, timeout_at):
+                            timeout_kind = stream_timeout_kind(hs.watchdog_state, timeout_at)
+                            if timeout_kind == "no_output":
                                 return self._finish_no_output_timeout(
                                     requested_model,
                                     started_at,
@@ -1391,7 +1394,7 @@ class ResponsesStreamRuntime:
                                     sequence=sequence,
                                     stream_obs_acc=hs.stream_obs_acc,
                                 )
-                            if should_trigger_terminal_timeout(hs.watchdog_state, timeout_at):
+                            if timeout_kind == "terminal":
                                 return self._finish_terminal_timeout_after_output(
                                     requested_model,
                                     started_at,
@@ -1467,9 +1470,9 @@ class ResponsesStreamRuntime:
                             hs.watchdog_state.mark_terminal(event_parsed_at)
                             restore_read_timeout_once()
 
-                        # No-output watchdog: fires on any event arrival if deadline passed
-                        # and no visible output or terminal event has been seen.
-                        if should_trigger_no_output_timeout(hs.watchdog_state, event_parsed_at):
+                        # Watchdog: fires on any event arrival if a timeout deadline passed.
+                        timeout_kind = stream_timeout_kind(hs.watchdog_state, event_parsed_at)
+                        if timeout_kind == "no_output":
                             return self._finish_no_output_timeout(
                                 requested_model,
                                 started_at,
@@ -1488,7 +1491,7 @@ class ResponsesStreamRuntime:
                                 sequence=sequence,
                                 stream_obs_acc=hs.stream_obs_acc,
                             )
-                        if should_trigger_terminal_timeout(hs.watchdog_state, event_parsed_at):
+                        if timeout_kind == "terminal":
                             return self._finish_terminal_timeout_after_output(
                                 requested_model,
                                 started_at,

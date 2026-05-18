@@ -121,6 +121,20 @@ def should_trigger_terminal_timeout(state: StreamWatchdogState, now: float) -> b
     return state.terminal_elapsed_secs(now) >= state.terminal_timeout_secs
 
 
+def stream_timeout_kind(state: StreamWatchdogState, now: float) -> str | None:
+    """Return which timeout kind should fire now, or None if neither should.
+
+    Pure helper — no I/O, no state mutation, no action side effects.
+    Returns "no_output", "terminal", or None.
+    No-output has priority over terminal to preserve the inline check order.
+    """
+    if should_trigger_no_output_timeout(state, now):
+        return "no_output"
+    if should_trigger_terminal_timeout(state, now):
+        return "terminal"
+    return None
+
+
 def build_timeout_telemetry_payload(
     state: StreamWatchdogState,
     terminal: dict,

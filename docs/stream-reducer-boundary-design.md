@@ -825,6 +825,37 @@ Not sync_terminal_read_timeout() extraction (socket side effect; not a pure deci
 
 ---
 
+## 9H. Slice 2F — COMPLETE
+
+`stream_timeout_kind(watchdog_state, now) -> str | None` added to
+`proxy/qz_stream_watchdog.py`. Two duplicated two-check patterns replaced at
+both call sites (exception handler and event loop) in `qz_responses_stream.py`.
+5 unit tests added in `StreamTimeoutKindHelperTests`.
+
+```text
+stream_timeout_kind(state: StreamWatchdogState, now: float) -> str | None
+  Returns "no_output" | "terminal" | None.
+  Pure: no I/O, no state mutation, no side effects.
+  Priority: no_output checked before terminal — preserves inline order.
+
+Call sites replaced (qz_responses_stream.py):
+  1. Exception handler (socket TimeoutError path)
+  2. Event-loop body (per-event arrival check)
+
+Action methods unchanged and still in qz_responses_stream.py:
+  _finish_no_output_timeout()
+  _finish_terminal_timeout_after_output()
+  watchdog_state.triggered = True
+  SSE rendering
+  telemetry
+```
+
+2470 tests passing. No behaviour change.
+
+**Recommended next: Slice 2F.1** — audit/polish before any further stream seam extraction.
+
+---
+
 ## 10. Risks
 
 | Risk | Likelihood | Mitigation |

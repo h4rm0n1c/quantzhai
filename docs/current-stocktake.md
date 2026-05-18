@@ -446,11 +446,12 @@ Key decisions from Slice 2A:
 
 **Slice 2F-design complete:** Compared all remaining #37 seam candidates; chose
   watchdog timeout-kind combiner as the next safe seam.
-  Proposed helper: `_stream_timeout_kind(watchdog_state, now) -> str | None`.
-  Design boundary, proposed shape, required tests, and acceptance criteria documented in
-  `docs/stream-reducer-boundary-design.md §9G`.
-  No runtime code changed. No tests changed.
-  Next: Slice 2F coding slice (5 unit tests + helper + two call-site replacements).
+
+**Slice 2F complete:** `stream_timeout_kind(watchdog_state, now) -> str | None` added to
+  `proxy/qz_stream_watchdog.py`. Two duplicated two-check patterns replaced at both call
+  sites in `qz_responses_stream.py`. 5 unit tests added (`StreamTimeoutKindHelperTests`).
+  No behaviour change. No side effects moved. 2470 tests passing.
+  Next: Slice 2F.1 audit/polish before any further stream seam extraction.
 
 ### Prompt A (archived): #37 Slice 1 + 1.1 — Stream state machine seam extraction — COMPLETE
 
