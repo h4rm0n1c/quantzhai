@@ -305,7 +305,13 @@ Key decisions from Slice 2A:
 **Slice 2E complete:** `_should_inject_context_pressure_signal(input_tokens, context_length, threshold) -> bool` extracted.
   Condition moved out of `_context_pressure_signal_message()`. 12 unit tests added. No behaviour change.
   Message construction and telemetry unchanged. 2465 tests passing.
-  Next: Slice 2E.1 audit/polish before any more complex extraction.
+
+**Slice 2E.1 complete:** Audit of Slices 2B–2E helpers. All helpers confirmed module-level, pure, and
+  side-effect free. No runtime code changes required. StreamDecision remains vocabulary-only.
+  No `decide_stream_event()` exists. 2465 tests passing.
+  Next: pause for top-level stocktake before touching more complex stream decisions.
+  Remaining candidates (tool lifecycle, terminal events, watchdog, proxy-local suppression,
+  continuation/repair flow) carry higher extraction risk and need a fresh design micro-slice first.
 
 ### Prompt A (archived): #37 Slice 1 + 1.1 — Stream state machine seam extraction — COMPLETE
 

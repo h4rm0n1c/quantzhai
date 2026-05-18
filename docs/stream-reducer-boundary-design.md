@@ -550,6 +550,56 @@ extraction until later.
 
 ---
 
+## 9F. Slice 2E.1 — COMPLETE
+
+Audit of all reducer-adjacent helpers extracted in Slices 2B–2E.
+
+**Audit results:**
+
+- All four helpers confirmed module-level, pure, and side-effect free:
+  no I/O, no DB, no sockets, no SSE writes, no tool execution, no telemetry,
+  no state mutation, no `self`.
+- `StreamDecision` confirmed vocabulary-only; not broadly consumed; no
+  `decide_stream_event()` exists in live code.
+- `_is_reasoning_only_abort` appears only as historical naming context in §9
+  — not live guidance.
+- Behaviour preservation confirmed for all helpers:
+  `_reasoning_only_abort_reason` (artifact priority, strict `>` comparisons,
+  disabled-at-negative, `None`-safe `progress_at`);
+  `_should_suppress_duplicate_response_start` (exact event-type set);
+  `_should_inject_hop_budget_signal` (threshold-negative disables, `<=` injects);
+  `_should_inject_context_pressure_signal` (threshold `<=0` disables, `>=` injects,
+  context_length and input_tokens edge cases preserved).
+- Test coverage confirmed: 167 stream tests, 2465 total — all pass.
+- No runtime code changes required.
+
+**Recommended next: pause for top-level stocktake.**
+
+Rationale: Slices 2B–2E safely extracted low-risk, bounded decisions. The
+remaining candidates carry higher extraction risk:
+
+```text
+tool lifecycle        — StreamToolCallState interaction is timing-sensitive
+terminal events       — emit_terminal must stay coupled with rendering
+watchdog/no-output    — timeout decisions depend on wall-clock injection
+proxy-local suppression — subtle timing; missing test gap noted in §8
+continuation/repair   — multi-hop state mutation; high blast radius
+```
+
+Before touching any of these, a fresh design micro-slice should define the
+extraction boundary, identify gaps in test coverage, and confirm the approach.
+
+Possible next options after stocktake:
+
+```text
+- continue #37 with a design micro-slice for the next delicate seam
+- shift to repeated-read v1 advisory signal (stateless, no stream changes)
+- revisit #7 memory_domain policy/config leftovers
+- defer #51/#46 until operational store decision
+```
+
+---
+
 ## 10. Risks
 
 | Risk | Likelihood | Mitigation |

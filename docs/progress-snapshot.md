@@ -31,7 +31,7 @@ docs/current-stocktake.md
 Current strategic direction:
 
 ```text
-P1 #37 Stream seam extraction (Slices 1–2E complete) — Slice 2E.1 audit/polish next
+P1 #37 Stream seam extraction (Slices 1–2E.1 complete) — pause for stocktake before next seam
 P2 repeated-read v1 advisory signal
 P3 #51/#46 operational-state persistence (deferred until store decision)
 P4 config/var/script ownership cleanup
