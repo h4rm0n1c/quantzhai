@@ -1092,6 +1092,283 @@ Confirms the plumbing path before the larger profile-bundle refactor.
 The `qz.profiles.v1` schema and `profiles/*.json` directory loader can be
 implemented as a follow-up PR once the memory_domain plumbing tests are green.
 
+## Generated artifact staleness design (#5 Slice C-design)
+
+Date: 2026-05-19. Status: design only — no runtime implementation yet.
+
+This section defines what "stale" means for the three generated artifacts reported
+by `/qz/config/effective`, and specifies the proposed warning codes, staleness
+conditions, and acceptance criteria for a future Slice C implementation.
+
+---
+
+### Artifact inventory and generation paths
+
+| Artifact | Record name | Default path | Generator | Triggered by |
+|---|---|---|---|---|
+| `model_inventory_cache` | `model_inventory_cache` | `var/model-inventory.json` (or `$QZ_MODEL_INVENTORY_CACHE`) | `ModelCatalog.refresh()` → `write_cache()` in `qz_model_catalog.py` | Proxy startup, `POST /qz/models/refresh`, `POST /qz/models/select` |
+| `codex_model_catalog` | `codex_model_catalog` | `$CODEX_HOME/model-catalogs/qwenzhai-models.json` (default: `var/codex-home/model-catalogs/qwenzhai-models.json`) | `qz_codex_catalog.generate(inventory_path, catalog_dst, config_dst)` via `_refresh_codex_catalog()` in `qz_request_router.py` | `POST /qz/models/refresh`, proxy startup (once at model-selection time) |
+| `codex_config` | `codex_config` | `$CODEX_HOME/config.toml` (default: `var/codex-home/config.toml`) | Same `generate()` call as `codex_model_catalog` — patches `config.toml` in-place | Same as `codex_model_catalog` (both updated atomically) |
+
+All three are classified as `generated` / cache / view. They are not source of truth
+for routing decisions.
+
+---
+
+### Input dependencies
+
+**`model_inventory_cache`**
+
+```text
+Inputs (code-confirmed):
+  QZ_MODEL_DIR scan results        — model files found in var/models/
+  Merged manifest from load_manifest():
+    config/default/model-overrides.json (or first-found fallback)
+    config/user/model-overrides.json   (or $QZ_MODEL_OVERRIDES)
+    config/example/model-overrides.json (only if QZ_LOAD_EXAMPLE_MODEL_OVERRIDES set)
+  Profile symlinks in var/models/  — resolved during scan_models()
+  Previously selected model key    — from var/model-state.json
+```
+
+**`codex_model_catalog`**
+
+```text
+Inputs (code-confirmed):
+  model-inventory.json             — direct input to generate()
+  assemble_instruction_stack()     — prompt policy for base_instructions field
+    → reads the same default/user overrides to build prompt
+    → prompt file contents change the catalog content
+  Note: catalog does NOT re-read model_dir directly; all model data comes from inventory
+```
+
+**`codex_config`**
+
+```text
+Inputs (code-confirmed):
+  Existing config.toml content     — read in full, then patched
+  catalog_dst path string          — embedded as model_catalog_json = "..."
+  Static cleanup rules             — removes stale model_context_window/model_max_output_tokens entries
+  Initial creation: qz-codex-common copies config/example/codex-config.toml on first run
+```
+
+`codex_model_catalog` and `codex_config` are always written together in one `generate()` call.
+If either write fails, the other may be inconsistent.
+
+**`qz-codex-common` note:** `qz-codex-common` calls `POST /qz/models/refresh` and checks
+the response; it does NOT read `model-inventory.json` directly. Script is a thin client,
+not a catalog authority.
+
+---
+
+### V1 staleness rule proposals
+
+**Rule 1: `stale_model_inventory_cache`**
+
+```text
+Condition:
+  model-inventory.json exists AND
+  max(mtime of default_overrides, mtime of model_overrides_user) > mtime of model-inventory.json
+
+Note on model_dir mtime: model_dir mtime is NOT used for staleness. Directory mtime
+is updated by ls, find, stat, and other read operations, causing excessive false positives.
+Override file comparison is sufficient and much more reliable.
+
+False positives: nearly none — override files are only written on explicit user edit.
+False negatives: new/removed GGUF files in model_dir are not detected without a scan.
+  This is acceptable: /qz/models/refresh is cheap and the operator can trigger it.
+
+Severity: advisory — Codex is usable but may show a stale model list.
+Remediation: POST /qz/models/refresh
+```
+
+**Rule 2: `stale_codex_catalog`**
+
+```text
+Condition:
+  codex_model_catalog exists AND model-inventory.json exists AND
+  mtime(model-inventory.json) > mtime(codex_model_catalog)
+
+Note: model-inventory.json is only written by ModelCatalog.refresh(). Its mtime
+reliably reflects the last successful scan. Comparing to catalog mtime is robust.
+
+False positives: very low — both are only written by refresh flows.
+False negatives: prompt policy changes (system_prompt_file content change) without
+  triggering inventory refresh will not be detected. Acceptable for v1.
+
+Severity: advisory — Codex model list may be stale but proxy routing is live.
+Remediation: POST /qz/models/refresh
+```
+
+**Rule 3: `stale_codex_config`**
+
+```text
+Condition:
+  codex_config exists AND codex_model_catalog exists AND
+  mtime(codex_model_catalog) > mtime(codex_config)
+
+Rationale: both are updated atomically by generate(). If catalog is newer than config,
+a write failure occurred. This is a defensive check, not a common case.
+
+False positives: rare — only if generate() partially failed.
+False negatives: config.toml is hand-edited after generation.
+  Acceptable: that scenario is unusual and the operator owns that edit.
+
+Severity: advisory — Codex may not find the updated catalog.
+Remediation: POST /qz/models/refresh
+```
+
+---
+
+### Proposed warning names and payloads
+
+```python
+# stale_model_inventory_cache
+{
+    "warning": "stale_model_inventory_cache",
+    "path": str(inventory_path),
+    "stale_against": ["model_overrides_default", "model_overrides_user"],
+    "artifact_mtime_ms": 1716000000000,       # model-inventory.json mtime
+    "newest_input_mtime_ms": 1716000001000,   # newest override file mtime
+    "remediation": "POST /qz/models/refresh",
+}
+
+# stale_codex_catalog
+{
+    "warning": "stale_codex_catalog",
+    "path": str(catalog_path),
+    "stale_against": ["model_inventory_cache"],
+    "artifact_mtime_ms": 1716000000000,       # qwenzhai-models.json mtime
+    "newest_input_mtime_ms": 1716000001000,   # model-inventory.json mtime
+    "remediation": "POST /qz/models/refresh",
+}
+
+# stale_codex_config
+{
+    "warning": "stale_codex_config",
+    "path": str(config_path),
+    "stale_against": ["codex_model_catalog"],
+    "artifact_mtime_ms": 1716000000000,       # config.toml mtime
+    "newest_input_mtime_ms": 1716000001000,   # qwenzhai-models.json mtime
+    "remediation": "POST /qz/models/refresh",
+}
+```
+
+---
+
+### Authority / routing constraints
+
+```text
+Staleness warnings must not change routing.
+  The proxy's live in-memory catalog state is always authoritative.
+  model-inventory.json is a cache, not a live routing fact.
+  codex_model_catalog is a view, not a routing authority.
+  codex_config is a Codex-client hint, not a proxy policy fact.
+
+Generated artifacts must remain labelled "generated" / cache / view.
+  The staleness warnings are advisory operator signals only.
+  A stale artifact does not mean the proxy is broken — it means a refresh is helpful.
+
+/qz/models/refresh is the remediation path for all three warnings.
+  Staleness warnings must never trigger refresh automatically.
+  The operator (or qz-codex-common) must call the endpoint explicitly.
+```
+
+---
+
+### Future Slice C implementation boundary
+
+**Slice C may:**
+
+```text
+- Add _artifact_staleness_check(artifact_path, input_paths) pure helper
+    Compares artifact mtime to max(input mtimes).
+    Returns {stale: bool, artifact_mtime_ms: int, newest_input_mtime_ms: int} or {}.
+    Safe failure: returns {} if stat fails.
+    Reuses _file_meta() mtime_ms fields from existing path records.
+- Add the three staleness warnings to the warnings array in effective_config_payload()
+    Conditions follow the rules defined above.
+    Payloads follow the proposed shapes above.
+- Add focused tests for each warning:
+    stale/fresh/missing cases for each artifact
+    missing input does not create misleading stale warning
+    payload bounded and contains remediation
+    generated/cache classification unchanged
+    no model files hashed or scanned differently
+```
+
+**Slice C must not:**
+
+```text
+- Change generation paths or file locations
+- Move generated artifacts to var/generated/
+- Run /qz/models/refresh automatically
+- Rewrite qz-codex-common
+- Mutate config files
+- Create new files at runtime
+- Change routing semantics
+- Promote generated files to source-of-truth status
+```
+
+---
+
+### Test plan for Slice C
+
+Exact tests future Slice C should add:
+
+```text
+test_model_inventory_cache_stale_when_override_newer_than_inventory
+  override file mtime > inventory mtime → stale_model_inventory_cache warning
+
+test_model_inventory_cache_fresh_when_inventory_newer_than_overrides
+  inventory mtime > override file mtimes → no stale_model_inventory_cache warning
+
+test_model_inventory_cache_missing_produces_existing_warning_not_stale
+  missing inventory → missing_codex_catalog (existing) not stale_model_inventory_cache
+
+test_codex_catalog_stale_when_inventory_newer_than_catalog
+  inventory mtime > catalog mtime → stale_codex_catalog warning
+
+test_codex_catalog_fresh_when_catalog_newer_than_inventory
+  catalog mtime > inventory mtime → no stale_codex_catalog warning
+
+test_codex_catalog_missing_input_does_not_create_misleading_stale_warning
+  inventory missing → stale check skipped entirely for catalog
+
+test_codex_config_stale_when_catalog_newer_than_config
+  catalog mtime > config mtime → stale_codex_config warning
+
+test_codex_config_fresh_when_config_newer_than_catalog
+  config mtime > catalog mtime → no stale_codex_config warning
+
+test_staleness_warning_payload_bounded
+  warning contains: warning, path, stale_against, artifact_mtime_ms,
+    newest_input_mtime_ms, remediation
+  no file contents in payload
+
+test_staleness_warning_does_not_promote_generated_artifact_to_authority
+  generated paths still classified as "generated" after staleness check
+
+test_models_refresh_not_called_by_effective_config
+  /qz/config/effective payload construction does not call ModelCatalog.refresh()
+  (must not trigger side effects)
+
+test_no_model_files_hashed
+  GGUF files and model-inventory.json are large; confirm no sha256_12 on them
+  (size_bytes > 65536 → hash_skipped or absent)
+```
+
+---
+
+### Implementation recommendation
+
+**Implement Slice C next** — the design is clear, dependencies are confirmed from code,
+and the mtime comparison rules are straightforward. No further verification pass is needed.
+
+The implementation is small: one pure helper, three warning conditions added to
+`effective_config_payload()`, and twelve focused tests. No path moves, no script rewrites.
+
+---
+
 ## Next steps
 
 1. Treat this plan as a living document.
