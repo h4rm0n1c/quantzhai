@@ -2007,6 +2007,164 @@ test_shell_syntax_qz_codex_common
 
 ---
 
+## qz-codex remote bootstrap: implementation phase split (#57 Slice C0-design)
+
+Date: 2026-05-19. Status: design only — no runtime implementation.
+
+The original Slice C plan combined server endpoints and qz-codex-common launcher
+changes in one slice. That is too broad. This section splits it.
+
+---
+
+### Why split Slice C
+
+The original Slice C plan included:
+- Add `GET /qz/codex/client-config` (server endpoint)
+- Add `GET /qz/codex/model-catalog` (server endpoint)
+- Update qz-codex-common for remote mode (script change)
+- Write local CODEX_HOME/config.toml (launcher action)
+- Write local catalog file (launcher action)
+
+Server endpoints and launcher changes have different risk profiles and different
+owners (Python proxy vs bash script). The server endpoints can be tested in
+isolation before the launcher is updated. Splitting them is safer.
+
+---
+
+### Slice C1: server endpoints only
+
+**Scope:** Python proxy endpoints only. No qz-codex-common changes.
+
+**C1 adds:**
+
+```text
+GET /qz/codex/client-config
+
+Response shape:
+  {
+    "ok": true,
+    "schema": "qz.codex.client_config.v1",
+    "model_provider": "quantzhai",
+    "provider": {
+      "name": "QuantZhai",
+      "base_url": "http://<QZ_PROXY_HOST>:<QZ_PROXY_PORT>/v1",
+      "wire_api": "responses",
+      "env_key": "LOCAL_QWEN_API_KEY"
+    },
+    "model_catalog": {
+      "mode": "download",
+      "url": "http://<QZ_PROXY_HOST>:<QZ_PROXY_PORT>/qz/codex/model-catalog",
+      "local_filename": "qwenzhai-models.json",
+      "sha256_12": "...",
+      "mtime_ms": 123
+    },
+    "warnings": []
+  }
+
+Rules:
+  - base_url derived from QZ_PROXY_HOST:QZ_PROXY_PORT, not hardcoded 127.0.0.1
+  - env_key is key NAME only; never expose value
+  - sha256_12 and mtime_ms from _file_meta() on the generated catalog file
+  - missing catalog: include bounded warning in warnings array, sha256_12/mtime_ms absent
+  - no routing changes
+  - no file writes
+  - no automatic refresh
+  - generated catalog remains cache/view, not authority
+
+GET /qz/codex/model-catalog
+
+Response:
+  - generated catalog JSON content from var/codex-home/model-catalogs/qwenzhai-models.json
+  - Content-Type: application/json
+  - missing catalog: HTTP 404, {"ok": false, "error": "missing_codex_catalog"}
+```
+
+**C1 must not:**
+```text
+Change qz-codex-common
+Move CODEX_HOME
+Write local client files
+Expose API key values
+Change model routing
+Mix in #56 path migration
+Break existing /qz/config/effective or /qz/models/refresh
+```
+
+**C1 tests:**
+```text
+test_client_config_schema_and_provider_slug
+test_client_config_base_url_uses_proxy_host_port (not 127.0.0.1)
+test_client_config_no_api_key_values
+test_client_config_catalog_url_points_to_model_catalog_endpoint
+test_client_config_catalog_sha256_and_mtime_present_when_catalog_exists
+test_client_config_missing_catalog_adds_bounded_warning
+test_model_catalog_endpoint_returns_generated_json
+test_model_catalog_endpoint_missing_returns_404_json
+test_generated_catalog_classification_unchanged (still cache/view)
+test_no_routing_change_after_c1
+test_qz_codex_common_unchanged_after_c1 (bash -n passes, no script edits)
+```
+
+---
+
+### Slice C1.1: endpoint audit/polish (after C1)
+
+Verify before touching qz-codex-common:
+- payload has no secrets
+- base_url is correctly dynamic
+- catalog delivery is bounded and safe
+- missing-catalog handling is correct
+- no routing side effects
+
+---
+
+### Slice C2: qz-codex-common remote bootstrap (after C1.1)
+
+**Scope:** qz-codex-common script update only. Depends on C1 endpoints being live.
+
+**C2 may:**
+```text
+- Detect remote mode via QZ_CODEX_REMOTE=1 env var (explicit opt-in)
+  or infer remote when QZ_PROXY_HOST is not 127.0.0.1 / localhost
+- Call GET /qz/codex/client-config to get provider and catalog URL
+- Call GET /qz/codex/model-catalog to fetch catalog JSON
+- Write fetched catalog to local CODEX_HOME/model-catalogs/qwenzhai-models.json
+- Generate or patch local CODEX_HOME/config.toml with:
+    model_catalog_json pointing to local client file path
+    base_url from client-config response (remote server, not 127.0.0.1)
+    model_provider, wire_api, env_key from client-config response
+- Preserve co-located mode exactly (no changes for local/co-located path)
+- Keep TOML fallback for co-located mode
+```
+
+**C2 must not:**
+```text
+Break co-located qz-codex (topology A must still work)
+Remove local TOML parsing for co-located mode
+Write API key values anywhere
+Require shared filesystem
+Move server-side CODEX_HOME or generated paths
+Rename provider/model slugs
+Change proxy routing
+Rewrite qz-codex-common from scratch
+Mix in #56 path migration
+```
+
+**C2 tests:**
+```text
+test_remote_mode_writes_local_catalog_file
+test_remote_mode_config_toml_has_remote_base_url
+test_remote_mode_model_catalog_json_points_to_local_path (not server absolute path)
+test_co_located_mode_unchanged_after_c2
+test_toml_fallback_unchanged_after_c2
+test_shell_syntax_qz_codex_common_after_c2 (bash -n passes)
+test_missing_client_config_gives_bounded_error
+test_missing_catalog_endpoint_gives_bounded_error
+test_no_api_key_written_in_remote_mode
+```
+
+---
+
 ## Next steps
 
 1. Treat this plan as a living document.
