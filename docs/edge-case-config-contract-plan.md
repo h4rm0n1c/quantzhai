@@ -2134,6 +2134,16 @@ Verify before touching qz-codex-common:
 
 ---
 
+### Slice C2 — COMPLETE
+
+`_qz_remote_bootstrap()` added to `scripts/qz-codex-common`. Activated via
+`QZ_CODEX_REMOTE=1`; co-located mode unchanged. Fetches `/qz/codex/client-config`
+and `/qz/codex/model-catalog`, writes local catalog atomically, writes/patches
+local `config.toml` with remote `base_url` and local `model_catalog_json` path.
+`env_key` name is written; key value is never written. Remote default `CODEX_HOME`:
+`$HOME/.qz-remote-codex/codex-home`. 10 tests in
+`tests/test_qz_codex_common_remote.py`. 2558 tests passing.
+
 ### Slice C2: qz-codex-common remote bootstrap (after C1.1)
 
 **Scope:** qz-codex-common script update only. Depends on C1 endpoints being live.

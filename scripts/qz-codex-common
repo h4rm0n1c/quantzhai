@@ -5,7 +5,169 @@ QZ_CODEX_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$QZ_CODEX_COMMON_DIR/qz-env"
 
+_qz_remote_bootstrap() {
+  # Remote bootstrap mode: fetch model catalog and client config from QuantZhai server,
+  # then write a local CODEX_HOME config.toml and model catalog JSON file.
+  #
+  # Requirements:
+  #   QZ_PROXY_HOST / QZ_PROXY_PORT — must point at the QuantZhai server
+  #   CODEX_HOME (optional)         — defaults to $HOME/.qz-remote-codex/codex-home
+  #   QZ_CODEX_REMOTE=1             — explicit opt-in; co-located mode is unchanged
+  #
+  # Never writes API key values; env_key field is the key NAME only.
+  # Catalog write is atomic: temp file + mv, no replacement on error.
+
+  local proxy_url="http://$QZ_PROXY_HOST:$QZ_PROXY_PORT"
+
+  # 1. Fetch /qz/codex/client-config
+  local _cfg_body
+  if ! _cfg_body=$(curl -fsS "$proxy_url/qz/codex/client-config" 2>/dev/null); then
+    printf 'qz-codex remote: failed to reach %s/qz/codex/client-config\n' "$proxy_url" >&2
+    printf '  Check QZ_PROXY_HOST=%s and QZ_PROXY_PORT=%s.\n' "$QZ_PROXY_HOST" "$QZ_PROXY_PORT" >&2
+    return 1
+  fi
+
+  # 2. Parse and validate; extract fields as tab-separated values
+  local _fields
+  _fields=$(printf '%s' "$_cfg_body" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    if not d.get('ok'):
+        print('ERROR: server ok=false', file=sys.stderr); sys.exit(1)
+    if d.get('schema') != 'qz.codex.client_config.v1':
+        print('ERROR: unexpected schema', file=sys.stderr); sys.exit(1)
+    p = d.get('provider', {})
+    mc = d.get('model_catalog', {})
+    vals = [
+        d.get('model_provider', ''),
+        p.get('name', ''),
+        p.get('base_url', ''),
+        p.get('wire_api', ''),
+        p.get('env_key', ''),
+        mc.get('url', ''),
+        mc.get('local_filename', 'qwenzhai-models.json'),
+    ]
+    if not all([vals[0], vals[2], vals[5]]):
+        print('ERROR: missing required fields', file=sys.stderr); sys.exit(1)
+    print('\t'.join(vals))
+except json.JSONDecodeError:
+    print('ERROR: invalid JSON response', file=sys.stderr); sys.exit(1)
+" 2>&1) || {
+    printf 'qz-codex remote: client config parse error: %s\n' "${_fields#ERROR: }" >&2
+    return 1
+  }
+  if [[ "$_fields" == ERROR:* ]]; then
+    printf 'qz-codex remote: client config error: %s\n' "${_fields#ERROR: }" >&2
+    return 1
+  fi
+
+  local _model_provider _provider_name _base_url _wire_api _env_key _catalog_url _catalog_filename
+  IFS=$'\t' read -r _model_provider _provider_name _base_url _wire_api _env_key _catalog_url _catalog_filename \
+    <<< "$_fields"
+
+  # 3. Resolve CODEX_HOME; default avoids collision with server var/codex-home
+  if [[ -z "${CODEX_HOME:-}" ]]; then
+    CODEX_HOME="$HOME/.qz-remote-codex/codex-home"
+  fi
+  mkdir -p "$CODEX_HOME/model-catalogs" "$CODEX_HOME/sqlite"
+
+  # 4. Fetch model catalog (atomic: write to temp file, validate, then mv)
+  local _catalog_file="$CODEX_HOME/model-catalogs/$_catalog_filename"
+  local _catalog_tmp="${_catalog_file}.tmp.$$"
+
+  if ! curl -fsS "$_catalog_url" -o "$_catalog_tmp" 2>/dev/null; then
+    rm -f "$_catalog_tmp"
+    printf 'qz-codex remote: failed to fetch model catalog from %s\n' "$_catalog_url" >&2
+    return 1
+  fi
+
+  if ! python3 -c "
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    sys.exit(0 if isinstance(d, dict) else 1)
+except Exception:
+    sys.exit(1)
+" "$_catalog_tmp" 2>/dev/null; then
+    rm -f "$_catalog_tmp"
+    printf 'qz-codex remote: fetched catalog is not a valid JSON object; not replacing existing catalog\n' >&2
+    return 1
+  fi
+
+  mv "$_catalog_tmp" "$_catalog_file"
+
+  # 5. Write/patch local config.toml with remote server values.
+  #    Only env_key name is written; never the key value.
+  local _config_toml="$CODEX_HOME/config.toml"
+
+  if [[ -f "$_config_toml" && ! -f "${_config_toml}.pre-qz-remote.bak" ]]; then
+    cp "$_config_toml" "${_config_toml}.pre-qz-remote.bak"
+  fi
+
+  python3 - "$_config_toml" \
+    "$_model_provider" "$_provider_name" "$_base_url" \
+    "$_wire_api" "$_env_key" "$_catalog_file" <<'PY'
+import re, sys
+from pathlib import Path
+
+dst          = Path(sys.argv[1])
+provider     = sys.argv[2]
+name         = sys.argv[3]
+base_url     = sys.argv[4]
+wire_api     = sys.argv[5]
+env_key      = sys.argv[6]   # key NAME only — never the key value
+catalog_file = sys.argv[7]
+
+existing = ""
+if dst.is_file():
+    try:
+        existing = dst.read_text(encoding="utf-8")
+    except Exception:
+        existing = ""
+
+# Remove managed top-level keys we will rewrite
+existing = re.sub(r'^\s*(model_provider|model_catalog_json)\s*=\s*.*$\n?', '', existing, flags=re.MULTILINE).strip()
+
+# Remove any existing [model_providers.<provider>] block we manage
+existing = re.sub(
+    r'\[model_providers\.' + re.escape(provider) + r'\].*?(?=\[|\Z)',
+    '', existing, flags=re.DOTALL,
+).strip()
+
+header = f'model_provider = "{provider}"\nmodel_catalog_json = "{catalog_file}"\n'
+block  = (
+    f'\n[model_providers.{provider}]\n'
+    f'name = "{name}"\n'
+    f'base_url = "{base_url}"\n'
+    f'wire_api = "{wire_api}"\n'
+    f'env_key = "{env_key}"\n'
+)
+
+parts = [header]
+if existing:
+    parts.append('\n' + existing)
+parts.append(block)
+
+dst.parent.mkdir(parents=True, exist_ok=True)
+dst.write_text(''.join(parts).rstrip('\n') + '\n', encoding='utf-8')
+PY
+
+  # 6. Export env vars for the Codex CLI launcher
+  export CODEX_HOME
+  export CODEX_SQLITE_HOME="$CODEX_HOME/sqlite"
+  export CODEX_OSS_BASE_URL="http://$QZ_PROXY_HOST:$QZ_PROXY_PORT"
+  export LOCAL_QWEN_API_KEY="${LOCAL_QWEN_API_KEY:-local}"
+  export QZ_CODEX_MODEL_PROVIDER="${QZ_CODEX_MODEL_PROVIDER:-$_model_provider}"
+}
+
 qz_prepare_codex_home() {
+  # Remote mode is explicit opt-in via QZ_CODEX_REMOTE=1; co-located mode unchanged.
+  if [[ "${QZ_CODEX_REMOTE:-}" == "1" ]]; then
+    _qz_remote_bootstrap
+    return $?
+  fi
+
   mkdir -p \
     "$QZ_VAR_DIR/codex-home/model-catalogs" \
     "$QZ_VAR_DIR/codex-home/sqlite" \
