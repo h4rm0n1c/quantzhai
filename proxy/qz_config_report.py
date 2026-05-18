@@ -67,6 +67,44 @@ def _file_meta(path: Path) -> Dict[str, Any]:
         return {}
 
 
+def _artifact_staleness_check(
+    artifact_path: Path,
+    input_paths: List[Path],
+) -> Dict[str, Any]:
+    """Return staleness metadata if artifact is older than any existing input.
+
+    Pure — no file writes, no creation, no refresh calls, no content reading.
+    Returns {"artifact_mtime_ms": int, "newest_input_mtime_ms": int} when stale.
+    Returns {} when not stale, when artifact is missing, or when no input exists.
+    Safe failure returns {} on any stat error.
+    """
+    try:
+        if not artifact_path.is_file():
+            return {}
+        artifact_mtime = artifact_path.stat().st_mtime
+    except Exception:
+        return {}
+
+    newest_mtime: Optional[float] = None
+    for path in input_paths:
+        try:
+            if path.is_file():
+                mt = path.stat().st_mtime
+                if newest_mtime is None or mt > newest_mtime:
+                    newest_mtime = mt
+        except Exception:
+            continue
+
+    if newest_mtime is None:
+        return {}
+    if newest_mtime > artifact_mtime:
+        return {
+            "artifact_mtime_ms": int(artifact_mtime * 1000),
+            "newest_input_mtime_ms": int(newest_mtime * 1000),
+        }
+    return {}
+
+
 def _record(
     name: str,
     path: Path,
@@ -339,6 +377,9 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
     model_state = Path(os.environ.get("QZ_MODEL_STATE_PATH", str(var_dir / "model-state.json"))).expanduser()
     backend_state = Path(os.environ.get("QZ_BACKEND_STATE_PATH", str(var_dir / "backend-state.json"))).expanduser()
     runtime_state = Path(os.environ.get("QZ_RUNTIME_STATE_PATH", str(var_dir / "run" / "qz-runtime-state.json"))).expanduser()
+    codex_home = var_dir / "codex-home"
+    codex_catalog_path = codex_home / "model-catalogs" / "qwenzhai-models.json"
+    codex_config_path = codex_home / "config.toml"
 
     policy_path = getattr(handler, "searxng_policy_path", None) if handler is not None else None
     capabilities_path = getattr(handler, "searxng_capabilities_path", None) if handler is not None else None
@@ -391,8 +432,8 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
         _record("codex_config_template", root / "config" / "example" / "codex-config.toml", source_layer="tracked_example", classification="example_codex_config"),
         _record("codex_catalog_example", root / "config" / "example" / "qwenzhai-models.json", source_layer="tracked_example", classification="example_codex_catalog"),
         _record("benchmark_prompts_default", root / "config" / "default" / "benchmark-prompts.json", source_layer="tracked_default", classification="benchmark_fixture"),
-        _record("codex_config", var_dir / "codex-home" / "config.toml", source_layer="generated", classification="generated_codex_config"),
-        _record("codex_model_catalog", var_dir / "codex-home" / "model-catalogs" / "qwenzhai-models.json", source_layer="generated", classification="generated_codex_catalog"),
+        _record("codex_config", codex_config_path, source_layer="generated", classification="generated_codex_config"),
+        _record("codex_model_catalog", codex_catalog_path, source_layer="generated", classification="generated_codex_catalog"),
         _record("model_state", model_state, source_layer="runtime_state", classification="state_fallback", env_var="QZ_MODEL_STATE_PATH", default=str(var_dir / "model-state.json")),
         _record("backend_state", backend_state, source_layer="runtime_state", classification="state_fallback", env_var="QZ_BACKEND_STATE_PATH", default=str(var_dir / "backend-state.json")),
         _record("runtime_state_snapshot", runtime_state, source_layer="runtime_state", classification="startup_snapshot", env_var="QZ_RUNTIME_STATE_PATH", default=str(var_dir / "run" / "qz-runtime-state.json")),
@@ -489,6 +530,41 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
             "path": records_by_name["codex_config"]["path"],
             "warning": "missing_codex_config",
             "note": "run /qz/models/refresh to regenerate",
+        })
+
+    # Staleness checks: advisory warnings when generated artifacts are older than
+    # their known inputs. These do not change routing and do not trigger refresh.
+    _inv_stale = _artifact_staleness_check(inventory, [default_overrides, model_overrides])
+    if _inv_stale:
+        warnings.append({
+            "warning": "stale_model_inventory_cache",
+            "path": str(inventory),
+            "stale_against": ["model_overrides_default", "model_overrides_user"],
+            "artifact_mtime_ms": _inv_stale["artifact_mtime_ms"],
+            "newest_input_mtime_ms": _inv_stale["newest_input_mtime_ms"],
+            "remediation": "POST /qz/models/refresh",
+        })
+
+    _cat_stale = _artifact_staleness_check(codex_catalog_path, [inventory])
+    if _cat_stale:
+        warnings.append({
+            "warning": "stale_codex_catalog",
+            "path": str(codex_catalog_path),
+            "stale_against": ["model_inventory_cache"],
+            "artifact_mtime_ms": _cat_stale["artifact_mtime_ms"],
+            "newest_input_mtime_ms": _cat_stale["newest_input_mtime_ms"],
+            "remediation": "POST /qz/models/refresh",
+        })
+
+    _cfg_stale = _artifact_staleness_check(codex_config_path, [codex_catalog_path])
+    if _cfg_stale:
+        warnings.append({
+            "warning": "stale_codex_config",
+            "path": str(codex_config_path),
+            "stale_against": ["codex_model_catalog"],
+            "artifact_mtime_ms": _cfg_stale["artifact_mtime_ms"],
+            "newest_input_mtime_ms": _cfg_stale["newest_input_mtime_ms"],
+            "remediation": "POST /qz/models/refresh",
         })
 
     proxy_initialization = None

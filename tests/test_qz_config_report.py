@@ -7,7 +7,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from proxy.qz_config_report import EFFECTIVE_CONFIG_SCHEMA, _file_meta, _prompt_file_records, effective_config_payload
+from proxy.qz_config_report import (
+    EFFECTIVE_CONFIG_SCHEMA,
+    _artifact_staleness_check,
+    _file_meta,
+    _prompt_file_records,
+    effective_config_payload,
+)
 
 
 class EffectiveConfigReportTests(unittest.TestCase):
@@ -406,6 +412,312 @@ class ProfilesV1ConfigReportTests(unittest.TestCase):
                     os.environ.pop(k, None)
                 else:
                     os.environ[k] = v
+
+
+class GeneratedArtifactStalenessTests(unittest.TestCase):
+    """Tests for _artifact_staleness_check() and staleness warnings — #5 Slice C."""
+
+    _ENV_KEYS = (
+        "QZ_ROOT", "QZ_VAR_DIR", "QZ_MODEL_OVERRIDES",
+        "QZ_MODEL_INVENTORY_CACHE", "QZ_CAPTURE_MODE",
+        "SEARXNG_POLICY", "SEARXNG_CAPABILITIES",
+        "QZ_LOAD_EXAMPLE_MODEL_OVERRIDES",
+    )
+
+    def _save_env(self):
+        return {k: os.environ.get(k) for k in self._ENV_KEYS}
+
+    def _restore_env(self, saved):
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def _minimal_root(self, tmp):
+        root = Path(tmp)
+        var_dir = root / "var"
+        (root / "config" / "default").mkdir(parents=True)
+        (root / "config" / "example").mkdir(parents=True)
+        (root / "proxy").mkdir()
+        var_dir.mkdir(parents=True)
+        os.environ["QZ_ROOT"] = str(root)
+        os.environ["QZ_VAR_DIR"] = str(var_dir)
+        os.environ.pop("QZ_MODEL_OVERRIDES", None)
+        os.environ.pop("QZ_MODEL_INVENTORY_CACHE", None)
+        os.environ.pop("QZ_CAPTURE_MODE", None)
+        os.environ.pop("SEARXNG_POLICY", None)
+        os.environ.pop("SEARXNG_CAPABILITIES", None)
+        os.environ.pop("QZ_LOAD_EXAMPLE_MODEL_OVERRIDES", None)
+        return root, var_dir
+
+    # --- _artifact_staleness_check() unit tests ---
+
+    def test_helper_returns_empty_when_artifact_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "missing.json"
+            inp = root / "input.json"
+            inp.write_text("{}", encoding="utf-8")
+            result = _artifact_staleness_check(artifact, [inp])
+            self.assertEqual(result, {})
+
+    def test_helper_returns_empty_when_no_inputs_exist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "artifact.json"
+            artifact.write_text("{}", encoding="utf-8")
+            result = _artifact_staleness_check(artifact, [root / "missing.json"])
+            self.assertEqual(result, {})
+
+    def test_helper_returns_stale_when_input_newer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "artifact.json"
+            inp = root / "input.json"
+            artifact.write_text("{}", encoding="utf-8")
+            inp.write_text("{}", encoding="utf-8")
+            # Set artifact older than input
+            old_time = 1_700_000_000.0
+            new_time = 1_700_001_000.0
+            os.utime(artifact, (old_time, old_time))
+            os.utime(inp, (new_time, new_time))
+            result = _artifact_staleness_check(artifact, [inp])
+            self.assertIn("artifact_mtime_ms", result)
+            self.assertIn("newest_input_mtime_ms", result)
+            self.assertLess(result["artifact_mtime_ms"], result["newest_input_mtime_ms"])
+
+    def test_helper_returns_empty_when_artifact_newer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "artifact.json"
+            inp = root / "input.json"
+            artifact.write_text("{}", encoding="utf-8")
+            inp.write_text("{}", encoding="utf-8")
+            new_time = 1_700_001_000.0
+            old_time = 1_700_000_000.0
+            os.utime(artifact, (new_time, new_time))
+            os.utime(inp, (old_time, old_time))
+            result = _artifact_staleness_check(artifact, [inp])
+            self.assertEqual(result, {})
+
+    # --- Integration tests via effective_config_payload() ---
+
+    def _write_with_mtime(self, path, content, mtime):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        os.utime(path, (mtime, mtime))
+
+    def test_model_inventory_cache_stale_when_override_newer_than_inventory(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                self._write_with_mtime(
+                    root / "config" / "default" / "model-overrides.json",
+                    '{"models":{}}', 1_700_001_000.0,  # newer
+                )
+                self._write_with_mtime(
+                    var_dir / "model-inventory.json",
+                    '{"models":[]}', 1_700_000_000.0,  # older
+                )
+                payload = effective_config_payload()
+                warning_codes = [w.get("warning") for w in payload["warnings"]]
+                self.assertIn("stale_model_inventory_cache", warning_codes)
+        finally:
+            self._restore_env(saved)
+
+    def test_model_inventory_cache_fresh_when_inventory_newer_than_overrides(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                self._write_with_mtime(
+                    root / "config" / "default" / "model-overrides.json",
+                    '{"models":{}}', 1_700_000_000.0,  # older
+                )
+                self._write_with_mtime(
+                    var_dir / "model-inventory.json",
+                    '{"models":[]}', 1_700_001_000.0,  # newer
+                )
+                payload = effective_config_payload()
+                warning_codes = [w.get("warning") for w in payload["warnings"]]
+                self.assertNotIn("stale_model_inventory_cache", warning_codes)
+        finally:
+            self._restore_env(saved)
+
+    def test_model_inventory_cache_missing_produces_no_stale_warning(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                self._write_with_mtime(
+                    root / "config" / "default" / "model-overrides.json",
+                    '{"models":{}}', 1_700_001_000.0,
+                )
+                # inventory does NOT exist
+                payload = effective_config_payload()
+                warning_codes = [w.get("warning") for w in payload["warnings"]]
+                self.assertNotIn("stale_model_inventory_cache", warning_codes)
+        finally:
+            self._restore_env(saved)
+
+    def test_codex_catalog_stale_when_inventory_newer_than_catalog(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                catalog_dir = var_dir / "codex-home" / "model-catalogs"
+                self._write_with_mtime(var_dir / "model-inventory.json", '{}', 1_700_001_000.0)
+                self._write_with_mtime(catalog_dir / "qwenzhai-models.json", '{}', 1_700_000_000.0)
+                payload = effective_config_payload()
+                warning_codes = [w.get("warning") for w in payload["warnings"]]
+                self.assertIn("stale_codex_catalog", warning_codes)
+        finally:
+            self._restore_env(saved)
+
+    def test_codex_catalog_fresh_when_catalog_newer_than_inventory(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                catalog_dir = var_dir / "codex-home" / "model-catalogs"
+                self._write_with_mtime(var_dir / "model-inventory.json", '{}', 1_700_000_000.0)
+                self._write_with_mtime(catalog_dir / "qwenzhai-models.json", '{}', 1_700_001_000.0)
+                payload = effective_config_payload()
+                warning_codes = [w.get("warning") for w in payload["warnings"]]
+                self.assertNotIn("stale_codex_catalog", warning_codes)
+        finally:
+            self._restore_env(saved)
+
+    def test_codex_catalog_missing_inventory_does_not_produce_stale_warning(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                catalog_dir = var_dir / "codex-home" / "model-catalogs"
+                # catalog exists but inventory is missing
+                self._write_with_mtime(catalog_dir / "qwenzhai-models.json", '{}', 1_700_000_000.0)
+                payload = effective_config_payload()
+                warning_codes = [w.get("warning") for w in payload["warnings"]]
+                self.assertNotIn("stale_codex_catalog", warning_codes)
+        finally:
+            self._restore_env(saved)
+
+    def test_codex_config_stale_when_catalog_newer_than_config(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                catalog_dir = var_dir / "codex-home" / "model-catalogs"
+                self._write_with_mtime(catalog_dir / "qwenzhai-models.json", '{}', 1_700_001_000.0)
+                self._write_with_mtime(var_dir / "codex-home" / "config.toml", 'x=1', 1_700_000_000.0)
+                payload = effective_config_payload()
+                warning_codes = [w.get("warning") for w in payload["warnings"]]
+                self.assertIn("stale_codex_config", warning_codes)
+        finally:
+            self._restore_env(saved)
+
+    def test_codex_config_fresh_when_config_newer_than_catalog(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                catalog_dir = var_dir / "codex-home" / "model-catalogs"
+                self._write_with_mtime(catalog_dir / "qwenzhai-models.json", '{}', 1_700_000_000.0)
+                self._write_with_mtime(var_dir / "codex-home" / "config.toml", 'x=1', 1_700_001_000.0)
+                payload = effective_config_payload()
+                warning_codes = [w.get("warning") for w in payload["warnings"]]
+                self.assertNotIn("stale_codex_config", warning_codes)
+        finally:
+            self._restore_env(saved)
+
+    def test_staleness_warning_payload_bounded(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                self._write_with_mtime(
+                    root / "config" / "default" / "model-overrides.json",
+                    '{"models":{}}', 1_700_001_000.0,
+                )
+                self._write_with_mtime(var_dir / "model-inventory.json", '{}', 1_700_000_000.0)
+                payload = effective_config_payload()
+                stale_warns = [w for w in payload["warnings"] if w.get("warning") == "stale_model_inventory_cache"]
+                self.assertEqual(len(stale_warns), 1)
+                w = stale_warns[0]
+                for key in ("warning", "path", "stale_against", "artifact_mtime_ms",
+                            "newest_input_mtime_ms", "remediation"):
+                    self.assertIn(key, w, f"missing key: {key}")
+                self.assertEqual(w["remediation"], "POST /qz/models/refresh")
+                self.assertIsInstance(w["stale_against"], list)
+                # No file contents
+                self.assertNotIn("content", w)
+                self.assertNotIn("text", w)
+        finally:
+            self._restore_env(saved)
+
+    def test_staleness_warning_does_not_promote_generated_artifact_to_authority(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                catalog_dir = var_dir / "codex-home" / "model-catalogs"
+                self._write_with_mtime(var_dir / "model-inventory.json", '{}', 1_700_001_000.0)
+                self._write_with_mtime(catalog_dir / "qwenzhai-models.json", '{}', 1_700_000_000.0)
+                payload = effective_config_payload()
+                paths = {item["name"]: item for item in payload["paths"]}
+                self.assertEqual(paths["codex_model_catalog"]["source_layer"], "generated")
+                self.assertEqual(paths["model_inventory_cache"]["source_layer"], "generated")
+                self.assertEqual(paths["codex_config"]["source_layer"], "generated")
+        finally:
+            self._restore_env(saved)
+
+    def test_models_refresh_not_called_by_effective_config(self):
+        """effective_config_payload must not import or call ModelCatalog."""
+        import proxy.qz_config_report as cr_module
+        # qz_config_report should not import ModelCatalog or trigger any model scan
+        self.assertFalse(hasattr(cr_module, "ModelCatalog"))
+        self.assertFalse(hasattr(cr_module, "scan_models"))
+        self.assertFalse(hasattr(cr_module, "write_cache"))
+
+    def test_no_model_files_hashed(self):
+        """model_dir is a directory record; GGUF files are not individually hashed."""
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                model_dir = var_dir / "models"
+                model_dir.mkdir(parents=True)
+                # Create a fake large GGUF to confirm it isn't hashed
+                fake_gguf = model_dir / "fake-model.gguf"
+                fake_gguf.write_bytes(b"GGUF" + b"\x00" * 1000)
+                payload = effective_config_payload()
+                paths = {item["name"]: item for item in payload["paths"]}
+                # model_dir record must be a directory, never a hashed file
+                model_dir_rec = paths["model_dir"]
+                self.assertIn(model_dir_rec["state"], ("dir", "missing"))
+                self.assertNotIn("sha256_12", model_dir_rec)
+                # No path record with gguf in name
+                gguf_records = [r for r in payload["paths"] if ".gguf" in r.get("path", "")]
+                self.assertEqual(gguf_records, [])
+        finally:
+            self._restore_env(saved)
+
+    def test_missing_and_stale_are_separate_concepts(self):
+        """A missing artifact gets missing_codex_catalog, not stale_codex_catalog."""
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                # inventory exists but catalog does not
+                self._write_with_mtime(var_dir / "model-inventory.json", '{}', 1_700_001_000.0)
+                payload = effective_config_payload()
+                warning_codes = [w.get("warning") for w in payload["warnings"]]
+                self.assertIn("missing_codex_catalog", warning_codes)
+                self.assertNotIn("stale_codex_catalog", warning_codes)
+        finally:
+            self._restore_env(saved)
 
 
 class PromptFileSourceLabellingTests(unittest.TestCase):

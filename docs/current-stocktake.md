@@ -85,7 +85,7 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 | #37 | Architectural seam extraction plan | **PAUSED** — Slices 1–2E.1 complete; next seam needs design micro-slice |
 | #51 | Promote recovery/backoff runtime state to SQLite | **deferred** until operational-store decision |
 | #46 | Replace qz-write-runtime-state launcher trace | **deferred** until startup-telemetry replacement |
-| #5 | Config/var/script ownership cleanup | **in-progress** (Slices A–C-design done: file-meta, warnings, prompt-source labelling, staleness design) |
+| #5 | Config/var/script ownership cleanup | **in-progress** (Slices A–C done: file-meta, warnings, prompt-source labelling, staleness warnings) |
 | #39 | Split search routing policy into search.json | **optional-polish** (resume when search work resumes) |
 | #52 | Backend-confirmed VRAM allocator metrics | **upstream-blocked** (TurboQuant side) |
 | #8 | RFC: NetTTS survival-weighted compaction | **research/later** |

@@ -1367,6 +1367,20 @@ and the mtime comparison rules are straightforward. No further verification pass
 The implementation is small: one pure helper, three warning conditions added to
 `effective_config_payload()`, and twelve focused tests. No path moves, no script rewrites.
 
+### Slice C — COMPLETE
+
+Added to `proxy/qz_config_report.py`:
+- `_artifact_staleness_check(artifact_path, input_paths) -> dict` — pure helper;
+  returns `{artifact_mtime_ms, newest_input_mtime_ms}` when stale, `{}` otherwise.
+  Safe failure returns `{}`. No writes, no refresh calls, no content reading.
+- `codex_catalog_path` / `codex_config_path` as named variables (reused in records + warnings).
+- Three staleness warning blocks: `stale_model_inventory_cache`, `stale_codex_catalog`,
+  `stale_codex_config` — advisory only, remediation is `POST /qz/models/refresh`.
+
+17 new tests in `GeneratedArtifactStalenessTests` covering helper unit tests, all three
+stale/fresh scenarios, missing-vs-stale separation, payload boundedness, no authority
+promotion, and no model-file hashing. 2518 total tests passing.
+
 ---
 
 ## Next steps
