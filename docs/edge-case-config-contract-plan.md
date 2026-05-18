@@ -1381,6 +1381,14 @@ Added to `proxy/qz_config_report.py`:
 stale/fresh scenarios, missing-vs-stale separation, payload boundedness, no authority
 promotion, and no model-file hashing. 2518 total tests passing.
 
+### Slice C.1 — COMPLETE
+
+Audit confirmed helper purity, warning isolation, and authority boundaries were clean.
+One precision issue fixed: `stale_against` for `stale_model_inventory_cache` now lists
+only override files that actually exist on disk. Previously the list was hardcoded to
+both names regardless of which files were present. 3 new tests lock the behaviour.
+2521 total tests passing. No routing/ownership/path changes.
+
 ---
 
 ## Next steps

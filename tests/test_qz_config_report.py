@@ -704,6 +704,68 @@ class GeneratedArtifactStalenessTests(unittest.TestCase):
         finally:
             self._restore_env(saved)
 
+    def test_stale_against_only_existing_default_override(self):
+        """stale_against lists only existing inputs — missing user override excluded."""
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                # Only default override exists; user override is absent
+                self._write_with_mtime(
+                    root / "config" / "default" / "model-overrides.json",
+                    '{"models":{}}', 1_700_001_000.0,
+                )
+                self._write_with_mtime(var_dir / "model-inventory.json", '{}', 1_700_000_000.0)
+                payload = effective_config_payload()
+                stale_warns = [w for w in payload["warnings"] if w.get("warning") == "stale_model_inventory_cache"]
+                self.assertEqual(len(stale_warns), 1)
+                self.assertEqual(stale_warns[0]["stale_against"], ["model_overrides_default"])
+        finally:
+            self._restore_env(saved)
+
+    def test_stale_against_includes_both_when_both_overrides_exist(self):
+        """stale_against includes both names when both override files exist."""
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                (root / "config" / "user").mkdir(parents=True)
+                self._write_with_mtime(
+                    root / "config" / "default" / "model-overrides.json",
+                    '{"models":{}}', 1_700_001_000.0,
+                )
+                self._write_with_mtime(
+                    root / "config" / "user" / "model-overrides.json",
+                    '{"models":{}}', 1_700_001_000.0,
+                )
+                self._write_with_mtime(var_dir / "model-inventory.json", '{}', 1_700_000_000.0)
+                payload = effective_config_payload()
+                stale_warns = [w for w in payload["warnings"] if w.get("warning") == "stale_model_inventory_cache"]
+                self.assertEqual(len(stale_warns), 1)
+                self.assertIn("model_overrides_default", stale_warns[0]["stale_against"])
+                self.assertIn("model_overrides_user", stale_warns[0]["stale_against"])
+        finally:
+            self._restore_env(saved)
+
+    def test_stale_against_only_existing_user_override(self):
+        """stale_against lists only user override when default is absent."""
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                (root / "config" / "user").mkdir(parents=True)
+                user_overrides = root / "config" / "user" / "model-overrides.json"
+                self._write_with_mtime(user_overrides, '{"models":{}}', 1_700_001_000.0)
+                # default override absent
+                os.environ["QZ_MODEL_OVERRIDES"] = str(user_overrides)
+                self._write_with_mtime(var_dir / "model-inventory.json", '{}', 1_700_000_000.0)
+                payload = effective_config_payload()
+                stale_warns = [w for w in payload["warnings"] if w.get("warning") == "stale_model_inventory_cache"]
+                self.assertEqual(len(stale_warns), 1)
+                self.assertEqual(stale_warns[0]["stale_against"], ["model_overrides_user"])
+        finally:
+            self._restore_env(saved)
+
     def test_missing_and_stale_are_separate_concepts(self):
         """A missing artifact gets missing_codex_catalog, not stale_codex_catalog."""
         saved = self._save_env()

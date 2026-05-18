@@ -534,12 +534,21 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
 
     # Staleness checks: advisory warnings when generated artifacts are older than
     # their known inputs. These do not change routing and do not trigger refresh.
-    _inv_stale = _artifact_staleness_check(inventory, [default_overrides, model_overrides])
+    #
+    # stale_against lists only inputs that exist on disk; missing override files
+    # are silently ignored by _artifact_staleness_check so listing them in the
+    # stale_against array would be misleading.
+    _inv_override_map = [
+        ("model_overrides_default", default_overrides),
+        ("model_overrides_user", model_overrides),
+    ]
+    _inv_existing = [(name, p) for name, p in _inv_override_map if p.is_file()]
+    _inv_stale = _artifact_staleness_check(inventory, [p for _, p in _inv_existing])
     if _inv_stale:
         warnings.append({
             "warning": "stale_model_inventory_cache",
             "path": str(inventory),
-            "stale_against": ["model_overrides_default", "model_overrides_user"],
+            "stale_against": [name for name, _ in _inv_existing],
             "artifact_mtime_ms": _inv_stale["artifact_mtime_ms"],
             "newest_input_mtime_ms": _inv_stale["newest_input_mtime_ms"],
             "remediation": "POST /qz/models/refresh",

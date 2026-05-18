@@ -32,7 +32,7 @@ Current strategic direction:
 
 ```text
 P1 #37 Stream seam extraction (Slices 1–2F.1 complete) — pause before next seam
-P2 Config/var/script cleanup (#5) — Slices A–C complete; Slice C.1 audit or staleness polish next
+P2 Config/var/script cleanup (#5) — Slices A–C.1 complete; D-design (qz-codex-common thinning) or #5 close-out audit next
 P3 #51/#46 operational-state persistence (deferred until store decision)
 P4 Search config split (#39) — when search work resumes
 ```
