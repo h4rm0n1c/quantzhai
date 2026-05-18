@@ -32,7 +32,7 @@ Current strategic direction:
 
 ```text
 P1 #37 Stream seam extraction (Slices 1–2F.1 complete) — pause before next seam
-P2 Config/var/script cleanup (#5) — CLOSED; #57 Slices A–A.2 done; Slice B: verify Codex catalog expectations
+P2 Config/var/script cleanup (#5) — CLOSED; #57 Slices A–B done; Slice C: implement remote client-config + catalog endpoints
 P3 #51/#46 operational-state persistence (deferred until store decision)
 P4 Search config split (#39) — when search work resumes
 ```

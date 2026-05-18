@@ -1857,6 +1857,156 @@ Not removing config.toml bootstrap copy.
 
 ---
 
+## qz-codex remote bootstrap: catalog delivery verification (#57 Slice B)
+
+Date: 2026-05-19. Status: verification complete, implementation design locked.
+
+---
+
+### Verification result: model_catalog_json is LOCAL FILE ONLY
+
+**Evidence (Codex CLI 0.130.0, x86_64-linux binary at `/home/harri/.local/bin/codex`):**
+
+Binary string analysis of the native Codex binary:
+
+```text
+"model_catalog_json path `"
+"failed to parse model_catalog_json path `" as JSON: "
+"save_fields_resolved_from_model_catalog"
+```
+
+**Interpretation:**
+- Codex treats `model_catalog_json` as a **local filesystem path**.
+- It reads the file as JSON and parses it at startup.
+- No HTTP URL handling found for `model_catalog_json`.
+- Fields resolved from the catalog include `context_size`, model capabilities, etc.
+
+**Live config evidence:**
+- `var/codex-home/config.toml`: `model_catalog_json = "/home/harri/turboquant/quantzhai/var/codex-home/model-catalogs/qwenzhai-models.json"` (absolute path)
+- `codex-home/config.toml` (other instance): `model_catalog_json = "/home/harri/turboquant/codex-home/model-catalogs/qwen36turbo-models.json"` (absolute path)
+- `config/example/codex-config.toml`: `model_catalog_json = "var/codex-home/model-catalogs/qwenzhai-models.json"` (relative path)
+
+**Conclusion: Option C2 (HTTP URL in config.toml) is NOT viable.**
+Remote clients MUST have a local catalog file on their filesystem.
+
+---
+
+### Chosen catalog delivery strategy: Option C1
+
+**Option C1: Server exposes `GET /qz/codex/model-catalog`; remote launcher fetches and writes local file.**
+
+Flow for remote qz-codex bootstrap:
+1. Call `GET /qz/codex/client-config` → get `base_url`, `model_provider`, `env_key`, catalog metadata
+2. Call `GET /qz/codex/model-catalog` → get catalog JSON
+3. Write to local `CODEX_HOME/model-catalogs/qwenzhai-models.json`
+4. Write local `config.toml` with `base_url` = remote server, `model_catalog_json` = local path
+
+**Why C1 over C3 (inline catalog)?**
+- Catalog can be fetched independently and cached (HTTP-level caching if desired)
+- Client-config payload stays bounded; catalog size varies with model count
+- Separate endpoint allows catalog refresh without re-fetching all client config
+- Easier to implement incrementally (catalog endpoint is just file-serving)
+
+---
+
+### Revised future Slice C implementation boundary
+
+**Slice C may implement:**
+
+```text
+GET /qz/codex/client-config
+  Response: {
+    "ok": true,
+    "schema": "qz.codex.client_config.v1",
+    "model_provider": "quantzhai",
+    "provider": {
+      "name": "QuantZhai",
+      "base_url": "http://<QZ_PROXY_HOST>:<QZ_PROXY_PORT>/v1",
+      "wire_api": "responses",
+      "env_key": "LOCAL_QWEN_API_KEY"
+    },
+    "model_catalog": {
+      "mode": "download",
+      "url": "http://<QZ_PROXY_HOST>:<QZ_PROXY_PORT>/qz/codex/model-catalog",
+      "local_filename": "qwenzhai-models.json",
+      "sha256_12": "...",
+      "mtime_ms": ...
+    },
+    "warnings": []
+  }
+  Note: base_url derived from QZ_PROXY_HOST:QZ_PROXY_PORT, not hardcoded 127.0.0.1
+  Note: env_key is key NAME only, never value
+
+GET /qz/codex/model-catalog
+  Response: the generated catalog JSON (qwenzhai-models.json content)
+  Content-Type: application/json
+  Source: var/codex-home/model-catalogs/qwenzhai-models.json
+  Missing catalog: HTTP 404 + {"ok": false, "error": "missing_codex_catalog"}
+
+Remote qz-codex-common additions:
+  - detect remote mode (QZ_PROXY_HOST != 127.0.0.1 / localhost, or new QZ_REMOTE_MODE flag)
+  - in remote mode: call client-config, fetch catalog, write local CODEX_HOME files
+  - set model_catalog_json in generated config.toml to LOCAL client path
+  - keep co-located mode unchanged
+  - keep TOML fallback for co-located mode
+```
+
+**Slice C must not:**
+```text
+Break co-located qz-codex
+Remove TOML parsing for co-located mode
+Move CODEX_HOME or generated paths (see #56)
+Rename slugs/profiles/models
+Change proxy routing
+Expose API key values
+Rewrite qz-codex-common from scratch
+```
+
+---
+
+### Revised test plan for Slice C
+
+```text
+test_client_config_schema_and_provider
+  GET /qz/codex/client-config returns ok=true, schema, model_provider="quantzhai"
+
+test_client_config_base_url_uses_proxy_host_port
+  base_url reflects QZ_PROXY_HOST:QZ_PROXY_PORT, not 127.0.0.1
+
+test_client_config_no_api_key_values
+  env_key field = "LOCAL_QWEN_API_KEY"; no key value in payload
+
+test_client_config_catalog_url_points_to_model_catalog_endpoint
+  model_catalog.url = http://...QZ_PROXY.../qz/codex/model-catalog
+
+test_model_catalog_endpoint_returns_generated_json
+  GET /qz/codex/model-catalog returns catalog matching generated file content
+
+test_model_catalog_endpoint_missing_catalog_returns_404
+  catalog file absent → HTTP 404, bounded JSON error, no exception
+
+test_remote_bootstrap_writes_local_config_toml_with_remote_base_url
+  given client-config response, generated local config.toml has remote base_url,
+  model_catalog_json points to local client path (not server absolute path)
+
+test_remote_bootstrap_writes_local_catalog_file
+  given model-catalog response, local CODEX_HOME/model-catalogs/... is written
+
+test_co_located_mode_unchanged
+  co-located qz-codex still works with TOML and local CODEX_HOME after Slice C
+
+test_local_toml_fallback_unchanged
+  QZ_CODEX_MODEL_PROVIDER env var and TOML parsing still work for co-located mode
+
+test_no_routing_change
+  proxy routing unchanged; catalog still cache/view after new endpoints added
+
+test_shell_syntax_qz_codex_common
+  bash -n scripts/qz-codex-common passes after Slice C changes
+```
+
+---
+
 ## Next steps
 
 1. Treat this plan as a living document.
