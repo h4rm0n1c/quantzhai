@@ -443,9 +443,14 @@ Key decisions from Slice 2A:
 **Slice 2E.1 complete:** Audit of Slices 2B–2E helpers. All helpers confirmed module-level, pure, and
   side-effect free. No runtime code changes required. StreamDecision remains vocabulary-only.
   No `decide_stream_event()` exists. 2465 tests passing.
-  Next: pause for top-level stocktake before touching more complex stream decisions.
-  Remaining candidates (tool lifecycle, terminal events, watchdog, proxy-local suppression,
-  continuation/repair flow) carry higher extraction risk and need a fresh design micro-slice first.
+
+**Slice 2F-design complete:** Compared all remaining #37 seam candidates; chose
+  watchdog timeout-kind combiner as the next safe seam.
+  Proposed helper: `_stream_timeout_kind(watchdog_state, now) -> str | None`.
+  Design boundary, proposed shape, required tests, and acceptance criteria documented in
+  `docs/stream-reducer-boundary-design.md §9G`.
+  No runtime code changed. No tests changed.
+  Next: Slice 2F coding slice (5 unit tests + helper + two call-site replacements).
 
 ### Prompt A (archived): #37 Slice 1 + 1.1 — Stream state machine seam extraction — COMPLETE
 

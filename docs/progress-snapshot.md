@@ -31,7 +31,7 @@ docs/current-stocktake.md
 Current strategic direction:
 
 ```text
-P1 #37 Stream seam extraction (Slices 1–2E.1 complete) — next seam needs design micro-slice first
+P1 #37 Stream seam extraction (Slices 1–2F-design complete) — Slice 2F coding next
 P2 Config/var/script cleanup (#5) — safe any time, good between features
 P3 #51/#46 operational-state persistence (deferred until store decision)
 P4 Search config split (#39) — when search work resumes

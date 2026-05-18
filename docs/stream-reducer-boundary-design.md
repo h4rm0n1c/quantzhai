@@ -601,6 +601,230 @@ Note: repeated-read v1 is COMPLETE (#3/#4/#43 closed); v2 blocked on SQLite.
 
 ---
 
+## 9G. Slice 2F-design — next delicate seam selection
+
+### Purpose
+
+Slices 2B–2E safely extracted four low-risk bounded decision helpers. The
+remaining #37 seam candidates are not equivalent in risk or extraction value.
+This design slice compares them and selects the next safe seam before any code
+is written.
+
+No runtime code was changed in this slice. All changes are documentation only.
+
+---
+
+### Candidate comparison
+
+| Candidate | Owner files | Risk level | Existing isolation | Test coverage | Verdict |
+|---|---|---|---|---|---|
+| Watchdog / timeout kind | `qz_stream_watchdog.py`, `qz_responses_stream.py` | **Low** | Decision predicates already extracted to `qz_stream_watchdog.py`; action code stays in `qz_responses_stream.py` | `test_qz_stream_watchdog.py`: 40+ tests; `WatchdogStreamRuntimeTests`: no-output + terminal paths | **Best next** — see §9G.3 |
+| Terminal event handling | `qz_stream_terminal.py`, `qz_responses_stream.py`, `qz_sse.py` | **High** | `is_terminal_stream_event()` pure; `classify_stream_terminal()` pure; emission and flag management coupled to rendering | Several live stream tests | Skip — rendering and flag mutation are inseparable |
+| Tool lifecycle | `qz_tool_lifecycle.py`, `qz_proxy_tools.py`, `qz_responses_stream.py` | **High** | `StreamToolCallState`, `abort_reason()`, `completed_call_decision()` already in `qz_tool_lifecycle.py`; inline code mixes decision + action + telemetry | Multiple integration tests | Skip — execution is a critical side effect; proxy-local timing is subtle |
+| Proxy-local suppression | `qz_proxy_tools.py`, `qz_responses_stream.py` | **Medium** | Suppression condition is a 3-line inline check; no standalone test | §8 notes test gap for suppression decision | Defer — needs test gap filled first |
+| Continuation / repair flow | `qz_responses_stream.py` | **Very high** | Not isolated at all; mutates `working_body`, `hop_body`, outer-loop repair counters | `test_reasoning_only_completed_triggers_exactly_one_repair_hop`, others | Skip — multi-hop state mutation; highest blast radius |
+
+---
+
+### Recommendation: watchdog timeout-kind combiner
+
+**Chosen seam:** Watchdog timeout kind selection.
+
+The pure decision predicates `should_trigger_no_output_timeout()` and
+`should_trigger_terminal_timeout()` are already extracted into
+`proxy/qz_stream_watchdog.py`. What remains inline in `qz_responses_stream.py`
+is the following pattern, duplicated at two call sites (exception handler and
+event loop):
+
+```python
+if should_trigger_no_output_timeout(hs.watchdog_state, now):
+    return self._finish_no_output_timeout(...)
+if should_trigger_terminal_timeout(hs.watchdog_state, now):
+    return self._finish_terminal_timeout_after_output(...)
+```
+
+A pure combiner helper can select *which* timeout kind applies — if any — as a
+single decision point:
+
+```python
+_stream_timeout_kind(watchdog_state, now) -> str | None
+```
+
+This:
+- Wraps two already-pure predicates
+- Eliminates the duplicated two-check pattern from two call sites
+- Creates a single testable decision point
+- Fits the `_should_*/kind-returning` helper pattern from Slices 2B–2E
+- Carries no I/O, no state mutation, no SSE writes, no tool execution
+
+The action code (`_finish_no_output_timeout()`, `_finish_terminal_timeout_after_output()`)
+stays entirely in `qz_responses_stream.py`. Nothing moves there.
+
+**Why not the others:**
+- Terminal event handling has no pure decision layer to extract — emission and
+  flag management are coupled to rendering.
+- Tool lifecycle: execution is a critical side effect; proxy-local timing is too
+  subtle for extraction without a dedicated design and test pass.
+- Proxy-local suppression: simple condition, but the §8 test gap should be
+  filled before extracting the suppression decision.
+- Continuation/repair: mutates `working_body` and outer-loop hop counters;
+  highest blast radius of all candidates.
+
+---
+
+### Proposed extraction boundary
+
+**What stays in `qz_responses_stream.py`:**
+
+```text
+socket reads (resp.readline())
+time.time() calls (event_parsed_at, timeout_at)
+sync_terminal_read_timeout() — socket deadline side effect
+_finish_no_output_timeout() — observation assembly, telemetry, SSE fallback, result build
+_finish_terminal_timeout_after_output() — observation assembly, telemetry, SSE completion, result build
+watchdog_state.triggered = True (inside _finish_*)
+public_trace mutation
+request body mutation
+response close / drain
+```
+
+**What may move to a pure helper:**
+
+```text
+The selection logic: "which timeout kind fires at this moment, if any"
+This is a pure function of watchdog_state and now.
+It does not need to know about the action path that follows.
+```
+
+---
+
+### Proposed helper shape
+
+```python
+def _stream_timeout_kind(
+    watchdog_state: "StreamWatchdogState",
+    now: float,
+) -> str | None:
+    """Return 'no_output', 'terminal', or None.
+
+    Pure helper — no I/O, no state mutation.
+    Combines should_trigger_no_output_timeout and should_trigger_terminal_timeout
+    with a stable priority order: no_output takes precedence over terminal.
+    Returns None when neither timeout should fire.
+    """
+    if should_trigger_no_output_timeout(watchdog_state, now):
+        return "no_output"
+    if should_trigger_terminal_timeout(watchdog_state, now):
+        return "terminal"
+    return None
+```
+
+Priority ordering preserves the existing inline order — no-output is checked
+before terminal at both call sites. This must not change.
+
+Caller would change from:
+
+```python
+if should_trigger_no_output_timeout(hs.watchdog_state, timeout_at):
+    return self._finish_no_output_timeout(...)
+if should_trigger_terminal_timeout(hs.watchdog_state, timeout_at):
+    return self._finish_terminal_timeout_after_output(...)
+```
+
+To:
+
+```python
+timeout_kind = _stream_timeout_kind(hs.watchdog_state, timeout_at)
+if timeout_kind == "no_output":
+    return self._finish_no_output_timeout(...)
+if timeout_kind == "terminal":
+    return self._finish_terminal_timeout_after_output(...)
+```
+
+This substitution is applied at both the exception handler and the event-loop
+call site.
+
+---
+
+### Existing test coverage
+
+`tests/test_qz_stream_watchdog.py` (40+ tests, all passing):
+- `DisabledWatchdogTests` — timeout=0, timeout<0, already_triggered
+- `TriggerTests` — elapsed≥timeout fires, elapsed<timeout does not, first_event reference
+- `SuppressionTests` — visible output prevents, terminal prevents, mark_* idempotent
+- `TerminalTimeoutTests` — fires after output + deadline, suppressed by terminal
+- `ElapsedSecsTests`, `BuildTimeout*Tests`, `WatchdogClassificationIntegrationTests`
+- `WatchdogStreamRuntimeTests` — no-output fires on read stall, terminal fires on stall after output, disabled watchdog does not fire
+- `NoInfiniteLoopTests` — triggered flag prevents re-trigger
+
+Live stream tests in `test_qz_responses_stream.py`:
+- `test_live_terminal_timeout_preserves_partial_output_and_emits_once`
+- `test_live_terminal_timeout_does_not_duplicate_partial_output`
+- `test_live_ok_stream_does_not_emit_terminal_classified`
+
+**Coverage gaps (pre-work required before coding slice):**
+
+| Gap | What to add |
+|---|---|
+| No unit test for `_stream_timeout_kind` combiner | Add `StreamTimeoutKindHelperTests` in `test_qz_stream_watchdog.py` or `test_qz_responses_stream.py` |
+| No event-loop no-output timeout integration test | `WatchdogStreamRuntimeTests` covers the exception path; add test for no-output firing during event loop (not on exception) if feasible |
+
+The combiner unit tests must include:
+- `test_no_output_kind_returned_when_no_output_predicate_fires`
+- `test_terminal_kind_returned_when_terminal_predicate_fires`
+- `test_no_output_takes_priority_over_terminal`
+- `test_none_returned_when_neither_fires`
+- `test_none_returned_when_both_disabled`
+
+These tests should be written as part of Slice 2F (the future coding slice),
+not as pre-work, since the helper does not exist yet.
+
+---
+
+### Acceptance criteria for future Slice 2F coding slice
+
+The implementation slice must:
+
+```text
+1. Add _stream_timeout_kind(watchdog_state, now) -> str | None near the other
+   watchdog helpers or near the other pure stream helpers in qz_responses_stream.py.
+
+2. Add StreamTimeoutKindHelperTests (5 unit tests) in test_qz_stream_watchdog.py.
+
+3. Replace the duplicated two-check pattern at both call sites in
+   qz_responses_stream.py (exception handler and event loop).
+
+4. Full suite must remain green (2465 tests or more).
+
+5. No SSE rendering moved.
+6. No time.time() calls moved (time is still injected via event_parsed_at / timeout_at).
+7. No response close/drain logic moved.
+8. No tool lifecycle touched.
+9. No continuation/repair logic touched.
+10. No request body mutation changed.
+11. No decide_stream_event() added.
+12. git diff --check PASS.
+```
+
+---
+
+### Explicit non-goals for Slice 2F
+
+```text
+Not a full reducer.
+Not a decide_stream_event() implementation.
+Not tool lifecycle extraction.
+Not terminal event forwarding rewrite.
+Not proxy-local suppression rewrite.
+Not continuation / repair flow extraction.
+Not BrainCase / LimbiCore work.
+Not repeated-read changes.
+Not operational persistence.
+Not sync_terminal_read_timeout() extraction (socket side effect; not a pure decision).
+```
+
+---
+
 ## 10. Risks
 
 | Risk | Likelihood | Mitigation |
