@@ -856,6 +856,31 @@ Action methods unchanged and still in qz_responses_stream.py:
 
 ---
 
+## 9I. Slice 2F.1 — COMPLETE
+
+Audit of `stream_timeout_kind()` and Slice 2F call sites.
+
+**Audit results:**
+
+- `stream_timeout_kind` confirmed module-level, pure, and side-effect free.
+  Only calls the two existing pure predicates; no I/O, no state mutation, no self.
+- Both call sites confirmed: `timeout_at`/`event_parsed_at` unchanged,
+  `_finish_*` arguments unchanged, no state mutation moved.
+- `qz_responses_stream.py` confirmed as sole side-effect/action owner.
+- No `decide_stream_event()` exists.
+- Test fix: `test_no_output_takes_priority_over_terminal` now patches both predicates
+  to `True` simultaneously via `unittest.mock.patch`, directly proving combiner priority
+  independent of predicate natural mutual exclusivity.
+- 52 watchdog tests pass. 2470 total tests pass. No behaviour change.
+
+**Recommended next: pause before further stream seam extraction.**
+
+Remaining seams (terminal events, tool lifecycle, proxy-local suppression,
+continuation/repair) need fresh design micro-slices. Config/var cleanup (#5)
+is the safe alternative.
+
+---
+
 ## 10. Risks
 
 | Risk | Likelihood | Mitigation |

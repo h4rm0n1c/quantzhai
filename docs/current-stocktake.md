@@ -451,7 +451,12 @@ Key decisions from Slice 2A:
   `proxy/qz_stream_watchdog.py`. Two duplicated two-check patterns replaced at both call
   sites in `qz_responses_stream.py`. 5 unit tests added (`StreamTimeoutKindHelperTests`).
   No behaviour change. No side effects moved. 2470 tests passing.
-  Next: Slice 2F.1 audit/polish before any further stream seam extraction.
+
+**Slice 2F.1 complete:** Audit of `stream_timeout_kind()` purity and call-site behaviour.
+  Priority test strengthened: `test_no_output_takes_priority_over_terminal` now patches both
+  predicates via `unittest.mock.patch` to prove combiner priority directly. No runtime code
+  changes. 2470 tests passing.
+  Next: pause before further stream seam extraction. Config/var cleanup #5 is the safe alternative.
 
 ### Prompt A (archived): #37 Slice 1 + 1.1 — Stream state machine seam extraction — COMPLETE
 

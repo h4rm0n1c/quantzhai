@@ -5,6 +5,7 @@ All tests are deterministic — no wall-clock sleeps. Time is injected.
 import json
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -797,12 +798,21 @@ class StreamTimeoutKindHelperTests(unittest.TestCase):
         self.assertEqual(stream_timeout_kind(state, now=5.0), "terminal")
 
     def test_no_output_takes_priority_over_terminal(self):
-        # Both conditions would fire independently, but no_output wins.
+        # Patch both predicates to return True simultaneously.
+        # Verifies combiner checks no_output before terminal regardless of
+        # natural predicate mutual exclusivity.
         state = _state(timeout_secs=5.0, terminal_timeout_secs=5.0, started_at=0.0)
-        state.mark_event(0.0)
-        # Do not mark visible output → no_output can fire; terminal cannot (no visible output).
-        # Verify no_output fires first.
-        self.assertEqual(stream_timeout_kind(state, now=5.0), "no_output")
+        with (
+            unittest.mock.patch(
+                "proxy.qz_stream_watchdog.should_trigger_no_output_timeout",
+                return_value=True,
+            ),
+            unittest.mock.patch(
+                "proxy.qz_stream_watchdog.should_trigger_terminal_timeout",
+                return_value=True,
+            ),
+        ):
+            self.assertEqual(stream_timeout_kind(state, now=0.0), "no_output")
 
     def test_none_returned_when_neither_fires(self):
         state = _state(timeout_secs=10.0, terminal_timeout_secs=10.0, started_at=0.0)
