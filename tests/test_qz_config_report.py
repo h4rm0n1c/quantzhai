@@ -641,6 +641,106 @@ class PromptFileSourceLabellingTests(unittest.TestCase):
         finally:
             self._restore_env(saved)
 
+    def test_source_layers_present_for_single_origin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "default.json"
+            manifest.write_text(
+                '{"models":{"a.gguf":{"system_prompt_file":"config/default/prompts/a.md"}}}\n',
+                encoding="utf-8",
+            )
+            source_layers = {str(manifest): "default"}
+            _records, summary = _prompt_file_records(root, [manifest], source_layers=source_layers)
+            entry = summary["referenced"][0]
+            self.assertIn("source_layers", entry)
+            self.assertEqual(entry["source_layers"], ["default"])
+
+    def test_source_layers_contains_all_origins_for_multi_manifest_prompt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            m1 = root / "default.json"
+            m2 = root / "user.json"
+            m1.write_text(
+                '{"models":{"a.gguf":{"system_prompt_file":"shared/prompt.md"}}}\n',
+                encoding="utf-8",
+            )
+            m2.write_text(
+                '{"models":{"b.gguf":{"system_prompt_file":"shared/prompt.md"}}}\n',
+                encoding="utf-8",
+            )
+            source_layers = {str(m1): "default", str(m2): "user"}
+            _records, summary = _prompt_file_records(root, [m1, m2], source_layers=source_layers)
+            key = str(root / "shared" / "prompt.md")
+            entry = next(e for e in summary["referenced"] if e["path"] == key)
+            # source_layers contains both origins, sorted default-first
+            self.assertEqual(entry["source_layers"], ["default", "user"])
+            # source_layer still reflects first reference for backward compat
+            self.assertEqual(entry["source_layer"], "default")
+            # referenced_by still contains both detailed references
+            self.assertEqual(len(entry["referenced_by"]), 2)
+
+    def test_duplicate_field_source_in_same_manifest_does_not_duplicate_referenced_by(self):
+        # Two model entries in the same manifest file reference the same prompt
+        # with the same field. referenced_by should contain it only once.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "overrides.json"
+            manifest.write_text(json.dumps({
+                "models": {
+                    "a.gguf": {"system_prompt_file": "shared/prompt.md"},
+                    "b.gguf": {"system_prompt_file": "shared/prompt.md"},
+                }
+            }), encoding="utf-8")
+            _records, summary = _prompt_file_records(root, [manifest])
+            key = str(root / "shared" / "prompt.md")
+            entry = next(e for e in summary["referenced"] if e["path"] == key)
+            # Same (field, source) pair — should appear only once in referenced_by
+            self.assertEqual(len(entry["referenced_by"]), 1)
+
+    def test_different_fields_from_same_manifest_are_not_deduped(self):
+        # Two different fields in the same manifest that point to the same path
+        # are genuinely distinct references and should both appear in referenced_by.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "overrides.json"
+            manifest.write_text(json.dumps({
+                "models": {
+                    "a.gguf": {
+                        "system_prompt_file": "shared/prompt.md",
+                        "base_instructions_file": "shared/prompt.md",
+                    },
+                }
+            }), encoding="utf-8")
+            _records, summary = _prompt_file_records(root, [manifest])
+            key = str(root / "shared" / "prompt.md")
+            entry = next(e for e in summary["referenced"] if e["path"] == key)
+            fields = {r["field"] for r in entry["referenced_by"]}
+            self.assertIn("system_prompt_file", fields)
+            self.assertIn("base_instructions_file", fields)
+
+    def test_source_layers_order_default_before_user(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            m_user = root / "user.json"
+            m_default = root / "default.json"
+            # User manifest is listed first
+            m_user.write_text(
+                '{"models":{"a.gguf":{"system_prompt_file":"shared/prompt.md"}}}\n',
+                encoding="utf-8",
+            )
+            m_default.write_text(
+                '{"models":{"b.gguf":{"system_prompt_file":"shared/prompt.md"}}}\n',
+                encoding="utf-8",
+            )
+            # User comes first in paths but "default" should still sort before "user"
+            source_layers = {str(m_user): "user", str(m_default): "default"}
+            _records, summary = _prompt_file_records(
+                root, [m_user, m_default], source_layers=source_layers
+            )
+            key = str(root / "shared" / "prompt.md")
+            entry = next(e for e in summary["referenced"] if e["path"] == key)
+            self.assertEqual(entry["source_layers"], ["default", "user"])
+
     def test_backward_compat_missing_list_still_present(self):
         saved = self._save_env()
         try:

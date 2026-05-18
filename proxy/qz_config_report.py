@@ -186,7 +186,11 @@ def _prompt_file_records(
 
     # First pass: collect all (field, prompt_path) references per manifest,
     # accumulating referenced_by per unique prompt path.
-    seen_refs: Dict[str, list] = {}  # prompt_path_str -> [{field, source, source_layer}]
+    # Deduplication key is (field, source) — same field from the same manifest
+    # file is a duplicate even when multiple model entries reference the same path.
+    _LAYER_ORDER = {"default": 0, "user": 1, "example": 2, "unknown": 3}
+    seen_refs: Dict[str, list] = {}       # prompt_path_str -> [{field, source, source_layer}]
+    seen_ref_keys: Dict[str, set] = {}    # prompt_path_str -> set of (field, source) tuples
     for manifest_path in paths:
         manifest = _load_json(manifest_path)
         if not manifest:
@@ -197,13 +201,17 @@ def _prompt_file_records(
             if path is None:
                 continue
             key = str(path)
+            ref_key = (field, str(manifest_path))
             if key not in seen_refs:
                 seen_refs[key] = []
-            seen_refs[key].append({
-                "field": field,
-                "source": str(manifest_path),
-                "source_layer": layer,
-            })
+                seen_ref_keys[key] = set()
+            if ref_key not in seen_ref_keys[key]:
+                seen_ref_keys[key].add(ref_key)
+                seen_refs[key].append({
+                    "field": field,
+                    "source": str(manifest_path),
+                    "source_layer": layer,
+                })
 
     records = []
     referenced = []
@@ -246,6 +254,10 @@ def _prompt_file_records(
             "path": key,
             "state": record["state"],
             "source_layer": source_layer,
+            "source_layers": sorted(
+                set(r["source_layer"] for r in refs),
+                key=lambda x: _LAYER_ORDER.get(x, 99),
+            ),
             "classification": "prompt_file",
             "referenced_by": refs,
         }
