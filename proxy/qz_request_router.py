@@ -13,6 +13,7 @@ CAPTURE_CONTRACT_SCHEMA = "qz.capture.contract.v1"
 REASONING_STREAM_FORMATS = {"raw", "summary", "hidden"}
 
 try:
+    from .qz_codex_client_config import codex_client_config_payload, codex_model_catalog_content
     from .qz_config_report import effective_config_payload
     from .qz_telemetry import TELEMETRY_RECENT_SCHEMA, TELEMETRY_REQUEST_SCHEMA
     from .qz_proxy_config import CURRENT_API_ENDPOINTS, LEGACY_API_ENDPOINTS, api_contract_payload
@@ -60,6 +61,7 @@ try:
         write_request_capture,
     )
 except ImportError:
+    from qz_codex_client_config import codex_client_config_payload, codex_model_catalog_content
     from qz_config_report import effective_config_payload
     from qz_telemetry import TELEMETRY_RECENT_SCHEMA, TELEMETRY_REQUEST_SCHEMA
     from qz_proxy_config import CURRENT_API_ENDPOINTS, LEGACY_API_ENDPOINTS, api_contract_payload
@@ -487,6 +489,22 @@ class RequestRouter:
 
         if self.handler.path in ("/qz/config/effective", "/qz/config/paths"):
             self.handler._send_json(200, effective_config_payload(self.handler))
+            return
+
+        if self.handler.path == "/qz/codex/client-config":
+            self.handler._send_json(200, codex_client_config_payload())
+            return
+
+        if self.handler.path == "/qz/codex/model-catalog":
+            catalog, error = codex_model_catalog_content()
+            if catalog is not None:
+                self.handler._send_json(200, catalog)
+            else:
+                self.handler._send_json(404, {
+                    "ok": False,
+                    "error": error or "missing_codex_catalog",
+                    "remediation": "POST /qz/models/refresh",
+                })
             return
 
         if self.handler.path == "/v1/models":

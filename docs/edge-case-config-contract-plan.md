@@ -2107,6 +2107,13 @@ test_qz_codex_common_unchanged_after_c1 (bash -n passes, no script edits)
 
 ---
 
+### Slice C1 — COMPLETE
+
+`GET /qz/codex/client-config` and `GET /qz/codex/model-catalog` added to
+`proxy/qz_codex_client_config.py` and routed from `proxy/qz_request_router.py`.
+20 focused tests in `tests/test_qz_codex_client_config.py`. 2541 tests passing.
+No qz-codex-common changes. No file writes. No routing changes. No secrets exposed.
+
 ### Slice C1.1: endpoint audit/polish (after C1)
 
 Verify before touching qz-codex-common:

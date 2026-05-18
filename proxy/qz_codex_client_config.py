@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""Bootstrap metadata and catalog delivery for remote qz-codex clients (#57 Slice C1).
+
+Remote qz-codex clients (topology B — LAN-separated from QuantZhai server) need:
+  - provider base_url pointing to the QuantZhai server, not hardcoded 127.0.0.1
+  - downloadable Codex model catalog to write locally before launching Codex CLI
+
+This module provides two read-only helper functions for GET /qz/codex/client-config
+and GET /qz/codex/model-catalog. Both are pure: no file writes, no refresh calls,
+no routing changes, no secrets exposed.
+
+Safety rules:
+  - env_key is key NAME only; never expose the key value
+  - base_url is derived from QZ_PROXY_HOST:QZ_PROXY_PORT, not hardcoded
+  - no API key values, no env var dumps, no prompt contents
+  - generated catalog remains cache/view, not routing authority
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
+
+CODEX_CLIENT_CONFIG_SCHEMA = "qz.codex.client_config.v1"
+CODEX_MODEL_CATALOG_FILENAME = "qwenzhai-models.json"
+
+# QuantZhai-specific Codex provider constants.
+# model_provider identifies the [model_providers.*] block in Codex config.toml.
+CODEX_MODEL_PROVIDER = "quantzhai"
+CODEX_PROVIDER_NAME = "QuantZhai"
+CODEX_WIRE_API = "responses"
+CODEX_ENV_KEY = "LOCAL_QWEN_API_KEY"   # env var name only — never the value
+
+
+def _proxy_base_url(suffix: str = "") -> str:
+    """Return http://<QZ_PROXY_HOST>:<QZ_PROXY_PORT><suffix>.
+
+    Uses environment variables so remote operators can set QZ_PROXY_HOST
+    to their server IP without hardcoding 127.0.0.1.
+    """
+    host = os.environ.get("QZ_PROXY_HOST", "127.0.0.1")
+    port = os.environ.get("QZ_PROXY_PORT", "18180")
+    return f"http://{host}:{port}{suffix}"
+
+
+def _catalog_path() -> Path:
+    """Return the path to the generated Codex model catalog JSON file."""
+    root_raw = os.environ.get("QZ_ROOT")
+    if root_raw:
+        root = Path(root_raw).expanduser().resolve()
+    else:
+        root = Path(__file__).resolve().parents[1]
+
+    var_raw = os.environ.get("QZ_VAR_DIR")
+    var_dir = Path(var_raw).expanduser() if var_raw else root / "var"
+
+    codex_home_raw = os.environ.get("CODEX_HOME")
+    codex_home = Path(codex_home_raw).expanduser() if codex_home_raw else var_dir / "codex-home"
+
+    return codex_home / "model-catalogs" / CODEX_MODEL_CATALOG_FILENAME
+
+
+def _catalog_file_meta(path: Path) -> Dict[str, Any]:
+    """Return bounded file metadata for the catalog file.
+
+    Safe failure returns {}.
+    sha256_12 computed only for files ≤64 KiB.
+    """
+    try:
+        st = path.stat()
+        result: Dict[str, Any] = {
+            "mtime_ms": int(st.st_mtime * 1000),
+            "size_bytes": st.st_size,
+            "sha256_12": None,
+        }
+        if st.st_size <= 65536:
+            try:
+                result["sha256_12"] = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+            except Exception:
+                pass
+        else:
+            result["hash_skipped"] = "too_large"
+        return result
+    except Exception:
+        return {}
+
+
+def codex_client_config_payload() -> Dict[str, Any]:
+    """Return bounded bootstrap metadata for remote qz-codex clients.
+
+    Pure — no file writes, no refresh calls, no routing changes.
+    Never exposes API key values or environment variable contents.
+    """
+    base_url = _proxy_base_url("/v1")
+    catalog_url = _proxy_base_url("/qz/codex/model-catalog")
+    catalog_path = _catalog_path()
+
+    warnings = []
+    model_catalog: Dict[str, Any] = {
+        "mode": "download",
+        "url": catalog_url,
+        "local_filename": CODEX_MODEL_CATALOG_FILENAME,
+    }
+
+    meta = _catalog_file_meta(catalog_path)
+    if meta:
+        if "sha256_12" in meta:
+            model_catalog["sha256_12"] = meta["sha256_12"]
+        if "mtime_ms" in meta:
+            model_catalog["mtime_ms"] = meta["mtime_ms"]
+        if "hash_skipped" in meta:
+            model_catalog["hash_skipped"] = meta["hash_skipped"]
+    else:
+        warnings.append({
+            "warning": "missing_codex_catalog",
+            "path": str(catalog_path),
+            "remediation": "POST /qz/models/refresh",
+        })
+
+    return {
+        "ok": True,
+        "schema": CODEX_CLIENT_CONFIG_SCHEMA,
+        "model_provider": CODEX_MODEL_PROVIDER,
+        "provider": {
+            "name": CODEX_PROVIDER_NAME,
+            "base_url": base_url,
+            "wire_api": CODEX_WIRE_API,
+            "env_key": CODEX_ENV_KEY,
+        },
+        "model_catalog": model_catalog,
+        "warnings": warnings,
+    }
+
+
+def codex_model_catalog_content() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Return (catalog_dict, None) on success or (None, error_code) on failure.
+
+    Pure — no file writes, no refresh calls, no routing changes.
+    """
+    path = _catalog_path()
+    try:
+        data = path.read_bytes()
+        catalog = json.loads(data)
+        if not isinstance(catalog, dict):
+            return None, "invalid_codex_catalog"
+        return catalog, None
+    except FileNotFoundError:
+        return None, "missing_codex_catalog"
+    except json.JSONDecodeError:
+        return None, "invalid_codex_catalog"
+    except Exception:
+        return None, "invalid_codex_catalog"
