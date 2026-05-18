@@ -238,6 +238,26 @@ def _should_inject_hop_budget_signal(hops_remaining: int, threshold: int) -> boo
     return hops_remaining <= threshold
 
 
+def _should_inject_context_pressure_signal(
+    input_tokens: int | float,
+    context_length: int,
+    threshold: float,
+) -> bool:
+    """Return True if the context-pressure signal should be injected for this hop.
+
+    Pure helper — no I/O, no state mutation.
+    threshold <= 0 disables the signal entirely.
+    Signal is injected when input_tokens / context_length >= threshold.
+    """
+    if threshold <= 0:
+        return False
+    if context_length <= 0:
+        return False
+    if input_tokens <= 0:
+        return False
+    return input_tokens / context_length >= threshold
+
+
 def _reasoning_only_abort_reason(
     *,
     reasoning_only_sample: str,
@@ -1168,22 +1188,23 @@ class ResponsesStreamRuntime:
         return self._make_signal_message(text)
 
     def _context_pressure_signal_message(self, usage: dict) -> dict | None:
-        if self.context_pressure_signal_threshold <= 0:
-            return None
         context_length = None
         if isinstance(self.selected_model, dict):
             context_length = (
                 self.selected_model.get("runtime_context_length")
                 or self.selected_model.get("context_length")
             )
-        if not isinstance(context_length, int) or context_length <= 0:
-            return None
+        context_length = context_length if isinstance(context_length, int) else 0
         input_tokens = usage.get("input_tokens") or 0
-        if not isinstance(input_tokens, (int, float)) or input_tokens <= 0:
+        if not isinstance(input_tokens, (int, float)):
+            input_tokens = 0
+        if not _should_inject_context_pressure_signal(
+            input_tokens,
+            context_length,
+            self.context_pressure_signal_threshold,
+        ):
             return None
         fill_ratio = input_tokens / context_length
-        if fill_ratio < self.context_pressure_signal_threshold:
-            return None
         pct = int(fill_ratio * 100)
         text = (
             f"Context window is {pct}% full. "

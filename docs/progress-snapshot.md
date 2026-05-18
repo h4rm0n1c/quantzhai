@@ -31,18 +31,18 @@ docs/current-stocktake.md
 Current strategic direction:
 
 ```text
-P1 #37 Stream seam extraction (Slices 1–2D.1 complete) — Slice 2E next
+P1 #37 Stream seam extraction (Slices 1–2E complete) — Slice 2E.1 audit/polish next
 P2 repeated-read v1 advisory signal
 P3 #51/#46 operational-state persistence (deferred until store decision)
 P4 config/var/script ownership cleanup
 ```
 
-BrainCase feature work paused: #53 and #54 are closed. 2453 tests passing.
+BrainCase feature work paused: #53 and #54 are closed. 2465 tests passing.
 
 ## Area estimates
 
 - **Core usable stack:** 94%
-  Known-good local flow. Suite is green at 2453 tests.
+  Known-good local flow. Suite is green at 2465 tests.
   Live smoke (`scripts/qz-live-smoke`) validates the end-to-end path reliably.
 - **Config/model/profile correctness:** 89%
   qz.profiles.v1 is the active format. memory_domain is wired from profile

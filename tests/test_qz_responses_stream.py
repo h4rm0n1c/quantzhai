@@ -9,6 +9,7 @@ from proxy.qz_responses_stream import (
     StreamDecision,
     StreamHopState,
     _reasoning_only_abort_reason,
+    _should_inject_context_pressure_signal,
     _should_inject_hop_budget_signal,
     _should_suppress_duplicate_response_start,
 )
@@ -3663,6 +3664,53 @@ class DuplicateResponseStartHelperTests(unittest.TestCase):
         self.assertFalse(
             _should_suppress_duplicate_response_start("done", True)
         )
+
+
+class ContextPressureSignalHelperTests(unittest.TestCase):
+    """Unit tests for _should_inject_context_pressure_signal() — #37 Slice 2E."""
+
+    def test_threshold_zero_disables_signal(self):
+        self.assertFalse(_should_inject_context_pressure_signal(900, 1000, 0.0))
+
+    def test_threshold_negative_disables_signal(self):
+        self.assertFalse(_should_inject_context_pressure_signal(900, 1000, -1.0))
+
+    def test_context_length_zero_returns_false(self):
+        self.assertFalse(_should_inject_context_pressure_signal(500, 0, 0.8))
+
+    def test_context_length_negative_returns_false(self):
+        self.assertFalse(_should_inject_context_pressure_signal(500, -100, 0.8))
+
+    def test_input_tokens_zero_returns_false(self):
+        self.assertFalse(_should_inject_context_pressure_signal(0, 1000, 0.8))
+
+    def test_below_threshold_returns_false(self):
+        # 500/1000 = 0.5 < 0.8 → no signal
+        self.assertFalse(_should_inject_context_pressure_signal(500, 1000, 0.8))
+
+    def test_exactly_at_threshold_returns_true(self):
+        # Uses >= comparison: 800/1000 = 0.8 >= 0.8 → signal
+        self.assertTrue(_should_inject_context_pressure_signal(800, 1000, 0.8))
+
+    def test_above_threshold_returns_true(self):
+        # 900/1000 = 0.9 >= 0.8 → signal
+        self.assertTrue(_should_inject_context_pressure_signal(900, 1000, 0.8))
+
+    def test_input_tokens_exceeds_context_length_returns_true(self):
+        # fill ratio > 1.0 — signal fires if threshold is enabled
+        self.assertTrue(_should_inject_context_pressure_signal(1200, 1000, 0.8))
+
+    def test_float_input_tokens_at_threshold_returns_true(self):
+        # input_tokens may be float per the parent coercion path
+        self.assertTrue(_should_inject_context_pressure_signal(800.0, 1000, 0.8))
+
+    def test_threshold_one_at_ratio_one_returns_true(self):
+        # threshold = 1.0, ratio = 1.0 → exactly at threshold → signal
+        self.assertTrue(_should_inject_context_pressure_signal(1000, 1000, 1.0))
+
+    def test_threshold_one_below_ratio_returns_false(self):
+        # threshold = 1.0, ratio < 1.0 → no signal
+        self.assertFalse(_should_inject_context_pressure_signal(999, 1000, 1.0))
 
 
 class HopBudgetSignalHelperTests(unittest.TestCase):

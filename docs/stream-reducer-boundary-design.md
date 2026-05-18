@@ -515,6 +515,41 @@ Avoid tool lifecycle extraction, terminal event extraction, and watchdog extract
 
 ---
 
+## 9E. Slice 2E — COMPLETE
+
+`_should_inject_context_pressure_signal(input_tokens, context_length, threshold) -> bool` extracted.
+Condition moved out of `_context_pressure_signal_message()`. 12 unit tests added.
+No behaviour change. Message construction and telemetry unchanged.
+
+**What was implemented:**
+
+```text
+_should_inject_context_pressure_signal(
+    input_tokens: int | float,
+    context_length: int,
+    threshold: float,
+) -> bool
+
+Semantics (exact, preserving original code):
+  threshold <= 0    → False  (disabled; note: <= not <, unlike hop-budget helper)
+  context_length <= 0 → False
+  input_tokens <= 0   → False
+  input_tokens / context_length >= threshold → True
+  otherwise → False
+
+_context_pressure_signal_message() now delegates to this helper.
+Model lookup and type coercion remain in the method.
+fill_ratio calculation and pct formatting remain unchanged.
+Message text and _make_signal_message() call unchanged.
+Telemetry emission (context_pressure_signal event) unchanged.
+```
+
+**Recommended next: Slice 2E.1** — audit and polish of Slices 2B–2E helpers before
+any more complex extraction. Avoid tool lifecycle, terminal event, and watchdog
+extraction until later.
+
+---
+
 ## 10. Risks
 
 | Risk | Likelihood | Mitigation |
