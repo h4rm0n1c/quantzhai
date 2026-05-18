@@ -138,26 +138,19 @@ docs/progress-snapshot.md
 Current next engineering target:
 
 ```text
-P1 BrainCase — Slices A–I.1 complete. #53 CLOSED.
-Model-facing tools (behind feature flags, default disabled):
-  braincase.render       — QZ_BRAINCASE_TOOLS_ENABLED
-  braincase.recall       — QZ_BRAINCASE_TOOLS_ENABLED
-  braincase.write_candidate — both flags required
-Model-visible result types:
-  RenderPacket          for render/recall
-  WriteCandidateResult  for write_candidate (candidate/internal forced)
-Still unexposed: braincase.write, update, search, inspect, promote_candidate.
-Operator CLI: scripts/qz-braincase-review list/inspect/promote/reject.
-Smoke: scripts/qz-braincase-smoke 12/12 PASS. Tests: 2239 passing.
-Follow-up: #54 retention/lifetime policy. No automatic ingestion.
-See docs/braincase-memory-tool-api.md for the full slice plan.
-```
+BrainCase #53 CLOSED — render/recall/write_candidate live; BrainCaseDB proven.
+BrainCase #54 CLOSED — retention policy; operator prune live.
+Repeated-read v1 COMPLETE (#3/#4/#43 closed) — qz_file_signal.py live;
+  advisory, stateless, input-history-seeded; qz-smoke-repeated-read passes.
+#37 stream seam Slices 1–2E.1 COMPLETE — paused before delicate seams.
 
-Then:
-
-```text
-P2 repeated-read v1 advisory signal.
-P3 telemetry filter ergonomics / qz-live-smoke refinements.
+P1 #37 design micro-slice — define next delicate stream seam before coding.
+   Candidates: tool lifecycle, terminal events, watchdog/timeout, proxy-local suppression.
+   Each carries higher extraction risk than Slices 2B–2E. Design first.
+   See docs/stream-reducer-boundary-design.md §9F.
+P2 Config/var/script cleanup (#5) — safe any time; good between features.
+P3 Telemetry filter ergonomics — when noisy-window problem recurs.
+P4 Operational-state persistence (#51/#46) — deferred until store decision.
 ```
 
 ### I want to work on memory/state/BrainCaseDB

@@ -593,9 +593,10 @@ Possible next options after stocktake:
 
 ```text
 - continue #37 with a design micro-slice for the next delicate seam
-- shift to repeated-read v1 advisory signal (stateless, no stream changes)
+- config/var/script cleanup (#5) — safe any time, good between features
 - revisit #7 memory_domain policy/config leftovers
 - defer #51/#46 until operational store decision
+Note: repeated-read v1 is COMPLETE (#3/#4/#43 closed); v2 blocked on SQLite.
 ```
 
 ---

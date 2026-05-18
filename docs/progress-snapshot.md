@@ -1,6 +1,6 @@
 # QuantZhai Progress Snapshot
 
-Last updated: 2026-05-15 (post-VRAM/recovery stabilisation).
+Last updated: 2026-05-18 (post-BrainCase/#37-helper-run stocktake).
 
 See `docs/current-stocktake.md` for the full point-in-time state summary.
 
@@ -31,13 +31,15 @@ docs/current-stocktake.md
 Current strategic direction:
 
 ```text
-P1 #37 Stream seam extraction (Slices 1–2E.1 complete) — pause for stocktake before next seam
-P2 repeated-read v1 advisory signal
+P1 #37 Stream seam extraction (Slices 1–2E.1 complete) — next seam needs design micro-slice first
+P2 Config/var/script cleanup (#5) — safe any time, good between features
 P3 #51/#46 operational-state persistence (deferred until store decision)
-P4 config/var/script ownership cleanup
+P4 Search config split (#39) — when search work resumes
 ```
 
-BrainCase feature work paused: #53 and #54 are closed. 2465 tests passing.
+BrainCase feature work paused: #53 and #54 are closed.
+Repeated-read v1: COMPLETE (#3/#4/#43 closed; qz_file_signal.py live).
+2465 tests passing.
 
 ## Area estimates
 
@@ -102,19 +104,13 @@ Do not add automatic ingestion. No request/session/turn logging.
 No model-visible memory by default.
 ```
 
-### P2: repeated-read signal
+### P2: config/var/script cleanup (#5)
 
 Status:
 
 ```text
-V1 plan approved. Not blocked; integration cleaner after P1 SQLite.
-V2 blocked on P1 same-scope SQLite facts.
-```
-
-Scope:
-
-```text
-V1 is advisory, stateless, and input-history-seeded from body["input"].
+Safe any time. Good incremental work between larger features.
+Focus: /qz/config/effective coverage, prompt-file warnings, catalog generation.
 ```
 
 ### P3: telemetry filter ergonomics
@@ -125,20 +121,19 @@ Status:
 Low priority. Implement when the noisy-window problem recurs in practice.
 ```
 
-### P4: config/var/script cleanup
+### P4: operational-state persistence (#51/#46)
 
 Status:
 
 ```text
-Still needed, but do not preempt the state spine unless a live breakage demands it.
+Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 ```
 
 ## Immediate next priorities
 
-1. **#40: Compaction/stream hang watchdog** — prevents client stuck states.
-2. **#2/#53: BrainCase memory tool API — Slice F harness wiring** (see docs/braincase-memory-tool-api.md).
-3. **#51: Promote recovery/backoff state to SQLite** (after #2).
-4. **Implement repeated-read v1 advisory signal** (can start any time).
+1. **#37 design micro-slice** — define boundary for next delicate stream seam before coding.
+2. **Config/var cleanup (#5)** — safe any time; good between feature sprints.
+3. **#51/#46** — deferred until operational-store decision.
 
 ## Remaining big rocks
 
@@ -154,12 +149,16 @@ Still needed, but do not preempt the state spine unless a live breakage demands 
 10. ~~Backend control-plane audit~~ — done (#44).
 11. ~~Backend service/recovery system~~ — done (#47-#50); six trigger actions operational.
 12. ~~VRAM telemetry~~ — done (#6 closed); provenance-labelled panel live.
-13. Compaction/stream hang watchdog — next (#40).
-14. Streaming reliability — mostly improved; long-running TUI and edge cases remain.
-15. LLM signal system — in progress; repeated-read v1 is next practical signal.
-16. Phase 1 SQLite substrate — high priority (#2).
-17. Recovery/backoff state persistence (#51) — after #2.
-18. Split proxy into a conventional Python package — later.
-19. Add backend adapter boundary — later.
-20. Later: MCP/app bridge, search packet mode, redaction, run grouping, rendered
+13. ~~Compaction/stream hang watchdog~~ — done (#40 closed); watchdog fallbacks live.
+14. ~~BrainCase memory tool API~~ — done (#53 closed); render/recall/write_candidate live.
+15. ~~BrainCase retention/lifetime policy~~ — done (#54 closed); operator prune live.
+16. ~~Repeated-read v1 advisory signal~~ — done (#3/#4/#43 closed); qz_file_signal.py live.
+17. ~~Stream seam extraction Slices 1–2E.1~~ — done (#37 paused); 4 pure helpers extracted.
+18. Streaming reliability — mostly improved; #37 delicate seams remain (design-first).
+19. LLM signal system — repeated-read v1 done; repeated-read v2 blocked on SQLite.
+20. Phase 1 SQLite substrate — parked (#2); BrainCaseDB proven but operational store TBD.
+21. Recovery/backoff state persistence (#51) — after operational-store decision.
+22. Split proxy into a conventional Python package — later.
+23. Add backend adapter boundary — later.
+24. Later: MCP/app bridge, search packet mode, redaction, run grouping, rendered
     state packets, roleplay/HSM-specific renderers.

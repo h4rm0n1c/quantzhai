@@ -25,6 +25,33 @@ they are not automatic operational logs.
 No automatic ingestion. No clever memory. No cross-domain sharing.
 ```
 
+## Recently completed (2026-05-18 run — BrainCase + repeated-read + #37)
+
+```text
+BrainCase memory tool API (#53, now closed)
+  - render/recall/write_candidate tools (feature-flagged, default disabled)
+  - Operator review CLI (qz-braincase-review), retention policy, prune --apply
+  - BrainCaseDB is the first concrete LimbiCore technology
+  - Slices A–I.1 complete; no automatic ingestion; 2465 tests
+
+BrainCase retention/lifetime policy (#54, now closed)
+  - Multi-axis policy matrix, pure evaluator, dry-run report, prune --apply
+  - Slices A–D complete; operator-controlled, not automatic
+
+Repeated-read v1 advisory signal (#3/#4/#43, now closed)
+  - proxy/qz_file_signal.py: parser, state, RepeatedReadState
+  - Integration: qz_proxy_tools.py, qz_responses_stream.py, qz_request_router.py
+  - Live smoke: scripts/qz-smoke-repeated-read
+  - Advisory, stateless, input-history-seeded; no BrainCase writes; no persistence
+
+#37 stream seam Slices 1–2E.1 (paused, not closed)
+  - StreamHopState (per-hop mutable state object)
+  - StreamDecision (vocabulary dataclass, not yet broadly consumed)
+  - 4 pure module-level decision helpers extracted
+  - No decide_stream_event() exists; qz_responses_stream.py remains side-effect owner
+  - 2465 tests; paused before delicate seams (tool lifecycle, terminal, watchdog)
+```
+
 ## Recently completed (2026-05-15 run — VRAM/recovery/docs)
 
 ```text
@@ -313,9 +340,14 @@ legitimate re-reads.
 Current rule:
 
 ```text
-Implement repeated-read v1 as advisory, stateless, and input-history-seeded.
-Do not implement persistent v2 until BrainCase recall/write semantics are defined
-and a suitable persistence scope exists.
+V1 COMPLETE (#3/#4/#43 closed).
+  proxy/qz_file_signal.py — parser, state, RepeatedReadState
+  Integration live in qz_proxy_tools.py, qz_responses_stream.py, qz_request_router.py
+  Live smoke: scripts/qz-smoke-repeated-read
+  Advisory, stateless, input-history-seeded. No BrainCase writes. No persistence.
+
+Do not implement persistent v2 until SQLite substrate and session identity scope
+are proven. V2 is blocked on #2 / session key design.
 ```
 
 V1 likely files:
@@ -489,11 +521,26 @@ cross-domain isolation tests
 
 ---
 
-## Next implementation prompt: BrainCase Slice F (harness/tool exposure)
+## Next implementation prompt: #37 design micro-slice for next delicate stream seam
 
-**Slices A through F (and C.1, D.1) are complete.**
+**BrainCase #53/#54 closed. Repeated-read v1 complete. #37 Slices 1–2E.1 complete.**
 
-Read `docs/braincase-memory-tool-api.md` for full Slice F details.
+Next: design micro-slice for the next #37 seam. Do not code before defining:
+- Which seam (tool lifecycle? terminal? watchdog?)
+- Extraction boundary and purity rules
+- Test coverage gaps to fill before extraction
+- Acceptance criteria
+
+Read `docs/stream-reducer-boundary-design.md` §9F for the candidate inventory
+and risk rationale. Slices 2F+ must not start from code — start from design.
+
+Alternative safe next: config/var/script cleanup (#5).
+
+## Reference: BrainCase Slice completion history
+
+**Slices A through I.1 are complete (#53 CLOSED). #54 CLOSED.**
+
+Read `docs/braincase-memory-tool-api.md` for the full slice history.
 
 ```text
 Slice A:   COMPLETE — schemas + fixtures + 44 tests

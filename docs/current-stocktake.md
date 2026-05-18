@@ -1,36 +1,47 @@
 # QuantZhai Post-Stabilisation Stocktake
 
-Date: 2026-05-15
-Status: post-VRAM/recovery/stream-watchdog stabilisation stocktake.
+Date: 2026-05-18 (updated — post-BrainCase/#37-helper-run stocktake)
+Status: post-BrainCase/repeated-read/stream-seam stabilisation stocktake.
 
-This document is a point-in-time snapshot for agents picking up after the
-2026-05-15 stabilisation run. For the live execution order, read
-`docs/current-task-hierarchy.md`. For architecture authority, read
+This document is a rolling point-in-time snapshot. For the live execution order,
+read `docs/current-task-hierarchy.md`. For architecture authority, read
 `docs/current-architecture-authority.md`.
 
 ---
 
 ## 1. Current operational state
 
-The local Codex + Qwen stack is usable, observable, and has a working recovery
-system. VRAM telemetry is live in qz-top with provenance labels. The first
-optional SQLite storage substrate skeleton exists and remains disabled by
-default. A foundation audit constrains #2 to parser-boundary identity/scoping
-facts and defers runtime signal unification.
+The local Codex + Qwen stack is usable, observable, has a working recovery
+system, a tool-mediated BrainCase memory layer, a live repeated-read advisory
+signal, and a partial stream-seam extraction.
 
 ```text
-Full test suite:     1442 tests passing
-Live smoke:          qz-live-smoke passes
-Recovery system:     full trigger/plan/backoff/async-job API operational
-VRAM panel (qz-top): live, provenance-labelled, calibrated
-Stream watchdog:     terminal/no-output classifications operational
-Docs doctrine:       docs/patterns/provenance-telemetry.md active
-Agent rules:         AGENTS.md includes telemetry doctrine
+Full test suite:         2465 tests passing
+Live smoke:              qz-live-smoke passes
+Repeated-read smoke:     qz-smoke-repeated-read passes
+BrainCase smoke:         qz-braincase-smoke 12/12 passes
+Recovery system:         full trigger/plan/backoff/async-job API operational
+VRAM panel (qz-top):     live, provenance-labelled, calibrated
+Stream watchdog:         terminal/no-output classifications operational
+BrainCase memory:        braincase.render/recall/write_candidate (#53 closed)
+Repeated-read signal v1: advisory, stateless, input-history-seeded (#3/#4/#43 closed)
+Stream seam (#37):       Slices 1–2E.1 complete; paused before delicate seams
+Docs doctrine:           docs/patterns/provenance-telemetry.md active
+Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 ```
 
 ---
 
 ## 2. Recently completed work
+
+### 2026-05-18 run (BrainCase + repeated-read + #37 stream seam)
+
+| Item | What shipped |
+|---|---|
+| #53 BrainCase memory tool API | CLOSED. Slices A–I.1. render/recall/write_candidate tools, operator review CLI, retention policy. |
+| #54 BrainCase retention/lifetime policy | CLOSED. Slices A–D. Multi-axis policy evaluator, dry-run report, prune --apply. |
+| #3/#4/#43 Repeated-read v1 | CLOSED. Parser + state + integration + live smoke. Advisory, stateless, input-history-seeded. |
+| #37 Slices 1–2E.1 | Stream seam helpers extracted (StreamHopState, StreamDecision, 4 pure helpers). Paused before delicate seams. |
 
 ### 2026-05-15 run (VRAM + recovery + docs lock)
 
@@ -68,12 +79,13 @@ Agent rules:         AGENTS.md includes telemetry doctrine
 | # | Title | Classification |
 |---|---|---|
 | #2 | Add optional Phase 1 SQLite storage substrate | **parked** (BrainCaseDB done via #53/#54; #2 may be closed or refocused) |
-| #53 | BrainCase memory tool API | **CLOSED** (Slices A–I.1 complete; 2406 tests) |
-| #54 | BrainCase retention/lifetime policy | **CLOSED** (Slices A–D complete; 2406 tests) |
-| #37 | Architectural seam extraction plan | **NEXT** — stream state machine seam is Slice 1 target |
+| #53 | BrainCase memory tool API | **CLOSED** (Slices A–I.1 complete; 2465 tests) |
+| #54 | BrainCase retention/lifetime policy | **CLOSED** (Slices A–D complete; 2465 tests) |
+| #3/#4/#43 | Repeated-read v1 (parser, integration, smoke) | **CLOSED** (complete; advisory stateless v1 live) |
+| #37 | Architectural seam extraction plan | **PAUSED** — Slices 1–2E.1 complete; next seam needs design micro-slice |
 | #51 | Promote recovery/backoff runtime state to SQLite | **deferred** until operational-store decision |
 | #46 | Replace qz-write-runtime-state launcher trace | **deferred** until startup-telemetry replacement |
-| #5 | Config/var/script ownership cleanup | **optional-polish** (do not preempt #37) |
+| #5 | Config/var/script ownership cleanup | **optional-polish** (safe any time) |
 | #39 | Split search routing policy into search.json | **optional-polish** (resume when search work resumes) |
 | #52 | Backend-confirmed VRAM allocator metrics | **upstream-blocked** (TurboQuant side) |
 | #8 | RFC: NetTTS survival-weighted compaction | **research/later** |
@@ -89,10 +101,23 @@ See `docs/braincase-memory-tool-api.md`, `docs/braincase-retention-policy.md`.
 
 **#53** — CLOSED. BrainCase memory tool API: render/recall/write_candidate,
 operator review CLI, candidate write, retention policy evaluator, prune CLI.
-2406 tests. BrainCaseDB is the first concrete LimbiCore technology.
+BrainCaseDB is the first concrete LimbiCore technology.
 
 **#54** — CLOSED. BrainCase retention policy: multi-axis matrix, pure evaluator,
-retention-report dry-run surface, prune --apply retire path. 2406 tests.
+retention-report dry-run surface, prune --apply retire path.
+
+**#3/#4/#43** — CLOSED. Repeated-read v1: parser/state (qz_file_signal.py),
+integration (qz_proxy_tools.py, qz_responses_stream.py, qz_request_router.py),
+and live smoke (scripts/qz-smoke-repeated-read). Advisory, stateless,
+input-history-seeded. V2 is blocked on SQLite/session identity.
+
+**#37** — PAUSED after Slice 2E.1. Stream seam Slices 1–2E.1 complete:
+StreamHopState, StreamDecision, _reasoning_only_abort_reason,
+_should_suppress_duplicate_response_start, _should_inject_hop_budget_signal,
+_should_inject_context_pressure_signal. Remaining candidates (tool lifecycle,
+terminal events, watchdog, proxy-local suppression, continuation/repair) carry
+higher extraction risk. Need a fresh design micro-slice before proceeding.
+See docs/stream-reducer-boundary-design.md.
 
 **#51** — Recovery backoff state is currently in-memory only. Should be persisted
 once #2 exists. Do not implement before #2.
@@ -100,12 +125,8 @@ once #2 exists. Do not implement before #2.
 **#46** — qz-write-runtime-state is a launcher trace only, not live-status truth.
 Removal blocked until a startup-telemetry or SQLite replacement path exists.
 
-**#37** — **NEXT priority.** Architectural seam extraction, starting with the
-stream state machine seam. See "Prompt A" below for Slice 1 plan.
-Do not do a grand rewrite. One seam at a time, test-backed.
-
-**#5** — Config/var cleanup is ongoing and never fully done. Do not preempt #2
-for it.
+**#5** — Config/var cleanup is ongoing and never fully done. Safe to do any time
+without blocking other work. Good incremental choice between larger features.
 
 **#39** — Useful when search work resumes. Not urgent.
 
@@ -122,16 +143,18 @@ now track. Keep as historical planning record; do not implement from it directly
 ## 4. Dependency map
 
 ```
-#53 / #54  BrainCase memory + retention          CLOSED
-#37  stream seam extraction (Slice 1)            NEXT — no hard dependencies
-  \-> #37 Slice 2+  further seam extraction
-  \-> #51 recovery state persistence             deferred / operational-store decision
-  \-> #46 launcher trace removal                 deferred / startup-telemetry
-#5  config cleanup                               incremental; do not preempt #37
-#39 search config split                          when search work resumes
-#52 backend allocator metrics                    upstream-blocked
-#8  compaction RFC                               research; no implementation dependency
-#7  LimbiCore/SQLite planning                    deferred; superseded by #53/#54
+#53 / #54   BrainCase memory + retention                 CLOSED
+#3/#4/#43   Repeated-read v1                             CLOSED
+#37  stream seam extraction Slices 1–2E.1                PAUSED — next seam needs design micro-slice
+  \-> #37 Slice 2F+  delicate seam extraction            needs fresh design before coding
+  \-> #51 recovery state persistence                     deferred / operational-store decision
+  \-> #46 launcher trace removal                         deferred / startup-telemetry
+#5  config cleanup                                       safe any time; good between features
+#39 search config split                                  when search work resumes
+#52 backend allocator metrics                            upstream-blocked
+#8  compaction RFC                                       research; no implementation dependency
+#7  LimbiCore/SQLite planning                            deferred; superseded by #53/#54
+Repeated-read v2                                         blocked on SQLite/session identity
 ```
 
 ---
@@ -139,26 +162,32 @@ now track. Keep as historical planning record; do not implement from it directly
 ## 5. Recommended next work order
 
 ```
-A. #37  Stream state machine seam extraction (Slice 1) — NEXT
-        BrainCase feature work is paused (#53/#54 closed).
-        Start here: extract per-hop state from qz_responses_stream.py.
-        See Prompt A below for the full Slice 1 plan.
+A. #37  Stream seam: fresh design micro-slice for next delicate seam
+        Slices 1–2E.1 are complete and paused.
+        Remaining candidates are higher-risk. Do not code until a design
+        micro-slice defines the boundary, gaps, and acceptance tests.
+        See §10 Prompt A and docs/stream-reducer-boundary-design.md §9F.
 
-B. #51  Recovery/backoff state persistence
+B. #5   Config/var/script cleanup
+        Safe any time. Good between larger features. Ongoing.
+        Do not make generated Codex catalog files into routing authority.
+
+C. #51  Recovery/backoff state persistence
         Deferred until operational-store decision.
         BrainCaseDB is NOT the target. Needs a separate lightweight store.
 
-C. #46  Remove qz-write-runtime-state
+D. #46  Remove qz-write-runtime-state
         Deferred until startup-telemetry replacement exists.
-
-D. #5   Config/var/script cleanup
-        Ongoing. Do not preempt #37.
 
 E. #39  Search config split
         When search work resumes.
 
 F. #52  Backend allocator metrics
         Upstream-blocked. No action needed in QuantZhai.
+
+G. Repeated-read v2
+        Blocked on SQLite substrate and session identity scope.
+        Do not implement before a suitable persistent session key is proven.
 ```
 
 ---
@@ -214,14 +243,26 @@ Signal/feedback subsystem design (#42)
     stream/runtime signals before #2.
 
 BrainCase memory tool API (#53)
-  → CLOSED. render/recall/write_candidate + operator review CLI. 2406 tests.
+  → CLOSED. render/recall/write_candidate + operator review CLI.
   → BrainCaseDB is the first concrete LimbiCore technology.
   → Do not add new BrainCase model-facing tools without a new issue.
 
 BrainCase retention/lifetime policy (#54)
   → CLOSED. Multi-axis policy, pure evaluator, dry-run report, prune --apply.
-  → 2406 tests. Retention is operator-controlled, not automatic.
+  → Retention is operator-controlled, not automatic.
   → Do not add automatic ingestion or background jobs.
+
+Repeated-read v1 signal (#3/#4/#43)
+  → CLOSED. Parser/state, integration, live smoke all complete.
+  → Advisory, stateless, input-history-seeded. qz_file_signal.py.
+  → Do not add persistence, session state, or v2 features without a new issue.
+  → V2 is blocked on SQLite/session identity.
+
+#37 safe stream seam helpers (Slices 1–2E.1)
+  → DONE. StreamHopState, StreamDecision, 4 pure decision helpers.
+  → Paused before delicate seams (tool lifecycle, terminal, watchdog).
+  → Do not extract further without a design micro-slice first.
+  → See docs/stream-reducer-boundary-design.md §9F for next-step rationale.
 ```
 
 ---
@@ -275,6 +316,99 @@ BrainCase retention/lifetime policy (#54)
 | `docs/codex-request-signal-inventory.md` | Historical inventory; use parser/tests for state |
 | `docs/master-stabilisation-plan.md` | Broader map; current-task-hierarchy wins for execution order |
 | `#7` issue | Planning tracker from before #2 was prioritised; informational only |
+
+---
+
+## 11. Post-#53/#54/#37-helper-run stocktake (2026-05-18)
+
+### 11.1 What is now complete
+
+```text
+BrainCase memory tool API (#53):
+  braincase.render, braincase.recall, braincase.write_candidate tools live.
+  Operator review CLI (qz-braincase-review), retention policy, prune --apply.
+  Slices A–I.1 complete. BrainCaseDB is the first concrete LimbiCore technology.
+
+BrainCase retention/lifetime policy (#54):
+  Multi-axis policy matrix, pure evaluator, dry-run report, prune --apply retire path.
+  Slices A–D complete. Retention is operator-controlled, not automatic.
+
+Repeated-read v1 advisory signal (#3/#4/#43):
+  Parser/state (proxy/qz_file_signal.py), integration into tool lifecycle and
+  stream/non-stream paths, live smoke (scripts/qz-smoke-repeated-read).
+  Advisory, stateless, input-history-seeded. No BrainCase writes. No persistence.
+
+#37 stream seam Slices 1–2E.1:
+  StreamHopState (per-hop state object).
+  StreamDecision (vocabulary dataclass).
+  _reasoning_only_abort_reason() — pure helper, keyword-only params.
+  _should_suppress_duplicate_response_start() — pure helper.
+  _should_inject_hop_budget_signal() — pure helper.
+  _should_inject_context_pressure_signal() — pure helper.
+  2465 tests. No decide_stream_event() exists. qz_responses_stream.py remains
+  the sole side-effect owner.
+
+Full suite: 2465 tests passing.
+```
+
+### 11.2 What must not be touched without a design micro-slice
+
+```text
+#37 delicate seam extraction:
+  tool lifecycle stream extraction
+  terminal event extraction
+  watchdog/no-output timeout extraction
+  proxy-local suppression extraction
+  continuation/repair flow extraction
+
+These all carry higher extraction risk than Slices 2B–2E:
+  timing-sensitive, multi-hop state mutation, hard-to-separate rendering
+  and decision concerns, subtle telemetry dependencies.
+
+Other hold-off:
+  more BrainCase model-facing tools (new issue required)
+  automatic ingestion of any kind
+  repeated-read v2 (blocked on SQLite/session identity)
+  operational SQLite persistence (#51/#46 blocked on #2)
+  HSM/LimbiCore expansion (research phase)
+```
+
+### 11.3 Next practical options (ranked by risk)
+
+```text
+A. #37 design micro-slice for next delicate seam — viable but needs design first
+   Remaining stream seams are higher-risk. Define the boundary, confirm coverage
+   gaps, write design notes, then code in a later slice. Do not jump to code.
+   See docs/stream-reducer-boundary-design.md §9F for the candidate inventory.
+
+B. Config/var/script cleanup (#5) — low risk, always useful
+   Ongoing. Does not block or preempt #37. Good incremental work between features.
+   Focus: /qz/config/effective coverage, prompt-file warnings, catalog generation.
+
+C. Telemetry filter ergonomics (P3) — low risk, low priority
+   Optional /qz/telemetry/recent?type= filtering. Implement when noisy-window
+   problem recurs in practice.
+
+D. Recovery/backoff state persistence (#51) — deferred
+   BrainCaseDB is NOT the target. Needs an operational-store decision first.
+   Do not implement before that decision is made.
+
+E. Repeated-read v2 — blocked
+   Requires SQLite substrate with session/turn scope and proven session identity.
+   Do not implement without a new design issue first.
+```
+
+### 11.4 Do-not-touch list (no coding without a new design issue)
+
+```text
+- Any new BrainCase model-facing tool
+- Automatic ingestion of any kind
+- #37 tool lifecycle / terminal / watchdog extraction (need design micro-slice)
+- Repeated-read v2 persistent state
+- Operational SQLite storage (#51/#46)
+- HSM/LimbiCore memory expansion
+- decide_stream_event() (full reducer — need design phase first)
+```
 
 ---
 
