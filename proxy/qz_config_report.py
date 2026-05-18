@@ -171,48 +171,89 @@ def _iter_prompt_refs(manifest: Dict[str, Any]):
             stack.extend(item for item in value if isinstance(item, (dict, list)))
 
 
-def _prompt_file_records(root: Path, paths: List[Path]) -> List[Dict[str, Any]]:
-    seen = set()
-    records = []
-    summary = {
-        "schema": "qz.prompt.files.v1",
-        "loaded": [],
-        "missing": [],
-        "failed": [],
-    }
+def _prompt_file_records(
+    root: Path,
+    paths: List[Path],
+    source_layers: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    """Collect all prompt file references from the given manifest paths.
+
+    source_layers maps str(manifest_path) -> source layer label (e.g. "default", "user").
+    Paths not found in source_layers get source_layer "unknown".
+    """
+    if source_layers is None:
+        source_layers = {}
+
+    # First pass: collect all (field, prompt_path) references per manifest,
+    # accumulating referenced_by per unique prompt path.
+    seen_refs: Dict[str, list] = {}  # prompt_path_str -> [{field, source, source_layer}]
     for manifest_path in paths:
         manifest = _load_json(manifest_path)
         if not manifest:
             continue
+        layer = source_layers.get(str(manifest_path), "unknown")
         for field, raw_path in _iter_prompt_refs(manifest):
             path = _resolve_repo_path(root, raw_path)
             if path is None:
                 continue
             key = str(path)
-            if key in seen:
-                continue
-            seen.add(key)
-            record = _record(
-                f"prompt_file:{field}",
-                path,
-                source_layer="prompt_override",
-                classification="tracked_or_user_prompt",
-                active=True,
-                note=f"referenced by {manifest_path}",
-            )
-            if record["state"] == "file":
-                try:
-                    path.read_text(encoding="utf-8")
-                    summary["loaded"].append(str(path))
-                except Exception as exc:
-                    record["state"] = "failed"
-                    record["note"] = f"{record['note']}; read failed: {exc}"
-                    summary["failed"].append({"path": str(path), "error": str(exc)})
-            elif record["state"] == "missing":
-                summary["missing"].append(str(path))
-            else:
-                summary["failed"].append({"path": str(path), "error": f"not a readable file: {record['state']}"})
-            records.append(record)
+            if key not in seen_refs:
+                seen_refs[key] = []
+            seen_refs[key].append({
+                "field": field,
+                "source": str(manifest_path),
+                "source_layer": layer,
+            })
+
+    records = []
+    referenced = []
+    summary: Dict[str, Any] = {
+        "schema": "qz.prompt.files.v1",
+        "referenced": referenced,
+        "loaded": [],
+        "missing": [],
+        "failed": [],
+    }
+
+    for key, refs in seen_refs.items():
+        path = Path(key)
+        source_layer = refs[0]["source_layer"] if refs else "unknown"
+        record = _record(
+            f"prompt_file:{refs[0]['field']}",
+            path,
+            source_layer=source_layer,
+            classification="tracked_or_user_prompt",
+            active=True,
+            note=f"referenced by {refs[0]['source']}",
+        )
+        if record["state"] == "file":
+            try:
+                path.read_text(encoding="utf-8")
+                summary["loaded"].append(key)
+            except Exception as exc:
+                record["state"] = "failed"
+                record["note"] = f"{record['note']}; read failed: {exc}"
+                summary["failed"].append({"path": key, "error": str(exc)})
+        elif record["state"] == "missing":
+            summary["missing"].append(key)
+        else:
+            summary["failed"].append({"path": key, "error": f"not a readable file: {record['state']}"})
+        records.append(record)
+
+        # Build rich referenced entry for summary — propagate file metadata
+        # already computed inside _record() rather than re-reading the file.
+        entry: Dict[str, Any] = {
+            "path": key,
+            "state": record["state"],
+            "source_layer": source_layer,
+            "classification": "prompt_file",
+            "referenced_by": refs,
+        }
+        for meta_key in ("mtime_ms", "size_bytes", "sha256_12", "hash_skipped"):
+            if meta_key in record:
+                entry[meta_key] = record[meta_key]
+        referenced.append(entry)
+
     return records, summary
 
 
@@ -361,12 +402,18 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
             note=capture["note"],
         )
     ]
+    _prompt_source_layers = {
+        str(default_overrides): "default",
+        str(model_overrides): "user",
+        str(root / "config" / "default" / "profiles.json"): "default",
+        str(root / "config" / "user" / "profiles.json"): "user",
+    }
     prompt_records, prompt_file_summary = _prompt_file_records(root, [
         default_overrides,
         model_overrides,
         root / "config" / "default" / "profiles.json",
         root / "config" / "user" / "profiles.json",
-    ])
+    ], source_layers=_prompt_source_layers)
     records.extend(prompt_records)
     memory_domain_report = _memory_domain_report([
         default_overrides,
@@ -406,11 +453,13 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
         })
 
     # Prompt files referenced by config but not found on disk.
+    _refs_by_path = {e["path"]: e.get("referenced_by", []) for e in prompt_file_summary.get("referenced", [])}
     for missing_path in prompt_file_summary.get("missing", []):
-        warnings.append({
-            "path": missing_path,
-            "warning": "missing_prompt_file",
-        })
+        w: Dict[str, Any] = {"path": missing_path, "warning": "missing_prompt_file"}
+        refs = _refs_by_path.get(missing_path)
+        if refs:
+            w["referenced_by"] = refs
+        warnings.append(w)
 
     # Generated Codex catalog missing — Codex cannot connect without it.
     if records_by_name.get("codex_model_catalog", {}).get("state") == "missing":

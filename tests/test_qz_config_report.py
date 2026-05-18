@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from proxy.qz_config_report import EFFECTIVE_CONFIG_SCHEMA, _file_meta, effective_config_payload
+from proxy.qz_config_report import EFFECTIVE_CONFIG_SCHEMA, _file_meta, _prompt_file_records, effective_config_payload
 
 
 class EffectiveConfigReportTests(unittest.TestCase):
@@ -406,6 +406,262 @@ class ProfilesV1ConfigReportTests(unittest.TestCase):
                     os.environ.pop(k, None)
                 else:
                     os.environ[k] = v
+
+
+class PromptFileSourceLabellingTests(unittest.TestCase):
+    """Tests for prompt-file source labelling in /qz/config/effective — #5 Slice B."""
+
+    _ENV_KEYS = (
+        "QZ_ROOT", "QZ_VAR_DIR", "QZ_MODEL_OVERRIDES",
+        "QZ_CAPTURE_MODE", "SEARXNG_POLICY", "SEARXNG_CAPABILITIES",
+        "QZ_LOAD_EXAMPLE_MODEL_OVERRIDES",
+    )
+
+    def _save_env(self):
+        return {k: os.environ.get(k) for k in self._ENV_KEYS}
+
+    def _restore_env(self, saved):
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def _minimal_root(self, tmp):
+        root = Path(tmp)
+        var_dir = root / "var"
+        (root / "config" / "default").mkdir(parents=True)
+        (root / "config" / "example").mkdir(parents=True)
+        (root / "proxy").mkdir()
+        var_dir.mkdir(parents=True)
+        os.environ["QZ_ROOT"] = str(root)
+        os.environ["QZ_VAR_DIR"] = str(var_dir)
+        os.environ.pop("QZ_MODEL_OVERRIDES", None)
+        os.environ.pop("QZ_CAPTURE_MODE", None)
+        os.environ.pop("SEARXNG_POLICY", None)
+        os.environ.pop("SEARXNG_CAPABILITIES", None)
+        os.environ.pop("QZ_LOAD_EXAMPLE_MODEL_OVERRIDES", None)
+        return root, var_dir
+
+    # --- _prompt_file_records() unit tests (direct) ---
+
+    def test_prompt_ref_from_default_overrides_has_default_source_layer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config" / "default").mkdir(parents=True)
+            manifest = root / "config" / "default" / "model-overrides.json"
+            manifest.write_text(
+                '{"models":{"a.gguf":{"system_prompt_file":"config/default/prompts/a.md"}}}\n',
+                encoding="utf-8",
+            )
+            source_layers = {str(manifest): "default"}
+            _records, summary = _prompt_file_records(root, [manifest], source_layers=source_layers)
+            referenced = {e["path"]: e for e in summary["referenced"]}
+            key = str(root / "config" / "default" / "prompts" / "a.md")
+            self.assertIn(key, referenced)
+            self.assertEqual(referenced[key]["source_layer"], "default")
+
+    def test_prompt_ref_from_user_overrides_has_user_source_layer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config" / "user").mkdir(parents=True)
+            manifest = root / "config" / "user" / "model-overrides.json"
+            manifest.write_text(
+                '{"models":{"b.gguf":{"system_prompt_file":"config/user/prompts/b.md"}}}\n',
+                encoding="utf-8",
+            )
+            source_layers = {str(manifest): "user"}
+            _records, summary = _prompt_file_records(root, [manifest], source_layers=source_layers)
+            referenced = {e["path"]: e for e in summary["referenced"]}
+            key = str(root / "config" / "user" / "prompts" / "b.md")
+            self.assertIn(key, referenced)
+            self.assertEqual(referenced[key]["source_layer"], "user")
+
+    def test_unknown_manifest_gets_unknown_source_layer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "some-other.json"
+            manifest.write_text(
+                '{"models":{"c.gguf":{"system_prompt_file":"config/default/prompts/c.md"}}}\n',
+                encoding="utf-8",
+            )
+            # No source_layers provided
+            _records, summary = _prompt_file_records(root, [manifest])
+            referenced = {e["path"]: e for e in summary["referenced"]}
+            key = str(root / "config" / "default" / "prompts" / "c.md")
+            self.assertIn(key, referenced)
+            self.assertEqual(referenced[key]["source_layer"], "unknown")
+
+    def test_existing_prompt_file_appears_with_state_file_and_file_meta(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config" / "default").mkdir(parents=True)
+            prompt_dir = root / "config" / "default" / "prompts"
+            prompt_dir.mkdir(parents=True)
+            (prompt_dir / "a.md").write_text("# prompt\n", encoding="utf-8")
+            manifest = root / "config" / "default" / "model-overrides.json"
+            manifest.write_text(
+                '{"models":{"a.gguf":{"system_prompt_file":"config/default/prompts/a.md"}}}\n',
+                encoding="utf-8",
+            )
+            source_layers = {str(manifest): "default"}
+            _records, summary = _prompt_file_records(root, [manifest], source_layers=source_layers)
+            referenced = {e["path"]: e for e in summary["referenced"]}
+            key = str(root / "config" / "default" / "prompts" / "a.md")
+            entry = referenced[key]
+            self.assertEqual(entry["state"], "file")
+            self.assertIn("mtime_ms", entry)
+            self.assertIn("size_bytes", entry)
+            self.assertIn("sha256_12", entry)
+            self.assertIsNotNone(entry["sha256_12"])
+            self.assertEqual(len(entry["sha256_12"]), 12)
+
+    def test_missing_prompt_file_appears_with_state_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "overrides.json"
+            manifest.write_text(
+                '{"models":{"a.gguf":{"system_prompt_file":"config/user/prompts/missing.md"}}}\n',
+                encoding="utf-8",
+            )
+            _records, summary = _prompt_file_records(root, [manifest])
+            referenced = {e["path"]: e for e in summary["referenced"]}
+            key = str(root / "config" / "user" / "prompts" / "missing.md")
+            self.assertEqual(referenced[key]["state"], "missing")
+            self.assertIn(key, summary["missing"])
+            self.assertNotIn("mtime_ms", referenced[key])
+            self.assertNotIn("size_bytes", referenced[key])
+
+    def test_referenced_by_includes_field_and_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "overrides.json"
+            manifest.write_text(
+                '{"models":{"a.gguf":{"system_prompt_file":"config/user/prompts/a.md"}}}\n',
+                encoding="utf-8",
+            )
+            _records, summary = _prompt_file_records(root, [manifest])
+            referenced = {e["path"]: e for e in summary["referenced"]}
+            key = str(root / "config" / "user" / "prompts" / "a.md")
+            refs = referenced[key]["referenced_by"]
+            self.assertEqual(len(refs), 1)
+            self.assertEqual(refs[0]["field"], "system_prompt_file")
+            self.assertEqual(refs[0]["source"], str(manifest))
+
+    def test_same_prompt_referenced_by_two_manifests_deduplicates_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            m1 = root / "default.json"
+            m2 = root / "user.json"
+            m1.write_text(
+                '{"models":{"a.gguf":{"system_prompt_file":"shared/prompt.md"}}}\n',
+                encoding="utf-8",
+            )
+            m2.write_text(
+                '{"models":{"b.gguf":{"system_prompt_file":"shared/prompt.md"}}}\n',
+                encoding="utf-8",
+            )
+            source_layers = {str(m1): "default", str(m2): "user"}
+            _records, summary = _prompt_file_records(root, [m1, m2], source_layers=source_layers)
+            # Path appears only once in referenced
+            keys = [e["path"] for e in summary["referenced"]]
+            key = str(root / "shared" / "prompt.md")
+            self.assertEqual(keys.count(key), 1)
+            # But referenced_by has two entries
+            entry = next(e for e in summary["referenced"] if e["path"] == key)
+            self.assertEqual(len(entry["referenced_by"]), 2)
+            sources = {r["source_layer"] for r in entry["referenced_by"]}
+            self.assertEqual(sources, {"default", "user"})
+
+    def test_prompt_over_64k_has_hash_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prompt_dir = root / "prompts"
+            prompt_dir.mkdir(parents=True)
+            big_prompt = prompt_dir / "big.md"
+            big_prompt.write_bytes(b"x" * 65537)
+            manifest = root / "overrides.json"
+            manifest.write_text(
+                '{"models":{"a.gguf":{"system_prompt_file":"prompts/big.md"}}}\n',
+                encoding="utf-8",
+            )
+            _records, summary = _prompt_file_records(root, [manifest])
+            referenced = {e["path"]: e for e in summary["referenced"]}
+            entry = referenced[str(big_prompt)]
+            self.assertEqual(entry["state"], "file")
+            self.assertIsNone(entry.get("sha256_12"))
+            self.assertEqual(entry.get("hash_skipped"), "too_large")
+
+    def test_prompt_content_not_exposed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prompt_dir = root / "prompts"
+            prompt_dir.mkdir(parents=True)
+            sentinel = "PROMPT_SENTINEL_CONTENT_XYZ"
+            (prompt_dir / "secret.md").write_text(f"# {sentinel}\n", encoding="utf-8")
+            manifest = root / "overrides.json"
+            manifest.write_text(
+                '{"models":{"a.gguf":{"system_prompt_file":"prompts/secret.md"}}}\n',
+                encoding="utf-8",
+            )
+            _records, summary = _prompt_file_records(root, [manifest])
+            summary_json = json.dumps(summary)
+            self.assertNotIn(sentinel, summary_json)
+
+    # --- Integration tests via effective_config_payload() ---
+
+    def test_prompt_files_referenced_key_present_in_payload(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                (root / "config" / "default" / "model-overrides.json").write_text(
+                    '{"models":{"a.gguf":{"system_prompt_file":"config/default/prompts/a.md"}}}\n',
+                    encoding="utf-8",
+                )
+                payload = effective_config_payload()
+                self.assertIn("referenced", payload["prompt_files"])
+                self.assertEqual(payload["prompt_files"]["schema"], "qz.prompt.files.v1")
+        finally:
+            self._restore_env(saved)
+
+    def test_missing_prompt_warning_includes_referenced_by(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                (root / "config" / "default" / "model-overrides.json").write_text(
+                    '{"models":{"a.gguf":{"system_prompt_file":"config/user/prompts/a.md"}}}\n',
+                    encoding="utf-8",
+                )
+                payload = effective_config_payload()
+                missing_warns = [w for w in payload["warnings"] if w.get("warning") == "missing_prompt_file"]
+                self.assertTrue(len(missing_warns) >= 1)
+                self.assertIn("referenced_by", missing_warns[0])
+        finally:
+            self._restore_env(saved)
+
+    def test_backward_compat_missing_list_still_present(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                (root / "config" / "default" / "model-overrides.json").write_text(
+                    '{"models":{"a.gguf":{"system_prompt_file":"config/user/prompts/a.md"}}}\n',
+                    encoding="utf-8",
+                )
+                payload = effective_config_payload()
+                pf = payload["prompt_files"]
+                # All legacy keys preserved
+                self.assertIn("schema", pf)
+                self.assertIn("loaded", pf)
+                self.assertIn("missing", pf)
+                self.assertIn("failed", pf)
+                # Missing path still in legacy list
+                missing_key = str(root / "config" / "user" / "prompts" / "a.md")
+                self.assertIn(missing_key, pf["missing"])
+        finally:
+            self._restore_env(saved)
 
 
 class SourceFileMetaTests(unittest.TestCase):
