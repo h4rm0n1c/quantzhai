@@ -734,8 +734,12 @@ Coverage gaps to fill in 2H-impl: `StreamRunStateTests` (defaults + independence
 
 See `docs/stream-reducer-boundary-design.md §9M` for full inventory and acceptance criteria.
 
-Next: Slice 2H-impl — add StreamRunState dataclass with 3 terminal flags only.
-Pure state bundling; no behaviour change. Analogous to Slice 1 (StreamHopState).
+**Slice 2H-impl (this commit):** CLOSED. `StreamRunState` added with
+`sent_response_start`, `sent_terminal`, `sent_done`. In `run()`, 3 locals
+replaced with `rs = StreamRunState.fresh()`. All uses updated to `rs.*`.
+3 unit tests in `StreamRunStateTests`. 2608 tests PASS. No behaviour change.
+
+Next: Slice 2H.1 — audit/polish.
 
 ## Reference: BrainCase Slice completion history
 

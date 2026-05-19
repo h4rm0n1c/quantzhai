@@ -132,7 +132,7 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 
 ## Immediate next priorities
 
-1. **#37 Slice 2H-impl** — add StreamRunState (3 terminal flags). 2H-design complete. Pure state bundling; no behaviour change.
+1. **#37 Slice 2H.1** — audit/polish StreamRunState. 2H-impl complete: sent_response_start/sent_terminal/sent_done in rs.
 3. **#51/#46** — deferred until operational-store decision.
 
 ## Remaining big rocks

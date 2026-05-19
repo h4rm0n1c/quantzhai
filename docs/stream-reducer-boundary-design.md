@@ -1377,6 +1377,32 @@ StreamRunStateTests:
 
 ---
 
+## 9N. Slice 2H-impl — COMPLETE
+
+`StreamRunState` dataclass added to `proxy/qz_responses_stream.py` near
+`StreamHopState` and `StreamDecision`.
+
+```text
+StreamRunState.fresh() -> StreamRunState(
+    sent_response_start=False,
+    sent_terminal=False,
+    sent_done=False,
+)
+```
+
+In `run()`, the 3 locals were replaced with `rs = StreamRunState.fresh()`.
+All uses replaced: `rs.sent_response_start`, `rs.sent_terminal`, `rs.sent_done`.
+
+Fields NOT included: sequence, public_trace, working_body, repair state,
+output_index_offset, summary_started, final_usage, tool lifecycle state.
+
+3 unit tests in `StreamRunStateTests`: defaults, independence, independent mutation.
+2608 tests passing. No behaviour change.
+
+**Recommended next: Slice 2H.1** — audit/polish before any further stream seam extraction.
+
+---
+
 ## Cross-references
 
 - `proxy/qz_responses_stream.py` — current side-effect owner; Slice 1 StreamHopState

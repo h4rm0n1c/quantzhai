@@ -212,6 +212,34 @@ class StreamDecision:
     warnings: list = field(default_factory=list)
 
 
+@dataclass
+class StreamRunState:
+    """Cross-hop mutable outer-loop state for one Responses SSE streaming run.
+
+    First cut: terminal emission flags only.  Analogous to StreamHopState for
+    per-hop state; this object bundles the three locals that persist across
+    continuation hops and control terminal/completion emission.
+
+    Does not include sequence, public_trace, working_body, repair state,
+    output_index_offset, summary_started, final_usage, or tool lifecycle state —
+    those remain locals until their own extraction slices are designed.
+
+    Production code must use StreamRunState.fresh() to construct an instance.
+    """
+    sent_response_start: bool = False
+    sent_terminal: bool = False
+    sent_done: bool = False
+
+    @classmethod
+    def fresh(cls) -> "StreamRunState":
+        """Return a new StreamRunState with all flags initialised to False."""
+        return cls(
+            sent_response_start=False,
+            sent_terminal=False,
+            sent_done=False,
+        )
+
+
 def _should_suppress_duplicate_response_start(
     event_type: str,
     sent_response_start: bool,
@@ -1322,9 +1350,7 @@ class ResponsesStreamRuntime:
         summary_started = set()
         output_index_offset = 0
         sequence = 0
-        sent_response_start = False
-        sent_terminal = False
-        sent_done = False
+        rs = StreamRunState.fresh()
         self._start_capture()
         self._emit("stream_started", {
             "model": requested_model,
@@ -1409,8 +1435,8 @@ class ResponsesStreamRuntime:
                                     visible_output_text_seen=hs.visible_output_text_seen,
                                     assistant_item_seen=hs.assistant_item_seen,
                                     completed_call=hs.completed_call,
-                                    sent_terminal=sent_terminal,
-                                    sent_done=sent_done,
+                                    sent_terminal=rs.sent_terminal,
+                                    sent_done=rs.sent_done,
                                     sequence=sequence,
                                     stream_obs_acc=hs.stream_obs_acc,
                                 )
@@ -1428,8 +1454,8 @@ class ResponsesStreamRuntime:
                                     visible_output_text_seen=hs.visible_output_text_seen,
                                     assistant_item_seen=hs.assistant_item_seen,
                                     completed_call=hs.completed_call,
-                                    sent_terminal=sent_terminal,
-                                    sent_done=sent_done,
+                                    sent_terminal=rs.sent_terminal,
+                                    sent_done=rs.sent_done,
                                     sequence=sequence,
                                     stream_obs_acc=hs.stream_obs_acc,
                                 )
@@ -1506,8 +1532,8 @@ class ResponsesStreamRuntime:
                                 visible_output_text_seen=hs.visible_output_text_seen,
                                 assistant_item_seen=hs.assistant_item_seen,
                                 completed_call=hs.completed_call,
-                                sent_terminal=sent_terminal,
-                                sent_done=sent_done,
+                                sent_terminal=rs.sent_terminal,
+                                sent_done=rs.sent_done,
                                 sequence=sequence,
                                 stream_obs_acc=hs.stream_obs_acc,
                             )
@@ -1525,8 +1551,8 @@ class ResponsesStreamRuntime:
                                 visible_output_text_seen=hs.visible_output_text_seen,
                                 assistant_item_seen=hs.assistant_item_seen,
                                 completed_call=hs.completed_call,
-                                sent_terminal=sent_terminal,
-                                sent_done=sent_done,
+                                sent_terminal=rs.sent_terminal,
+                                sent_done=rs.sent_done,
                                 sequence=sequence,
                                 stream_obs_acc=hs.stream_obs_acc,
                             )
@@ -1921,7 +1947,7 @@ class ResponsesStreamRuntime:
                                     )
 
                         if event_type in {"response.created", "response.in_progress"}:
-                            if _should_suppress_duplicate_response_start(event_type, sent_response_start):
+                            if _should_suppress_duplicate_response_start(event_type, rs.sent_response_start):
                                 self._emit_stream_event_timing(
                                     event_type,
                                     event_received_at,
@@ -1931,14 +1957,14 @@ class ResponsesStreamRuntime:
                                 )
                                 hs.event_lines = []
                                 continue
-                            sent_response_start = True
+                            rs.sent_response_start = True
 
                         if is_terminal_stream_event(event_type, payload):
                             if (
                                 event_type in {"response.completed", "response.failed", "response.cancelled", "response.incomplete"}
                                 and payload is None
                                 and public_trace
-                                and not sent_terminal
+                                and not rs.sent_terminal
                             ):
                                 self._emit_stream_event_timing(
                                     event_type,
@@ -1950,15 +1976,15 @@ class ResponsesStreamRuntime:
                                 self._emit_stream_completed(requested_model, len(public_trace), started_at)
                                 completed_at = time.time()
                                 self._emit_completed(requested_model, public_trace, summary_started, usage=final_usage)
-                                sent_terminal = True
-                                sent_done = True
+                                rs.sent_terminal = True
+                                rs.sent_done = True
                                 hs.watchdog_state.mark_terminal(event_parsed_at)
                                 hs.event_lines = []
                                 continue
                             if (
                                 (event_type == "done" or payload == "[DONE]")
                                 and public_trace
-                                and not sent_terminal
+                                and not rs.sent_terminal
                             ):
                                 self._emit_stream_event_timing(
                                     event_type,
@@ -1970,8 +1996,8 @@ class ResponsesStreamRuntime:
                                 self._emit_stream_completed(requested_model, len(public_trace), started_at)
                                 completed_at = time.time()
                                 self._emit_completed(requested_model, public_trace, summary_started, usage=final_usage)
-                                sent_terminal = True
-                                sent_done = True
+                                rs.sent_terminal = True
+                                rs.sent_done = True
                                 hs.watchdog_state.mark_terminal(event_parsed_at)
                                 hs.event_lines = []
                                 continue
@@ -1993,9 +2019,9 @@ class ResponsesStreamRuntime:
                                 forwarded_bytes=forwarded_bytes,
                             )
                             if event_type == "done" or payload == "[DONE]":
-                                sent_done = True
+                                rs.sent_done = True
                             else:
-                                sent_terminal = True
+                                rs.sent_terminal = True
                             hs.watchdog_state.mark_terminal(event_parsed_at)
                             hs.event_lines = []
                             continue
@@ -2082,16 +2108,16 @@ class ResponsesStreamRuntime:
                     working_body["input"] = hs.next_input
                     continue
 
-                if sent_terminal and not sent_done:
+                if rs.sent_terminal and not rs.sent_done:
                     self._write_chunk(b"data: [DONE]\n\n")
-                    sent_done = True
+                    rs.sent_done = True
 
-                if public_trace and not sent_terminal and not sent_done:
+                if public_trace and not rs.sent_terminal and not rs.sent_done:
                     self._emit_stream_completed(requested_model, len(public_trace), started_at)
                     completed_at = time.time()
                     self._emit_completed(requested_model, public_trace, summary_started, usage=final_usage)
-                    sent_terminal = True
-                    sent_done = True
+                    rs.sent_terminal = True
+                    rs.sent_done = True
 
                 completed_at = time.time()
                 self._merge_manual_stream_observation(
@@ -2100,8 +2126,8 @@ class ResponsesStreamRuntime:
                     visible_output_text_seen=hs.visible_output_text_seen,
                     assistant_item_seen=hs.assistant_item_seen,
                     completed_call=hs.completed_call,
-                    sent_terminal=sent_terminal,
-                    sent_done=sent_done,
+                    sent_terminal=rs.sent_terminal,
+                    sent_done=rs.sent_done,
                 )
                 hop_obs = observation_from_dict(hs.stream_obs_acc)
                 return self._build_result(

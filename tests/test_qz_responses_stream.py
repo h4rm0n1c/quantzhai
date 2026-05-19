@@ -8,6 +8,7 @@ from proxy.qz_responses_stream import (
     ResponsesStreamRuntime,
     StreamDecision,
     StreamHopState,
+    StreamRunState,
     _reasoning_only_abort_reason,
     _should_inject_context_pressure_signal,
     _should_inject_hop_budget_signal,
@@ -3922,6 +3923,34 @@ class ReasoningOnlyAbortHelperTests(unittest.TestCase):
             reasoning_only_char_limit=-1,
         )
         self.assertEqual(result, "timeout")
+
+
+class StreamRunStateTests(unittest.TestCase):
+    """Unit tests for StreamRunState dataclass — #37 Slice 2H-impl."""
+
+    def test_fresh_returns_all_false_defaults(self):
+        rs = StreamRunState.fresh()
+        self.assertFalse(rs.sent_response_start)
+        self.assertFalse(rs.sent_terminal)
+        self.assertFalse(rs.sent_done)
+
+    def test_fields_are_independent_between_instances(self):
+        rs1 = StreamRunState.fresh()
+        rs2 = StreamRunState.fresh()
+        rs1.sent_terminal = True
+        rs1.sent_done = True
+        self.assertFalse(rs2.sent_terminal)
+        self.assertFalse(rs2.sent_done)
+
+    def test_flags_can_be_mutated_independently(self):
+        rs = StreamRunState.fresh()
+        rs.sent_response_start = True
+        self.assertTrue(rs.sent_response_start)
+        self.assertFalse(rs.sent_terminal)
+        self.assertFalse(rs.sent_done)
+        rs.sent_terminal = True
+        self.assertTrue(rs.sent_terminal)
+        self.assertFalse(rs.sent_done)
 
 
 class ProxyLocalTerminalSuppressionHelperTests(unittest.TestCase):
