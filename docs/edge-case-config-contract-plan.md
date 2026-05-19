@@ -2208,6 +2208,30 @@ test_no_api_key_written_in_remote_mode
 
 ---
 
+## #57 close-out (2026-05-19)
+
+**Issue #57 CLOSED.** All acceptance criteria satisfied.
+
+| Acceptance | Status | Evidence |
+|---|---|---|
+| model_provider ownership clarified | PASS | Launcher-local TOML parsing kept for co-located; remote gets provider from client-config endpoint |
+| model_provider exposed via proxy endpoint | PASS | `/qz/codex/client-config` includes provider as Codex client bootstrap metadata, not routing policy |
+| Initial config.toml copy unchanged | PASS | Co-located bootstrap path unchanged; remote writes own local config.toml |
+| Script-owned patching remains client-side | PASS | Remote mode patches local CODEX_HOME/config.toml only; proxy owns catalog generation |
+| Remote/LAN topology without shared filesystem | PASS | HTTP catalog fetch, local file write, remote base_url, local model_catalog_json |
+| No secrets exposed | PASS | env_key name only; sentinel test confirms key value never written |
+| Atomic catalog + config.toml writes | PASS | temp file + mv for both; C2.1 fixed config.toml write |
+| TOML value escaping | PASS | toml_str() via json.dumps(); C2.1 fix |
+| No #56 path migration mixed in | PASS | #56 remains separate open issue |
+
+Remaining follow-ups (not required for #57 close):
+- **#56** — generated artifact path migration design
+- Optional: live remote smoke test / remote auto-detection
+
+2566 tests passing at close-out.
+
+---
+
 ## Next steps
 
 1. Treat this plan as a living document.
