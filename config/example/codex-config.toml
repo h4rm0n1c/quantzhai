@@ -1,11 +1,12 @@
 # QuantZhai Codex CLI config template.
 #
-# qz-codex copies this file to var/codex-home/config.toml on first run, then
-# regenerates model_catalog_json on every launch. Model metadata, context
-# windows, truncation limits, reasoning levels, and system prompts belong in the
-# generated catalog, not in deprecated static profile blocks here.
+# qz-codex (after #58) downloads the model catalog from /qz/codex/model-catalog
+# and writes config.toml to the client-local CODEX_HOME ($HOME/.qz-codex/codex-home).
+# The server regenerates the catalog at var/generated/codex/qwenzhai-models.json
+# on every /qz/models/refresh call. Model metadata, context windows, truncation
+# limits, reasoning levels, and system prompts belong in the generated catalog.
 
-model_catalog_json = "var/codex-home/model-catalogs/qwenzhai-models.json"
+model_catalog_json = "var/generated/codex/qwenzhai-models.json"
 model = "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M"
 model_provider = "quantzhai"
 approval_policy = "on-request"

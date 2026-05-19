@@ -94,7 +94,7 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 | #54 | BrainCase retention/lifetime policy | **CLOSED** (Slices A–D complete) |
 | #3/#4/#43 | Repeated-read v1 (parser, integration, smoke) | **CLOSED** (complete; advisory stateless v1 live) |
 | #37 | Architectural seam extraction plan | **PAUSED** — Slices 1–2F.1 complete; next seam needs design micro-slice |
-| #56 | Generated artifact path migration design (var/generated/) | **D-design complete** — A1 migrated; A2/A3 plan ready (var/generated/codex/); D-impl pending |
+| #56 | Generated artifact path migration design (var/generated/) | **D-impl complete** — A1/A2/A3 all under var/generated/; D.1 audit pending |
 | #51 | Promote recovery/backoff runtime state to SQLite | **deferred** until operational-store decision |
 | #46 | Replace qz-write-runtime-state launcher trace | **deferred** until startup-telemetry replacement |
 | #5 | Config/var/script ownership cleanup | **CLOSED** (#56, #57 opened for migration/thinning follow-ups) |
@@ -133,23 +133,20 @@ candidates (tool lifecycle, terminal events, proxy-local suppression,
 continuation/repair) carry higher extraction risk. Need a fresh design
 micro-slice before proceeding. See docs/stream-reducer-boundary-design.md.
 
-**#56** — Slices A–D-design complete. Generated artifact path migration (var/generated/).
+**#56** — Slices A–D-impl complete. Generated artifact path migration (var/generated/).
 Follow-up from #5 close-out.
 
-- **Slice A-design:** Inventoried generated artifacts and consumers; classified
-  public boundaries; confirmed #58 makes qz-codex independent of server-local paths.
-- **Slice B / B.1:** Added `proxy/qz_paths.py` path helpers; removed 3 stale CODEX_HOME
-  overrides. 2592 tests passing.
-- **Slice C-design/C-impl/C.1:** A1 migrated — `model_inventory_path()` returns
-  `var/generated/model-inventory.json`. QZ_MODEL_INVENTORY_CACHE override preserved.
-  Staleness warnings and all consumers follow the helper. A2/A3 not moved.
-- **Slice D-design:** A2/A3 coupling audited. Chosen target: both under
-  `var/generated/codex/`. New helper `codex_generated_dir()` planned.
-  `codex_model_catalog_path()` → `var/generated/codex/qwenzhai-models.json`.
-  `codex_config_path()` → `var/generated/codex/config.toml`. No shim needed.
-  No files moved.
+- **Slice A-design:** Inventoried generated artifacts and consumers.
+- **Slice B / B.1:** Added `proxy/qz_paths.py`; removed 3 stale CODEX_HOME overrides.
+- **Slice C-design/C-impl/C.1:** A1 at `var/generated/model-inventory.json`.
+- **Slice D-design:** A2/A3 coupling audited; D2 flat layout chosen.
+- **Slice D-impl:** `codex_generated_dir()` added. A2/A3 moved:
+  - `codex_model_catalog_path()` → `var/generated/codex/qwenzhai-models.json`
+  - `codex_config_path()` → `var/generated/codex/config.toml`
+  - Deprecated `codex_home_dir()` and `codex_model_catalog_dir()` kept.
+  - No shim. No old-path deletion. 2600 tests passing.
 
-Next: Slice D-impl — physical move of A2/A3.
+Next: Slice D.1 audit/polish.
 
 **#51** — Recovery backoff state is currently in-memory only. Should be persisted
 once #2 exists. Do not implement before #2.
@@ -200,10 +197,11 @@ A. #58  Always-HTTP qz-codex bootstrap — CLOSED (slices D2/D2.1/D3)
         and qz-up recovery coupling all removed. CODEX_HOME default: $HOME/.qz-codex/codex-home.
         See docs/edge-case-config-contract-plan.md §qz-codex always-HTTP bootstrap design.
 
-B. #56  Generated artifact path migration (var/generated/) — Slices A–D-design complete
-        A1 at var/generated/model-inventory.json. D-design: A2 → var/generated/codex/qwenzhai-models.json;
-        A3 → var/generated/codex/config.toml. New codex_generated_dir() helper planned.
-        Next: Slice D-impl — physical move of A2/A3.
+B. #56  Generated artifact path migration (var/generated/) — Slices A–D-impl complete
+        All three artifacts now under var/generated/: A1 at var/generated/model-inventory.json;
+        A2 at var/generated/codex/qwenzhai-models.json; A3 at var/generated/codex/config.toml.
+        No shim. No old-path deletion. 2600 tests passing.
+        Next: Slice D.1 audit/polish. Then deprecate codex_home_dir().
         See docs/edge-case-config-contract-plan.md §generated artifact path migration design.
 
 B. #37  Stream seam: fresh design micro-slice for next delicate seam

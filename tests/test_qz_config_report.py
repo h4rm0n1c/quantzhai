@@ -567,7 +567,7 @@ class GeneratedArtifactStalenessTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 root, var_dir = self._minimal_root(tmp)
-                catalog_dir = var_dir / "codex-home" / "model-catalogs"
+                catalog_dir = var_dir / "generated" / "codex"
                 self._write_with_mtime(var_dir / "generated" / "model-inventory.json", '{}', 1_700_001_000.0)
                 self._write_with_mtime(catalog_dir / "qwenzhai-models.json", '{}', 1_700_000_000.0)
                 payload = effective_config_payload()
@@ -581,7 +581,7 @@ class GeneratedArtifactStalenessTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 root, var_dir = self._minimal_root(tmp)
-                catalog_dir = var_dir / "codex-home" / "model-catalogs"
+                catalog_dir = var_dir / "generated" / "codex"
                 self._write_with_mtime(var_dir / "generated" / "model-inventory.json", '{}', 1_700_000_000.0)
                 self._write_with_mtime(catalog_dir / "qwenzhai-models.json", '{}', 1_700_001_000.0)
                 payload = effective_config_payload()
@@ -595,7 +595,7 @@ class GeneratedArtifactStalenessTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 root, var_dir = self._minimal_root(tmp)
-                catalog_dir = var_dir / "codex-home" / "model-catalogs"
+                catalog_dir = var_dir / "generated" / "codex"
                 # catalog exists but inventory is missing
                 self._write_with_mtime(catalog_dir / "qwenzhai-models.json", '{}', 1_700_000_000.0)
                 payload = effective_config_payload()
@@ -609,9 +609,9 @@ class GeneratedArtifactStalenessTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 root, var_dir = self._minimal_root(tmp)
-                catalog_dir = var_dir / "codex-home" / "model-catalogs"
+                catalog_dir = var_dir / "generated" / "codex"
                 self._write_with_mtime(catalog_dir / "qwenzhai-models.json", '{}', 1_700_001_000.0)
-                self._write_with_mtime(var_dir / "codex-home" / "config.toml", 'x=1', 1_700_000_000.0)
+                self._write_with_mtime(var_dir / "generated" / "codex" / "config.toml", 'x=1', 1_700_000_000.0)
                 payload = effective_config_payload()
                 warning_codes = [w.get("warning") for w in payload["warnings"]]
                 self.assertIn("stale_codex_config", warning_codes)
@@ -623,9 +623,9 @@ class GeneratedArtifactStalenessTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 root, var_dir = self._minimal_root(tmp)
-                catalog_dir = var_dir / "codex-home" / "model-catalogs"
+                catalog_dir = var_dir / "generated" / "codex"
                 self._write_with_mtime(catalog_dir / "qwenzhai-models.json", '{}', 1_700_000_000.0)
-                self._write_with_mtime(var_dir / "codex-home" / "config.toml", 'x=1', 1_700_001_000.0)
+                self._write_with_mtime(var_dir / "generated" / "codex" / "config.toml", 'x=1', 1_700_001_000.0)
                 payload = effective_config_payload()
                 warning_codes = [w.get("warning") for w in payload["warnings"]]
                 self.assertNotIn("stale_codex_config", warning_codes)
@@ -662,7 +662,7 @@ class GeneratedArtifactStalenessTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 root, var_dir = self._minimal_root(tmp)
-                catalog_dir = var_dir / "codex-home" / "model-catalogs"
+                catalog_dir = var_dir / "generated" / "codex"
                 self._write_with_mtime(var_dir / "generated" / "model-inventory.json", '{}', 1_700_001_000.0)
                 self._write_with_mtime(catalog_dir / "qwenzhai-models.json", '{}', 1_700_000_000.0)
                 payload = effective_config_payload()
@@ -1402,7 +1402,7 @@ class SourceFileMetaTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 root, var_dir = self._minimal_root(tmp)
-                catalog_dir = var_dir / "codex-home" / "model-catalogs"
+                catalog_dir = var_dir / "generated" / "codex"
                 catalog_dir.mkdir(parents=True)
                 (catalog_dir / "qwenzhai-models.json").write_text('{"models":[]}\n', encoding="utf-8")
 

@@ -650,10 +650,15 @@ Key decisions:
 
 See `docs/edge-case-config-contract-plan.md` §Slice D-design for full analysis.
 
-Next: Slice D-impl — physical move of A2/A3.
-  Add `codex_generated_dir()` to qz_paths.py.
-  Change `codex_model_catalog_path()` and `codex_config_path()`.
-  Update tests. Validate full suite, staleness, endpoint behaviour.
+**Slice D-impl (this commit):** CLOSED. `codex_generated_dir()` added.
+`codex_model_catalog_path()` → `var/generated/codex/qwenzhai-models.json`.
+`codex_config_path()` → `var/generated/codex/config.toml`.
+`codex_home_dir()` and `codex_model_catalog_dir()` deprecated (unchanged return values).
+No shim. No old-path deletion. No qz-codex-common changes.
+qz-doctor and config/example/codex-config.toml updated.
+6 new path tests. All A2/A3 test fixtures updated. 2600 tests PASS.
+
+Next: Slice D.1 — audit/polish the D-impl migration.
 
 ## Next implementation prompt: #37 design micro-slice for next delicate stream seam
 

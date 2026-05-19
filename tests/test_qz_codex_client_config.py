@@ -167,7 +167,7 @@ class CodexClientConfigWithCatalogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             var_dir = root / "var"
-            catalog_dir = var_dir / "codex-home" / "model-catalogs"
+            catalog_dir = var_dir / "generated" / "codex"
             catalog_dir.mkdir(parents=True)
             catalog_file = catalog_dir / CODEX_MODEL_CATALOG_FILENAME
             catalog_file.write_text('{"models":[]}\n', encoding="utf-8")
@@ -188,7 +188,7 @@ class CodexClientConfigWithCatalogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             var_dir = root / "var"
-            catalog_dir = var_dir / "codex-home" / "model-catalogs"
+            catalog_dir = var_dir / "generated" / "codex"
             catalog_dir.mkdir(parents=True)
             (catalog_dir / CODEX_MODEL_CATALOG_FILENAME).write_text('{"models":[]}\n', encoding="utf-8")
             os.environ["QZ_ROOT"] = str(root)
@@ -203,7 +203,7 @@ class CodexClientConfigWithCatalogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             var_dir = root / "var"
-            catalog_dir = var_dir / "codex-home" / "model-catalogs"
+            catalog_dir = var_dir / "generated" / "codex"
             catalog_dir.mkdir(parents=True)
             sentinel = "CATALOG_SENTINEL_CONTENT_XYZ"
             catalog = {"models": [{"slug": sentinel}]}
@@ -241,7 +241,7 @@ class CodexModelCatalogContentTests(unittest.TestCase):
     def test_returns_catalog_dict_when_catalog_exists(self):
         with tempfile.TemporaryDirectory() as tmp:
             root, var_dir = self._set_minimal_env(tmp)
-            catalog_dir = var_dir / "codex-home" / "model-catalogs"
+            catalog_dir = var_dir / "generated" / "codex"
             catalog_dir.mkdir(parents=True)
             catalog = {"models": [{"slug": "test-model", "display_name": "Test"}]}
             (catalog_dir / CODEX_MODEL_CATALOG_FILENAME).write_text(
@@ -262,7 +262,7 @@ class CodexModelCatalogContentTests(unittest.TestCase):
     def test_malformed_catalog_returns_none_and_invalid_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             root, var_dir = self._set_minimal_env(tmp)
-            catalog_dir = var_dir / "codex-home" / "model-catalogs"
+            catalog_dir = var_dir / "generated" / "codex"
             catalog_dir.mkdir(parents=True)
             (catalog_dir / CODEX_MODEL_CATALOG_FILENAME).write_bytes(b"not json {{{{")
             result, error = codex_model_catalog_content()
@@ -272,7 +272,7 @@ class CodexModelCatalogContentTests(unittest.TestCase):
     def test_non_dict_catalog_returns_invalid(self):
         with tempfile.TemporaryDirectory() as tmp:
             root, var_dir = self._set_minimal_env(tmp)
-            catalog_dir = var_dir / "codex-home" / "model-catalogs"
+            catalog_dir = var_dir / "generated" / "codex"
             catalog_dir.mkdir(parents=True)
             (catalog_dir / CODEX_MODEL_CATALOG_FILENAME).write_text(
                 "[]", encoding="utf-8"
@@ -345,7 +345,7 @@ class CodexClientConfigC11AuditTests(unittest.TestCase):
 
             path = _catalog_path()
 
-            # Must be under QZ_VAR_DIR/codex-home, not under CODEX_HOME
+            # Must be under QZ_VAR_DIR/generated/codex, not under CODEX_HOME
             self.assertIn("var", str(path))
             self.assertNotIn("unrelated-client-home", str(path))
 
@@ -368,8 +368,8 @@ class CodexClientConfigC11AuditTests(unittest.TestCase):
         """Catalog warning/metadata reflect QZ_VAR_DIR path, not CODEX_HOME path."""
         with tempfile.TemporaryDirectory() as tmp:
             root, var_dir = self._set_minimal_env(tmp)
-            # Write catalog under var_dir/codex-home (server path)
-            catalog_dir = var_dir / "codex-home" / "model-catalogs"
+            # Write catalog under var_dir/generated/codex (server path)
+            catalog_dir = var_dir / "generated" / "codex"
             catalog_dir.mkdir(parents=True)
             (catalog_dir / CODEX_MODEL_CATALOG_FILENAME).write_text('{"models":[]}\n', encoding="utf-8")
             # Set CODEX_HOME to an unrelated path with no catalog
@@ -404,7 +404,7 @@ class CodexClientConfigC11AuditTests(unittest.TestCase):
         """client-config payload contains only metadata, not the full catalog JSON."""
         with tempfile.TemporaryDirectory() as tmp:
             root, var_dir = self._set_minimal_env(tmp)
-            catalog_dir = var_dir / "codex-home" / "model-catalogs"
+            catalog_dir = var_dir / "generated" / "codex"
             catalog_dir.mkdir(parents=True)
             models_sentinel = "UNIQUE_MODELS_CONTENT_SHOULD_NOT_APPEAR_IN_CLIENT_CONFIG"
             catalog = {"models": [{"slug": models_sentinel}]}
@@ -423,7 +423,7 @@ class CodexClientConfigC11AuditTests(unittest.TestCase):
         """Catalog file >64 KiB gets hash_skipped: 'too_large' in client-config."""
         with tempfile.TemporaryDirectory() as tmp:
             root, var_dir = self._set_minimal_env(tmp)
-            catalog_dir = var_dir / "codex-home" / "model-catalogs"
+            catalog_dir = var_dir / "generated" / "codex"
             catalog_dir.mkdir(parents=True)
             # Write a catalog that is just over 64 KiB
             large_content = '{"models":' + '[{"slug":"x"}]' * 5000 + '}'
@@ -444,7 +444,7 @@ class CodexClientConfigC11AuditTests(unittest.TestCase):
         """Malformed catalog JSON gives error code, not exception or stack trace."""
         with tempfile.TemporaryDirectory() as tmp:
             root, var_dir = self._set_minimal_env(tmp)
-            catalog_dir = var_dir / "codex-home" / "model-catalogs"
+            catalog_dir = var_dir / "generated" / "codex"
             catalog_dir.mkdir(parents=True)
             (catalog_dir / CODEX_MODEL_CATALOG_FILENAME).write_bytes(b"not valid json {{{{")
 

@@ -2857,9 +2857,12 @@ later (future slice) if old path exists and new path exists.
    - ~~No symlink shim, no old-path deletion, QZ_MODEL_INVENTORY_CACHE preserved~~
 5. ~~**Slice C.1: A1 migration audit/polish** — COMPLETE~~
    - ~~Docs updated, table separator fixed, two focused tests added~~
-6. ~~**Slice D-design: A2/A3 migration plan** — COMPLETE (this section)~~
-7. **Slice D-impl: Physical move of A2/A3** — implement D-design; no old-path deletion, no shim
-8. **Slice E: Deprecate `codex_home_dir()` / `codex_model_catalog_dir()`** — after D-impl proves stable
+6. ~~**Slice D-design: A2/A3 migration plan** — COMPLETE~~
+7. ~~**Slice D-impl: Physical move of A2/A3** — COMPLETE~~
+   - ~~`codex_generated_dir()` added; `codex_model_catalog_path()` and `codex_config_path()` changed~~
+   - ~~No shim, no old-path deletion, 2600 tests PASS~~
+8. **Slice D.1: D-impl audit/polish** — verify migration clean, add any missing tests
+9. **Slice E: Deprecate `codex_home_dir()` / `codex_model_catalog_dir()`** — after D.1 proves stable
 
 ---
 

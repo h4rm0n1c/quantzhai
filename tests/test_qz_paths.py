@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from proxy.qz_paths import (
     codex_config_path,
+    codex_generated_dir,
     codex_home_dir,
     codex_model_catalog_dir,
     codex_model_catalog_path,
@@ -39,6 +40,7 @@ class QzPathsDefaultTests(unittest.TestCase):
         self.assertIsInstance(qz_root(), Path)
         self.assertIsInstance(qz_var_dir(), Path)
         self.assertIsInstance(model_inventory_path(), Path)
+        self.assertIsInstance(codex_generated_dir(), Path)
         self.assertIsInstance(codex_home_dir(), Path)
         self.assertIsInstance(codex_model_catalog_dir(), Path)
         self.assertIsInstance(codex_model_catalog_path(), Path)
@@ -66,11 +68,11 @@ class QzPathsDefaultTests(unittest.TestCase):
         self.assertEqual(codex_model_catalog_dir(), expected)
 
     def test_codex_model_catalog_path_default_matches_current_var_path(self):
-        expected = codex_model_catalog_dir() / "qwenzhai-models.json"
+        expected = codex_generated_dir() / "qwenzhai-models.json"
         self.assertEqual(codex_model_catalog_path(), expected)
 
     def test_codex_config_path_default_matches_current_var_path(self):
-        expected = codex_home_dir() / "config.toml"
+        expected = codex_generated_dir() / "config.toml"
         self.assertEqual(codex_config_path(), expected)
 
 
@@ -96,9 +98,11 @@ class QzPathsEnvOverrideTests(unittest.TestCase):
             os.environ["QZ_VAR_DIR"] = str(custom_var)
             self.assertEqual(qz_var_dir(), custom_var)
             self.assertEqual(model_inventory_path(), custom_var / "generated" / "model-inventory.json")
+            self.assertEqual(codex_generated_dir(), custom_var / "generated" / "codex")
+            self.assertEqual(codex_model_catalog_path(), custom_var / "generated" / "codex" / "qwenzhai-models.json")
+            self.assertEqual(codex_config_path(), custom_var / "generated" / "codex" / "config.toml")
+            # deprecated helpers still return old layout
             self.assertEqual(codex_home_dir(), custom_var / "codex-home")
-            self.assertEqual(codex_model_catalog_path(), custom_var / "codex-home" / "model-catalogs" / "qwenzhai-models.json")
-            self.assertEqual(codex_config_path(), custom_var / "codex-home" / "config.toml")
 
     def test_qz_root_env_override_is_respected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -131,10 +135,11 @@ class QzPathsNoSideEffectsTests(unittest.TestCase):
             os.environ.pop("QZ_ROOT", None)
             paths = [
                 model_inventory_path(),
-                codex_home_dir(),
-                codex_model_catalog_dir(),
+                codex_generated_dir(),
                 codex_model_catalog_path(),
                 codex_config_path(),
+                codex_home_dir(),
+                codex_model_catalog_dir(),
             ]
             for path in paths:
                 self.assertFalse(path.exists(), f"helper created {path}")
@@ -196,6 +201,67 @@ class QzPathsCodexHomeIndependenceTests(unittest.TestCase):
             path = model_inventory_path()
             self.assertIn(str(var_dir), str(path))
             self.assertNotIn("client-home", str(path))
+
+
+class QzPathsCodexGeneratedDirTests(unittest.TestCase):
+    """Tests for codex_generated_dir() and migrated A2/A3 paths (#56 Slice D-impl)."""
+
+    _ENV_KEYS = ("QZ_ROOT", "QZ_VAR_DIR", "CODEX_HOME")
+
+    def setUp(self):
+        self._saved = {k: os.environ.get(k) for k in self._ENV_KEYS}
+        for k in self._ENV_KEYS:
+            os.environ.pop(k, None)
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_codex_generated_dir_default_matches_generated_codex_path(self):
+        expected = qz_var_dir() / "generated" / "codex"
+        self.assertEqual(codex_generated_dir(), expected)
+
+    def test_codex_model_catalog_path_moves_to_var_generated_codex(self):
+        expected = codex_generated_dir() / "qwenzhai-models.json"
+        self.assertEqual(codex_model_catalog_path(), expected)
+        self.assertIn("generated", codex_model_catalog_path().parts)
+        self.assertNotIn("codex-home", codex_model_catalog_path().parts)
+
+    def test_codex_config_path_moves_to_var_generated_codex(self):
+        expected = codex_generated_dir() / "config.toml"
+        self.assertEqual(codex_config_path(), expected)
+        self.assertIn("generated", codex_config_path().parts)
+        self.assertNotIn("codex-home", codex_config_path().parts)
+
+    def test_deprecated_codex_home_dir_still_returns_old_server_layout(self):
+        expected = qz_var_dir() / "codex-home"
+        self.assertEqual(codex_home_dir(), expected)
+
+    def test_codex_generated_paths_ignore_codex_home(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            var_dir = Path(tmp) / "var"
+            var_dir.mkdir(parents=True)
+            os.environ["QZ_VAR_DIR"] = str(var_dir)
+            os.environ["CODEX_HOME"] = str(Path(tmp) / "client-home")
+            self.assertIn(str(var_dir), str(codex_generated_dir()))
+            self.assertNotIn("client-home", str(codex_generated_dir()))
+            self.assertIn(str(var_dir), str(codex_model_catalog_path()))
+            self.assertNotIn("client-home", str(codex_model_catalog_path()))
+            self.assertIn(str(var_dir), str(codex_config_path()))
+            self.assertNotIn("client-home", str(codex_config_path()))
+
+    def test_old_var_codex_home_catalog_not_created_by_default(self):
+        """Calling helpers must not create var/codex-home/model-catalogs/."""
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["QZ_VAR_DIR"] = tmp
+            _ = codex_generated_dir()
+            _ = codex_model_catalog_path()
+            _ = codex_config_path()
+            old_catalog_dir = Path(tmp) / "codex-home" / "model-catalogs"
+            self.assertFalse(old_catalog_dir.exists(), "old codex-home dir must not be created")
 
 
 if __name__ == "__main__":

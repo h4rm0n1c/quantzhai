@@ -148,7 +148,7 @@ else
   skip "search base: set SEARXNG_BASE_URL to enable local web_search"
 fi
 
-codex_config="$QZ_ROOT/var/codex-home/config.toml"
+codex_config="$QZ_ROOT/var/generated/codex/config.toml"
 if [[ -f "$codex_config" ]]; then
   if stale_codex_limits="$(python3 - "$codex_config" <<'PY'
 import re

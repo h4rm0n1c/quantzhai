@@ -13,7 +13,7 @@ Usage:
 Arguments:
   inventory_path  Path to var/generated/model-inventory.json
   catalog_dst     Output path for the generated Codex catalog JSON
-  config_dst      Path to var/codex-home/config.toml (patched in-place)
+  config_dst      Path to var/generated/codex/config.toml (patched in-place)
 """
 import json
 import re
