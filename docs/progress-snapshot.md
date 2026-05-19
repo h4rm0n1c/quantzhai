@@ -132,7 +132,7 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 
 ## Immediate next priorities
 
-1. **Slice D2** — always-HTTP qz-codex bootstrap: remove legacy local/co-located path, remove QZ_CODEX_REMOTE branch, remove POST /qz/models/refresh in launcher, clean proxy-down failure. Design in `docs/edge-case-config-contract-plan.md`.
+1. **Slice D2.1** — audit/polish after always-HTTP qz-codex bootstrap (Slice D2 complete: legacy path removed, HTTP always used, no POST /qz/models/refresh).
 2. **#56 design slice** — generated artifact path migration design only; no path moves. Safer after Slice D.
 3. **#37 design micro-slice** — next delicate stream seam before coding.
 4. **#51/#46** — deferred until operational-store decision.

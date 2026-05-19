@@ -181,7 +181,7 @@ Repeated-read v2                                         blocked on SQLite/sessi
 ## 5. Recommended next work order
 
 ```
-A. #58 / Slice D2  Make qz-codex always-HTTP bootstrap — NEXT
+A. #58 / Slice D2.1  Audit/polish after always-HTTP bootstrap — NEXT
         Refactor qz-codex-common: one HTTP path, remove QZ_CODEX_REMOTE branch,
         remove server-local CODEX_HOME, remove POST /qz/models/refresh in launcher,
         remove qz-up reference from error messages, clean proxy-down failure.

@@ -2407,16 +2407,21 @@ The proxy-down error message describes recovery in service-neutral terms:
 
 **Slice D1: This design document (done)**
 
-**Slice D2: Refactor qz-codex-common to always-HTTP**
-- Remove QZ_CODEX_REMOTE branching
-- Remove server-local CODEX_HOME assignment
-- Remove config/example/codex-config.toml copy
-- Remove TOML parse for model_provider
-- Remove POST /qz/models/refresh call
-- Remove qz-up reference from error messages
+**Slice D2: Refactor qz-codex-common to always-HTTP — COMPLETE**
+
+Implemented in #58 Slice D2:
+- Removed QZ_CODEX_REMOTE branching — `qz_prepare_codex_home()` always uses HTTP
+- Removed server-local CODEX_HOME assignment (`$QZ_ROOT/var/codex-home`)
+- Removed `config/example/codex-config.toml` copy
+- Removed TOML parse for `model_provider`
+- Removed `POST /qz/models/refresh` call
+- Removed qz-up reference from error messages
+- Renamed `_qz_remote_bootstrap` → `_qz_http_bootstrap` (neutral name)
 - New CODEX_HOME default: `$HOME/.qz-codex/codex-home`
-- New clean proxy-down and missing-catalog error messages
-- Preserve atomic writes, TOML escaping, no-secret guarantees from C2.1
+- Clean proxy-down: "QuantZhai appears to be down. Start the QuantZhai proxy/service, then retry."
+- Clean catalog-missing: "The Codex model catalog is not available. Run curl -X POST .../qz/models/refresh. Then retry."
+- Preserved atomic writes, TOML escaping, no-secret guarantees from C2.1
+- 28 tests (10 new in HttpBootstrapTests). 2576 total passing.
 
 **Slice D2.1: Audit/polish**
 - No legacy local path remains

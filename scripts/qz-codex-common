@@ -5,25 +5,29 @@ QZ_CODEX_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$QZ_CODEX_COMMON_DIR/qz-env"
 
-_qz_remote_bootstrap() {
-  # Remote bootstrap mode: fetch model catalog and client config from QuantZhai server,
+_qz_http_bootstrap() {
+  # HTTP bootstrap: fetch model catalog and client config from the QuantZhai proxy,
   # then write a local CODEX_HOME config.toml and model catalog JSON file.
   #
+  # This is the only bootstrap path — for localhost and remote hosts alike.
+  # QZ_CODEX_REMOTE is no longer required; HTTP is always used.
+  #
   # Requirements:
-  #   QZ_PROXY_HOST / QZ_PROXY_PORT — must point at the QuantZhai server
-  #   CODEX_HOME (optional)         — defaults to $HOME/.qz-remote-codex/codex-home
-  #   QZ_CODEX_REMOTE=1             — explicit opt-in; co-located mode is unchanged
+  #   QZ_PROXY_HOST / QZ_PROXY_PORT — proxy address (127.0.0.1 for local)
+  #   CODEX_HOME (optional)         — defaults to $HOME/.qz-codex/codex-home
   #
   # Never writes API key values; env_key field is the key NAME only.
   # Catalog write is atomic: temp file + mv, no replacement on error.
+  # qz-codex does not call POST /qz/models/refresh — it is a read-only client.
 
   local proxy_url="http://$QZ_PROXY_HOST:$QZ_PROXY_PORT"
 
   # 1. Fetch /qz/codex/client-config
   local _cfg_body
   if ! _cfg_body=$(curl -fsS "$proxy_url/qz/codex/client-config" 2>/dev/null); then
-    printf 'qz-codex remote: failed to reach %s/qz/codex/client-config\n' "$proxy_url" >&2
-    printf '  Check QZ_PROXY_HOST=%s and QZ_PROXY_PORT=%s.\n' "$QZ_PROXY_HOST" "$QZ_PROXY_PORT" >&2
+    printf 'qz-codex: QuantZhai appears to be down.\n' >&2
+    printf '  Tried: %s/qz/codex/client-config\n' "$proxy_url" >&2
+    printf '  Start the QuantZhai proxy/service, then retry.\n' >&2
     return 1
   fi
 
@@ -54,11 +58,11 @@ try:
 except json.JSONDecodeError:
     print('ERROR: invalid JSON response', file=sys.stderr); sys.exit(1)
 " 2>&1) || {
-    printf 'qz-codex remote: client config parse error: %s\n' "${_fields#ERROR: }" >&2
+    printf 'qz-codex: client config parse error: %s\n' "${_fields#ERROR: }" >&2
     return 1
   }
   if [[ "$_fields" == ERROR:* ]]; then
-    printf 'qz-codex remote: client config error: %s\n' "${_fields#ERROR: }" >&2
+    printf 'qz-codex: client config error: %s\n' "${_fields#ERROR: }" >&2
     return 1
   fi
 
@@ -66,9 +70,9 @@ except json.JSONDecodeError:
   IFS=$'\t' read -r _model_provider _provider_name _base_url _wire_api _env_key _catalog_url _catalog_filename \
     <<< "$_fields"
 
-  # 3. Resolve CODEX_HOME; default avoids collision with server var/codex-home
+  # 3. Resolve CODEX_HOME — client-local state, never server var/codex-home
   if [[ -z "${CODEX_HOME:-}" ]]; then
-    CODEX_HOME="$HOME/.qz-remote-codex/codex-home"
+    CODEX_HOME="$HOME/.qz-codex/codex-home"
   fi
   mkdir -p "$CODEX_HOME/model-catalogs" "$CODEX_HOME/sqlite"
 
@@ -78,7 +82,10 @@ except json.JSONDecodeError:
 
   if ! curl -fsS "$_catalog_url" -o "$_catalog_tmp" 2>/dev/null; then
     rm -f "$_catalog_tmp"
-    printf 'qz-codex remote: failed to fetch model catalog from %s\n' "$_catalog_url" >&2
+    printf 'qz-codex: The Codex model catalog is not available on the QuantZhai server.\n' >&2
+    printf '  Tried: %s\n' "$_catalog_url" >&2
+    printf '  Run: curl -X POST %s/qz/models/refresh\n' "$proxy_url" >&2
+    printf '  Then retry.\n' >&2
     return 1
   fi
 
@@ -91,13 +98,13 @@ except Exception:
     sys.exit(1)
 " "$_catalog_tmp" 2>/dev/null; then
     rm -f "$_catalog_tmp"
-    printf 'qz-codex remote: fetched catalog is not a valid JSON object; not replacing existing catalog\n' >&2
+    printf 'qz-codex: fetched catalog is not a valid JSON object; not replacing existing catalog\n' >&2
     return 1
   fi
 
   mv "$_catalog_tmp" "$_catalog_file"
 
-  # 5. Write/patch local config.toml with remote server values (atomic write).
+  # 5. Write/patch local config.toml with server values (atomic write).
   #    Only env_key name is written; never the key value.
   #    Values are TOML-safe escaped via json.dumps (handles quotes, backslashes, etc.).
   local _config_toml="$CODEX_HOME/config.toml"
@@ -162,13 +169,13 @@ dst_tmp.write_text(''.join(parts).rstrip('\n') + '\n', encoding='utf-8')
 PY
   then
     rm -f "$_config_toml_tmp"
-    printf 'qz-codex remote: failed to generate config.toml content\n' >&2
+    printf 'qz-codex: failed to generate config.toml content\n' >&2
     return 1
   fi
 
   if ! mv "$_config_toml_tmp" "$_config_toml" 2>/dev/null; then
     rm -f "$_config_toml_tmp"
-    printf 'qz-codex remote: failed to install config.toml\n' >&2
+    printf 'qz-codex: failed to install config.toml\n' >&2
     return 1
   fi
 
@@ -181,140 +188,11 @@ PY
 }
 
 qz_prepare_codex_home() {
-  # Remote mode is explicit opt-in via QZ_CODEX_REMOTE=1; co-located mode unchanged.
-  if [[ "${QZ_CODEX_REMOTE:-}" == "1" ]]; then
-    _qz_remote_bootstrap
-    return $?
-  fi
-
-  mkdir -p \
-    "$QZ_VAR_DIR/codex-home/model-catalogs" \
-    "$QZ_VAR_DIR/codex-home/sqlite" \
-    "$QZ_VAR_DIR/logs" \
-    "$QZ_VAR_DIR/run" \
-    "$QZ_VAR_DIR/captures" \
-    "$QZ_VAR_DIR/benchmarks"
-
-  if [[ ! -f "$QZ_ROOT/var/codex-home/config.toml" ]]; then
-    cp "$QZ_ROOT/config/example/codex-config.toml" "$QZ_ROOT/var/codex-home/config.toml"
-  fi
-
-  # The proxy is the sole authority for model/catalog state.
-  # POST /qz/models/refresh triggers the proxy to rescan models and regenerate
-  # the Codex catalog file. qz-codex requires a reachable QuantZhai proxy;
-  # there is no local scan fallback.
-  local proxy_url="http://$QZ_PROXY_HOST:$QZ_PROXY_PORT"
-  local _refresh_body
-  if _refresh_body=$(curl -fsS -X POST "$proxy_url/qz/models/refresh" 2>/dev/null); then
-    # Parse proxy-owned response to confirm the catalog artifact was updated.
-    # Rules (in priority order):
-    #   new schema: ok==true AND catalog_updated==true  -> success
-    #   new schema: ok==true AND catalog_updated==false -> failure (artifact not regenerated)
-    #   new schema: ok==false                           -> failure
-    #   compat:     codex_catalog_updated==true         -> success (pre-slice-4 response)
-    #   old format: HTTP 200 without any schema fields  -> treat as success (backwards compat)
-    local _catalog_ok
-    _catalog_ok=$(printf '%s' "$_refresh_body" | python3 -c "
-import json, sys
-try:
-    d = json.load(sys.stdin)
-    # New schema: require both ok==true and catalog_updated==true.
-    if 'catalog_updated' in d:
-        ok = d.get('ok', True)
-        updated = d.get('catalog_updated', False)
-        print('true' if (ok and updated) else 'false')
-    elif 'ok' in d:
-        # ok present but no catalog_updated: check compat field
-        ok = d['ok']
-        updated = bool(d.get('codex_catalog_updated', False))
-        print('true' if (ok and updated) else 'false')
-    elif 'codex_catalog_updated' in d:
-        # Pre-slice-4 response: only codex_catalog_updated available
-        print('true' if d['codex_catalog_updated'] else 'false')
-    else:
-        # Unknown old format: HTTP 200 assumed success for backwards compat
-        print('true')
-except Exception:
-    print('true')
-" 2>/dev/null || echo true)
-    if [[ "$_catalog_ok" != "true" ]]; then
-      local _err
-      _err=$(printf '%s' "$_refresh_body" | python3 -c "
-import json, sys
-try:
-    d = json.load(sys.stdin)
-    parts = [p for p in [d.get('error'), d.get('reason')] if p]
-    if not parts:
-        if 'catalog_updated' in d and not d.get('catalog_updated'):
-            parts = ['Codex catalog file was not regenerated']
-    print(', '.join(parts) if parts else 'catalog refresh failed')
-except Exception:
-    print('catalog refresh failed')
-" 2>/dev/null || echo "catalog refresh failed")
-      printf 'qz-codex: proxy catalog refresh failed: %s\n' "$_err" >&2
-      return 1
-    fi
-    : # proxy owns catalog; continue
-  else
-    printf 'qz-codex: proxy catalog refresh failed.\n' >&2
-    printf '\n' >&2
-    printf '  qz-codex requires a reachable QuantZhai proxy to own model/catalog state.\n' >&2
-    printf '  POST %s/qz/models/refresh did not succeed.\n' "$proxy_url" >&2
-    printf '\n' >&2
-    printf '  Solutions:\n' >&2
-    printf '    Start the proxy:  scripts/qz-proxy\n' >&2
-    printf '    Start the stack:  scripts/qz-up\n' >&2
-    printf '\n' >&2
-    printf '  qz-codex does not need to run on the same machine as llama.cpp,\n' >&2
-    printf '  but it does need a reachable QuantZhai proxy at:\n' >&2
-    printf '    %s\n' "$proxy_url" >&2
-    printf '\n' >&2
-    # Show compact control-plane facts to help diagnose the issue.
-    python3 - "$QZ_PROXY_HOST" "$QZ_PROXY_PORT" <<'PY' >&2 2>/dev/null || true
-import json, sys, urllib.request
-host, port = sys.argv[1], sys.argv[2]
-url = "http://{}:{}/qz/control-plane".format(host, port)
-try:
-    with urllib.request.urlopen(url, timeout=2.0) as r:
-        d = json.loads(r.read().decode())
-    if not isinstance(d, dict) or d.get("schema") != "qz.control_plane.status.v1":
-        print("  /qz/control-plane: unexpected response (old proxy?)")
-        sys.exit(0)
-    ri = d.get("readiness", {})
-    m = d.get("models", {})
-    hints = d.get("operator_hints", [])
-    print("  /qz/control-plane: proxy_ready={}  catalog_ready={}  models={}  backend_reachable={}".format(
-        ri.get("proxy_ready"), ri.get("catalog_ready"),
-        m.get("count", 0), ri.get("backend_reachable")))
-    for hint in hints[:1]:
-        print("  hint: " + str(hint)[:100])
-except Exception as e:
-    print("  /qz/control-plane: unreachable ({})".format(e))
-PY
-    printf '\n' >&2
-    return 1
-  fi
-
-  export CODEX_HOME="$QZ_ROOT/var/codex-home"
-  export CODEX_SQLITE_HOME="$CODEX_HOME/sqlite"
-  export CODEX_OSS_BASE_URL="http://$QZ_PROXY_HOST:$QZ_PROXY_PORT"
-  export LOCAL_QWEN_API_KEY="${LOCAL_QWEN_API_KEY:-local}"
-
-  QZ_CODEX_MODEL_PROVIDER="${QZ_CODEX_MODEL_PROVIDER:-$(python3 - "$QZ_ROOT/var/codex-home/config.toml" <<'PY'
-import re
-import sys
-from pathlib import Path
-
-for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
-    if line.lstrip().startswith("["):
-        break
-    match = re.match(r'\s*model_provider\s*=\s*"([^"]+)"', line)
-    if match:
-        print(match.group(1))
-        break
-PY
-)}"
-  export QZ_CODEX_MODEL_PROVIDER
+  # qz-codex always bootstraps via HTTP from the QuantZhai proxy.
+  # QuantZhai proxy is the authority; qz-codex is a read-only client launcher.
+  # QZ_CODEX_REMOTE is no longer required — HTTP is always the path.
+  _qz_http_bootstrap
+  return $?
 }
 
 qz_resolve_codex_profile() {
