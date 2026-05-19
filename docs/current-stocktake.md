@@ -151,11 +151,15 @@ place. 2615 tests passing. See `docs/stream-reducer-boundary-design.md §9S`.
 - Close-out audit fixed 3 stale proxy docstrings and 2 doc path references.
 - All acceptance criteria PASS.
 
-**#51** — Recovery backoff state is currently in-memory only. Should be persisted
-once #2 exists. Do not implement before #2.
+**#51** — Recovery backoff state is currently in-memory only. OperationalStore
+Slice A-design defines the persistence path: `recovery_state` table in
+`var/state/operational.sqlite3`. Implementation in Slice D. See
+`docs/operational-store-design.md`.
 
 **#46** — qz-write-runtime-state is a launcher trace only, not live-status truth.
-Removal blocked until a startup-telemetry or SQLite replacement path exists.
+OperationalStore Slice A-design defines the replacement: `runtime_events` table
++ dual-write in Slice C; script stays compatible through C.1. See
+`docs/operational-store-design.md §6`.
 
 **#5** — Config/var cleanup is ongoing and never fully done. Safe to do any time
 without blocking other work. Good incremental choice between larger features.

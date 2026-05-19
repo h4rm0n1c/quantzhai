@@ -129,7 +129,7 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 
 ## Immediate next priorities
 
-1. **#51/#46 Slice A-design** — operational store boundary + session identity. Design only. Unblocks recovery state, startup telemetry, repeated-read v2.
+1. **#51/#46 Slice B-impl** — create `qz_operational_store.py` skeleton with schema creation. Slice A-design complete.
 
 ## Remaining big rocks
 
