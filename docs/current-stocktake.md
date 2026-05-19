@@ -125,7 +125,7 @@ integration (qz_proxy_tools.py, qz_responses_stream.py, qz_request_router.py),
 and live smoke (scripts/qz-smoke-repeated-read). Advisory, stateless,
 input-history-seeded. V2 is blocked on SQLite/session identity.
 
-**#37** — Slices 1–2I-impl complete. Next: 2I.1 audit/polish, then 2J close-out.
+**#37** — Slices 1–2I.1 complete. Next: Slice 2J close-out.
 
 Completed: StreamHopState, StreamDecision, 7 pure helpers, StreamRunState
 (terminal flags + timing: started_at, first_output_at, final_usage,

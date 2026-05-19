@@ -757,7 +757,12 @@ No decide_stream_event() required.
 `completed_at`/sequence/public_trace/summary_started/working_body/repair remain locals.
 6 new tests (total 11 in `StreamRunStateTests`). 2615 tests PASS.
 
-Next: Slice 2I.1 audit/polish.
+**Slice 2I.1 (this commit):** CLOSED. Audit clean. All 7 StreamRunState fields confirmed.
+No bare `started_at`/`first_output_at`/`final_usage`/`output_index_offset` in `run()`.
+Method signatures unchanged. `completed_at`/sequence/public_trace/summary_started/
+working_body/repair all remain locals. No code changes needed. 2615 tests PASS.
+
+Next: Slice 2J close-out — document remaining bounded locals, close #37.
 
 ## Reference: BrainCase Slice completion history
 

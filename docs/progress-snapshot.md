@@ -132,7 +132,7 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 
 ## Immediate next priorities
 
-1. **#37 Slice 2I.1** — audit/polish timing cluster. 2I-impl done: started_at/first_output_at/final_usage/output_index_offset in rs.
+1. **#37 Slice 2J close-out** — document remaining bounded locals, close #37. Slices 1–2I.1 complete.
 3. **#51/#46** — deferred until operational-store decision.
 
 ## Remaining big rocks

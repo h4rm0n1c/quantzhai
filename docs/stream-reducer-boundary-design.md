@@ -1632,6 +1632,37 @@ The Slice 2J close-out will document each of these explicitly in the design doc,
 
 ---
 
+---
+
+## 9R. Slice 2I.1 — COMPLETE
+
+Audit of Slice 2I-impl StreamRunState timing/index migration.
+
+**Audit results:**
+
+- `StreamRunState` confirmed with exactly 7 fields: `started_at`, `sent_response_start`,
+  `sent_terminal`, `sent_done`, `first_output_at`, `final_usage`, `output_index_offset`.
+- `fresh(started_at: float)` confirmed — `started_at` is required.
+- `final_usage` confirmed non-shared: initialized via `_normalize_response_usage({})` in `fresh()`; `field(default_factory=dict)` on the class ensures each instance gets an independent dict.
+- `rs = StreamRunState.fresh(started_at=time.time())` confirmed at line 1355, outside the hop loop, constructed once per `run()` call.
+- No bare `started_at`/`first_output_at`/`final_usage`/`output_index_offset` in `run()` body (the single `started_at` reference is the keyword arg in `fresh(started_at=time.time())`).
+- `first_output_at` set-once logic correct: `if rs.first_output_at is None and event_type not in {...}: rs.first_output_at = time.time()` — never reset per hop.
+- `rs.final_usage = _normalize_response_usage(response.get("usage"))` and `rs.final_usage = drained_usage` are the only two assignment sites — correct.
+- `rs.output_index_offset += hs.max_output_index + 1` at line 2071 — single increment site — correct.
+- All `_finish_no_output_timeout`, `_finish_terminal_timeout_after_output`, `_merge_manual_stream_observation`, `_build_result`, `_emit_stream_completed` confirmed to receive value arguments from `rs.*`, not the `rs` object. Method signatures unchanged.
+- `completed_at` confirmed as local (16 bare refs, 0 `rs.*` in `run()`).
+- `sequence`, `public_trace`, `summary_started`, `working_body`, `repair_hops_used`, `pending_repair_hop_index` all confirmed as locals.
+
+**Fix:** None — audit clean.
+
+**No new tests added** — `test_independence_for_timing_fields` already covers `final_usage` dict independence and `output_index_offset` independence; `first_output_at` is a scalar, no sharing possible.
+
+2615 tests passing. No code changes.
+
+**Recommended next: Slice 2J close-out** — document remaining bounded locals, close #37.
+
+---
+
 ## Cross-references
 
 - `proxy/qz_responses_stream.py` — current side-effect owner; Slice 1 StreamHopState
