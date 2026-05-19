@@ -2432,7 +2432,9 @@ Audit confirmed:
 - Bounded errors without traceback or qz-up
 3 fixes: stale test names/docstrings updated; design doc status refreshed.
 
-**Slice D3: Close-out audit. Then proceed to #56 design.**
+**Slice D3: Close-out audit — COMPLETE (#58 closed)**
+All acceptance criteria PASS. #58 closed.
+Next: #56 generated artifact path migration design.
 
 ---
 

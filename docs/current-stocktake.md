@@ -27,7 +27,7 @@ BrainCase memory:        braincase.render/recall/write_candidate (#53 closed)
 Repeated-read signal v1: advisory, stateless, input-history-seeded (#3/#4/#43 closed)
 Stream seam (#37):       Slices 1–2F.1 complete; paused before delicate seams
 Config observability:    /qz/config/effective full source/staleness coverage (#5 closed)
-qz-codex remote mode:    QZ_CODEX_REMOTE=1 + client-config/model-catalog endpoints (#57 closed)
+qz-codex bootstrap:      always HTTP via /qz/codex/client-config (#58 closed)
 Docs doctrine:           docs/patterns/provenance-telemetry.md active
 Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 ```
@@ -98,7 +98,8 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 | #51 | Promote recovery/backoff runtime state to SQLite | **deferred** until operational-store decision |
 | #46 | Replace qz-write-runtime-state launcher trace | **deferred** until startup-telemetry replacement |
 | #5 | Config/var/script ownership cleanup | **CLOSED** (#56, #57 opened for migration/thinning follow-ups) |
-| #57 | qz-codex-common thinning | **CLOSED** (Slices A–C2.1 complete; remote bootstrap delivered; #56 remains separate) |
+| #57 | qz-codex-common thinning | **CLOSED** (Slices A–C2.1 complete; remote bootstrap endpoints delivered; superseded by #58) |
+| #58 | Always-HTTP qz-codex bootstrap | **CLOSED** (D2/D2.1/D3 complete; qz-codex always uses HTTP; #56 remains separate) |
 | #39 | Split search routing policy into search.json | **optional-polish** (resume when search work resumes) |
 | #52 | Backend-confirmed VRAM allocator metrics | **upstream-blocked** (TurboQuant side) |
 | #8 | RFC: NetTTS survival-weighted compaction | **research/later** |
@@ -181,15 +182,10 @@ Repeated-read v2                                         blocked on SQLite/sessi
 ## 5. Recommended next work order
 
 ```
-A. #58 / Slice D2  Always-HTTP bootstrap — DONE (480ecdc)
-        D2 complete: qz-codex always uses HTTP bootstrap; QZ_CODEX_REMOTE removed as
-        gate/branch; server-local CODEX_HOME, codex-config.toml copy, TOML provider
-        parse, POST /qz/models/refresh, and qz-up recovery coupling all removed.
-        CODEX_HOME default: $HOME/.qz-codex/codex-home.
-        See docs/edge-case-config-contract-plan.md §qz-codex always-HTTP bootstrap design.
-
-A. #58 / Slice D2.1  Audit/polish after always-HTTP bootstrap — NEXT
-        Polish and close-out audit after D2. Keeps #58 open.
+A. #58  Always-HTTP qz-codex bootstrap — CLOSED (slices D2/D2.1/D3)
+        qz-codex always uses HTTP bootstrap; QZ_CODEX_REMOTE removed; server-local
+        CODEX_HOME, codex-config.toml copy, TOML provider parse, POST /qz/models/refresh,
+        and qz-up recovery coupling all removed. CODEX_HOME default: $HOME/.qz-codex/codex-home.
         See docs/edge-case-config-contract-plan.md §qz-codex always-HTTP bootstrap design.
 
 B. #56  Generated artifact path migration design (var/generated/)

@@ -25,7 +25,7 @@ they are not automatic operational logs.
 No automatic ingestion. No clever memory. No cross-domain sharing.
 ```
 
-## Recently completed (2026-05-19 run — #5/#57 close-out)
+## Recently completed (2026-05-19 run — #5/#57 close-out + #58 always-HTTP bootstrap)
 
 ```text
 Config/var/script cleanup (#5, now closed)
@@ -36,13 +36,21 @@ Config/var/script cleanup (#5, now closed)
   - stale_against precision; close-out audit verdict: CLOSED
   - Follow-ups: #56 (path migration design), #57 (qz-codex thinning)
 
-qz-codex remote bootstrap (#57, now closed)
+qz-codex remote bootstrap (#57, now closed; superseded by #58)
   - GET /qz/codex/client-config — Codex client bootstrap metadata
   - GET /qz/codex/model-catalog — generated catalog served to remote clients
   - QZ_CODEX_REMOTE=1 explicit launcher remote mode in qz-codex-common
   - Writes local CODEX_HOME catalog/config.toml atomically with TOML escaping
   - Co-located mode unchanged; no API key values written or printed
   - Verified Codex CLI 0.130.0 model_catalog_json is local-file-only
+
+Always-HTTP qz-codex bootstrap (#58, now closed)
+  - qz-codex always uses HTTP; QZ_CODEX_REMOTE removed as branch/gate
+  - Server-local CODEX_HOME, config template copy, TOML provider parse removed
+  - POST /qz/models/refresh removed from launcher (client is read-only)
+  - qz-up recovery coupling removed; error messages bounded
+  - CODEX_HOME default: $HOME/.qz-codex/codex-home
+  - 28 focused tests; 2576 total; py_compile/shell syntax PASS
 
 #37 stream seam Slices 2F + 2F.1 (paused, not closed)
   - stream_timeout_kind() combiner extracted to qz_stream_watchdog.py
@@ -545,26 +553,22 @@ cross-domain isolation tests
 
 ---
 
-## Next implementation prompt: Slice D2 — qz-codex always-HTTP bootstrap
+## #58 completed: always-HTTP qz-codex bootstrap (D2/D2.1/D3)
 
-**Supersedes the QZ_CODEX_REMOTE opt-in model from #57.**
+**CLOSED.** qz-codex now always uses HTTP bootstrap via `/qz/codex/client-config`.
 
-HTTP bootstrap is now the *only* qz-codex path. Localhost is just a server at 127.0.0.1.
+Implementation (Slices D2/D2.1/D3):
+- `QZ_CODEX_REMOTE` branching removed — HTTP is the only path
+- Server-local `CODEX_HOME` removed; default is `$HOME/.qz-codex/codex-home`
+- `config/example/codex-config.toml` copy removed from launcher
+- TOML provider parse removed; provider comes from HTTP client-config
+- `POST /qz/models/refresh` removed from launcher (client is read-only)
+- qz-up reference removed from error messages
+- Proxy-down and missing-catalog errors bounded with no traceback/qz-up
+- Atomic writes, TOML escaping, no-secret guarantees preserved
+- No #56 path migration mixed in
 
-See `docs/edge-case-config-contract-plan.md` §qz-codex always-HTTP bootstrap design for full spec.
-
-**What changes:**
-- Remove `QZ_CODEX_REMOTE=1` branching from `qz-codex-common`
-- Remove server-local `CODEX_HOME="$QZ_ROOT/var/codex-home"` assignment
-- Remove `config/example/codex-config.toml` copy
-- Remove TOML parse for `model_provider` (comes from HTTP client-config)
-- Remove `POST /qz/models/refresh` call in launcher (client is read-only)
-- Remove qz-up reference from error messages
-- New CODEX_HOME default: `$HOME/.qz-codex/codex-home`
-- Clean proxy-down and missing-catalog error messages
-- Preserve atomic writes, TOML escaping, no-secret from C2.1
-
-**New issue #58** tracks this work.
+See `docs/edge-case-config-contract-plan.md` §qz-codex always-HTTP bootstrap design.
 
 ## Next implementation prompt: #37 design micro-slice for next delicate stream seam
 

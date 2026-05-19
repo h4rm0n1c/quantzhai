@@ -32,15 +32,15 @@ Current strategic direction:
 
 ```text
 P1 #37 Stream seam extraction (Slices 1–2F.1 complete) — pause before next seam
-P2 Config/var/script cleanup (#5) — CLOSED; #57 — CLOSED (remote qz-codex bootstrap delivered)
+P2 Config/var/script cleanup (#5) — CLOSED; #57/#58 — CLOSED (always-HTTP qz-codex bootstrap)
 P3 #51/#46 operational-state persistence (deferred until store decision)
 P4 Search config split (#39) — when search work resumes
 ```
 
 BrainCase feature work paused: #53 and #54 are closed.
 Repeated-read v1: COMPLETE (#3/#4/#43 closed; qz_file_signal.py live).
-Config cleanup CLOSED (#5). qz-codex remote bootstrap CLOSED (#57).
-2566 tests passing.
+Config cleanup CLOSED (#5). qz-codex always-HTTP bootstrap CLOSED (#57/#58).
+2576 tests passing.
 
 ## Area estimates
 
@@ -132,10 +132,9 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 
 ## Immediate next priorities
 
-1. **Slice D2.1** — audit/polish after always-HTTP qz-codex bootstrap (Slice D2 complete: legacy path removed, HTTP always used, no POST /qz/models/refresh).
-2. **#56 design slice** — generated artifact path migration design only; no path moves. Safer after Slice D.
-3. **#37 design micro-slice** — next delicate stream seam before coding.
-4. **#51/#46** — deferred until operational-store decision.
+1. **#56 design slice** — generated artifact path migration design only; no path moves. Safer now that #58 always-HTTP bootstrap is closed.
+2. **#37 design micro-slice** — next delicate stream seam before coding.
+3. **#51/#46** — deferred until operational-store decision.
 
 ## Remaining big rocks
 
