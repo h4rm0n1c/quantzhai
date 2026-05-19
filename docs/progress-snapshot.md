@@ -1,6 +1,6 @@
 # QuantZhai Progress Snapshot
 
-Last updated: 2026-05-19 (post-#5/#57 close-out + #56 Slices B/B.1/C-design/C-impl/C.1).
+Last updated: 2026-05-19 (post-#5/#57 close-out + #56 Slices B/B.1/C-design/C-impl/C.1/D-design).
 
 See `docs/current-stocktake.md` for the full point-in-time state summary.
 
@@ -40,8 +40,8 @@ P4 Search config split (#39) — when search work resumes
 BrainCase feature work paused: #53 and #54 are closed.
 Repeated-read v1: COMPLETE (#3/#4/#43 closed; qz_file_signal.py live).
 Config cleanup CLOSED (#5). qz-codex always-HTTP bootstrap CLOSED (#57/#58).
-#56 Slices B/B.1/C-design/C-impl complete. A1 migrated to var/generated/model-inventory.json.
-QZ_MODEL_INVENTORY_CACHE override preserved. A2/A3 not moved. 2592 tests passing.
+#56 Slices B/B.1/C/D-design complete. A1 at var/generated/model-inventory.json.
+D-design: A2→var/generated/codex/qwenzhai-models.json, A3→var/generated/codex/config.toml. No files moved. 2594 tests passing.
 
 ## Area estimates
 
@@ -133,7 +133,7 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 
 ## Immediate next priorities
 
-1. **#56 Slice D-design** — plan A2/A3 migration (var/codex-home/model-catalogs/ and config.toml). Slices A–C-impl complete; A1 at var/generated/.
+1. **#56 Slice D-impl** — physical move of A2/A3. D-design complete: target var/generated/codex/, new codex_generated_dir() helper, no shim, no old-path deletion.
 2. **#37 design micro-slice** — next delicate stream seam before coding.
 3. **#51/#46** — deferred until operational-store decision.
 

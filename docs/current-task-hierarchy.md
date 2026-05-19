@@ -589,7 +589,7 @@ Implementation (Slices D2/D2.1/D3):
 
 See `docs/edge-case-config-contract-plan.md` §qz-codex always-HTTP bootstrap design.
 
-## #56 A1 migrated: generated artifact path migration (Slices A–C-impl)
+## #56 D-design complete: generated artifact path migration (Slices A–D-design)
 
 **Slice A-design:** CLOSED. Inventory/plan complete. No path moves yet.
 
@@ -630,14 +630,30 @@ Key decisions:
 override preserved. Staleness warnings and write_cache() follow the helper.
 No A2/A3 changes. Full suite 2592 tests PASS.
 
-**Slice C.1 (this commit):** CLOSED. A1 migration audit/polish. Table separator
+**Slice C.1 (commit 3ec719e):** CLOSED. A1 migration audit/polish. Table separator
 fix in current-stocktake.md. Stale docs updated. Two focused tests added
 (generated path default, QZ_MODEL_INVENTORY_CACHE override).
 
-Next: Slice D-design — plan A2/A3 migration (coupled artifacts).
-  A2: var/codex-home/model-catalogs/qwenzhai-models.json
-  A3: var/codex-home/config.toml
-  These must move together; assess endpoint/client-config compatibility first.
+**Slice D-design (this commit):** CLOSED. A2/A3 coupling audited. Chosen target: D2.
+
+Key decisions:
+- **A2 target:** `var/generated/codex/qwenzhai-models.json`
+- **A3 target:** `var/generated/codex/config.toml`
+- **Move together** — generate() writes A3 with A2's absolute path; splitting breaks consistency
+- **New helper:** `codex_generated_dir()` → `qz_var_dir() / "generated" / "codex"`
+- **Changed helpers:** `codex_model_catalog_path()` and `codex_config_path()` route through it
+- **Kept deprecated:** `codex_home_dir()` and `codex_model_catalog_dir()` (unchanged return values)
+- **No shim** — after #58, no client reads server A2/A3 paths
+- **No old-path deletion** — `var/codex-home/` stays until user cleans up
+- **No script changes** — qz-codex-common uses client-local CODEX_HOME, not server paths
+- **Staleness names unchanged** — `stale_codex_catalog`, `stale_codex_config`
+
+See `docs/edge-case-config-contract-plan.md` §Slice D-design for full analysis.
+
+Next: Slice D-impl — physical move of A2/A3.
+  Add `codex_generated_dir()` to qz_paths.py.
+  Change `codex_model_catalog_path()` and `codex_config_path()`.
+  Update tests. Validate full suite, staleness, endpoint behaviour.
 
 ## Next implementation prompt: #37 design micro-slice for next delicate stream seam
 
