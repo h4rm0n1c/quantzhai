@@ -1,6 +1,6 @@
 # QuantZhai Progress Snapshot
 
-Last updated: 2026-05-19 (post-#5/#57 close-out + #56 CLOSED — all slices complete).
+Last updated: 2026-05-20 (post-#37/#56 close-out stocktake).
 
 See `docs/current-stocktake.md` for the full point-in-time state summary.
 
@@ -9,17 +9,17 @@ we overall?" without rereading every roadmap.
 
 ## Overall
 
-Current estimate: **93% through stabilisation for the local Codex + Qwen goal**.
+Current estimate: **95% through stabilisation for the local Codex + Qwen goal**.
 
-The 2026-05-15 run added: VRAM telemetry panel live in qz-top with provenance
-labels (#6, closed), full backend recovery system (#47-#50, closed), control-plane
-audit (#44, closed), telemetry doctrine (docs/patterns/provenance-telemetry.md).
+The 2026-05-20 run closed: #37 (stream seam extraction, Slices 1–2J), #56 (generated
+artifact migration, A1/A2/A3 under var/generated/). Major structural work is now done.
 
-The 2026-05-14 run added: qz.profiles.v1, memory_domain plumbing, simplified
-prompts, sandbox/tool-failure telemetry, live stack smoke.
+The 2026-05-19 run closed: #56/#57/#58 (generated artifacts, qz-codex always-HTTP).
 
-The current risk remains the state substrate: SQLite Phase 1 has not been
-implemented. The VRAM and recovery work is complete from QuantZhai's side.
+The 2026-05-18 run closed: #53/#54 (BrainCase), #3/#4/#43 (repeated-read v1).
+
+The remaining risk is the state substrate: SQLite operational store has not been
+designed or implemented. This is the next architectural decision.
 
 Control sheet:
 
@@ -31,16 +31,13 @@ docs/current-stocktake.md
 Current strategic direction:
 
 ```text
-P1 #37 Stream seam extraction — CLOSED (Slices 1–2J complete)
-P2 Config/var/script cleanup (#5) — CLOSED; #57/#58 — CLOSED (always-HTTP qz-codex bootstrap)
-P3 #51/#46 operational-state persistence (deferred until store decision)
-P4 Search config split (#39) — when search work resumes
+P1 #51/#46 Slice A-design — operational store boundary + session identity (NEXT)
+P2 #39 Search config split — when search work resumes
+P3 Repeated-read v2 — after operational-store session identity is defined
 ```
 
-BrainCase feature work paused: #53 and #54 are closed.
-Repeated-read v1: COMPLETE (#3/#4/#43 closed; qz_file_signal.py live).
-Config cleanup CLOSED (#5). qz-codex always-HTTP bootstrap CLOSED (#57/#58).
-#56 CLOSED. All generated artifacts under var/generated/. Stale helpers removed. All acceptance criteria PASS. 2600 tests passing.
+Recently closed: #5, #37, #53, #54, #56, #57, #58, #3/#4/#43.
+2615 tests passing. All generated artifacts under var/generated/.
 
 ## Area estimates
 
@@ -50,9 +47,9 @@ Config cleanup CLOSED (#5). qz-codex always-HTTP bootstrap CLOSED (#57/#58).
 - **Config/model/profile correctness:** 89%
   qz.profiles.v1 is the active format. memory_domain is wired from profile
   config through to request context. Broad config/var cleanup is still deferred.
-- **Streaming reliability:** 81%
-  Streaming/tool lifecycle work is substantially improved. Remaining work is
-  long-running TUI validation and edge-case relay polish.
+- **Streaming reliability:** 85%
+  #37 stream seam closed. StreamHopState + StreamRunState + 6 pure helpers.
+  Remaining side-effect code bounded in place by design.
 - **Tool handling:** 91%
   Sandbox/tool-failure telemetry landed (Slice 1 escalation, Slice 2 native
   tool-output classifier, harness guidance). Repeated-read signalling is planned
@@ -66,11 +63,11 @@ Config cleanup CLOSED (#5). qz-codex always-HTTP bootstrap CLOSED (#57/#58).
   Reasoning-effort prompts simplified. Hop/context pressure signals, compaction
   bridge, and profile eval work are delivered. Repeated-read v1 plan is approved;
   not yet implemented.
-- **State/memory substrate:** 75%
+- **State/memory substrate:** 78%
   BrainCaseDB is the first concrete LimbiCore technology (#53/#54 closed).
   render/recall/write_candidate tools live; operator review and retention CLI live.
   Retention policy enforced via operator prune. No automatic ingestion.
-  Remaining: operational-state store (#51/#46 deferred), #37 stream seam.
+  Remaining: operational-state store (#51/#46 — needs design slice next).
 - **Docs/tests/replay:** 95%
   Docs refreshed post-stabilisation. Active task hierarchy and progress snapshot
   are current. Runtime observability notes describe the live stack smoke and
@@ -132,8 +129,7 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 
 ## Immediate next priorities
 
-1. **Stocktake** — #37 CLOSED. Assess next work: #51 operational-state design, #39 search config split, or general project stocktake.
-3. **#51/#46** — deferred until operational-store decision.
+1. **#51/#46 Slice A-design** — operational store boundary + session identity. Design only. Unblocks recovery state, startup telemetry, repeated-read v2.
 
 ## Remaining big rocks
 
@@ -153,11 +149,13 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 14. ~~BrainCase memory tool API~~ — done (#53 closed); render/recall/write_candidate live.
 15. ~~BrainCase retention/lifetime policy~~ — done (#54 closed); operator prune live.
 16. ~~Repeated-read v1 advisory signal~~ — done (#3/#4/#43 closed); qz_file_signal.py live.
-17. ~~Stream seam extraction Slices 1–2E.1~~ — done (#37 paused); 4 pure helpers extracted.
-18. Streaming reliability — mostly improved; #37 delicate seams remain (design-first).
-19. LLM signal system — repeated-read v1 done; repeated-read v2 blocked on SQLite.
-20. Phase 1 SQLite substrate — parked (#2); BrainCaseDB proven but operational store TBD.
-21. Recovery/backoff state persistence (#51) — after operational-store decision.
+17. ~~Stream seam extraction~~ — done (#37 closed, Slices 1–2J); StreamHopState + StreamRunState + 6 pure helpers.
+18. ~~Generated artifact migration~~ — done (#56 closed); A1/A2/A3 under var/generated/.
+19. Streaming reliability — structurally improved; side-effect residual bounded in place by design.
+20. LLM signal system — repeated-read v1 done; repeated-read v2 blocked on SQLite.
+21. Phase 1 SQLite substrate — parked (#2); BrainCaseDB proven but operational store TBD.
+22. Recovery/backoff state persistence (#51) — after operational-store design (Slice A-design is next).
+23. qz-write-runtime-state replacement (#46) — after operational-store design.
 22. Split proxy into a conventional Python package — later.
 23. Add backend adapter boundary — later.
 24. Later: MCP/app bridge, search packet mode, redaction, run grouping, rendered

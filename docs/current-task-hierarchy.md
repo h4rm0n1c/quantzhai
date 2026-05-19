@@ -674,7 +674,7 @@ for `codex-home` path references updated. Artifact inventory table A2/A3 paths f
 `docs/config-data-path-audit.md` migration note extended to cover A2/A3. 2600 tests PASS.
 #56 closed.
 
-Next: #37 design micro-slice for the next delicate stream seam.
+Next: #51/#46 Slice A-design — operational store boundary and session identity.
 
 ## #37 next stream seam: proxy-local terminal suppression (Slice 2G)
 

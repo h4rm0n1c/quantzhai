@@ -16,7 +16,7 @@ system, a tool-mediated BrainCase memory layer, a live repeated-read advisory
 signal, and a partial stream-seam extraction.
 
 ```text
-Full test suite:         2566 tests passing
+Full test suite:         2615 tests passing
 Live smoke:              qz-live-smoke passes
 Repeated-read smoke:     qz-smoke-repeated-read passes
 BrainCase smoke:         qz-braincase-smoke 12/12 passes
@@ -25,8 +25,9 @@ VRAM panel (qz-top):     live, provenance-labelled, calibrated
 Stream watchdog:         terminal/no-output classifications operational
 BrainCase memory:        braincase.render/recall/write_candidate (#53 closed)
 Repeated-read signal v1: advisory, stateless, input-history-seeded (#3/#4/#43 closed)
-Stream seam (#37):       Slices 1–2F.1 complete; paused before delicate seams
+Stream seam (#37):       CLOSED — StreamHopState + StreamRunState + 6 pure helpers
 Config observability:    /qz/config/effective full source/staleness coverage (#5 closed)
+Generated artifacts:     all A1/A2/A3 under var/generated/ (#56 closed)
 qz-codex bootstrap:      always HTTP via /qz/codex/client-config (#58 closed)
 Docs doctrine:           docs/patterns/provenance-telemetry.md active
 Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
@@ -35,6 +36,14 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 ---
 
 ## 2. Recently completed work
+
+### 2026-05-20 run (#37 close-out + #56 close-out + stocktake)
+
+| Item | What shipped |
+|---|---|
+| #37 Stream seam extraction | CLOSED. Slices 1–2J. StreamHopState, StreamRunState (7 fields), 6 pure helpers. |
+| #56 Generated artifact migration | CLOSED. A1/A2/A3 under var/generated/. codex_home_dir removed. All tests PASS. |
+| #51/#46 operational-state | Next priority: Slice A-design — define operational store boundary and session identity. |
 
 ### 2026-05-19 run (#5 close-out + #57 qz-codex remote bootstrap)
 
@@ -168,15 +177,17 @@ now track. Keep as historical planning record; do not implement from it directly
 ```
 #53 / #54   BrainCase memory + retention                 CLOSED
 #3/#4/#43   Repeated-read v1                             CLOSED
-#37  stream seam extraction Slices 1–2E.1                PAUSED — next seam needs design micro-slice
-  \-> #37 Slice 2F+  delicate seam extraction            needs fresh design before coding
-  \-> #51 recovery state persistence                     deferred / operational-store decision
-  \-> #46 launcher trace removal                         deferred / startup-telemetry
-#5  config cleanup                                       safe any time; good between features
-#39 search config split                                  when search work resumes
-#52 backend allocator metrics                            upstream-blocked
-#8  compaction RFC                                       research; no implementation dependency
-#7  LimbiCore/SQLite planning                            deferred; superseded by #53/#54
+#37  stream seam extraction Slices 1–2J                  CLOSED
+#56  generated artifact migration                        CLOSED
+#57  qz-codex remote bootstrap                           CLOSED
+#58  always-HTTP qz-codex bootstrap                      CLOSED
+#5   config/var/script cleanup                           CLOSED
+#51  recovery state persistence                          deferred / needs operational-store-design slice
+#46  launcher trace removal                              deferred / needs startup-telemetry replacement
+#39  search config split                                 when search work resumes
+#52  backend allocator metrics                           upstream-blocked
+#8   compaction RFC                                      research; no implementation dependency
+#7   LimbiCore/SQLite planning                           deferred; superseded by #53/#54
 Repeated-read v2                                         blocked on SQLite/session identity
 ```
 
@@ -185,42 +196,34 @@ Repeated-read v2                                         blocked on SQLite/sessi
 ## 5. Recommended next work order
 
 ```
-A. #58  Always-HTTP qz-codex bootstrap — CLOSED (slices D2/D2.1/D3)
-        qz-codex always uses HTTP bootstrap; QZ_CODEX_REMOTE removed; server-local
-        CODEX_HOME, codex-config.toml copy, TOML provider parse, POST /qz/models/refresh,
-        and qz-up recovery coupling all removed. CODEX_HOME default: $HOME/.qz-codex/codex-home.
-        See docs/edge-case-config-contract-plan.md §qz-codex always-HTTP bootstrap design.
+A. #58  Always-HTTP qz-codex bootstrap — CLOSED
+B. #56  Generated artifact migration — CLOSED
+C. #37  Stream seam extraction — CLOSED (Slices 1–2J; StreamHopState + StreamRunState + 6 pure helpers)
+D. #53  BrainCase memory tool API — CLOSED
+E. #54  BrainCase retention policy — CLOSED
+F. #5   Config/var/script cleanup — CLOSED
+G. #3/#4/#43  Repeated-read v1 — CLOSED
 
-B. #56  Generated artifact path migration (var/generated/) — CLOSED
-        A1/A2/A3 under var/generated/. Stale helpers removed. All acceptance criteria PASS.
-        See docs/edge-case-config-contract-plan.md §generated artifact path migration design.
+NEXT:
+  #51/#46 Slice A-design — Operational store boundary and session identity design
 
-B. #37  Stream seam: fresh design micro-slice for next delicate seam
-        Slices 1–2F.1 are complete and paused.
-        Remaining candidates are higher-risk. Do not code until a design
-        micro-slice defines the boundary, gaps, and acceptance tests.
-        See §10 Prompt A and docs/stream-reducer-boundary-design.md §9F.
+  Goal:
+    - Define what operational facts go into a lightweight SQLite store
+      (NOT BrainCaseDB — that is for model-visible memory records)
+    - Define what replaces qz-write-runtime-state
+    - Define session/workspace identity boundaries (unblocks repeated-read v2)
+    - Define what stays out of scope
 
-C. #51  Recovery/backoff state persistence
-        Deferred until operational-store decision.
-        BrainCaseDB is NOT the target. Needs a separate lightweight store.
+  Why this is next:
+    - Unblocks #51 (recovery state persistence)
+    - Unblocks #46 (startup-telemetry replacement)
+    - Unblocks repeated-read v2 (session identity needed)
+    - Design only — no database changes in this slice
 
-D. #46  Remove qz-write-runtime-state
-        Deferred until startup-telemetry replacement exists.
-
-E. #39  Search config split
-        When search work resumes.
-
-F. #52  Backend allocator metrics
-        Upstream-blocked. No action needed in QuantZhai.
-
-G. Repeated-read v2
-        Blocked on SQLite substrate and session identity scope.
-        Do not implement before a suitable persistent session key is proven.
-
-H. Optional: live qz-codex remote smoke test
-        #57 is closed via unit/mock-server tests. A real two-host LAN smoke
-        test would validate the path in practice. Manual/environment-dependent.
+  After this:
+    #39  Search config split        — when search work resumes
+    #52  Backend allocator metrics  — upstream-blocked
+    Repeated-read v2                — after operational-store design
 ```
 
 ---
@@ -291,13 +294,12 @@ Repeated-read v1 signal (#3/#4/#43)
   → Do not add persistence, session state, or v2 features without a new issue.
   → V2 is blocked on SQLite/session identity.
 
-#37 safe stream seam helpers (Slices 1–2F.1)
-  → DONE. StreamHopState, StreamDecision, 5 pure decision helpers
-    (incl. stream_timeout_kind combiner).
-  → Paused before delicate seams (tool lifecycle, terminal, proxy-local
-    suppression, continuation/repair).
-  → Do not extract further without a design micro-slice first.
-  → See docs/stream-reducer-boundary-design.md §9F for next-step rationale.
+#37 stream seam extraction
+  → CLOSED. Slices 1–2J complete.
+  → StreamHopState (per-hop), StreamRunState (7 cross-hop fields), 6 pure helpers.
+  → Remaining side-effect locals (sequence, public_trace, working_body, repair)
+    intentionally bounded in place by design. See §9S in stream-reducer-boundary-design.md.
+  → Do not reopen. No decide_stream_event() required.
 
 Config/var/script ownership cleanup (#5)
   → CLOSED. /qz/config/effective: file metadata, source layer/path
