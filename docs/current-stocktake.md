@@ -1,7 +1,7 @@
 # QuantZhai Post-Stabilisation Stocktake
 
-Date: 2026-05-18 (updated — post-BrainCase/#37-helper-run stocktake)
-Status: post-BrainCase/repeated-read/stream-seam stabilisation stocktake.
+Date: 2026-05-19 (updated — post-#5/#57 close-out stocktake)
+Status: post-BrainCase/repeated-read/stream-seam/config-cleanup/qz-codex-remote stocktake.
 
 This document is a rolling point-in-time snapshot. For the live execution order,
 read `docs/current-task-hierarchy.md`. For architecture authority, read
@@ -16,7 +16,7 @@ system, a tool-mediated BrainCase memory layer, a live repeated-read advisory
 signal, and a partial stream-seam extraction.
 
 ```text
-Full test suite:         2465 tests passing
+Full test suite:         2566 tests passing
 Live smoke:              qz-live-smoke passes
 Repeated-read smoke:     qz-smoke-repeated-read passes
 BrainCase smoke:         qz-braincase-smoke 12/12 passes
@@ -25,7 +25,9 @@ VRAM panel (qz-top):     live, provenance-labelled, calibrated
 Stream watchdog:         terminal/no-output classifications operational
 BrainCase memory:        braincase.render/recall/write_candidate (#53 closed)
 Repeated-read signal v1: advisory, stateless, input-history-seeded (#3/#4/#43 closed)
-Stream seam (#37):       Slices 1–2E.1 complete; paused before delicate seams
+Stream seam (#37):       Slices 1–2F.1 complete; paused before delicate seams
+Config observability:    /qz/config/effective full source/staleness coverage (#5 closed)
+qz-codex remote mode:    QZ_CODEX_REMOTE=1 + client-config/model-catalog endpoints (#57 closed)
 Docs doctrine:           docs/patterns/provenance-telemetry.md active
 Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 ```
@@ -33,6 +35,15 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 ---
 
 ## 2. Recently completed work
+
+### 2026-05-19 run (#5 close-out + #57 qz-codex remote bootstrap)
+
+| Item | What shipped |
+|---|---|
+| #5 Config/var/script cleanup | CLOSED. /qz/config/effective: file metadata, source labelling, generated artifact staleness warnings. |
+| #57 qz-codex-common thinning | CLOSED. /qz/codex/client-config + /qz/codex/model-catalog server endpoints. QZ_CODEX_REMOTE=1 launcher remote mode writes local CODEX_HOME atomically with TOML escaping. |
+| #37 Slices 2F + 2F.1 | Stream timeout-kind combiner extracted; co-located helper audit polish. |
+| #56 opened | Generated artifact path migration design (var/generated/) — follow-up from #5. |
 
 ### 2026-05-18 run (BrainCase + repeated-read + #37 stream seam)
 
@@ -79,10 +90,11 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 | # | Title | Classification |
 |---|---|---|
 | #2 | Add optional Phase 1 SQLite storage substrate | **parked** (BrainCaseDB done via #53/#54; #2 may be closed or refocused) |
-| #53 | BrainCase memory tool API | **CLOSED** (Slices A–I.1 complete; 2465 tests) |
-| #54 | BrainCase retention/lifetime policy | **CLOSED** (Slices A–D complete; 2465 tests) |
+| #53 | BrainCase memory tool API | **CLOSED** (Slices A–I.1 complete) |
+| #54 | BrainCase retention/lifetime policy | **CLOSED** (Slices A–D complete) |
 | #3/#4/#43 | Repeated-read v1 (parser, integration, smoke) | **CLOSED** (complete; advisory stateless v1 live) |
-| #37 | Architectural seam extraction plan | **PAUSED** — Slices 1–2E.1 complete; next seam needs design micro-slice |
+| #37 | Architectural seam extraction plan | **PAUSED** — Slices 1–2F.1 complete; next seam needs design micro-slice |
+| #56 | Generated artifact path migration design (var/generated/) | **NEXT** — design-only follow-up from #5 close-out |
 | #51 | Promote recovery/backoff runtime state to SQLite | **deferred** until operational-store decision |
 | #46 | Replace qz-write-runtime-state launcher trace | **deferred** until startup-telemetry replacement |
 | #5 | Config/var/script ownership cleanup | **CLOSED** (#56, #57 opened for migration/thinning follow-ups) |
@@ -112,13 +124,19 @@ integration (qz_proxy_tools.py, qz_responses_stream.py, qz_request_router.py),
 and live smoke (scripts/qz-smoke-repeated-read). Advisory, stateless,
 input-history-seeded. V2 is blocked on SQLite/session identity.
 
-**#37** — PAUSED after Slice 2E.1. Stream seam Slices 1–2E.1 complete:
+**#37** — PAUSED after Slice 2F.1. Stream seam Slices 1–2F.1 complete:
 StreamHopState, StreamDecision, _reasoning_only_abort_reason,
 _should_suppress_duplicate_response_start, _should_inject_hop_budget_signal,
-_should_inject_context_pressure_signal. Remaining candidates (tool lifecycle,
-terminal events, watchdog, proxy-local suppression, continuation/repair) carry
-higher extraction risk. Need a fresh design micro-slice before proceeding.
-See docs/stream-reducer-boundary-design.md.
+_should_inject_context_pressure_signal, stream_timeout_kind. Remaining
+candidates (tool lifecycle, terminal events, proxy-local suppression,
+continuation/repair) carry higher extraction risk. Need a fresh design
+micro-slice before proceeding. See docs/stream-reducer-boundary-design.md.
+
+**#56** — NEXT. Generated artifact path migration design (var/generated/).
+Follow-up from #5 close-out. **Design only first** — inventory current
+generated artifacts and consumers, define compatibility/shim strategy,
+preserve qz-codex local and remote bootstrap, no routing changes, no
+CODEX_HOME breakage. No path moves in the first slice.
 
 **#51** — Recovery backoff state is currently in-memory only. Should be persisted
 once #2 exists. Do not implement before #2.
@@ -163,15 +181,16 @@ Repeated-read v2                                         blocked on SQLite/sessi
 ## 5. Recommended next work order
 
 ```
-A. #37  Stream seam: fresh design micro-slice for next delicate seam
-        Slices 1–2E.1 are complete and paused.
+A. #56  Generated artifact path migration design (var/generated/) — NEXT
+        Direct follow-up from #5/#57 close. Design-only first:
+        inventory artifacts/consumers, define compatibility plan, no path moves.
+        No CODEX_HOME breakage. Preserve qz-codex co-located AND remote modes.
+
+B. #37  Stream seam: fresh design micro-slice for next delicate seam
+        Slices 1–2F.1 are complete and paused.
         Remaining candidates are higher-risk. Do not code until a design
         micro-slice defines the boundary, gaps, and acceptance tests.
         See §10 Prompt A and docs/stream-reducer-boundary-design.md §9F.
-
-B. #5   Config/var/script cleanup
-        Safe any time. Good between larger features. Ongoing.
-        Do not make generated Codex catalog files into routing authority.
 
 C. #51  Recovery/backoff state persistence
         Deferred until operational-store decision.
@@ -189,6 +208,10 @@ F. #52  Backend allocator metrics
 G. Repeated-read v2
         Blocked on SQLite substrate and session identity scope.
         Do not implement before a suitable persistent session key is proven.
+
+H. Optional: live qz-codex remote smoke test
+        #57 is closed via unit/mock-server tests. A real two-host LAN smoke
+        test would validate the path in practice. Manual/environment-dependent.
 ```
 
 ---
@@ -259,11 +282,29 @@ Repeated-read v1 signal (#3/#4/#43)
   → Do not add persistence, session state, or v2 features without a new issue.
   → V2 is blocked on SQLite/session identity.
 
-#37 safe stream seam helpers (Slices 1–2E.1)
-  → DONE. StreamHopState, StreamDecision, 4 pure decision helpers.
-  → Paused before delicate seams (tool lifecycle, terminal, watchdog).
+#37 safe stream seam helpers (Slices 1–2F.1)
+  → DONE. StreamHopState, StreamDecision, 5 pure decision helpers
+    (incl. stream_timeout_kind combiner).
+  → Paused before delicate seams (tool lifecycle, terminal, proxy-local
+    suppression, continuation/repair).
   → Do not extract further without a design micro-slice first.
   → See docs/stream-reducer-boundary-design.md §9F for next-step rationale.
+
+Config/var/script ownership cleanup (#5)
+  → CLOSED. /qz/config/effective: file metadata, source layer/path
+    classification, prompt-file source labelling, generated artifact
+    staleness warnings (stale_model_inventory_cache, stale_codex_catalog,
+    stale_codex_config), stale_against precision.
+  → Follow-ups: #56 (path migration design), #57 (qz-codex thinning).
+  → Do not reopen for var/generated migration — that is #56.
+
+qz-codex remote bootstrap (#57)
+  → CLOSED. Slices A–C2.1. GET /qz/codex/client-config and
+    GET /qz/codex/model-catalog server endpoints. QZ_CODEX_REMOTE=1
+    launcher remote mode writes local CODEX_HOME atomically with
+    TOML-escaped values. Co-located mode unchanged.
+  → Do not reopen unless a real production bug appears.
+  → Optional follow-up: live two-host LAN smoke test (manual).
 ```
 
 ---
@@ -339,17 +380,29 @@ Repeated-read v1 advisory signal (#3/#4/#43):
   stream/non-stream paths, live smoke (scripts/qz-smoke-repeated-read).
   Advisory, stateless, input-history-seeded. No BrainCase writes. No persistence.
 
-#37 stream seam Slices 1–2E.1:
+#37 stream seam Slices 1–2F.1:
   StreamHopState (per-hop state object).
   StreamDecision (vocabulary dataclass).
   _reasoning_only_abort_reason() — pure helper, keyword-only params.
   _should_suppress_duplicate_response_start() — pure helper.
   _should_inject_hop_budget_signal() — pure helper.
   _should_inject_context_pressure_signal() — pure helper.
-  2465 tests. No decide_stream_event() exists. qz_responses_stream.py remains
-  the sole side-effect owner.
+  stream_timeout_kind() — pure helper (no_output/terminal/None combiner).
+  No decide_stream_event() exists. qz_responses_stream.py remains the sole
+  side-effect owner.
 
-Full suite: 2465 tests passing.
+#5 config/var/script cleanup (CLOSED):
+  /qz/config/effective: file metadata, source layer/path classification,
+  prompt-file source labelling, staleness warnings, stale_against precision.
+  Follow-ups: #56 (path migration), #57 (qz-codex thinning).
+
+#57 qz-codex remote bootstrap (CLOSED):
+  GET /qz/codex/client-config — provider/base_url/catalog metadata.
+  GET /qz/codex/model-catalog — generated catalog served to remote clients.
+  QZ_CODEX_REMOTE=1 launcher mode writes local CODEX_HOME atomically with
+  TOML-escaped values. Co-located mode unchanged.
+
+Full suite: 2566 tests passing.
 ```
 
 ### 11.2 What must not be touched without a design micro-slice

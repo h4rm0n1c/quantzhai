@@ -1,6 +1,6 @@
 # QuantZhai Progress Snapshot
 
-Last updated: 2026-05-18 (post-BrainCase/#37-helper-run stocktake).
+Last updated: 2026-05-19 (post-#5/#57 close-out stocktake).
 
 See `docs/current-stocktake.md` for the full point-in-time state summary.
 
@@ -39,12 +39,13 @@ P4 Search config split (#39) — when search work resumes
 
 BrainCase feature work paused: #53 and #54 are closed.
 Repeated-read v1: COMPLETE (#3/#4/#43 closed; qz_file_signal.py live).
-2465 tests passing.
+Config cleanup CLOSED (#5). qz-codex remote bootstrap CLOSED (#57).
+2566 tests passing.
 
 ## Area estimates
 
 - **Core usable stack:** 94%
-  Known-good local flow. Suite is green at 2465 tests.
+  Known-good local flow. Suite is green at 2566 tests.
   Live smoke (`scripts/qz-live-smoke`) validates the end-to-end path reliably.
 - **Config/model/profile correctness:** 89%
   qz.profiles.v1 is the active format. memory_domain is wired from profile
@@ -131,9 +132,10 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 
 ## Immediate next priorities
 
-1. **#37 design micro-slice** — define boundary for next delicate stream seam before coding.
-2. **Config/var cleanup (#5)** — safe any time; good between feature sprints.
+1. **#56 design slice** — generated artifact path migration (var/generated/) design only; no path moves.
+2. **#37 design micro-slice** — define boundary for next delicate stream seam before coding.
 3. **#51/#46** — deferred until operational-store decision.
+4. **Optional:** live qz-codex remote LAN smoke test (manual, validates #57 in real topology).
 
 ## Remaining big rocks
 

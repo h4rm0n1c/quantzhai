@@ -25,6 +25,30 @@ they are not automatic operational logs.
 No automatic ingestion. No clever memory. No cross-domain sharing.
 ```
 
+## Recently completed (2026-05-19 run — #5/#57 close-out)
+
+```text
+Config/var/script cleanup (#5, now closed)
+  - /qz/config/effective: file metadata (mtime/size/sha256_12/hash_skipped)
+  - prompt-file source labelling (referenced list, source_layers, referenced_by)
+  - generated artifact staleness warnings:
+      stale_model_inventory_cache, stale_codex_catalog, stale_codex_config
+  - stale_against precision; close-out audit verdict: CLOSED
+  - Follow-ups: #56 (path migration design), #57 (qz-codex thinning)
+
+qz-codex remote bootstrap (#57, now closed)
+  - GET /qz/codex/client-config — Codex client bootstrap metadata
+  - GET /qz/codex/model-catalog — generated catalog served to remote clients
+  - QZ_CODEX_REMOTE=1 explicit launcher remote mode in qz-codex-common
+  - Writes local CODEX_HOME catalog/config.toml atomically with TOML escaping
+  - Co-located mode unchanged; no API key values written or printed
+  - Verified Codex CLI 0.130.0 model_catalog_json is local-file-only
+
+#37 stream seam Slices 2F + 2F.1 (paused, not closed)
+  - stream_timeout_kind() combiner extracted to qz_stream_watchdog.py
+  - 2566 tests total
+```
+
 ## Recently completed (2026-05-18 run — BrainCase + repeated-read + #37)
 
 ```text
