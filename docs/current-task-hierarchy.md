@@ -709,7 +709,11 @@ def _should_suppress_proxy_local_terminal(
 ) -> bool:
 ```
 
-See `docs/stream-reducer-boundary-design.md §9J` for full acceptance criteria.
+**Slice 2G (this commit):** CLOSED. `_should_suppress_proxy_local_terminal()` extracted.
+4 unit tests added in `ProxyLocalTerminalSuppressionHelperTests`. 2604 tests PASS.
+Outer-loop conditions at ~2021/~2037 untouched. Side-effect block unchanged.
+
+Next: Slice 2G.1 — audit/polish before any further stream seam extraction.
 
 ## Reference: BrainCase Slice completion history
 

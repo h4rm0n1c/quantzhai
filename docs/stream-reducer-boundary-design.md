@@ -1079,6 +1079,37 @@ Not outer-loop StreamRunState bundling.
 
 ---
 
+## 9K. Slice 2G — COMPLETE
+
+`_should_suppress_proxy_local_terminal(event_type, payload, completed_call, is_proxy_local) -> bool`
+added to `proxy/qz_responses_stream.py`.
+
+```text
+Helper location: qz_responses_stream.py, after _should_inject_context_pressure_signal()
+Pure: no I/O, no state mutation, no registry calls
+Calls: is_terminal_stream_event(event_type, payload) from qz_streaming
+Takes: is_proxy_local as precomputed bool from call site
+
+Call site change (qz_responses_stream.py ~line 1795):
+  Before: inline 3-condition check calling is_proxy_local_call() directly
+  After:  _should_suppress_proxy_local_terminal() with is_proxy_local precomputed inline
+
+Side-effect block (emit, clear event_lines, continue): unchanged
+Outer-loop conditions (~lines 2021/2037): untouched
+```
+
+4 unit tests in `ProxyLocalTerminalSuppressionHelperTests`:
+- `test_returns_true_when_all_conditions_met`
+- `test_returns_false_when_event_is_not_terminal`
+- `test_returns_false_when_completed_call_is_none`
+- `test_returns_false_when_not_proxy_local`
+
+2604 tests passing. No behaviour change.
+
+**Recommended next: Slice 2G.1** — audit/polish before any further stream seam extraction.
+
+---
+
 ## Cross-references
 
 - `proxy/qz_responses_stream.py` — current side-effect owner; Slice 1 StreamHopState

@@ -260,6 +260,25 @@ def _should_inject_context_pressure_signal(
     return input_tokens / context_length >= threshold
 
 
+def _should_suppress_proxy_local_terminal(
+    event_type: str,
+    payload: object,
+    completed_call: dict | None,
+    is_proxy_local: bool,
+) -> bool:
+    """Return True if a proxy-local terminal event should be suppressed.
+
+    Pure helper — no I/O, no state mutation.
+    The caller precomputes is_proxy_local via proxy_tool_registry.is_proxy_local_call().
+    Returns False whenever completed_call is None (no active tool call).
+    """
+    return (
+        is_terminal_stream_event(event_type, payload)
+        and completed_call is not None
+        and is_proxy_local
+    )
+
+
 def _reasoning_only_abort_reason(
     *,
     reasoning_only_sample: str,
@@ -1773,10 +1792,12 @@ class ResponsesStreamRuntime:
                             hs.event_lines = []
                             continue
 
-                        if (
-                            is_terminal_stream_event(event_type, payload)
-                            and hs.completed_call
-                            and self.proxy_tool_registry.is_proxy_local_call(hs.completed_call)
+                        if _should_suppress_proxy_local_terminal(
+                            event_type,
+                            payload,
+                            hs.completed_call,
+                            self.proxy_tool_registry.is_proxy_local_call(hs.completed_call)
+                            if hs.completed_call is not None else False,
                         ):
                             self._emit_stream_event_timing(
                                 event_type,

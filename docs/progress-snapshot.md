@@ -132,7 +132,7 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 
 ## Immediate next priorities
 
-1. **#37 Slice 2G** — proxy-local terminal suppression helper. Stocktake complete; seam selected. See docs/stream-reducer-boundary-design.md §9J.
+1. **#37 Slice 2G.1** — audit/polish of proxy-local terminal suppression helper. Slice 2G complete.
 3. **#51/#46** — deferred until operational-store decision.
 
 ## Remaining big rocks

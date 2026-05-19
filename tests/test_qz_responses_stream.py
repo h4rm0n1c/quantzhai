@@ -12,6 +12,7 @@ from proxy.qz_responses_stream import (
     _should_inject_context_pressure_signal,
     _should_inject_hop_budget_signal,
     _should_suppress_duplicate_response_start,
+    _should_suppress_proxy_local_terminal,
 )
 from proxy.qz_telemetry import TelemetryBus
 from proxy.qz_tool_lifecycle import ToolContinuationResult
@@ -3921,6 +3922,46 @@ class ReasoningOnlyAbortHelperTests(unittest.TestCase):
             reasoning_only_char_limit=-1,
         )
         self.assertEqual(result, "timeout")
+
+
+class ProxyLocalTerminalSuppressionHelperTests(unittest.TestCase):
+    """Unit tests for _should_suppress_proxy_local_terminal() — #37 Slice 2G."""
+
+    def test_returns_true_when_all_conditions_met(self):
+        result = _should_suppress_proxy_local_terminal(
+            event_type="response.completed",
+            payload={},
+            completed_call={"call_id": "call_1"},
+            is_proxy_local=True,
+        )
+        self.assertTrue(result)
+
+    def test_returns_false_when_event_is_not_terminal(self):
+        result = _should_suppress_proxy_local_terminal(
+            event_type="response.output_text.delta",
+            payload={},
+            completed_call={"call_id": "call_1"},
+            is_proxy_local=True,
+        )
+        self.assertFalse(result)
+
+    def test_returns_false_when_completed_call_is_none(self):
+        result = _should_suppress_proxy_local_terminal(
+            event_type="response.completed",
+            payload={},
+            completed_call=None,
+            is_proxy_local=True,
+        )
+        self.assertFalse(result)
+
+    def test_returns_false_when_not_proxy_local(self):
+        result = _should_suppress_proxy_local_terminal(
+            event_type="response.completed",
+            payload={},
+            completed_call={"call_id": "call_1"},
+            is_proxy_local=False,
+        )
+        self.assertFalse(result)
 
 
 if __name__ == "__main__":
