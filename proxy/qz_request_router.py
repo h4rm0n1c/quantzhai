@@ -1465,7 +1465,7 @@ class RequestRouter:
             ]
             _model_ids = [mid for mid in _model_ids if mid]
 
-            # Catalog path from qz_paths (QZ_VAR_DIR / codex-home), not CODEX_HOME
+            # Catalog path from qz_paths (QZ_VAR_DIR / generated / codex), not CODEX_HOME
             _catalog_path = str(_codex_model_catalog_path())
 
             self.handler._send_json(200, {

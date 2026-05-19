@@ -669,7 +669,12 @@ risks). Stale path in `scripts/qz-codex` exec error message fixed. 3 new tests c
 4 deprecated tests removed; 1 negative regression test added
 (`test_no_deprecated_codex_home_helpers_exported`). 2600 tests PASS.
 
-Next: #56 close-out audit — confirm acceptance criteria, then close.
+**Close-out (this commit):** CLOSED. All acceptance criteria verified. Proxy docstrings
+for `codex-home` path references updated. Artifact inventory table A2/A3 paths fixed.
+`docs/config-data-path-audit.md` migration note extended to cover A2/A3. 2600 tests PASS.
+#56 closed.
+
+Next: #37 design micro-slice for the next delicate stream seam.
 
 ## Next implementation prompt: #37 design micro-slice for next delicate stream seam
 

@@ -2,9 +2,13 @@
 
 Date: 2026-05-10
 
-> **Note (2026-05-19):** This audit predates the #56 A1 path migration.
-> `var/model-inventory.json` references in this document describe the path
-> **before** Slice C-impl. The current default is `var/generated/model-inventory.json`.
+> **Note (2026-05-19):** This audit predates the #56 generated artifact migration.
+> All three artifact paths moved:
+> - `var/model-inventory.json` → `var/generated/model-inventory.json` (A1, Slice C)
+> - `var/codex-home/model-catalogs/qwenzhai-models.json` → `var/generated/codex/qwenzhai-models.json` (A2, Slice D)
+> - `var/codex-home/config.toml` → `var/generated/codex/config.toml` (A3, Slice D)
+>
+> Old path references in this document are historical. Current paths are under `var/generated/`.
 > See `docs/edge-case-config-contract-plan.md` §generated artifact path migration design.
 
 This is the audit called for by `docs/edge-case-config-contract-plan.md`

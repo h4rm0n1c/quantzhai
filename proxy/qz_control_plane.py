@@ -43,8 +43,8 @@ QZ_CONTROL_PLANE_SCHEMA = "qz.control_plane.status.v1"
 def _codex_catalog_info() -> dict[str, Any]:
     """Return the Codex catalog artifact path and existence state.
 
-    Path comes from qz_paths (QZ_VAR_DIR / codex-home / ...), not CODEX_HOME.
-    CODEX_HOME is qz-codex client-local state after #58.
+    Path comes from qz_paths (QZ_VAR_DIR / generated / codex), not CODEX_HOME.
+    CODEX_HOME is qz-codex client-local state after #58 (#56 Slice D).
     """
     catalog_path = _codex_model_catalog_path()
     return {

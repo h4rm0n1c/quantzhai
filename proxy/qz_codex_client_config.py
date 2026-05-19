@@ -54,11 +54,10 @@ def _catalog_path() -> Path:
     """Return the server-side path to the generated Codex model catalog JSON file.
 
     Uses QZ_VAR_DIR (falling back to <repo_root>/var) and NOT CODEX_HOME.
-    CODEX_HOME is a Codex CLI client launcher concept; in remote mode (Slice C2)
-    the client launcher will set CODEX_HOME to its own local directory. The server
-    endpoint must serve the server-generated catalog regardless of that client
-    setting, and must match the path reported by /qz/config/effective
-    (qz_config_report.py uses var_dir / "codex-home" without CODEX_HOME).
+    CODEX_HOME is a Codex CLI client launcher concept; the client sets its own
+    local CODEX_HOME at $HOME/.qz-codex/codex-home and downloads the catalog
+    from /qz/codex/model-catalog over HTTP. The server path (var/generated/codex/)
+    is independent of the client CODEX_HOME setting (#58, #56 Slice D).
     """
     return _codex_model_catalog_path()
 
