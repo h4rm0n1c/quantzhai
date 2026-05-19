@@ -11,7 +11,7 @@ Usage:
   python3 proxy/qz_codex_catalog.py <inventory_path> <catalog_dst> <config_dst>
 
 Arguments:
-  inventory_path  Path to var/model-inventory.json
+  inventory_path  Path to var/generated/model-inventory.json
   catalog_dst     Output path for the generated Codex catalog JSON
   config_dst      Path to var/codex-home/config.toml (patched in-place)
 """

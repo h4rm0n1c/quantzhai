@@ -518,7 +518,7 @@ class GeneratedArtifactStalenessTests(unittest.TestCase):
                     '{"models":{}}', 1_700_001_000.0,  # newer
                 )
                 self._write_with_mtime(
-                    var_dir / "model-inventory.json",
+                    var_dir / "generated" / "model-inventory.json",
                     '{"models":[]}', 1_700_000_000.0,  # older
                 )
                 payload = effective_config_payload()
@@ -537,7 +537,7 @@ class GeneratedArtifactStalenessTests(unittest.TestCase):
                     '{"models":{}}', 1_700_000_000.0,  # older
                 )
                 self._write_with_mtime(
-                    var_dir / "model-inventory.json",
+                    var_dir / "generated" / "model-inventory.json",
                     '{"models":[]}', 1_700_001_000.0,  # newer
                 )
                 payload = effective_config_payload()
@@ -568,7 +568,7 @@ class GeneratedArtifactStalenessTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 root, var_dir = self._minimal_root(tmp)
                 catalog_dir = var_dir / "codex-home" / "model-catalogs"
-                self._write_with_mtime(var_dir / "model-inventory.json", '{}', 1_700_001_000.0)
+                self._write_with_mtime(var_dir / "generated" / "model-inventory.json", '{}', 1_700_001_000.0)
                 self._write_with_mtime(catalog_dir / "qwenzhai-models.json", '{}', 1_700_000_000.0)
                 payload = effective_config_payload()
                 warning_codes = [w.get("warning") for w in payload["warnings"]]
@@ -582,7 +582,7 @@ class GeneratedArtifactStalenessTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 root, var_dir = self._minimal_root(tmp)
                 catalog_dir = var_dir / "codex-home" / "model-catalogs"
-                self._write_with_mtime(var_dir / "model-inventory.json", '{}', 1_700_000_000.0)
+                self._write_with_mtime(var_dir / "generated" / "model-inventory.json", '{}', 1_700_000_000.0)
                 self._write_with_mtime(catalog_dir / "qwenzhai-models.json", '{}', 1_700_001_000.0)
                 payload = effective_config_payload()
                 warning_codes = [w.get("warning") for w in payload["warnings"]]
@@ -641,7 +641,7 @@ class GeneratedArtifactStalenessTests(unittest.TestCase):
                     root / "config" / "default" / "model-overrides.json",
                     '{"models":{}}', 1_700_001_000.0,
                 )
-                self._write_with_mtime(var_dir / "model-inventory.json", '{}', 1_700_000_000.0)
+                self._write_with_mtime(var_dir / "generated" / "model-inventory.json", '{}', 1_700_000_000.0)
                 payload = effective_config_payload()
                 stale_warns = [w for w in payload["warnings"] if w.get("warning") == "stale_model_inventory_cache"]
                 self.assertEqual(len(stale_warns), 1)
@@ -663,7 +663,7 @@ class GeneratedArtifactStalenessTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 root, var_dir = self._minimal_root(tmp)
                 catalog_dir = var_dir / "codex-home" / "model-catalogs"
-                self._write_with_mtime(var_dir / "model-inventory.json", '{}', 1_700_001_000.0)
+                self._write_with_mtime(var_dir / "generated" / "model-inventory.json", '{}', 1_700_001_000.0)
                 self._write_with_mtime(catalog_dir / "qwenzhai-models.json", '{}', 1_700_000_000.0)
                 payload = effective_config_payload()
                 paths = {item["name"]: item for item in payload["paths"]}
@@ -715,7 +715,7 @@ class GeneratedArtifactStalenessTests(unittest.TestCase):
                     root / "config" / "default" / "model-overrides.json",
                     '{"models":{}}', 1_700_001_000.0,
                 )
-                self._write_with_mtime(var_dir / "model-inventory.json", '{}', 1_700_000_000.0)
+                self._write_with_mtime(var_dir / "generated" / "model-inventory.json", '{}', 1_700_000_000.0)
                 payload = effective_config_payload()
                 stale_warns = [w for w in payload["warnings"] if w.get("warning") == "stale_model_inventory_cache"]
                 self.assertEqual(len(stale_warns), 1)
@@ -738,7 +738,7 @@ class GeneratedArtifactStalenessTests(unittest.TestCase):
                     root / "config" / "user" / "model-overrides.json",
                     '{"models":{}}', 1_700_001_000.0,
                 )
-                self._write_with_mtime(var_dir / "model-inventory.json", '{}', 1_700_000_000.0)
+                self._write_with_mtime(var_dir / "generated" / "model-inventory.json", '{}', 1_700_000_000.0)
                 payload = effective_config_payload()
                 stale_warns = [w for w in payload["warnings"] if w.get("warning") == "stale_model_inventory_cache"]
                 self.assertEqual(len(stale_warns), 1)
@@ -758,7 +758,7 @@ class GeneratedArtifactStalenessTests(unittest.TestCase):
                 self._write_with_mtime(user_overrides, '{"models":{}}', 1_700_001_000.0)
                 # default override absent
                 os.environ["QZ_MODEL_OVERRIDES"] = str(user_overrides)
-                self._write_with_mtime(var_dir / "model-inventory.json", '{}', 1_700_000_000.0)
+                self._write_with_mtime(var_dir / "generated" / "model-inventory.json", '{}', 1_700_000_000.0)
                 payload = effective_config_payload()
                 stale_warns = [w for w in payload["warnings"] if w.get("warning") == "stale_model_inventory_cache"]
                 self.assertEqual(len(stale_warns), 1)
@@ -773,7 +773,7 @@ class GeneratedArtifactStalenessTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 root, var_dir = self._minimal_root(tmp)
                 # inventory exists but catalog does not
-                self._write_with_mtime(var_dir / "model-inventory.json", '{}', 1_700_001_000.0)
+                self._write_with_mtime(var_dir / "generated" / "model-inventory.json", '{}', 1_700_001_000.0)
                 payload = effective_config_payload()
                 warning_codes = [w.get("warning") for w in payload["warnings"]]
                 self.assertIn("missing_codex_catalog", warning_codes)

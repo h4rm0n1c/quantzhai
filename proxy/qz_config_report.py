@@ -439,7 +439,7 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
         _record("profiles_example", root / "config" / "example" / "profiles.json", source_layer="tracked_example", classification="example_config", active=os.environ.get("QZ_LOAD_EXAMPLE_MODEL_OVERRIDES", "").strip().lower() in {"1", "true", "yes", "on"}),
         _record("profiles_user", root / "config" / "user" / "profiles.json", source_layer="user_override", classification="local_config"),
         _record("profiles_user_dir", root / "config" / "user" / "profiles", source_layer="user_override", classification="local_config"),
-        _record("model_inventory_cache", inventory, source_layer="generated", classification="generated_inventory", env_var="QZ_MODEL_INVENTORY_CACHE", default=str(var_dir / "model-inventory.json")),
+        _record("model_inventory_cache", inventory, source_layer="generated", classification="generated_inventory", env_var="QZ_MODEL_INVENTORY_CACHE", default=str(var_dir / "generated" / "model-inventory.json")),
         _record("codex_config_template", root / "config" / "example" / "codex-config.toml", source_layer="tracked_example", classification="example_codex_config"),
         _record("codex_catalog_example", root / "config" / "example" / "qwenzhai-models.json", source_layer="tracked_example", classification="example_codex_catalog"),
         _record("benchmark_prompts_default", root / "config" / "default" / "benchmark-prompts.json", source_layer="tracked_default", classification="benchmark_fixture"),

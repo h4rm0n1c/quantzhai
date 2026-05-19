@@ -60,7 +60,7 @@ if [[ -z "${QZ_MODEL_OVERRIDES:-}" ]]; then
 else
   export QZ_MODEL_OVERRIDES
 fi
-export QZ_MODEL_INVENTORY_CACHE="${QZ_MODEL_INVENTORY_CACHE:-$QZ_ROOT/var/model-inventory.json}"
+export QZ_MODEL_INVENTORY_CACHE="${QZ_MODEL_INVENTORY_CACHE:-$QZ_ROOT/var/generated/model-inventory.json}"
 export QZ_MODEL_STATE_PATH="${QZ_MODEL_STATE_PATH:-$QZ_ROOT/var/model-state.json}"
 export QZ_BACKEND_STATE_PATH="${QZ_BACKEND_STATE_PATH:-$QZ_ROOT/var/backend-state.json}"
 export QZ_RUNTIME_STATE_PATH="${QZ_RUNTIME_STATE_PATH:-$QZ_ROOT/var/run/qz-runtime-state.json}"

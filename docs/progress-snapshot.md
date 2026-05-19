@@ -40,8 +40,8 @@ P4 Search config split (#39) — when search work resumes
 BrainCase feature work paused: #53 and #54 are closed.
 Repeated-read v1: COMPLETE (#3/#4/#43 closed; qz_file_signal.py live).
 Config cleanup CLOSED (#5). qz-codex always-HTTP bootstrap CLOSED (#57/#58).
-#56 Slice B (path helpers) + B.1 (CODEX_HOME audit) CLOSED.
-2592 tests passing.
+#56 Slice B (path helpers) + B.1 (CODEX_HOME audit) + C-design (first migration target) CLOSED.
+2592 tests passing. No files moved. No runtime changes.
 
 ## Area estimates
 
@@ -133,7 +133,7 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 
 ## Immediate next priorities
 
-1. **#56 Slice C-design** — first physical migration target / compatibility plan. Slices A–B.1 complete.
+1. **#56 Slice C-impl** — physical move of A1 (model-inventory.json → var/generated/). Slice C-design complete.
 2. **#37 design micro-slice** — next delicate stream seam before coding.
 3. **#51/#46** — deferred until operational-store decision.
 

@@ -142,7 +142,8 @@ class GenerateIntegrationTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _write_inventory(self, models):
-        path = self.root / "var" / "model-inventory.json"
+        path = self.root / "var" / "generated" / "model-inventory.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"models": models}), encoding="utf-8")
         return path
 

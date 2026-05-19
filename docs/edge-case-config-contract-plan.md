@@ -2643,12 +2643,221 @@ Design for path helper slice:
 - No new endpoints
 - No changes to scripts (qz-up, qz-down, qz-codex-common)
 
-### Recommended next slices
+### Slice C-design (completed 2026-05-19) — first physical migration target
 
-1. **Slice B: Path helper abstraction** — add `proxy/qz_paths.py` module, update server-side references, no physical path moves
-2. **Slice C: Physical move of A1** — `var/model-inventory.json` to `var/generated/model-inventory.json`
-3. **Slice D: Physical move of A2** — `var/codex-home/model-catalogs/qwenzhai-models.json` to `var/generated/codex/model-catalogs/qwenzhai-models.json`
-4. **Slice E: var/codex-home/config.toml decision** — deprecate or keep as server-internal view; no client impact after #58
+**Status:** design only — no runtime implementation, no files moved.
+
+This section defines the first physical generated-artifact migration target
+and the compatibility plan. It follows Slice B (path-helper abstraction) and
+Slice B.1 (CODEX_HOME/server-path audit).
+
+---
+
+#### 1. Candidate comparison
+
+The 3 in-scope artifacts from Slice A-design:
+
+| Artifact | Current path | Helper | Coupling | Migration risk |
+|---|---|---|---|---|
+| **A1** | `var/model-inventory.json` | `model_inventory_path()` | Single artifact, env override supported | **Low** |
+| **A2** | `var/codex-home/model-catalogs/qwenzhai-models.json` | `codex_model_catalog_path()` | Coupled to A3, endpoint consumers | **Medium** |
+| **A3** | `var/codex-home/config.toml` | `codex_config_path()` | Coupled to A2, client launcher path | **Medium** |
+
+**Producer/consumer summary for A1:**
+
+- **Producer:** `ModelCatalog.refresh()` → `write_cache()`, `ModelCatalog.__init__()` → `refresh()`, `ModelCatalog.select()` (all in `qz_model_catalog.py`)
+- **Consumers:** `qz_codex_catalog.generate()`, `_refresh_codex_catalog()`, `/qz/config/effective`, CLI scan/resolve/list
+- **Current helper:** `model_inventory_path()` in `qz_paths.py`
+- **Env override:** `QZ_MODEL_INVENTORY_CACHE` (proven, tested)
+- **Stale/missing warning:** `stale_model_inventory_cache` (advisory)
+- **After #58:** qz-codex clients never read this file — safe to move server-internal
+
+**A2/A3 coupling assessment:**
+
+- Both written atomically by `qz_codex_catalog.generate()` in one call
+- Same staleness chain: A2 depends on A1, A3 depends on A2
+- Endpoint `/qz/codex/model-catalog` reads A2 — must keep working during migration
+- `/qz/config/effective` reports both — path auto-updates via helpers
+
+---
+
+#### 2. Chosen first target: Option C1 — migrate A1 first
+
+**Decision:** Move `var/model-inventory.json` → `var/generated/model-inventory.json` first.
+
+**Rationale:**
+
+- Single artifact, lowest migration risk
+- Already behind `model_inventory_path()` helper — change is one helper return value
+- All consumers use the helper or `QZ_MODEL_INVENTORY_CACHE` env override
+- After #58, no qz-codex client reads this file — zero client impact
+- Existing `QZ_MODEL_INVENTORY_CACHE` env override is the proven escape hatch
+- Rollback is trivial: change helper back, or use env override
+- Good proof of the "change helper → all consumers follow" strategy
+- A2/A3 are coupled and should move together in a later slice
+
+**Rejected alternatives:**
+
+- **C2 (A2/A3 together):** Higher risk — touches refresh, client-config, model-catalog
+  endpoint, config report, control plane. Better done after A1 proves the approach.
+- **C3 (no physical migration):** Does not complete #56 intent.
+
+---
+
+#### 3. Proposed new path
+
+```
+old:  var/model-inventory.json
+new:  var/generated/model-inventory.json
+```
+
+**Helper behaviour:**
+
+- `model_inventory_path()` in `qz_paths.py` returns new path by default
+- Helper does NOT create parent directories — that remains the producer's
+  responsibility (`write_cache()` already calls `.parent.mkdir(parents=True, exist_ok=True)`)
+- No symlink shim from old to new path
+- No automatic old-path deletion on first migration
+- No temporary read fallback: all runtime consumers use the helper
+
+**When old file exists and new file is missing (first upgrade):**
+
+- The operator must run `POST /qz/models/refresh` to regenerate inventory at new path
+- No automatic migration of old file content — inventory is a cache, not a durable record
+- Add advisory `old_path_lingers` warning in `/qz/config/effective` if old path still
+  exists AND new path also exists (future implementation option, not required for move)
+
+---
+
+#### 4. QZ_MODEL_INVENTORY_CACHE override handling
+
+- If `QZ_MODEL_INVENTORY_CACHE` is set, it still wins over the helper default
+- If unset, helper returns new path after migration
+- `/qz/config/effective` reports the effective path (env override or default)
+- Tests must cover:
+  - Env override set → override path used
+  - Env override unset → new default path used
+  - Both old and new paths are reported correctly
+- No change to existing `QZ_MODEL_INVENTORY_CACHE` semantics
+
+---
+
+#### 5. Staleness warning plan
+
+- Warning name `stale_model_inventory_cache` does NOT change
+- Warning path field auto-updates when helper returns new path
+- Staleness condition unchanged: compare override manifest mtimes against
+  model inventory cache mtime
+- `_artifact_staleness_check()` in `qz_config_report.py` already works with
+  the path from `_model_inventory_path()` — no logic change needed
+- Missing inventory warning behaviour unchanged
+
+---
+
+#### 6. Consumer compatibility audit
+
+All A1 consumers use the helper or env override — no code changes needed
+beyond the helper return value:
+
+| Consumer | Current path source | Auto-update on helper change? |
+|---|---|---|
+| `qz_model_catalog.write_cache()` | `_model_inventory_path()` import | Yes |
+| `ModelCatalog.cache_path` | `_model_inventory_path()` in `__init__`, updated by `write_cache()` return | Yes |
+| `qz_config_report.effective_config_payload()` | `_model_inventory_path()` import + `QZ_MODEL_INVENTORY_CACHE` | Yes |
+| `qz_request_router._refresh_codex_catalog()` | `_model_inventory_path()` import + `QZ_MODEL_INVENTORY_CACHE` fallback | Yes |
+| CLI main() | Not direct — uses `write_cache()` which returns cache path | Yes |
+| `tests/test_qz_config_report.py` staleness tests | Helper via effective_config_payload | Yes |
+
+**No additional compatibility work needed.** The path-helper abstraction (Slice B)
+was designed for exactly this: change one helper, all consumers follow.
+
+---
+
+#### 7. Test plan for future implementation slice (Slice C-impl or D)
+
+Exact tests a future slice should add to `tests/test_qz_paths.py`:
+
+```text
+test_model_inventory_path_moves_to_var_generated
+  model_inventory_path() returns qz_var_dir() / "generated" / "model-inventory.json"
+
+test_model_inventory_writer_creates_var_generated_parent
+  write_cache() creates var/generated/ parent when writing to new path
+
+test_model_catalog_uses_new_inventory_path_by_default
+  ModelCatalog.cache_path defaults to new path
+
+test_qz_model_inventory_cache_override_still_wins
+  QZ_MODEL_INVENTORY_CACHE set → helper returns override, not new default
+
+test_config_effective_reports_new_inventory_path
+  /qz/config/effective model_inventory_cache path shows new path
+
+test_stale_model_inventory_cache_warning_still_works
+  staleness warning fires with updated path
+
+test_refresh_codex_catalog_reads_new_inventory_path
+  _refresh_codex_catalog() resolves inventory via helper
+
+test_no_var_model_inventory_literal_in_proxy_runtime
+  grep confirms no "var/model-inventory.json" literal in proxy/*.py
+
+test_old_path_not_created_by_default
+  after refresh with new path, old var/model-inventory.json does not exist
+
+test_full_suite_passes
+  python3 -m unittest discover -s tests passes
+```
+
+---
+
+#### 8. Rollback / failure plan
+
+| Scenario | Behaviour | Recovery |
+|---|---|---|
+| New path missing | Inventory regenerated on next `POST /qz/models/refresh` | Operator calls refresh |
+| Old path exists after migration | Advisory only — no automatic deletion | Manual cleanup if desired |
+| Old path exists, new path missing | Old file is ignored — operator should refresh | Refresh creates new path |
+| `QZ_MODEL_INVENTORY_CACHE` set | Override wins — old or custom path used | Unset env var to use new default |
+| Migration causes unexpected failure | Change `model_inventory_path()` back to old path | Full backout is one line change |
+
+**No automatic deletion of old path in first migration.** Add advisory warning
+later (future slice) if old path exists and new path exists.
+
+---
+
+#### 9. Non-goals
+
+```text
+- No physical file moves in Slice C-design (this section is design only)
+- No symlink shim
+- No automatic old-path deletion
+- No A2 or A3 migration (deferred to later slice)
+- No var/generated/ directory created at runtime by this design
+- No Codex client changes (impossible — qz-codex reads via HTTP after #58)
+- No rename of model slugs, profile slugs, or Codex-visible names
+- No routing changes
+- No BrainCase/LimbiCore changes
+- No operational persistence (#51/#46)
+- No stream work (#37)
+- No proxy or endpoint behaviour changes
+- No qz-codex-common changes
+- No qz-up/qz-down changes
+```
+
+---
+
+### Recommended next slices (updated)
+
+1. ~~**Slice B: Path helper abstraction** — COMPLETE (commit eff2555)~~
+2. ~~**Slice B.1: CODEX_HOME/server-path audit** — COMPLETE~~
+3. ~~**Slice C-design: First migration target selection** — COMPLETE (this section)~~
+4. **Slice C-impl: Physical move of A1** — `var/model-inventory.json` → `var/generated/model-inventory.json`
+   - Change `model_inventory_path()` return value
+   - No symlink shim, no old-path deletion
+   - Validate: full suite passes, staleness warnings intact, env override works
+5. **Slice D-design: A2/A3 migration plan** — assess coupling, define compatibility for moving `var/codex-home/model-catalogs/` and `var/codex-home/config.toml` together
+6. **Slice E: var/codex-home/config.toml decision** — deprecate or keep as server-internal view; no client impact after #58
 
 ## Next steps
 

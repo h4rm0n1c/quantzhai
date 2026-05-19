@@ -54,7 +54,7 @@ class QzPathsDefaultTests(unittest.TestCase):
         self.assertEqual(qz_var_dir(), root / "var")
 
     def test_model_inventory_path_default_matches_current_var_path(self):
-        expected = qz_var_dir() / "model-inventory.json"
+        expected = qz_var_dir() / "generated" / "model-inventory.json"
         self.assertEqual(model_inventory_path(), expected)
 
     def test_codex_home_dir_default_matches_current_var_path(self):
@@ -95,7 +95,7 @@ class QzPathsEnvOverrideTests(unittest.TestCase):
             custom_var.mkdir()
             os.environ["QZ_VAR_DIR"] = str(custom_var)
             self.assertEqual(qz_var_dir(), custom_var)
-            self.assertEqual(model_inventory_path(), custom_var / "model-inventory.json")
+            self.assertEqual(model_inventory_path(), custom_var / "generated" / "model-inventory.json")
             self.assertEqual(codex_home_dir(), custom_var / "codex-home")
             self.assertEqual(codex_model_catalog_path(), custom_var / "codex-home" / "model-catalogs" / "qwenzhai-models.json")
             self.assertEqual(codex_config_path(), custom_var / "codex-home" / "config.toml")

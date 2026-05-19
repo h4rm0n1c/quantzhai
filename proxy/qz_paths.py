@@ -18,7 +18,7 @@ def qz_var_dir() -> Path:
 
 
 def model_inventory_path() -> Path:
-    return qz_var_dir() / "model-inventory.json"
+    return qz_var_dir() / "generated" / "model-inventory.json"
 
 
 def codex_home_dir() -> Path:

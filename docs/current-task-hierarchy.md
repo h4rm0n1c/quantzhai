@@ -589,7 +589,7 @@ Implementation (Slices D2/D2.1/D3):
 
 See `docs/edge-case-config-contract-plan.md` §qz-codex always-HTTP bootstrap design.
 
-## #56 design complete: generated artifact path migration (Slices A–B.1)
+## #56 design complete: generated artifact path migration (Slices A–C-design)
 
 **Slice A-design:** CLOSED. Inventory/plan complete. No path moves yet.
 
@@ -616,7 +616,22 @@ Doctrine confirmed: CODEX_HOME is client-local qz-codex state.
 Server/proxy generated artifact paths come from qz_paths / QZ_VAR_DIR.
 No physical file moves. No var/generated/ created.
 
-Next slice: C-design — first physical migration target / compatibility plan.
+**Slice C-design (this commit):** CLOSED. First migration target selected and
+compatibility plan defined. See `docs/edge-case-config-contract-plan.md`
+§Slice C-design for full analysis.
+
+Key decisions:
+- **Chosen target:** A1 (`var/model-inventory.json`) → `var/generated/model-inventory.json`
+- Strategy: change one helper return value, all consumers follow
+- No symlink shim, no old-path deletion, QZ_MODEL_INVENTORY_CACHE preserved
+- A2/A3 migration deferred to Slice D-design (coupled artifacts)
+- 10 future implementation tests specified
+- Full design doc added to edge-case config plan
+
+Next implementation slice:
+  **Slice C-impl:** Physical move of A1 — var/model-inventory.json → var/generated/model-inventory.json
+  Change `model_inventory_path()` return value. Validate full suite, staleness, env override.
+  No old-path deletion. No A2/A3 changes.
 
 ## Next implementation prompt: #37 design micro-slice for next delicate stream seam
 
