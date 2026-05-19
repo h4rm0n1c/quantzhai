@@ -3934,6 +3934,11 @@ class StreamRunStateTests(unittest.TestCase):
         self.assertFalse(rs.sent_terminal)
         self.assertFalse(rs.sent_done)
 
+    def test_fresh_returns_new_instance_each_time(self):
+        rs1 = StreamRunState.fresh()
+        rs2 = StreamRunState.fresh()
+        self.assertIsNot(rs1, rs2)
+
     def test_fields_are_independent_between_instances(self):
         rs1 = StreamRunState.fresh()
         rs2 = StreamRunState.fresh()

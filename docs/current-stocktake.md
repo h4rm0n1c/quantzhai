@@ -125,17 +125,15 @@ integration (qz_proxy_tools.py, qz_responses_stream.py, qz_request_router.py),
 and live smoke (scripts/qz-smoke-repeated-read). Advisory, stateless,
 input-history-seeded. V2 is blocked on SQLite/session identity.
 
-**#37** — Slices 1–2H-impl complete. Next: Slice 2H.1 audit/polish.
+**#37** — Slices 1–2H.1 complete. Paused before next seam design.
 
-Completed helpers: StreamHopState, StreamDecision,
-_reasoning_only_abort_reason, _should_suppress_duplicate_response_start,
+Completed: StreamHopState, StreamDecision, pure helpers through 2G.1
+(_reasoning_only_abort_reason, _should_suppress_duplicate_response_start,
 _should_inject_hop_budget_signal, _should_inject_context_pressure_signal,
-stream_timeout_kind, _should_suppress_proxy_local_terminal. No decide_stream_event().
-No tool lifecycle/terminal/continuation extraction. 2605 tests passing.
-
-Completed: StreamHopState, StreamDecision, all pure helpers through 2G.1,
-StreamRunState (terminal flags only: sent_response_start, sent_terminal, sent_done).
-No sequence/public_trace/working_body moved. No decide_stream_event(). 2608 tests passing.
+stream_timeout_kind, _should_suppress_proxy_local_terminal),
+StreamRunState (terminal flags only). Audit confirmed rs created once per run,
+no extra fields moved, timeout handler signatures unchanged. No decide_stream_event().
+2609 tests passing.
 
 **#56** — CLOSED. Generated artifact path migration (var/generated/). Slices A–E + close-out complete.
 

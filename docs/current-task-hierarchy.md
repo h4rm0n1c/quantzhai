@@ -739,7 +739,12 @@ See `docs/stream-reducer-boundary-design.md §9M` for full inventory and accepta
 replaced with `rs = StreamRunState.fresh()`. All uses updated to `rs.*`.
 3 unit tests in `StreamRunStateTests`. 2608 tests PASS. No behaviour change.
 
-Next: Slice 2H.1 — audit/polish.
+**Slice 2H.1 (this commit):** CLOSED. Audit clean. `rs` confirmed outside hop loop,
+all three terminal flag reads/writes correct, timeout handlers receive values not rs object,
+no extra fields moved. One identity test added (`test_fresh_returns_new_instance_each_time`).
+2609 tests PASS. No behaviour change.
+
+Next: fresh design micro-slice before any further stream seam extraction.
 
 ## Reference: BrainCase Slice completion history
 

@@ -1403,6 +1403,41 @@ output_index_offset, summary_started, final_usage, tool lifecycle state.
 
 ---
 
+## 9O. Slice 2H.1 — COMPLETE
+
+Audit of `StreamRunState` extraction and `run()` call sites.
+
+**Audit results:**
+
+- `rs = StreamRunState.fresh()` confirmed at line 1353, outside the for-hop loop.
+  Not recreated inside any hop iteration — cross-hop persistence is correct.
+- All three terminal flag reads (`rs.sent_terminal`, `rs.sent_done`,
+  `rs.sent_response_start`) confirmed to replace the original bare locals in
+  exactly the same branches and conditions.
+- `_finish_no_output_timeout()`, `_finish_terminal_timeout_after_output()`, and
+  `_merge_manual_stream_observation()` confirmed to receive keyword arguments
+  `sent_terminal=rs.sent_terminal` / `sent_done=rs.sent_done` — no signature change.
+- Method-internal uses of `sent_terminal` / `sent_done` as parameter names are
+  inside helper function bodies, not `run()`. Correct.
+- Confirmed `StreamRunState` has exactly three fields. No extra fields moved.
+- `sequence`, `public_trace`, `working_body`, `repair_hops_used`,
+  `pending_repair_hop_index`, `output_index_offset`, `summary_started`,
+  `final_usage`, `repeated_read_state`, `seen_signatures`, `counters` all remain
+  as locals in `run()`.
+- No `decide_stream_event()`. No tool lifecycle / terminal rendering /
+  continuation/repair extraction.
+
+**Fix:** None — audit clean.
+
+**Test added:** `test_fresh_returns_new_instance_each_time` — asserts `rs1 is not rs2`
+as an explicit identity regression guard.
+
+2609 tests passing. No behaviour change.
+
+**Recommended next: fresh design micro-slice before any further stream seam extraction.**
+
+---
+
 ## Cross-references
 
 - `proxy/qz_responses_stream.py` — current side-effect owner; Slice 1 StreamHopState
