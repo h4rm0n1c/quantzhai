@@ -23,6 +23,11 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+try:
+    from .qz_paths import codex_model_catalog_path as _codex_model_catalog_path
+except ImportError:
+    from qz_paths import codex_model_catalog_path as _codex_model_catalog_path
+
 CODEX_CLIENT_CONFIG_SCHEMA = "qz.codex.client_config.v1"
 CODEX_MODEL_CATALOG_FILENAME = "qwenzhai-models.json"
 
@@ -55,16 +60,7 @@ def _catalog_path() -> Path:
     setting, and must match the path reported by /qz/config/effective
     (qz_config_report.py uses var_dir / "codex-home" without CODEX_HOME).
     """
-    root_raw = os.environ.get("QZ_ROOT")
-    if root_raw:
-        root = Path(root_raw).expanduser().resolve()
-    else:
-        root = Path(__file__).resolve().parents[1]
-
-    var_raw = os.environ.get("QZ_VAR_DIR")
-    var_dir = Path(var_raw).expanduser() if var_raw else root / "var"
-
-    return var_dir / "codex-home" / "model-catalogs" / CODEX_MODEL_CATALOG_FILENAME
+    return _codex_model_catalog_path()
 
 
 def _catalog_file_meta(path: Path) -> Dict[str, Any]:

@@ -6,8 +6,22 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 try:
+    from .qz_paths import (
+        codex_config_path as _codex_config_path,
+        codex_home_dir as _codex_home_dir,
+        codex_model_catalog_path as _codex_model_catalog_path,
+        model_inventory_path as _model_inventory_path,
+        qz_var_dir as _qz_var_dir,
+    )
     from .qz_runtime_io import capture_policy
 except ImportError:
+    from qz_paths import (
+        codex_config_path as _codex_config_path,
+        codex_home_dir as _codex_home_dir,
+        codex_model_catalog_path as _codex_model_catalog_path,
+        model_inventory_path as _model_inventory_path,
+        qz_var_dir as _qz_var_dir,
+    )
     from qz_runtime_io import capture_policy
 
 
@@ -373,13 +387,12 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
 
     model_dir = Path(os.environ.get("QZ_MODEL_DIR", str(var_dir / "models"))).expanduser()
     model_overrides = Path(os.environ.get("QZ_MODEL_OVERRIDES", str(root / "config" / "user" / "model-overrides.json"))).expanduser()
-    inventory = Path(os.environ.get("QZ_MODEL_INVENTORY_CACHE", str(var_dir / "model-inventory.json"))).expanduser()
+    inventory = Path(os.environ.get("QZ_MODEL_INVENTORY_CACHE", str(_model_inventory_path()))).expanduser()
     model_state = Path(os.environ.get("QZ_MODEL_STATE_PATH", str(var_dir / "model-state.json"))).expanduser()
     backend_state = Path(os.environ.get("QZ_BACKEND_STATE_PATH", str(var_dir / "backend-state.json"))).expanduser()
     runtime_state = Path(os.environ.get("QZ_RUNTIME_STATE_PATH", str(var_dir / "run" / "qz-runtime-state.json"))).expanduser()
-    codex_home = var_dir / "codex-home"
-    codex_catalog_path = codex_home / "model-catalogs" / "qwenzhai-models.json"
-    codex_config_path = codex_home / "config.toml"
+    codex_catalog_path = _codex_model_catalog_path()
+    codex_config_path = _codex_config_path()
 
     policy_path = getattr(handler, "searxng_policy_path", None) if handler is not None else None
     capabilities_path = getattr(handler, "searxng_capabilities_path", None) if handler is not None else None

@@ -15,6 +15,13 @@ REASONING_STREAM_FORMATS = {"raw", "summary", "hidden"}
 try:
     from .qz_codex_client_config import codex_client_config_payload, codex_model_catalog_content
     from .qz_config_report import effective_config_payload
+    from .qz_paths import (
+        codex_config_path as _codex_config_path,
+        codex_home_dir as _codex_home_dir,
+        codex_model_catalog_path as _codex_model_catalog_path,
+        model_inventory_path as _model_inventory_path,
+        qz_var_dir as _qz_var_dir,
+    )
     from .qz_telemetry import TELEMETRY_RECENT_SCHEMA, TELEMETRY_REQUEST_SCHEMA
     from .qz_proxy_config import CURRENT_API_ENDPOINTS, LEGACY_API_ENDPOINTS, api_contract_payload
     from .qz_responses import (
@@ -63,6 +70,13 @@ try:
 except ImportError:
     from qz_codex_client_config import codex_client_config_payload, codex_model_catalog_content
     from qz_config_report import effective_config_payload
+    from qz_paths import (
+        codex_config_path as _codex_config_path,
+        codex_home_dir as _codex_home_dir,
+        codex_model_catalog_path as _codex_model_catalog_path,
+        model_inventory_path as _model_inventory_path,
+        qz_var_dir as _qz_var_dir,
+    )
     from qz_telemetry import TELEMETRY_RECENT_SCHEMA, TELEMETRY_REQUEST_SCHEMA
     from qz_proxy_config import CURRENT_API_ENDPOINTS, LEGACY_API_ENDPOINTS, api_contract_payload
     from qz_responses import (
@@ -376,12 +390,14 @@ class RequestRouter:
             except ImportError:
                 return False
         try:
-            root = Path(os.environ.get("QZ_ROOT", Path(__file__).resolve().parents[1])).resolve()
             inventory_path = Path(os.environ.get(
                 "QZ_MODEL_INVENTORY_CACHE",
-                root / "var" / "model-inventory.json",
+                str(_model_inventory_path()),
             ))
-            codex_home = Path(os.environ.get("CODEX_HOME", root / "var" / "codex-home"))
+            codex_home = Path(os.environ.get(
+                "CODEX_HOME",
+                str(_codex_home_dir()),
+            ))
             catalog_dst = codex_home / "model-catalogs" / "qwenzhai-models.json"
             config_dst = codex_home / "config.toml"
             catalog_dst.parent.mkdir(parents=True, exist_ok=True)
@@ -1456,8 +1472,10 @@ class RequestRouter:
             _model_ids = [mid for mid in _model_ids if mid]
 
             # Catalog path from env / convention
-            _root = Path(os.environ.get("QZ_ROOT", Path(__file__).resolve().parents[1])).resolve()
-            _codex_home = Path(os.environ.get("CODEX_HOME", _root / "var" / "codex-home"))
+            _codex_home = Path(os.environ.get(
+                "CODEX_HOME",
+                str(_codex_home_dir()),
+            ))
             _catalog_path = str(_codex_home / "model-catalogs" / "qwenzhai-models.json")
 
             self.handler._send_json(200, {

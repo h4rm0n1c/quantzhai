@@ -20,6 +20,7 @@ import os
 from pathlib import Path
 
 try:
+    from .qz_paths import codex_home_dir as _codex_home_dir
     from .qz_service_status import build_service_status
     from .qz_recovery_status import build_recovery_status
     from .qz_recovery_state import RECOVERY_STATE
@@ -27,6 +28,7 @@ try:
     from .qz_recovery_jobs import RECOVERY_JOBS
     from .qz_vram_snapshot import get_cached_vram_snapshot
 except ImportError:
+    from qz_paths import codex_home_dir as _codex_home_dir
     from qz_service_status import build_service_status
     from qz_recovery_status import build_recovery_status
     from qz_recovery_state import RECOVERY_STATE

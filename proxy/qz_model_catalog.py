@@ -9,8 +9,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
+    from .qz_paths import model_inventory_path as _model_inventory_path
     from .qz_reasoning_policy import supported_reasoning_levels
 except ImportError:
+    from qz_paths import model_inventory_path as _model_inventory_path
     from qz_reasoning_policy import supported_reasoning_levels
 
 
@@ -766,7 +768,7 @@ def cache_payload(root: Path, model_dir: Path, manifest: Dict[str, Any], entries
 
 
 def write_cache(root: Path, payload: Dict[str, Any]) -> Path:
-    cache_path = root / "var" / "model-inventory.json"
+    cache_path = _model_inventory_path()
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return cache_path
@@ -824,7 +826,7 @@ class ModelCatalog:
         self.errors: List[Dict[str, Any]] = []
         self.selected: Optional[Dict[str, Any]] = None
         self.reason = "uninitialized"
-        self.cache_path = root / "var" / "model-inventory.json"
+        self.cache_path = _model_inventory_path()
         self.refresh()
 
     @classmethod
