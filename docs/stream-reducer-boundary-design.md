@@ -1152,6 +1152,231 @@ test:     test_returns_false_when_completed_call_is_empty_dict added
 
 ---
 
+---
+
+## 9M. Slice 2H-design — outer-loop StreamRunState assessment (2026-05-19)
+
+### Purpose
+
+After Slices 1–2G.1, evaluate whether an outer-loop `StreamRunState` bundling
+the cross-hop locals in `run()` is the next safe step, and compare it against
+the remaining higher-risk seam candidates.
+
+No runtime code was changed in this slice.
+
+---
+
+### Outer-loop state inventory
+
+The `run()` method maintains these variable clusters outside `StreamHopState`:
+
+**Group 1 — Timing/run metadata** (initialized once; read-mostly)
+
+| Variable | Lifecycle | Notes |
+|---|---|---|
+| `started_at` | set at `time.time()` before hop loop | passed to `_build_result` |
+| `first_output_at` | set once at first visible output | set to `None` if no output |
+| `completed_at` | set at each exit point | local, not cross-hop state |
+| `final_usage` | updated from `response.completed` payload | mutated inside hop |
+
+**Group 2 — Terminal emission flags** (simple booleans; safest cross-hop cluster)
+
+| Variable | Where set | Where read | Notes |
+|---|---|---|---|
+| `sent_response_start` | set to `True` once at `response.created`; never reset | `_should_suppress_duplicate_response_start` | cross-hop dedup |
+| `sent_terminal` | set at loop exit/fallback paths | end-of-hop completion block | prevents duplicate completion |
+| `sent_done` | set alongside `sent_terminal` or just after | end-of-hop `[DONE]` emission | prevents duplicate `[DONE]` |
+
+**Group 3 — Output accumulation** (tightly coupled to SSE; higher risk)
+
+| Variable | Mutations | Coupling | Risk to move |
+|---|---|---|---|
+| `public_trace` | `extend`/`append` in 7 places | `emit_completed()`, fallback assembly | High |
+| `sequence` | returned from SSE helpers; incremented in many SSE functions | every SSE write | Very high |
+| `output_index_offset` | incremented once per hop: `hs.max_output_index + 1` | output_index computation for next hop | Medium |
+| `summary_started` | passed to `_transform_sse_event()`; tracks seen reasoning IDs | SSE transform; cross-hop reasoning dedup | Medium |
+
+**Group 4 — Continuation/repair state** (highest blast radius)
+
+| Variable | Mutations | Coupling |
+|---|---|---|
+| `working_body` | `working_body["input"] = hs.next_input` once per continuation hop | hop request body; input accumulation |
+| `max_hops` | read-only after init | loop bound |
+| `repair_hops_used` | incremented when repair hop starts | repair quota enforcement |
+| `pending_repair_hop_index` | set when repair needed; cleared each hop | repair hop scheduling |
+
+**Group 5 — Advisory/signal state** (loosely coupled)
+
+| Variable | Lifecycle |
+|---|---|
+| `repeated_read_state` | seeded once; updated by `record_tool_call` per tool hop |
+| `seen_signatures` | dedup set; used in one tool-call path |
+| `counters` | `{"search": 0, "open_page": 0}`; tool call accounting |
+
+---
+
+### StreamRunState value/risk assessment
+
+**Benefits of StreamRunState:**
+
+1. Makes the boundary between per-hop state (already `StreamHopState`) and
+   cross-hop state (currently scattered locals) explicit.
+2. Terminal flags (`sent_response_start`, `sent_terminal`, `sent_done`) are
+   the smallest safe first cluster — simple booleans, clear semantics, read
+   from/written to a handful of locations.
+3. Enables future unit tests that construct a `StreamRunState` with known values
+   (e.g. "what happens if `sent_terminal=True` and `sent_done=False`?").
+4. Parallel to Slice 1's `StreamHopState` — same pattern, same justification.
+5. No behaviour change required; pure state-bundling.
+
+**Risks of StreamRunState:**
+
+1. `sequence` is currently threaded as a value returned-and-updated through
+   helper functions (`sequence = func(sequence)`). Moving it to a mutable
+   object changes that calling convention across many call sites.
+2. `public_trace` is directly extended/appended in 7 places; moving it requires
+   careful update of every mutation site.
+3. `working_body` mutation is the heart of the continuation flow. Must not enter
+   `StreamRunState` until continuation/repair is safely extracted.
+4. Overly broad first cut risks accidental coupling between adjacent fields.
+5. Object lifetime confusion if `StreamRunState` outlives the `run()` scope.
+
+**Verdict:** StreamRunState is worthwhile, but only if scoped to the simplest
+cluster first. The terminal emission flags (`sent_terminal`, `sent_done`,
+`sent_response_start`) are the right first cluster. They satisfy all the
+criteria from Slice 1's StreamHopState: simple, clearly scoped, no I/O
+coupling, testable in isolation.
+
+Must **not** include in first cut: `sequence`, `public_trace`, `working_body`,
+`repair_hops_used`, `pending_repair_hop_index`.
+
+---
+
+### Candidate comparison (post-2G.1)
+
+| Candidate | Risk | Verdict |
+|---|---|---|
+| **StreamRunState (terminal flags only)** | **Low** | **Next — pure state bundling; no behaviour change** |
+| Another pure helper (remaining conditions) | Low–medium | No obvious remaining target after 2G |
+| Terminal event handling seam | High | Skip — rendering inseparable |
+| Tool lifecycle seam | High | Skip — execution side effect + timing |
+| Continuation / repair flow | Very high | Skip — outer-loop mutation |
+
+---
+
+### Proposed StreamRunState shape (first cut)
+
+```python
+@dataclass
+class StreamRunState:
+    """Cross-hop mutable outer-loop state for the Responses SSE streaming run.
+
+    Bundles the terminal emission flags that persist across continuation hops.
+    Analogous to StreamHopState for per-hop state. Production code uses
+    StreamRunState.fresh() to construct.
+
+    Does NOT include: sequence, public_trace, working_body, repair state,
+    output_index_offset, or any SSE-coupled fields — those remain locals
+    until their own extraction slice is designed.
+    """
+    sent_response_start: bool = False
+    sent_terminal: bool = False
+    sent_done: bool = False
+
+    @classmethod
+    def fresh(cls) -> "StreamRunState":
+        return cls(
+            sent_response_start=False,
+            sent_terminal=False,
+            sent_done=False,
+        )
+```
+
+**Fields in first cut:**
+
+| Field | Reason |
+|---|---|
+| `sent_response_start` | cross-hop dedup for response.created; set once, never reset |
+| `sent_terminal` | guards duplicate terminal emission at end of each hop |
+| `sent_done` | guards duplicate `[DONE]` emission |
+
+**Fields deferred (must not move yet):**
+
+| Field | Reason to defer |
+|---|---|
+| `sequence` | threaded through SSE helpers as return value; changing convention is high risk |
+| `public_trace` | mutated in 7+ places; requires careful audit of every mutation site |
+| `output_index_offset` | index arithmetic across hops; needs dedicated test-first slice |
+| `summary_started` | passed to SSE transform; SSE coupling risk |
+| `final_usage` | updated inside event loop; lives closer to hop logic than run logic |
+| `working_body` | core of continuation mutation; extremely high blast radius |
+| `repair_hops_used` / `pending_repair_hop_index` | repair flow; highest risk cluster |
+
+---
+
+### Coverage gaps before Slice 2H-impl
+
+| Scenario | Coverage | Gap? |
+|---|---|---|
+| `sent_response_start` prevents duplicate response.created | `test_web_search_continuation_suppresses_duplicate_response_start` | ✅ covered |
+| `sent_terminal=True` prevents duplicate completion | `test_web_search_continuation_final_completed_without_done_appends_done_once`, `test_web_search_continuation_final_done_only_emits_completed_once` | ✅ covered via integration |
+| `sent_done=True` prevents duplicate `[DONE]` | Above tests | ✅ covered via integration |
+| Unit test for `StreamRunState.fresh()` defaults | No unit test | **Gap** — add as part of 2H-impl |
+| Cross-hop terminal flag persistence | Integration fixtures (proxy-local multi-hop) | ✅ partially covered |
+| `sent_response_start` stays True across hops | Implicit in continuation fixture | **Gap** — add unit test in 2H-impl |
+
+Required tests for Slice 2H-impl:
+
+```text
+StreamRunStateTests:
+  test_fresh_returns_all_false_defaults
+    StreamRunState.fresh().sent_response_start == False
+    StreamRunState.fresh().sent_terminal == False
+    StreamRunState.fresh().sent_done == False
+
+  test_fields_are_independent_between_instances
+    setting rs1.sent_terminal = True does not affect rs2
+
+  test_sent_response_start_persists_across_logical_hops
+    (integration: verify via proxy-local multi-hop fixture or web-search continuation test)
+```
+
+---
+
+### Acceptance criteria for Slice 2H-impl
+
+```text
+1. Add StreamRunState dataclass near StreamHopState in qz_responses_stream.py.
+
+2. Replace the 3 terminal emission locals in run() with rs.sent_response_start,
+   rs.sent_terminal, rs.sent_done where rs = StreamRunState.fresh().
+
+3. All existing tests must remain green. No behaviour change.
+
+4. Add StreamRunStateTests (2+ unit tests for defaults and independence).
+
+5. Do NOT move sequence, public_trace, working_body, or repair state.
+
+6. py_compile PASS. git diff --check PASS. Full suite PASS.
+```
+
+---
+
+### Non-goals for Slice 2H
+
+```text
+- No field moves beyond the 3 terminal flags
+- No sequence or public_trace relocation
+- No working_body encapsulation
+- No continuation/repair bundling
+- No tool lifecycle or terminal rendering extraction
+- No decide_stream_event()
+- No SSE rendering changes
+- No test changes beyond StreamRunStateTests
+```
+
+---
+
 ## Cross-references
 
 - `proxy/qz_responses_stream.py` — current side-effect owner; Slice 1 StreamHopState

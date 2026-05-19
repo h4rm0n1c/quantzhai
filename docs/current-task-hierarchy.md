@@ -719,9 +719,23 @@ Fixed to `bool(completed_call)`. Call-site guard updated from `is not None` to
 truthiness; `is_proxy_local` extracted to local variable. 1 boundary test added.
 2605 tests PASS. No behaviour change in real flow.
 
-Next: fresh design micro-slice before any further stream seam extraction.
-Remaining candidates (terminal events, tool lifecycle, continuation/repair) are
-higher-risk and need design + test-gap analysis before any code.
+**Slice 2H-design (this commit):** CLOSED. Outer-loop state inventory complete.
+
+Candidate assessment:
+  StreamRunState (terminal flags only) — Low risk; **next**
+  Terminal event seam — High risk; skip
+  Tool lifecycle seam — High risk; skip
+  Continuation/repair — Very high risk; skip
+
+First safe StreamRunState cluster: `sent_response_start`, `sent_terminal`, `sent_done`.
+Must NOT include: `sequence`, `public_trace`, `working_body`, `repair_hops_used`.
+
+Coverage gaps to fill in 2H-impl: `StreamRunStateTests` (defaults + independence + persistence).
+
+See `docs/stream-reducer-boundary-design.md §9M` for full inventory and acceptance criteria.
+
+Next: Slice 2H-impl — add StreamRunState dataclass with 3 terminal flags only.
+Pure state bundling; no behaviour change. Analogous to Slice 1 (StreamHopState).
 
 ## Reference: BrainCase Slice completion history
 

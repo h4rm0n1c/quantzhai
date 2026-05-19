@@ -125,7 +125,8 @@ integration (qz_proxy_tools.py, qz_responses_stream.py, qz_request_router.py),
 and live smoke (scripts/qz-smoke-repeated-read). Advisory, stateless,
 input-history-seeded. V2 is blocked on SQLite/session identity.
 
-**#37** — Slices 1–2G.1 complete. Paused before next seam.
+**#37** — Slices 1–2G.1 complete. Slice 2H-design complete.
+Next: Slice 2H-impl — add StreamRunState with terminal flags only.
 
 Completed helpers: StreamHopState, StreamDecision,
 _reasoning_only_abort_reason, _should_suppress_duplicate_response_start,
@@ -133,8 +134,10 @@ _should_inject_hop_budget_signal, _should_inject_context_pressure_signal,
 stream_timeout_kind, _should_suppress_proxy_local_terminal. No decide_stream_event().
 No tool lifecycle/terminal/continuation extraction. 2605 tests passing.
 
-2G.1 fix: helper uses `bool(completed_call)` to preserve original truthiness
-semantics; call site uses truthiness guard and local variable.
+Slice 2H-design: outer-loop state inventory complete. First safe StreamRunState
+cluster is the 3 terminal emission flags (sent_response_start, sent_terminal,
+sent_done). Must NOT include sequence, public_trace, or working_body yet.
+See `docs/stream-reducer-boundary-design.md §9M`.
 
 **#56** — CLOSED. Generated artifact path migration (var/generated/). Slices A–E + close-out complete.
 
