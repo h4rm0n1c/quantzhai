@@ -744,7 +744,17 @@ all three terminal flag reads/writes correct, timeout handlers receive values no
 no extra fields moved. One identity test added (`test_fresh_returns_new_instance_each_time`).
 2609 tests PASS. No behaviour change.
 
-Next: fresh design micro-slice before any further stream seam extraction.
+**Finish-plan (this commit):** Slices 2I → 2I.1 → 2J-close-out defined.
+
+#37 finish line: per-hop state (StreamHopState ✓), cross-hop terminal flags
+(StreamRunState ✓), cross-hop timing/index arithmetic (StreamRunState after 2I),
+pure helpers (7 extracted ✓), remaining side-effects explicitly bounded in place.
+No decide_stream_event() required.
+
+Next: **Slice 2I-impl** — add `started_at`, `first_output_at`, `final_usage`,
+`output_index_offset` to StreamRunState. `fresh()` takes `started_at: float`
+as required parameter. `completed_at` stays local.
+See `docs/stream-reducer-boundary-design.md §9P`.
 
 ## Reference: BrainCase Slice completion history
 

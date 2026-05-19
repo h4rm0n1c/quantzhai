@@ -1438,6 +1438,170 @@ as an explicit identity regression guard.
 
 ---
 
+## 9P. Finish-plan after Slice 2H.1 (2026-05-20)
+
+### Definition of done for #37
+
+**#37 is complete when:**
+
+1. Per-hop state is explicitly isolated — **DONE** (StreamHopState)
+2. Cross-hop terminal emission state is explicitly isolated — **DONE** (StreamRunState, Slices 2H–2H.1)
+3. Cross-hop timing and index arithmetic are explicitly isolated — **NEXT** (Slice 2I)
+4. Pure branch decisions are extracted where safe — **DONE** (7 pure helpers across Slices 2B–2G)
+5. Remaining side-effect-heavy code is intentionally left in `qz_responses_stream.py` with documented seam boundaries — **Slice 2J close-out**
+
+**A full `decide_stream_event()` reducer is NOT required for #37 to be complete.** The original objective was architectural seam extraction — making state explicit and decisions testable — not rewriting the entire stream loop.
+
+The residual locals that will stay as-is after #37:
+- `public_trace` (46 references; passed to many helpers as positional argument)
+- `sequence` (threaded through SSE helpers as returned-value; changing the calling convention is high risk)
+- `summary_started` (35 references; passed to SSE transform)
+- `working_body`, `repair_hops_used`, `pending_repair_hop_index` (continuation core; very high blast radius)
+- `completed_at` (set at every exit point locally; not cross-hop state)
+
+These are intentionally bounded in place, not accidentally left behind.
+
+---
+
+### Remaining slice sequence
+
+| Slice | Content | Risk | Status |
+|---|---|---|---|
+| **2I-impl** | StreamRunState timing + cross-hop arithmetic: `started_at`, `first_output_at`, `final_usage`, `output_index_offset` | Low | **Next** |
+| **2I.1** | Audit/polish Slice 2I | Low | Follows 2I |
+| **2J close-out** | Final audit, document remaining seam boundaries, close #37 | Low (docs only) | After 2I.1 |
+
+---
+
+### Slice 2I — StreamRunState timing + cross-hop arithmetic
+
+**Fields to add:**
+
+| Field | Current init | Mutation sites | Risk |
+|---|---|---|---|
+| `started_at: float` | `time.time()` at line 1343 | Read-only after init | None |
+| `first_output_at: float \| None` | `None` at line 1344; set once at line 1489 | Set once inside loop | Low |
+| `final_usage: dict` | `_normalize_response_usage({})` at line 1346 | Lines 1514, 2056 (replacement assignment) | Low |
+| `output_index_offset: int` | `0` at line 1351 | Line 2069 (`+= hs.max_output_index + 1`) | Low |
+
+**Why these four together:**
+All four are cross-hop accumulators consumed by `_build_result()` and the terminal completion path. Moving them together makes the result-building path self-contained within `rs`.
+
+**`completed_at` stays local:** It is set at every exit point immediately before use. It is not cross-hop state — each exit sets it fresh and uses it once.
+
+**Proposed StreamRunState after 2I:**
+
+```python
+@dataclass
+class StreamRunState:
+    """Cross-hop mutable outer-loop state for one Responses SSE streaming run.
+
+    Includes terminal emission flags and cross-hop timing/accumulation state.
+    Does not include sequence, public_trace, working_body, repair state,
+    summary_started, or tool lifecycle state.
+    """
+    started_at: float
+    sent_response_start: bool = False
+    sent_terminal: bool = False
+    sent_done: bool = False
+    first_output_at: float | None = None
+    final_usage: dict = field(default_factory=dict)
+    output_index_offset: int = 0
+
+    @classmethod
+    def fresh(cls, started_at: float) -> "StreamRunState":
+        return cls(
+            started_at=started_at,
+            sent_response_start=False,
+            sent_terminal=False,
+            sent_done=False,
+            first_output_at=None,
+            final_usage=_normalize_response_usage({}),
+            output_index_offset=0,
+        )
+```
+
+**Call site change in `run()`:**
+
+```python
+# Before:
+started_at = time.time()
+first_output_at = None
+completed_at = None
+final_usage = _normalize_response_usage({})
+...
+output_index_offset = 0
+...
+rs = StreamRunState.fresh()
+
+# After:
+completed_at = None
+...
+rs = StreamRunState.fresh(started_at=time.time())
+```
+
+**Method call sites:** All passes of `started_at`, `first_output_at`, `final_usage`, `output_index_offset` to helpers become `rs.started_at`, `rs.first_output_at`, `rs.final_usage`, `rs.output_index_offset`. Method signatures themselves are NOT changed in Slice 2I.
+
+---
+
+### Acceptance criteria for Slice 2I-impl
+
+```text
+1. StreamRunState gains 4 fields; fresh() takes started_at as required parameter.
+
+2. run() replaces 4 locals with rs.* references:
+   - started_at → rs.started_at (all ~22 references)
+   - first_output_at → rs.first_output_at (all ~5 references)
+   - final_usage → rs.final_usage (all ~8 references)
+   - output_index_offset → rs.output_index_offset (all ~5 references)
+
+3. completed_at stays as a local variable — NOT moved.
+
+4. No method signatures changed (_finish_no_output_timeout,
+   _finish_terminal_timeout_after_output, _build_result, etc. still receive
+   keyword arguments with rs.* values).
+
+5. sequence, public_trace, working_body, repair_hops_used,
+   pending_repair_hop_index, summary_started stay as locals.
+
+6. No SSE rendering changed. No continuation/repair logic changed.
+   No tool lifecycle changed. No decide_stream_event added.
+
+7. Tests: StreamRunStateTests gains ~6 new tests:
+   - test_fresh_requires_started_at
+   - test_fresh_started_at_preserved
+   - test_first_output_at_defaults_to_none
+   - test_output_index_offset_defaults_to_zero
+   - test_final_usage_defaults_to_empty_normalized
+   - test_independence_for_timing_fields
+
+8. Full suite passes (2609 tests or more after new tests added).
+```
+
+---
+
+### Intentionally-kept locals (close-out documentation for Slice 2J)
+
+These remain as locals in `run()` by design, with documented reasons:
+
+```text
+public_trace         — 46 references; passed positionally to many helpers;
+                       high coupling, low migration benefit
+sequence             — 35+ references; threaded as returned value through SSE
+                       helper functions; changing calling convention is high risk
+summary_started      — 35 references; passed to SSE transform; SSE coupling
+working_body         — continuation core; mutated between hops;
+                       requires dedicated design before any extraction
+repair_hops_used /
+pending_repair_hop_index — repair flow state; very high blast radius
+completed_at         — set at every exit point immediately before use;
+                       not cross-hop state; leave as local
+```
+
+The Slice 2J close-out will document each of these explicitly in the design doc, confirm no additional extraction is needed, and declare #37 complete.
+
+---
+
 ## Cross-references
 
 - `proxy/qz_responses_stream.py` — current side-effect owner; Slice 1 StreamHopState
