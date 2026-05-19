@@ -1670,6 +1670,80 @@ Audit of Slice 2I-impl StreamRunState timing/index migration.
 - `proxy/qz_stream_watchdog.py` — pure StreamWatchdogState predicates + stream_timeout_kind
 - `proxy/qz_tool_lifecycle.py` — StreamToolCallState for function_call accumulation
 - `proxy/qz_streaming.py` — is_terminal_stream_event() and SSE block construction
-- `tests/test_qz_responses_stream.py` — 3927 lines, covers most decisions
+- `tests/test_qz_responses_stream.py` — covers most decisions
 - `docs/current-stocktake.md` — current project state
-- Issue #37 — architectural seam extraction plan
+- Issue #37 — CLOSED
+
+---
+
+## 9S. Slice 2J — Close-out (2026-05-20)
+
+### Verdict: CLOSED — stream seam extraction objective complete
+
+### Acceptance criteria
+
+| Criterion | Status |
+|---|---|
+| A. `StreamHopState` owns per-hop state | ✅ PASS |
+| B. `StreamRunState` owns cross-hop state (7 fields) | ✅ PASS |
+| C. Six pure decision helpers extracted and tested | ✅ PASS |
+| D. `StreamDecision` exists as vocabulary dataclass only | ✅ PASS |
+| E. No `decide_stream_event()` exists | ✅ PASS |
+| F. Terminal rendering intentionally bounded in place | ✅ PASS by design |
+| G. Tool lifecycle intentionally bounded in place | ✅ PASS by design |
+| H. Continuation/repair intentionally bounded in place | ✅ PASS by design |
+| I. Remaining locals documented as intentionally bounded | ✅ PASS (this section) |
+| J. Full test suite passes | ✅ 2615 tests |
+
+### Final StreamRunState
+
+```python
+StreamRunState:
+    started_at: float          # required at construction
+    sent_response_start: bool  # cross-hop terminal dedup
+    sent_terminal: bool        # terminal emission guard
+    sent_done: bool            # [DONE] emission guard
+    first_output_at: float|None  # first visible output timestamp
+    final_usage: dict          # accumulated usage from response.completed
+    output_index_offset: int   # cross-hop output index arithmetic
+```
+
+### Extracted pure helpers
+
+| Helper | Location | Slices |
+|---|---|---|
+| `_reasoning_only_abort_reason()` | `qz_responses_stream.py` | 2B/2B.1 |
+| `_should_suppress_duplicate_response_start()` | `qz_responses_stream.py` | 2C |
+| `_should_inject_hop_budget_signal()` | `qz_responses_stream.py` | 2D/2D.1 |
+| `_should_inject_context_pressure_signal()` | `qz_responses_stream.py` | 2E/2E.1 |
+| `stream_timeout_kind()` | `qz_stream_watchdog.py` | 2F/2F.1 |
+| `_should_suppress_proxy_local_terminal()` | `qz_responses_stream.py` | 2G/2G.1 |
+
+### Intentionally bounded in place (not TODOs)
+
+The following locals in `run()` are retained by design:
+
+| Local | Reason |
+|---|---|
+| `completed_at` | Set at every exit point immediately before use; not cross-hop state; moving adds no value |
+| `sequence` | Threaded as returned value through SSE helpers; moving would change calling convention across 17+ sites |
+| `public_trace` | 35 mutation/read sites; tightly coupled to `emit_completed` and fallback assembly; high blast radius |
+| `summary_started` | Passed through SSE transform/reasoning dedup paths; 15 sites |
+| `working_body` | Core continuation mutation; must stay explicit until a future continuation redesign |
+| `repair_hops_used` / `pending_repair_hop_index` | Repair scheduling/quota; very high blast radius; explicitly out of #37 scope |
+| `repeated_read_state` | Advisory repeated-read detection; belongs to future operational-state work |
+| `seen_signatures` / `counters` | Tool accounting; low value for #37 |
+
+These are not missed extractions. They are the side-effect-heavy residual that stays in `qz_responses_stream.py` by design. The file retains ownership of network I/O, SSE rendering, tool execution, and continuation/repair logic.
+
+### Why no `decide_stream_event()` was needed
+
+The original #37 objective was architectural seam extraction — making state explicit and pure decisions testable. That objective is met:
+
+- Mutable state is now grouped: per-hop (`StreamHopState`), cross-hop (`StreamRunState`)
+- Pure decision points are extracted and independently testable (6 helpers)
+- `qz_responses_stream.py` remains the sole side-effect owner
+
+A full reducer would have required moving SSE rendering and tool execution out of `qz_responses_stream.py`, which would carry substantial risk without proportional benefit. That work belongs in a future redesign of the streaming architecture, not in the seam extraction work.
+
+### 2615 tests passing at close-out

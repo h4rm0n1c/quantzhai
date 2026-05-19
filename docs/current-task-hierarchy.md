@@ -762,7 +762,12 @@ No bare `started_at`/`first_output_at`/`final_usage`/`output_index_offset` in `r
 Method signatures unchanged. `completed_at`/sequence/public_trace/summary_started/
 working_body/repair all remain locals. No code changes needed. 2615 tests PASS.
 
-Next: Slice 2J close-out — document remaining bounded locals, close #37.
+**Slice 2J close-out (this commit):** CLOSED. All acceptance criteria PASS.
+Remaining locals (sequence, public_trace, summary_started, working_body, repair state)
+documented as intentionally bounded in place. No decide_stream_event() required.
+#37 CLOSED.
+
+Next recommended: stocktake / #51 operational-state design or #39 search config split.
 
 ## Reference: BrainCase Slice completion history
 

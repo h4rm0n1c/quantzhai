@@ -93,7 +93,7 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 | #53 | BrainCase memory tool API | **CLOSED** (Slices A–I.1 complete) |
 | #54 | BrainCase retention/lifetime policy | **CLOSED** (Slices A–D complete) |
 | #3/#4/#43 | Repeated-read v1 (parser, integration, smoke) | **CLOSED** (complete; advisory stateless v1 live) |
-| #37 | Architectural seam extraction plan | **PAUSED** — Slices 1–2F.1 complete; next seam needs design micro-slice |
+| #37 | Architectural seam extraction plan | **CLOSED** — Slices 1–2J complete; StreamHopState + StreamRunState + 6 pure helpers |
 | #56 | Generated artifact path migration design (var/generated/) | **CLOSED** — A1/A2/A3 under var/generated/; helpers clean; all acceptance criteria PASS |
 | #51 | Promote recovery/backoff runtime state to SQLite | **deferred** until operational-store decision |
 | #46 | Replace qz-write-runtime-state launcher trace | **deferred** until startup-telemetry replacement |
@@ -125,12 +125,12 @@ integration (qz_proxy_tools.py, qz_responses_stream.py, qz_request_router.py),
 and live smoke (scripts/qz-smoke-repeated-read). Advisory, stateless,
 input-history-seeded. V2 is blocked on SQLite/session identity.
 
-**#37** — Slices 1–2I.1 complete. Next: Slice 2J close-out.
+**#37** — CLOSED. Stream seam extraction complete. Slices 1–2J.
 
-Completed: StreamHopState, StreamDecision, 7 pure helpers, StreamRunState
-(terminal flags + timing: started_at, first_output_at, final_usage,
-output_index_offset). completed_at/sequence/public_trace/summary_started/
-working_body/repair remain locals. No decide_stream_event(). 2615 tests passing.
+StreamHopState (per-hop state), StreamRunState (7 cross-hop fields), 6 pure
+decision helpers. No decide_stream_event() required. Remaining side-effect
+locals (sequence, public_trace, working_body, repair) intentionally bounded in
+place. 2615 tests passing. See `docs/stream-reducer-boundary-design.md §9S`.
 
 **#56** — CLOSED. Generated artifact path migration (var/generated/). Slices A–E + close-out complete.
 
