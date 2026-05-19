@@ -270,11 +270,12 @@ def _should_suppress_proxy_local_terminal(
 
     Pure helper — no I/O, no state mutation.
     The caller precomputes is_proxy_local via proxy_tool_registry.is_proxy_local_call().
-    Returns False whenever completed_call is None (no active tool call).
+    Returns False whenever completed_call is falsey (None or empty).
+    Uses truthiness check to match the original inline condition semantics.
     """
     return (
         is_terminal_stream_event(event_type, payload)
-        and completed_call is not None
+        and bool(completed_call)
         and is_proxy_local
     )
 
@@ -1792,12 +1793,15 @@ class ResponsesStreamRuntime:
                             hs.event_lines = []
                             continue
 
+                        _completed_call_is_proxy_local = (
+                            self.proxy_tool_registry.is_proxy_local_call(hs.completed_call)
+                            if hs.completed_call else False
+                        )
                         if _should_suppress_proxy_local_terminal(
                             event_type,
                             payload,
                             hs.completed_call,
-                            self.proxy_tool_registry.is_proxy_local_call(hs.completed_call)
-                            if hs.completed_call is not None else False,
+                            _completed_call_is_proxy_local,
                         ):
                             self._emit_stream_event_timing(
                                 event_type,

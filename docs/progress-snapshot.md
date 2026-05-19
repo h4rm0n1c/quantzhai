@@ -132,7 +132,7 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 
 ## Immediate next priorities
 
-1. **#37 Slice 2G.1** — audit/polish of proxy-local terminal suppression helper. Slice 2G complete.
+1. **#37 design micro-slice** — next seam candidates (terminal/tool/continuation) are higher-risk. Design before code. Slices 1–2G.1 complete.
 3. **#51/#46** — deferred until operational-store decision.
 
 ## Remaining big rocks

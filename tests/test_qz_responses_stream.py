@@ -3963,6 +3963,16 @@ class ProxyLocalTerminalSuppressionHelperTests(unittest.TestCase):
         )
         self.assertFalse(result)
 
+    def test_returns_false_when_completed_call_is_empty_dict(self):
+        """Preserves original truthiness semantics: falsey completed_call -> False."""
+        result = _should_suppress_proxy_local_terminal(
+            event_type="response.completed",
+            payload={},
+            completed_call={},
+            is_proxy_local=True,
+        )
+        self.assertFalse(result)
+
 
 if __name__ == "__main__":
     unittest.main()

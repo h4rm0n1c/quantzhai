@@ -713,7 +713,15 @@ def _should_suppress_proxy_local_terminal(
 4 unit tests added in `ProxyLocalTerminalSuppressionHelperTests`. 2604 tests PASS.
 Outer-loop conditions at ~2021/~2037 untouched. Side-effect block unchanged.
 
-Next: Slice 2G.1 — audit/polish before any further stream seam extraction.
+**Slice 2G.1 (this commit):** CLOSED. Audit found semantic drift: helper used
+`completed_call is not None` but original used `and hs.completed_call` (truthiness).
+Fixed to `bool(completed_call)`. Call-site guard updated from `is not None` to
+truthiness; `is_proxy_local` extracted to local variable. 1 boundary test added.
+2605 tests PASS. No behaviour change in real flow.
+
+Next: fresh design micro-slice before any further stream seam extraction.
+Remaining candidates (terminal events, tool lifecycle, continuation/repair) are
+higher-risk and need design + test-gap analysis before any code.
 
 ## Reference: BrainCase Slice completion history
 

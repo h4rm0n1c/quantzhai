@@ -125,14 +125,16 @@ integration (qz_proxy_tools.py, qz_responses_stream.py, qz_request_router.py),
 and live smoke (scripts/qz-smoke-repeated-read). Advisory, stateless,
 input-history-seeded. V2 is blocked on SQLite/session identity.
 
-**#37** — Slice 2G complete. Slices 1–2G now done.
-Next: Slice 2G.1 audit/polish.
+**#37** — Slices 1–2G.1 complete. Paused before next seam.
 
 Completed helpers: StreamHopState, StreamDecision,
 _reasoning_only_abort_reason, _should_suppress_duplicate_response_start,
 _should_inject_hop_budget_signal, _should_inject_context_pressure_signal,
 stream_timeout_kind, _should_suppress_proxy_local_terminal. No decide_stream_event().
-No tool lifecycle/terminal/continuation extraction. 2604 tests passing.
+No tool lifecycle/terminal/continuation extraction. 2605 tests passing.
+
+2G.1 fix: helper uses `bool(completed_call)` to preserve original truthiness
+semantics; call site uses truthiness guard and local variable.
 
 **#56** — CLOSED. Generated artifact path migration (var/generated/). Slices A–E + close-out complete.
 

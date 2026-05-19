@@ -1110,6 +1110,48 @@ Outer-loop conditions (~lines 2021/2037): untouched
 
 ---
 
+## 9L. Slice 2G.1 — COMPLETE
+
+Audit of `_should_suppress_proxy_local_terminal()` and Slice 2G call site.
+
+**Audit results:**
+
+- Semantic drift found: Slice 2G used `completed_call is not None` but the original
+  inline condition used `and hs.completed_call` (truthiness). In real flow
+  `completed_call` is either `None` or a non-empty dict from the assembler (never
+  `{}`), so no behaviour difference exists today. Nevertheless, the helper was
+  updated to use `bool(completed_call)` to preserve exact original semantics and
+  protect against future changes.
+
+- Call-site guard updated: `if hs.completed_call is not None else False` changed to
+  `if hs.completed_call else False`, matching truthiness semantics.
+
+- `is_proxy_local` computation extracted into local variable `_completed_call_is_proxy_local`
+  for clarity (was inline ternary on the call line).
+
+- Helper confirmed pure: no I/O, no state mutation, no registry calls, calls only
+  `is_terminal_stream_event()` from `qz_streaming`.
+
+- Outer-loop conditions at ~lines 2021/2037 confirmed untouched.
+
+- Side-effect block (emit, clear event_lines, continue) confirmed unchanged.
+
+- No `decide_stream_event()` exists.
+
+**Fix summary:**
+```text
+helper:   completed_call is not None -> bool(completed_call)
+docstring: "None" -> "falsey (None or empty)"
+call site: is not None guard -> truthiness guard; inline ternary -> local variable
+test:     test_returns_false_when_completed_call_is_empty_dict added
+```
+
+2605 tests passing. No behaviour change.
+
+**Recommended next: fresh design micro-slice before any further stream seam extraction.**
+
+---
+
 ## Cross-references
 
 - `proxy/qz_responses_stream.py` — current side-effect owner; Slice 1 StreamHopState
