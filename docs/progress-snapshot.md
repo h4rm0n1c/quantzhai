@@ -31,7 +31,7 @@ docs/current-stocktake.md
 Current strategic direction:
 
 ```text
-P1 #37 Stream seam extraction (Slices 1–2F.1 complete) — pause before next seam
+P1 #37 Stream seam extraction (Slices 1–2F.1 complete) — next: Slice 2G proxy-local suppression
 P2 Config/var/script cleanup (#5) — CLOSED; #57/#58 — CLOSED (always-HTTP qz-codex bootstrap)
 P3 #51/#46 operational-state persistence (deferred until store decision)
 P4 Search config split (#39) — when search work resumes
@@ -132,8 +132,7 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 
 ## Immediate next priorities
 
-1. **#37 design micro-slice** — next delicate stream seam. Slices 1–2F.1 complete; design before coding.
-2. **#37 design micro-slice** — next delicate stream seam before coding.
+1. **#37 Slice 2G** — proxy-local terminal suppression helper. Stocktake complete; seam selected. See docs/stream-reducer-boundary-design.md §9J.
 3. **#51/#46** — deferred until operational-store decision.
 
 ## Remaining big rocks

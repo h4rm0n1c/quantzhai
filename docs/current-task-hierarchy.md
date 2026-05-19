@@ -676,20 +676,40 @@ for `codex-home` path references updated. Artifact inventory table A2/A3 paths f
 
 Next: #37 design micro-slice for the next delicate stream seam.
 
-## Next implementation prompt: #37 design micro-slice for next delicate stream seam
+## #37 next stream seam: proxy-local terminal suppression (Slice 2G)
 
-**BrainCase #53/#54 closed. Repeated-read v1 complete. #37 Slices 1–2E.1 complete.**
+**#37 Slices 1–2F.1 complete. Post-#56 stocktake complete.**
 
-Next: design micro-slice for the next #37 seam. Do not code before defining:
-- Which seam (tool lifecycle? terminal? watchdog?)
-- Extraction boundary and purity rules
-- Test coverage gaps to fill before extraction
-- Acceptance criteria
+Completed helpers:
+- `StreamHopState` (Slice 1) — per-hop state bundling
+- `StreamDecision` (Slice 2B) — vocabulary dataclass
+- `_reasoning_only_abort_reason()` (Slice 2B) — 14 tests
+- `_should_suppress_duplicate_response_start()` (Slice 2C) — 6 tests
+- `_should_inject_hop_budget_signal()` (Slice 2D) — 11 tests
+- `_should_inject_context_pressure_signal()` (Slice 2E) — 12 tests
+- `stream_timeout_kind()` (Slice 2F) — 5 tests; in `qz_stream_watchdog.py`
 
-Read `docs/stream-reducer-boundary-design.md` §9F for the candidate inventory
-and risk rationale. Slices 2F+ must not start from code — start from design.
+No `decide_stream_event()`. No tool lifecycle, terminal, continuation/repair extraction.
 
-Alternative safe next: config/var/script cleanup (#5).
+Next safe seam: **proxy-local terminal suppression** (Slice 2G).
+
+Selected in `docs/stream-reducer-boundary-design.md §9J`.
+
+Key facts:
+- 3-condition boolean check at `qz_responses_stream.py:~1779`
+- Pure: `is_terminal_stream_event(event_type, payload) and completed_call is not None and is_proxy_local`
+- No state mutation, no SSE rendering, no tool execution
+- Test gap: 4 unit tests needed before or alongside extraction
+- Do NOT touch outer-loop conditions at lines ~2001 and ~2016
+
+Proposed helper:
+```python
+def _should_suppress_proxy_local_terminal(
+    event_type, payload, completed_call, is_proxy_local
+) -> bool:
+```
+
+See `docs/stream-reducer-boundary-design.md §9J` for full acceptance criteria.
 
 ## Reference: BrainCase Slice completion history
 

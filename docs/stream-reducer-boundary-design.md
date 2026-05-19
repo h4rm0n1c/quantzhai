@@ -912,12 +912,180 @@ The reducer extraction is explicitly not:
 
 ---
 
+## 9J. Post-#56 stocktake (2026-05-19) — next seam recommendation
+
+### State verification
+
+All Slices 1–2F.1 confirmed in code:
+
+| Helper | Location | Tests |
+|---|---|---|
+| `StreamHopState` | `qz_responses_stream.py:92` | independence tests pass |
+| `StreamDecision` | `qz_responses_stream.py:173` | vocabulary only; no `decide_stream_event()` |
+| `_reasoning_only_abort_reason()` | `qz_responses_stream.py:263` | 14 unit tests |
+| `_should_suppress_duplicate_response_start()` | `qz_responses_stream.py:215` | 6 unit tests |
+| `_should_inject_hop_budget_signal()` | `qz_responses_stream.py:231` | 11 unit tests |
+| `_should_inject_context_pressure_signal()` | `qz_responses_stream.py:243` | 12 unit tests |
+| `stream_timeout_kind()` | `qz_stream_watchdog.py` (imported) | 5 unit tests in `StreamTimeoutKindHelperTests` |
+
+Current file sizes: `qz_responses_stream.py` 2168 lines. Full suite: 2600 tests.
+
+No tool lifecycle, terminal event, continuation/repair extraction has happened.
+No `decide_stream_event()` exists.
+
+---
+
+### Candidate comparison (post-Slice 2F.1)
+
+| Candidate | Risk | Key blocker | Recommendation |
+|---|---|---|---|
+| Proxy-local terminal suppression | **Low–medium** | §8 test gap: no pure suppression decision test | **Next** — bounded 3-condition check; test gap fillable with 4 unit tests |
+| Terminal event handling | High | Rendering + flag mutation inseparable | Skip — do not extract |
+| Tool lifecycle | High | `StreamToolCallState` timing + execution side effect | Skip — do not extract |
+| Watchdog follow-up | Low | `stream_timeout_kind` already done; action code stays in `qz_responses_stream.py` | Nothing to extract |
+| Continuation / repair flow | Very high | Outer-loop state mutation; `working_body` changes | Skip — do not extract |
+| Outer-loop StreamRunState | Medium | New state bundling; risk of touching multi-hop path | Design-first; not urgent |
+
+---
+
+### Selected next seam: proxy-local terminal suppression
+
+**Why this seam, not the others:**
+
+The terminal suppression check at `qz_responses_stream.py:1779` is a 3-condition
+boolean check that decides whether to suppress a terminal event when a proxy-local
+tool call is active. It has:
+
+- No state mutation
+- No SSE rendering
+- No socket I/O
+- No tool execution
+- Three fully pure inputs (event_type + payload dispatch, completed_call None-check, is_proxy_local bool)
+
+The design is described in §4.6. The only blocker is the test gap: there is
+no unit test that exercises the suppression decision in isolation.
+
+**Extraction boundary:**
+
+```text
+Site to extract (qz_responses_stream.py ~line 1779):
+
+    if (
+        is_terminal_stream_event(event_type, payload)
+        and hs.completed_call
+        and self.proxy_tool_registry.is_proxy_local_call(hs.completed_call)
+    ):
+        self._emit_stream_event_timing(...)
+        hs.event_lines = []
+        continue
+```
+
+The pure condition (3-line check) can move to a helper.
+The side-effect block (emit, clear event_lines, continue) stays in `qz_responses_stream.py`.
+
+**Two other proxy-local checks (lines 2001, 2016) must not move:**
+These are complex outer-loop control-flow conditions combining `error_injected`,
+`signal_injected`, and `is_proxy_local`. They are not pure suppression decisions
+and must remain untouched.
+
+---
+
+### Proposed helper shape
+
+```python
+def _should_suppress_proxy_local_terminal(
+    event_type: str,
+    payload: Any,
+    completed_call: dict | None,
+    is_proxy_local: bool,
+) -> bool:
+    """Return True if a proxy-local terminal event should be suppressed.
+
+    Pure — no I/O, no state mutation.
+    The caller computes is_proxy_local via proxy_tool_registry.is_proxy_local_call().
+    Returns False whenever completed_call is None (no active tool call).
+    """
+    return (
+        is_terminal_stream_event(event_type, payload)
+        and completed_call is not None
+        and is_proxy_local
+    )
+```
+
+By taking `is_proxy_local` as a pre-computed bool rather than the registry callable,
+the helper has no dependency on `proxy_tool_registry` and is fully testable with
+plain data.
+
+---
+
+### Required tests for Slice 2G
+
+```text
+ProxyLocalTerminalSuppressionHelperTests (4 tests):
+
+test_returns_true_when_all_conditions_met
+  event_type="response.completed", completed_call={...}, is_proxy_local=True -> True
+
+test_returns_false_when_event_is_not_terminal
+  event_type="response.output_text.delta", is_proxy_local=True -> False
+
+test_returns_false_when_completed_call_is_none
+  event_type="response.completed", completed_call=None, is_proxy_local=True -> False
+
+test_returns_false_when_not_proxy_local
+  event_type="response.completed", completed_call={...}, is_proxy_local=False -> False
+```
+
+Plus regression: existing proxy-local continuation tests must still pass.
+
+---
+
+### Acceptance criteria for Slice 2G
+
+```text
+1. Add _should_suppress_proxy_local_terminal() near the other pure helpers
+   in qz_responses_stream.py (after _should_inject_context_pressure_signal).
+
+2. Add ProxyLocalTerminalSuppressionHelperTests (4 tests).
+
+3. Replace the 3-condition check at the terminal suppression site (~line 1779).
+   Side-effect block stays untouched.
+
+4. Do NOT touch lines 2001 or 2016 (outer-loop drain/continuation conditions).
+
+5. Full suite must remain green (2600 tests or more).
+
+6. No SSE rendering moved.
+7. No state mutation moved.
+8. No tool lifecycle touched.
+9. No continuation/repair touched.
+10. No decide_stream_event() added.
+11. git diff --check PASS.
+```
+
+---
+
+### Non-goals for Slice 2G
+
+```text
+Not a full reducer.
+Not decide_stream_event().
+Not tool lifecycle extraction.
+Not continuation/repair extraction.
+Not touching the two outer-loop proxy-local conditions (lines 2001, 2016).
+Not extracting terminal event rendering.
+Not outer-loop StreamRunState bundling.
+```
+
+---
+
 ## Cross-references
 
 - `proxy/qz_responses_stream.py` — current side-effect owner; Slice 1 StreamHopState
 - `proxy/qz_stream_terminal.py` — pure StreamObservation + classify_stream_terminal()
-- `proxy/qz_stream_watchdog.py` — pure StreamWatchdogState predicates
+- `proxy/qz_stream_watchdog.py` — pure StreamWatchdogState predicates + stream_timeout_kind
 - `proxy/qz_tool_lifecycle.py` — StreamToolCallState for function_call accumulation
-- `tests/test_qz_responses_stream.py` — 121 stream tests; covers most decisions
+- `proxy/qz_streaming.py` — is_terminal_stream_event() and SSE block construction
+- `tests/test_qz_responses_stream.py` — 3927 lines, covers most decisions
 - `docs/current-stocktake.md` — current project state
 - Issue #37 — architectural seam extraction plan

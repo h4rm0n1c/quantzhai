@@ -125,13 +125,20 @@ integration (qz_proxy_tools.py, qz_responses_stream.py, qz_request_router.py),
 and live smoke (scripts/qz-smoke-repeated-read). Advisory, stateless,
 input-history-seeded. V2 is blocked on SQLite/session identity.
 
-**#37** — PAUSED after Slice 2F.1. Stream seam Slices 1–2F.1 complete:
-StreamHopState, StreamDecision, _reasoning_only_abort_reason,
-_should_suppress_duplicate_response_start, _should_inject_hop_budget_signal,
-_should_inject_context_pressure_signal, stream_timeout_kind. Remaining
-candidates (tool lifecycle, terminal events, proxy-local suppression,
-continuation/repair) carry higher extraction risk. Need a fresh design
-micro-slice before proceeding. See docs/stream-reducer-boundary-design.md.
+**#37** — ACTIVE after post-#56 stocktake. Slices 1–2F.1 complete.
+Next: Slice 2G — proxy-local terminal suppression helper.
+
+Verified completed helpers: StreamHopState, StreamDecision,
+_reasoning_only_abort_reason, _should_suppress_duplicate_response_start,
+_should_inject_hop_budget_signal, _should_inject_context_pressure_signal,
+stream_timeout_kind. No decide_stream_event(). No tool lifecycle/terminal/
+continuation extraction.
+
+Slice 2G target: extract `_should_suppress_proxy_local_terminal(event_type,
+payload, completed_call, is_proxy_local) -> bool` from ~line 1779 in
+`qz_responses_stream.py`. 4 unit tests required. Outer-loop conditions at
+lines ~2001/~2016 must not be touched.
+See `docs/stream-reducer-boundary-design.md §9J`.
 
 **#56** — CLOSED. Generated artifact path migration (var/generated/). Slices A–E + close-out complete.
 
