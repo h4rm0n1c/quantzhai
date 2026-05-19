@@ -94,7 +94,7 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 | #54 | BrainCase retention/lifetime policy | **CLOSED** (Slices A–D complete) |
 | #3/#4/#43 | Repeated-read v1 (parser, integration, smoke) | **CLOSED** (complete; advisory stateless v1 live) |
 | #37 | Architectural seam extraction plan | **PAUSED** — Slices 1–2F.1 complete; next seam needs design micro-slice |
-| #56 | Generated artifact path migration design (var/generated/) | **D.1 complete** — A1/A2/A3 all under var/generated/; Slice E (deprecate helpers) pending |
+| #56 | Generated artifact path migration design (var/generated/) | **Slice E complete** — A1/A2/A3 under var/generated/; stale helpers removed; close-out audit pending |
 | #51 | Promote recovery/backoff runtime state to SQLite | **deferred** until operational-store decision |
 | #46 | Replace qz-write-runtime-state launcher trace | **deferred** until startup-telemetry replacement |
 | #5 | Config/var/script ownership cleanup | **CLOSED** (#56, #57 opened for migration/thinning follow-ups) |
@@ -143,13 +143,13 @@ Follow-up from #5 close-out.
 - **Slice D-impl:** `codex_generated_dir()` added. A2/A3 moved:
   - `codex_model_catalog_path()` → `var/generated/codex/qwenzhai-models.json`
   - `codex_config_path()` → `var/generated/codex/config.toml`
-  - Deprecated `codex_home_dir()` and `codex_model_catalog_dir()` kept.
   - No shim. No old-path deletion. 2600 tests passing.
-- **Slice D.1:** A2/A3 migration audited. Stale paths fixed in edge-case doc
-  (generated files list, path map table, contract risks) and qz-codex exec message.
-  3 new tests confirm effective config reports new A2/A3 paths. 2603 tests passing.
+- **Slice D.1:** A2/A3 migration audited. Stale docs/message paths fixed. 3 new tests. 2603 PASS.
+- **Slice E:** `codex_home_dir()` and `codex_model_catalog_dir()` removed from qz_paths.py.
+  No runtime callers remained. Deprecated tests removed; 1 negative regression test added.
+  2600 tests passing.
 
-Next: Slice E — deprecate/remove `codex_home_dir()` and `codex_model_catalog_dir()` or close-out decision.
+Next: #56 close-out audit — confirm all acceptance criteria are met, then close.
 
 **#51** — Recovery backoff state is currently in-memory only. Should be persisted
 once #2 exists. Do not implement before #2.
@@ -200,9 +200,9 @@ A. #58  Always-HTTP qz-codex bootstrap — CLOSED (slices D2/D2.1/D3)
         and qz-up recovery coupling all removed. CODEX_HOME default: $HOME/.qz-codex/codex-home.
         See docs/edge-case-config-contract-plan.md §qz-codex always-HTTP bootstrap design.
 
-B. #56  Generated artifact path migration (var/generated/) — Slices A–D.1 complete
-        All three artifacts under var/generated/. No shim. No old-path deletion. 2603 tests passing.
-        Next: Slice E — deprecate/remove stale codex_home_dir() helpers or close-out decision.
+B. #56  Generated artifact path migration (var/generated/) — Slices A–E complete
+        All three artifacts under var/generated/. Stale helpers removed. 2600 tests passing.
+        Next: close-out audit — confirm acceptance criteria, then close #56.
         See docs/edge-case-config-contract-plan.md §generated artifact path migration design.
 
 B. #37  Stream seam: fresh design micro-slice for next delicate seam

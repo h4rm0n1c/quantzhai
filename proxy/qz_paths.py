@@ -36,17 +36,3 @@ def codex_model_catalog_path() -> Path:
 
 def codex_config_path() -> Path:
     return codex_generated_dir() / "config.toml"
-
-
-# Deprecated: var/codex-home/ was the server-local CODEX_HOME before #58.
-# After #58, CODEX_HOME is client-local ($HOME/.qz-codex/codex-home).
-# Kept for compatibility; not called by any runtime code after Slice D-impl.
-
-def codex_home_dir() -> Path:
-    """Deprecated — server-side var/codex-home/ is no longer CODEX_HOME after #58."""
-    return qz_var_dir() / "codex-home"
-
-
-def codex_model_catalog_dir() -> Path:
-    """Deprecated — model catalogs now live under codex_generated_dir()."""
-    return codex_home_dir() / "model-catalogs"

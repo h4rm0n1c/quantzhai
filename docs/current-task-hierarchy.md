@@ -664,8 +664,12 @@ risks). Stale path in `scripts/qz-codex` exec error message fixed. 3 new tests c
 `/qz/config/effective` reports new A2/A3 paths and old `codex-home` path not present.
 2603 tests PASS.
 
-Next: Slice E — deprecate/remove `codex_home_dir()` and `codex_model_catalog_dir()` stubs,
-or close out #56 with migration complete and stubs as permanent deprecated helpers.
+**Slice E (this commit):** CLOSED. Audited runtime callers — none found.
+`codex_home_dir()` and `codex_model_catalog_dir()` removed from `proxy/qz_paths.py`.
+4 deprecated tests removed; 1 negative regression test added
+(`test_no_deprecated_codex_home_helpers_exported`). 2600 tests PASS.
+
+Next: #56 close-out audit — confirm acceptance criteria, then close.
 
 ## Next implementation prompt: #37 design micro-slice for next delicate stream seam
 

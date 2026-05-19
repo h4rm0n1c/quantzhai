@@ -2864,7 +2864,10 @@ later (future slice) if old path exists and new path exists.
 8. ~~**Slice D.1: D-impl audit/polish** — COMPLETE~~
    - ~~Stale path references fixed in edge-case doc and qz-codex exec message~~
    - ~~3 new tests confirm /qz/config/effective reports new A2/A3 paths, 2603 tests PASS~~
-9. **Slice E: Deprecate `codex_home_dir()` / `codex_model_catalog_dir()`** — or close-out decision
+9. ~~**Slice E: Remove `codex_home_dir()` / `codex_model_catalog_dir()`** — COMPLETE~~
+   - ~~Audit: no runtime callers; helpers removed from qz_paths.py~~
+   - ~~Deprecated tests removed; negative regression test added; 2600 tests PASS~~
+10. **#56 close-out audit** — confirm acceptance criteria, then close
 
 ---
 

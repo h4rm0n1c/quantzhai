@@ -7,11 +7,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import proxy.qz_paths as qz_paths_module
 from proxy.qz_paths import (
     codex_config_path,
     codex_generated_dir,
-    codex_home_dir,
-    codex_model_catalog_dir,
     codex_model_catalog_path,
     model_inventory_path,
     qz_root,
@@ -41,8 +40,6 @@ class QzPathsDefaultTests(unittest.TestCase):
         self.assertIsInstance(qz_var_dir(), Path)
         self.assertIsInstance(model_inventory_path(), Path)
         self.assertIsInstance(codex_generated_dir(), Path)
-        self.assertIsInstance(codex_home_dir(), Path)
-        self.assertIsInstance(codex_model_catalog_dir(), Path)
         self.assertIsInstance(codex_model_catalog_path(), Path)
         self.assertIsInstance(codex_config_path(), Path)
 
@@ -58,14 +55,6 @@ class QzPathsDefaultTests(unittest.TestCase):
     def test_model_inventory_path_default_matches_current_var_path(self):
         expected = qz_var_dir() / "generated" / "model-inventory.json"
         self.assertEqual(model_inventory_path(), expected)
-
-    def test_codex_home_dir_default_matches_current_var_path(self):
-        expected = qz_var_dir() / "codex-home"
-        self.assertEqual(codex_home_dir(), expected)
-
-    def test_codex_model_catalog_dir_default_matches_current_var_path(self):
-        expected = codex_home_dir() / "model-catalogs"
-        self.assertEqual(codex_model_catalog_dir(), expected)
 
     def test_codex_model_catalog_path_default_matches_current_var_path(self):
         expected = codex_generated_dir() / "qwenzhai-models.json"
@@ -101,8 +90,6 @@ class QzPathsEnvOverrideTests(unittest.TestCase):
             self.assertEqual(codex_generated_dir(), custom_var / "generated" / "codex")
             self.assertEqual(codex_model_catalog_path(), custom_var / "generated" / "codex" / "qwenzhai-models.json")
             self.assertEqual(codex_config_path(), custom_var / "generated" / "codex" / "config.toml")
-            # deprecated helpers still return old layout
-            self.assertEqual(codex_home_dir(), custom_var / "codex-home")
 
     def test_qz_root_env_override_is_respected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -138,8 +125,6 @@ class QzPathsNoSideEffectsTests(unittest.TestCase):
                 codex_generated_dir(),
                 codex_model_catalog_path(),
                 codex_config_path(),
-                codex_home_dir(),
-                codex_model_catalog_dir(),
             ]
             for path in paths:
                 self.assertFalse(path.exists(), f"helper created {path}")
@@ -179,16 +164,6 @@ class QzPathsCodexHomeIndependenceTests(unittest.TestCase):
             os.environ["QZ_VAR_DIR"] = str(var_dir)
             os.environ["CODEX_HOME"] = str(Path(tmp) / "client-home")
             path = codex_config_path()
-            self.assertIn(str(var_dir), str(path))
-            self.assertNotIn("client-home", str(path))
-
-    def test_codex_home_dir_uses_var_dir_not_codex_home(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            var_dir = Path(tmp) / "var"
-            var_dir.mkdir(parents=True)
-            os.environ["QZ_VAR_DIR"] = str(var_dir)
-            os.environ["CODEX_HOME"] = str(Path(tmp) / "client-home")
-            path = codex_home_dir()
             self.assertIn(str(var_dir), str(path))
             self.assertNotIn("client-home", str(path))
 
@@ -236,10 +211,6 @@ class QzPathsCodexGeneratedDirTests(unittest.TestCase):
         self.assertIn("generated", codex_config_path().parts)
         self.assertNotIn("codex-home", codex_config_path().parts)
 
-    def test_deprecated_codex_home_dir_still_returns_old_server_layout(self):
-        expected = qz_var_dir() / "codex-home"
-        self.assertEqual(codex_home_dir(), expected)
-
     def test_codex_generated_paths_ignore_codex_home(self):
         with tempfile.TemporaryDirectory() as tmp:
             var_dir = Path(tmp) / "var"
@@ -262,6 +233,13 @@ class QzPathsCodexGeneratedDirTests(unittest.TestCase):
             _ = codex_config_path()
             old_catalog_dir = Path(tmp) / "codex-home" / "model-catalogs"
             self.assertFalse(old_catalog_dir.exists(), "old codex-home dir must not be created")
+
+    def test_no_deprecated_codex_home_helpers_exported(self):
+        """codex_home_dir and codex_model_catalog_dir must not exist in qz_paths (#56 Slice E)."""
+        self.assertFalse(hasattr(qz_paths_module, "codex_home_dir"),
+                         "codex_home_dir was removed in Slice E; do not re-add")
+        self.assertFalse(hasattr(qz_paths_module, "codex_model_catalog_dir"),
+                         "codex_model_catalog_dir was removed in Slice E; do not re-add")
 
 
 if __name__ == "__main__":
