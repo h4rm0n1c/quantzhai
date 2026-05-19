@@ -2510,7 +2510,9 @@ var/codex-home/model-catalogs/qwenzhai-models.json (A2)
     /qz/codex/client-config metadata (sha256, mtime)       [qz_codex_client_config.py:67,70-92]
     /qz/config/effective reports path/existence/staleness  [qz_config_report.py:381,436]
     /qz/models/refresh regenerates and reports path        [qz_request_router.py:1448,1460-1461]
-  Env override: CODEX_HOME (for server-side codex-home base)
+  Env override: None — CODEX_HOME is client-local qz-codex state after #58.
+                Server path follows QZ_VAR_DIR via qz_paths helpers.
+                See #56 Slice B.1 audit.
   Default:      (QZ_VAR_DIR or root/var) / "codex-home" / "model-catalogs" / "qwenzhai-models.json"
 
 var/codex-home/config.toml (A3)

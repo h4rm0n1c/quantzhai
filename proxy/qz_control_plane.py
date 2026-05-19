@@ -20,7 +20,7 @@ import os
 from pathlib import Path
 
 try:
-    from .qz_paths import codex_home_dir as _codex_home_dir
+    from .qz_paths import codex_model_catalog_path as _codex_model_catalog_path
     from .qz_service_status import build_service_status
     from .qz_recovery_status import build_recovery_status
     from .qz_recovery_state import RECOVERY_STATE
@@ -28,7 +28,7 @@ try:
     from .qz_recovery_jobs import RECOVERY_JOBS
     from .qz_vram_snapshot import get_cached_vram_snapshot
 except ImportError:
-    from qz_paths import codex_home_dir as _codex_home_dir
+    from qz_paths import codex_model_catalog_path as _codex_model_catalog_path
     from qz_service_status import build_service_status
     from qz_recovery_status import build_recovery_status
     from qz_recovery_state import RECOVERY_STATE
@@ -41,10 +41,12 @@ QZ_CONTROL_PLANE_SCHEMA = "qz.control_plane.status.v1"
 
 
 def _codex_catalog_info() -> dict[str, Any]:
-    """Return the Codex catalog artifact path and existence state."""
-    root = Path(os.environ.get("QZ_ROOT", Path(__file__).resolve().parents[1])).resolve()
-    codex_home = Path(os.environ.get("CODEX_HOME", root / "var" / "codex-home"))
-    catalog_path = codex_home / "model-catalogs" / "qwenzhai-models.json"
+    """Return the Codex catalog artifact path and existence state.
+
+    Path comes from qz_paths (QZ_VAR_DIR / codex-home / ...), not CODEX_HOME.
+    CODEX_HOME is qz-codex client-local state after #58.
+    """
+    catalog_path = _codex_model_catalog_path()
     return {
         "path": str(catalog_path),
         "exists": catalog_path.is_file(),

@@ -1,6 +1,6 @@
 # QuantZhai Progress Snapshot
 
-Last updated: 2026-05-19 (post-#5/#57 close-out stocktake).
+Last updated: 2026-05-19 (post-#5/#57 close-out + #56 Slices B/B.1).
 
 See `docs/current-stocktake.md` for the full point-in-time state summary.
 
@@ -40,7 +40,8 @@ P4 Search config split (#39) — when search work resumes
 BrainCase feature work paused: #53 and #54 are closed.
 Repeated-read v1: COMPLETE (#3/#4/#43 closed; qz_file_signal.py live).
 Config cleanup CLOSED (#5). qz-codex always-HTTP bootstrap CLOSED (#57/#58).
-2576 tests passing.
+#56 Slice B (path helpers) + B.1 (CODEX_HOME audit) CLOSED.
+2592 tests passing.
 
 ## Area estimates
 
@@ -132,7 +133,7 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 
 ## Immediate next priorities
 
-1. **#56 Slice B** — path-helper abstraction for generated artifacts (no path moves yet). Slice A-design complete.
+1. **#56 Slice C-design** — first physical migration target / compatibility plan. Slices A–B.1 complete.
 2. **#37 design micro-slice** — next delicate stream seam before coding.
 3. **#51/#46** — deferred until operational-store decision.
 

@@ -308,28 +308,47 @@ class OverallStatusTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class CodexCatalogInfoTests(unittest.TestCase):
+    _ENV_KEYS = ("QZ_ROOT", "QZ_VAR_DIR", "CODEX_HOME")
+
+    def setUp(self):
+        self._saved = {k: os.environ.get(k) for k in self._ENV_KEYS}
+        for k in self._ENV_KEYS:
+            os.environ.pop(k, None)
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
     def test_returns_dict(self):
         info = _codex_catalog_info()
         self.assertIsInstance(info, dict)
         self.assertIn("path", info)
         self.assertIn("exists", info)
 
-    def test_respects_codex_home_env(self):
+    def test_path_uses_qz_var_dir_not_codex_home(self):
+        """CODEX_HOME must not redirect server catalog path; QZ_VAR_DIR controls it."""
         with tempfile.TemporaryDirectory() as tmp:
-            cat_dir = Path(tmp) / "model-catalogs"
-            cat_dir.mkdir()
-            cat_file = cat_dir / "qwenzhai-models.json"
-            cat_file.write_text("{}", encoding="utf-8")
-            old = os.environ.get("CODEX_HOME")
-            try:
-                os.environ["CODEX_HOME"] = tmp
-                info = _codex_catalog_info()
-                self.assertTrue(info["exists"])
-            finally:
-                if old is None:
-                    os.environ.pop("CODEX_HOME", None)
-                else:
-                    os.environ["CODEX_HOME"] = old
+            custom_var = Path(tmp) / "custom-var"
+            custom_var.mkdir(parents=True)
+            os.environ["QZ_VAR_DIR"] = str(custom_var)
+            os.environ.pop("CODEX_HOME", None)
+            info = _codex_catalog_info()
+            self.assertIn(str(custom_var), info["path"])
+            self.assertNotIn("CODEX_HOME", info["path"])
+
+    def test_codex_home_env_ignored_for_catalog_path(self):
+        """Setting CODEX_HOME must not change the server catalog path."""
+        with tempfile.TemporaryDirectory() as tmp:
+            custom_var = Path(tmp) / "custom-var"
+            custom_var.mkdir(parents=True)
+            os.environ["QZ_VAR_DIR"] = str(custom_var)
+            os.environ["CODEX_HOME"] = str(Path(tmp) / "client-home")
+            info = _codex_catalog_info()
+            self.assertIn(str(custom_var), info["path"])
+            self.assertNotIn("client-home", info["path"])
 
 
 class ServiceStatusInControlPlaneTests(unittest.TestCase):

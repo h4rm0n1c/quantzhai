@@ -25,6 +25,25 @@ they are not automatic operational logs.
 No automatic ingestion. No clever memory. No cross-domain sharing.
 ```
 
+## Recently completed (2026-05-19 run — #5/#57 close-out + #58 always-HTTP + #56 Slices B/B.1)
+
+```text
+#56 Slice B — path-helper abstraction (commit eff2555)
+  - proxy/qz_paths.py: qz_root, qz_var_dir, model_inventory_path,
+    codex_home_dir, codex_model_catalog_path, codex_config_path
+  - Replaced inline generated artifact paths in 5 modules
+  - 11 tests; py_compile/shell syntax PASS
+
+#56 Slice B.1 — CODEX_HOME/server-path audit
+  - Removed 3 stale CODEX_HOME overrides from server/proxy runtime code:
+    qz_request_router.py:_refresh_codex_catalog(),
+    qz_request_router.py:/qz/models/refresh,
+    qz_control_plane.py:_codex_catalog_info()
+  - All server Codex artifact paths now use qz_paths (QZ_VAR_DIR), not CODEX_HOME
+  - 6 new tests for CODEX_HOME independence
+  - 2592 tests PASS
+```
+
 ## Recently completed (2026-05-19 run — #5/#57 close-out + #58 always-HTTP bootstrap)
 
 ```text
@@ -570,19 +589,34 @@ Implementation (Slices D2/D2.1/D3):
 
 See `docs/edge-case-config-contract-plan.md` §qz-codex always-HTTP bootstrap design.
 
-## #56 design complete: generated artifact path migration (Slice A-design)
+## #56 design complete: generated artifact path migration (Slices A–B.1)
 
-**CLOSED for design.** Slice A inventory/plan complete. No path moves yet.
+**Slice A-design:** CLOSED. Inventory/plan complete. No path moves yet.
 
 Key finding: After #58, qz-codex clients do NOT read server-local generated
 paths. The `/qz/codex/model-catalog` endpoint is the stable boundary. This
 makes server-side path migration safe — no client changes needed.
 
-Recommendation: path-helper abstraction (`qz_paths` module) before any
-physical path move. See `docs/edge-case-config-contract-plan.md` §generated
-artifact path migration design for full inventory and plan.
+**Slice B (commit eff2555):** CLOSED. `proxy/qz_paths.py` added. Replaced
+inline generated artifact paths with helpers. 11 tests. No physical moves.
 
-Next slice: B — path-helper abstraction (still no physical path moves).
+**Slice B.1 (audit/polish):** CLOSED. Audited all server/proxy CODEX_HOME
+usage after #58. Three fixes:
+- `qz_request_router.py:_refresh_codex_catalog()` — removed CODEX_HOME override
+- `qz_request_router.py:/qz/models/refresh` — removed CODEX_HOME override
+- `qz_control_plane.py:_codex_catalog_info()` — replaced inline CODEX_HOME path
+  with `codex_model_catalog_path()` from qz_paths
+- Removed unused `_codex_home_dir` imports from qz_config_report.py,
+  qz_control_plane.py, qz_request_router.py
+- Added 6 tests for CODEX_HOME independence
+- Updated control plane test for new behaviour
+- 2592 tests PASS. py_compile/shell syntax PASS.
+
+Doctrine confirmed: CODEX_HOME is client-local qz-codex state.
+Server/proxy generated artifact paths come from qz_paths / QZ_VAR_DIR.
+No physical file moves. No var/generated/ created.
+
+Next slice: C-design — first physical migration target / compatibility plan.
 
 ## Next implementation prompt: #37 design micro-slice for next delicate stream seam
 

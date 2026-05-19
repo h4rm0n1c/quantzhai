@@ -17,7 +17,6 @@ try:
     from .qz_config_report import effective_config_payload
     from .qz_paths import (
         codex_config_path as _codex_config_path,
-        codex_home_dir as _codex_home_dir,
         codex_model_catalog_path as _codex_model_catalog_path,
         model_inventory_path as _model_inventory_path,
         qz_var_dir as _qz_var_dir,
@@ -72,7 +71,6 @@ except ImportError:
     from qz_config_report import effective_config_payload
     from qz_paths import (
         codex_config_path as _codex_config_path,
-        codex_home_dir as _codex_home_dir,
         codex_model_catalog_path as _codex_model_catalog_path,
         model_inventory_path as _model_inventory_path,
         qz_var_dir as _qz_var_dir,
@@ -394,12 +392,8 @@ class RequestRouter:
                 "QZ_MODEL_INVENTORY_CACHE",
                 str(_model_inventory_path()),
             ))
-            codex_home = Path(os.environ.get(
-                "CODEX_HOME",
-                str(_codex_home_dir()),
-            ))
-            catalog_dst = codex_home / "model-catalogs" / "qwenzhai-models.json"
-            config_dst = codex_home / "config.toml"
+            catalog_dst = _codex_model_catalog_path()
+            config_dst = _codex_config_path()
             catalog_dst.parent.mkdir(parents=True, exist_ok=True)
             generate_codex_catalog(inventory_path, catalog_dst, config_dst)
             return True
@@ -1471,12 +1465,8 @@ class RequestRouter:
             ]
             _model_ids = [mid for mid in _model_ids if mid]
 
-            # Catalog path from env / convention
-            _codex_home = Path(os.environ.get(
-                "CODEX_HOME",
-                str(_codex_home_dir()),
-            ))
-            _catalog_path = str(_codex_home / "model-catalogs" / "qwenzhai-models.json")
+            # Catalog path from qz_paths (QZ_VAR_DIR / codex-home), not CODEX_HOME
+            _catalog_path = str(_codex_model_catalog_path())
 
             self.handler._send_json(200, {
                 "schema": "qz.codex.catalog.refresh.v1",

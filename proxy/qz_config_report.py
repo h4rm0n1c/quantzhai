@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Optional
 try:
     from .qz_paths import (
         codex_config_path as _codex_config_path,
-        codex_home_dir as _codex_home_dir,
         codex_model_catalog_path as _codex_model_catalog_path,
         model_inventory_path as _model_inventory_path,
         qz_var_dir as _qz_var_dir,
@@ -17,7 +16,6 @@ try:
 except ImportError:
     from qz_paths import (
         codex_config_path as _codex_config_path,
-        codex_home_dir as _codex_home_dir,
         codex_model_catalog_path as _codex_model_catalog_path,
         model_inventory_path as _model_inventory_path,
         qz_var_dir as _qz_var_dir,

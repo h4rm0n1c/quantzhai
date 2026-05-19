@@ -140,5 +140,63 @@ class QzPathsNoSideEffectsTests(unittest.TestCase):
                 self.assertFalse(path.exists(), f"helper created {path}")
 
 
+class QzPathsCodexHomeIndependenceTests(unittest.TestCase):
+    """Tests that qz_paths helpers ignore CODEX_HOME env var (stale after #58)."""
+
+    _ENV_KEYS = ("QZ_ROOT", "QZ_VAR_DIR", "CODEX_HOME")
+
+    def setUp(self):
+        self._saved = {k: os.environ.get(k) for k in self._ENV_KEYS}
+        for k in self._ENV_KEYS:
+            os.environ.pop(k, None)
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_codex_model_catalog_path_ignores_codex_home(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            var_dir = Path(tmp) / "var"
+            var_dir.mkdir(parents=True)
+            os.environ["QZ_VAR_DIR"] = str(var_dir)
+            os.environ["CODEX_HOME"] = str(Path(tmp) / "client-home")
+            path = codex_model_catalog_path()
+            self.assertIn(str(var_dir), str(path))
+            self.assertNotIn("client-home", str(path))
+
+    def test_codex_config_path_ignores_codex_home(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            var_dir = Path(tmp) / "var"
+            var_dir.mkdir(parents=True)
+            os.environ["QZ_VAR_DIR"] = str(var_dir)
+            os.environ["CODEX_HOME"] = str(Path(tmp) / "client-home")
+            path = codex_config_path()
+            self.assertIn(str(var_dir), str(path))
+            self.assertNotIn("client-home", str(path))
+
+    def test_codex_home_dir_uses_var_dir_not_codex_home(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            var_dir = Path(tmp) / "var"
+            var_dir.mkdir(parents=True)
+            os.environ["QZ_VAR_DIR"] = str(var_dir)
+            os.environ["CODEX_HOME"] = str(Path(tmp) / "client-home")
+            path = codex_home_dir()
+            self.assertIn(str(var_dir), str(path))
+            self.assertNotIn("client-home", str(path))
+
+    def test_model_inventory_path_ignores_codex_home(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            var_dir = Path(tmp) / "var"
+            var_dir.mkdir(parents=True)
+            os.environ["QZ_VAR_DIR"] = str(var_dir)
+            os.environ["CODEX_HOME"] = str(Path(tmp) / "client-home")
+            path = model_inventory_path()
+            self.assertIn(str(var_dir), str(path))
+            self.assertNotIn("client-home", str(path))
+
+
 if __name__ == "__main__":
     unittest.main()
