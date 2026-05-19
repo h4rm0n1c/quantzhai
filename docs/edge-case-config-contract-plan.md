@@ -2260,8 +2260,10 @@ qz-codex:
   - fails cleanly and explicitly if proxy is unavailable
 
 qz-up:
-  - service management only: start/stop/check QuantZhai stack
-  - may optionally exec qz-codex as a convenience after startup
+  - service management only: start/stop/check QuantZhai services
+  - must not exec qz-codex
+  - must not prepare qz-codex CODEX_HOME
+  - must not appear in qz-codex bootstrap or recovery flow
   - qz-codex never invokes qz-up
   - qz-codex failure message does not reference qz-up
 ```
@@ -2309,8 +2311,7 @@ No branching on `QZ_CODEX_REMOTE`. No server path reads. No template copies.
 ```text
 qz-codex: QuantZhai appears to be down.
   Tried: http://QZ_PROXY_HOST:QZ_PROXY_PORT/qz/codex/client-config
-  Start the QuantZhai proxy/service (e.g. scripts/qz-proxy or scripts/qz-up),
-  then retry.
+  Start the QuantZhai proxy/service, then retry.
 ```
 
 **Catalog missing (proxy up but not refreshed):**
@@ -2385,14 +2386,20 @@ This makes #56 safer:
 
 ### qz-up boundary
 
-`qz-up --codex-model MODEL` may exec `qz-codex` as a convenience after starting
-the stack. That is a qz-up feature, not a qz-codex dependency. qz-codex must not:
+qz-up is service management only. It starts, stops, and checks QuantZhai services.
+
+**qz-up must not:**
+- exec qz-codex
+- prepare qz-codex CODEX_HOME
+- be referenced in qz-codex error or recovery messages
+
+**qz-codex must not:**
 - invoke qz-up
 - reference qz-up in error messages
 - assume qz-up manages its CODEX_HOME
 
-The new proxy-down error message explicitly describes manual recovery without
-coupling to qz-up's script name.
+The proxy-down error message describes recovery in service-neutral terms:
+"Start the QuantZhai proxy/service, then retry." — no mention of qz-up.
 
 ---
 
