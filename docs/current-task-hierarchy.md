@@ -570,6 +570,20 @@ Implementation (Slices D2/D2.1/D3):
 
 See `docs/edge-case-config-contract-plan.md` §qz-codex always-HTTP bootstrap design.
 
+## #56 design complete: generated artifact path migration (Slice A-design)
+
+**CLOSED for design.** Slice A inventory/plan complete. No path moves yet.
+
+Key finding: After #58, qz-codex clients do NOT read server-local generated
+paths. The `/qz/codex/model-catalog` endpoint is the stable boundary. This
+makes server-side path migration safe — no client changes needed.
+
+Recommendation: path-helper abstraction (`qz_paths` module) before any
+physical path move. See `docs/edge-case-config-contract-plan.md` §generated
+artifact path migration design for full inventory and plan.
+
+Next slice: B — path-helper abstraction (still no physical path moves).
+
 ## Next implementation prompt: #37 design micro-slice for next delicate stream seam
 
 **BrainCase #53/#54 closed. Repeated-read v1 complete. #37 Slices 1–2E.1 complete.**

@@ -132,7 +132,7 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 
 ## Immediate next priorities
 
-1. **#56 design slice** — generated artifact path migration design only; no path moves. Safer now that #58 always-HTTP bootstrap is closed.
+1. **#56 Slice B** — path-helper abstraction for generated artifacts (no path moves yet). Slice A-design complete.
 2. **#37 design micro-slice** — next delicate stream seam before coding.
 3. **#51/#46** — deferred until operational-store decision.
 

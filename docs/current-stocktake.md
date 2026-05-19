@@ -133,11 +133,11 @@ candidates (tool lifecycle, terminal events, proxy-local suppression,
 continuation/repair) carry higher extraction risk. Need a fresh design
 micro-slice before proceeding. See docs/stream-reducer-boundary-design.md.
 
-**#56** — NEXT. Generated artifact path migration design (var/generated/).
-Follow-up from #5 close-out. **Design only first** — inventory current
-generated artifacts and consumers, define compatibility/shim strategy,
-preserve qz-codex local and remote bootstrap, no routing changes, no
-CODEX_HOME breakage. No path moves in the first slice.
+**#56** — Slice A-design complete. Generated artifact path migration design (var/generated/).
+Follow-up from #5 close-out. **Design/inventory only** — inventoried generated
+artifacts and consumers; recommended path-helper abstraction before any path
+move; confirmed #58 makes qz-codex independent of server-local generated paths.
+Next: Slice B path-helper abstraction.
 
 **#51** — Recovery backoff state is currently in-memory only. Should be persisted
 once #2 exists. Do not implement before #2.
@@ -188,10 +188,11 @@ A. #58  Always-HTTP qz-codex bootstrap — CLOSED (slices D2/D2.1/D3)
         and qz-up recovery coupling all removed. CODEX_HOME default: $HOME/.qz-codex/codex-home.
         See docs/edge-case-config-contract-plan.md §qz-codex always-HTTP bootstrap design.
 
-B. #56  Generated artifact path migration design (var/generated/)
-        Design-only first: inventory artifacts/consumers, define compatibility plan, no path moves.
-        Safer after Slice D because qz-codex clients will no longer read server paths.
-        See docs/edge-case-config-contract-plan.md §qz-codex always-HTTP bootstrap design.
+B. #56  Generated artifact path migration (var/generated/) — design complete
+        Slice A-design done: inventoried generated artifacts and consumers;
+        classified public boundaries; confirmed #58 makes qz-codex independent
+        of server-local paths. Next: Slice B path-helper abstraction.
+        See docs/edge-case-config-contract-plan.md §generated artifact path migration design.
 
 B. #37  Stream seam: fresh design micro-slice for next delicate seam
         Slices 1–2F.1 are complete and paused.

@@ -2459,16 +2459,196 @@ test_shell_syntax_qz_codex_common
 
 ---
 
-## Next steps
+## Generated artifact path migration design (#56 Slice A-design)
 
-1. Treat this plan as a living document.
-2. Start with an audit of data paths, failure modes, and config/state files.
-3. Prioritise minimal error-report improvements before the larger config restructure.
-4. Hide or compactly fail invalid profiles before touching broader layout.
-5. Design the config contract after the audit, not before.
-6. Reduce script sprawl as part of the refactor, without moving shell mess into the three remaining entry scripts.
-7. Add `memory_domain` plumbing to the existing model-overrides loader (next smallest implementation slice above).
-8. Implement `qz.profiles.v1` loader and `profiles/*.json` directory support after the plumbing is green.
+Date: 2026-05-19. Status: design/inventory only — no path moves yet.
+
+### Background
+
+After #58 (always-HTTP qz-codex bootstrap), qz-codex clients no longer
+read server-side generated paths directly. The `/qz/codex/model-catalog`
+HTTP endpoint is the stable compatibility boundary. This makes server-side
+path migration safer: the server can reorganise its generated artifacts
+as long as internal references are updated and endpoints remain stable.
+
+### Artifact inventory
+
+| # | Path | Classification | Producer | Consumers | Generated at | Safe to move? |
+|---|---|---|---|---|---|---|
+| A1 | `var/model-inventory.json` | generated_inventory | `ModelCatalog.refresh()`, `write_cache()` in `qz_model_catalog.py` | `qz_codex_catalog.generate()`, `/qz/config/effective`, `/qz/models/refresh` flow, CLI | Refresh time | Yes — server-internal |
+| A2 | `var/codex-home/model-catalogs/qwenzhai-models.json` | generated_codex_catalog | `qz_codex_catalog.generate()`, called from `_refresh_codex_catalog()` | `/qz/codex/model-catalog`, `/qz/codex/client-config` metadata, `/qz/config/effective`, `/qz/models/refresh` | Refresh time | Yes — behind endpoint boundary |
+| A3 | `var/codex-home/config.toml` | generated_codex_config | `qz_codex_catalog.generate()` patches in-place; `_refresh_codex_catalog()` orchestrates | Codex CLI via `model_catalog_json` path, `/qz/config/effective` | Refresh time | Borderline — generated Codex config view |
+| A4 | `var/model-state.json` | state_fallback | `qz_model_router.py` writes on model select | `ModelCatalog.load_last_selected_model()` | Runtime | Not #56 — see #51/#46 |
+| A5 | `var/backend-state.json` | state_fallback | `qz_model_router.py` writes | Internal proxy reads | Runtime | Not #56 — see #51/#46 |
+| A6 | `var/run/qz-runtime-state.json` | startup_snapshot | `qz-write-runtime-state` script, `qz-up` | Diagnostics | Startup | Not #56 — see #46 |
+| A7 | `var/captures/` | debug_captures | `qz_capture.py` | Diagnostics/playback | Request time | Not #56 — out of scope |
+| A8 | `var/logs/` | logs | Proxy + backend | Diagnostics | Continuous | Not #56 — out of scope |
+| A9 | `var/benchmarks/latest-summary.json` | benchmark_cache | Benchmark scripts | Diagnostics | Benchmark time | Not #56 — out of scope |
+| A10 | `config/example/codex-config.toml` | example_codex_config | Tracked in git | Reference | N/A (source) | Not generated — exclude |
+| A11 | `config/example/qwenzhai-models.json` | example_codex_catalog | Tracked in git | Reference | N/A (source) | Not generated — exclude |
+
+### Producer/consumer map
+
+```
+var/model-inventory.json (A1)
+  Producer:   ModelCatalog.refresh() -> write_cache(root)   [qz_model_catalog.py:768-772]
+              ModelCatalog.__init__() -> self.refresh()      [qz_model_catalog.py:827-828]
+              ModelCatalog.select() -> write_cache()         [qz_model_catalog.py:860-861]
+  Consumers:
+    qz_codex_catalog.generate(inventory_path, ...)           [qz_codex_catalog.py:278-280]
+    _refresh_codex_catalog() -> generate(inventory_path,...) [qz_request_router.py:380-388]
+    /qz/config/effective -> effective_config_payload()       [qz_config_report.py:376,431]
+    CLI scan/resolve/list                                    [qz_model_catalog.py:950,957,main]
+  Env override: QZ_MODEL_INVENTORY_CACHE
+  Default:      root / "var" / "model-inventory.json"
+
+var/codex-home/model-catalogs/qwenzhai-models.json (A2)
+  Producer:   _refresh_codex_catalog() -> generate()  [qz_request_router.py:384-388]
+              generate(inventory, catalog_dst, config_dst)  [qz_codex_catalog.py:278-290]
+  Consumers:
+    /qz/codex/model-catalog endpoint reads and serves file  [qz_request_router.py:498-507]
+    /qz/codex/client-config metadata (sha256, mtime)       [qz_codex_client_config.py:67,70-92]
+    /qz/config/effective reports path/existence/staleness  [qz_config_report.py:381,436]
+    /qz/models/refresh regenerates and reports path        [qz_request_router.py:1448,1460-1461]
+  Env override: CODEX_HOME (for server-side codex-home base)
+  Default:      (QZ_VAR_DIR or root/var) / "codex-home" / "model-catalogs" / "qwenzhai-models.json"
+
+var/codex-home/config.toml (A3)
+  Producer:   generate() patches model_catalog_json in-place  [qz_codex_catalog.py:292-303]
+  Consumers:
+    Codex CLI reads via model_catalog_json path in config.toml
+    (server-side; qz-codex writes its own client config)
+    /qz/config/effective reports path/existence/staleness   [qz_config_report.py:382,435]
+```
+
+### Public boundary classification
+
+**A. Public/API boundary — must remain stable:**
+
+| Endpoint | What it serves | Path dependency |
+|---|---|---|
+| `GET /qz/codex/client-config` | Provider metadata + catalog URL + sha256 | Reads A2 for metadata only |
+| `GET /qz/codex/model-catalog` | Full catalog JSON | Reads A2 |
+| `GET /qz/config/effective` | File metadata, staleness warnings | Reads A1, A2, A3 for status |
+| `POST /qz/models/refresh` | Regenerates catalog + config | Writes A1, A2, A3 |
+
+These endpoints must keep working after any path move. Wire format unchanged.
+
+**B. Server-internal generated artifacts — movable (code changes only):**
+
+| Artifact | Code references |
+|---|---|
+| A1 `var/model-inventory.json` | ~8 locations: `qz_model_catalog.py`, `qz_request_router.py`, `qz_config_report.py`, CLI |
+| A2 `var/codex-home/model-catalogs/qwenzhai-models.json` | 4 locations: router, config_report, client_config, codex_catalog |
+| A3 `var/codex-home/config.toml` | 2 locations: router, config_report |
+
+**C. Client-local cache — out of server migration scope:**
+- `qz-codex` client CODEX_HOME (default: `$HOME/.qz-codex/codex-home/`)
+- qz-codex downloads its own copy of the catalog via HTTP
+
+**D. Operational runtime state — #51/#46 scope:**
+- `var/model-state.json` (A4)
+- `var/backend-state.json` (A5)
+- `var/run/qz-runtime-state.json` (A6)
+
+**E. Logs/debug/captures — not #56 scope:**
+- `var/captures/` (A7)
+- `var/logs/` (A8)
+- `var/benchmarks/latest-summary.json` (A9)
+
+### #58 compatibility impact
+
+After #58, qz-codex-common does NOT read any server `var/codex-home` path:
+- `qz-codex-common` gets catalog via `GET /qz/codex/model-catalog`
+- `qz-codex-common` writes client-local CODEX_HOME from HTTP response
+- `qz-codex-common` never reads `var/model-inventory.json`
+
+This means:
+- A1 migration requires updating ~8 server-side references but zero qz-codex changes
+- A2 migration requires updating ~4 server-side references and the endpoint implementation, but zero qz-codex changes as long as the `/qz/codex/model-catalog` endpoint still works
+- A3 is server-internal; even local qz-codex reads via HTTP after #58
+
+**No client changes needed for any server-side path move.**
+
+### Migration strategy comparison
+
+| Option | Description | Pros | Cons | Recommendation |
+|---|---|---|---|---|
+| **A** Direct move | Move all generated paths to `var/generated/` at once | Clean layout | High breakage risk, tests break, needs shims | Not yet |
+| **B** Path helper abstraction | Add `qz_paths.generated_dir()`, `qz_paths.codex_catalog_path()`, etc. before moving | Centralises path logic, low risk | Small refactor needed | **RECOMMENDED for Slice B** |
+| **C** Symlink shim | Add symlinks from old paths to new | Zero code changes | Portability issues, hides stale consumers, cleanup burden | Not recommended |
+| **D** Keep as-is | Document paths as server-internal, no move | No churn | Does not solve layout cleanup | Long-term fallback |
+
+### Proposed future layout (design only — do not implement)
+
+```
+var/generated/model-inventory.json             <- currently var/model-inventory.json
+var/generated/codex/model-catalogs/             <- currently var/codex-home/model-catalogs/
+  qwenzhai-models.json
+```
+
+Artifact A3 (`var/codex-home/config.toml`) should NOT move to `var/generated/`. Rationale:
+- It is a generated Codex-compatible server config view, not a pure generated artifact
+- Keep in `var/codex-home/config.toml` or deprecate; do not move to generated
+
+### Staleness warning impact
+
+Current warnings (`/qz/config/effective`):
+- `stale_model_inventory_cache` — compares A1 mtime against user model-override mtimes
+- `stale_codex_catalog` — compares A2 mtime against A1 mtime
+- `stale_codex_config` — compares A3 mtime against A2 mtime
+
+Design for path helper slice:
+- Warnings must use path helpers, not hardcoded paths
+- Warning names must NOT change
+- Payload paths auto-update when helper returns new path
+- Missing-vs-stale separation must remain
+
+### Tests for future slices
+
+**Slice B (path helper abstraction) tests:**
+- `qz_paths.generated_dir()` returns `var/generated/` by default
+- `qz_paths.codex_catalog_path()` returns current path (no move yet)
+- `qz_paths.model_inventory_path()` returns current path (no move yet)
+- `/qz/config/effective` uses path helpers for all generated path records
+- `/qz/codex/client-config` catalog metadata uses path helpers
+- `/qz/codex/model-catalog` endpoint reads via path helper
+- `_refresh_codex_catalog()` receives paths from helpers
+- No qz-codex-common server path dependency
+- All existing tests still pass (helpers return same current paths)
+
+**Slice C (physical path move) tests:**
+- After A2 moves: `GET /qz/codex/model-catalog` still returns catalog
+- `GET /qz/codex/client-config` still reports sha256/mtime metadata
+- `GET /qz/config/effective` reports new path
+- Staleness warnings still work
+- `POST /qz/models/refresh` still regenerates at new location
+- No qz-codex client changes required
+- Full suite passes
+
+### Non-goals
+
+- No path moves in Slice A (this design slice)
+- No qz-codex client changes
+- No #58 reopening
+- No model/profile/slug changes
+- No routing changes
+- No BrainCase/LimbiCore changes
+- No operational persistence (#51/#46)
+- No stream work (#37)
+- No symlink shim layer
+- No replacement of `var/codex-home/config.toml`
+- No new endpoints
+- No changes to scripts (qz-up, qz-down, qz-codex-common)
+
+### Recommended next slices
+
+1. **Slice B: Path helper abstraction** — add `proxy/qz_paths.py` module, update server-side references, no physical path moves
+2. **Slice C: Physical move of A1** — `var/model-inventory.json` to `var/generated/model-inventory.json`
+3. **Slice D: Physical move of A2** — `var/codex-home/model-catalogs/qwenzhai-models.json` to `var/generated/codex/model-catalogs/qwenzhai-models.json`
+4. **Slice E: var/codex-home/config.toml decision** — deprecate or keep as server-internal view; no client impact after #58
+
+## Next steps
 
 ## Acceptance checks
 
