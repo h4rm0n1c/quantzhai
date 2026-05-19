@@ -88,13 +88,13 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 ## 3. Current open issues
 
 | # | Title | Classification |
-|---|---|---|---|
+|---|---|---|
 | #2 | Add optional Phase 1 SQLite storage substrate | **parked** (BrainCaseDB done via #53/#54; #2 may be closed or refocused) |
 | #53 | BrainCase memory tool API | **CLOSED** (Slices A–I.1 complete) |
 | #54 | BrainCase retention/lifetime policy | **CLOSED** (Slices A–D complete) |
 | #3/#4/#43 | Repeated-read v1 (parser, integration, smoke) | **CLOSED** (complete; advisory stateless v1 live) |
 | #37 | Architectural seam extraction plan | **PAUSED** — Slices 1–2F.1 complete; next seam needs design micro-slice |
-| #56 | Generated artifact path migration design (var/generated/) | **DESIGN (Slices A–C-design complete)** — first target A1 selected; no files moved |
+| #56 | Generated artifact path migration design (var/generated/) | **A1 MIGRATED (Slices A–C-impl complete)** — A1 at var/generated/model-inventory.json; A2/A3 pending |
 | #51 | Promote recovery/backoff runtime state to SQLite | **deferred** until operational-store decision |
 | #46 | Replace qz-write-runtime-state launcher trace | **deferred** until startup-telemetry replacement |
 | #5 | Config/var/script ownership cleanup | **CLOSED** (#56, #57 opened for migration/thinning follow-ups) |
@@ -133,7 +133,7 @@ candidates (tool lifecycle, terminal events, proxy-local suppression,
 continuation/repair) carry higher extraction risk. Need a fresh design
 micro-slice before proceeding. See docs/stream-reducer-boundary-design.md.
 
-**#56** — Slices A–C-design complete. Generated artifact path migration design (var/generated/).
+**#56** — Slices A–C-impl complete. Generated artifact path migration (var/generated/).
 Follow-up from #5 close-out.
 
 - **Slice A-design:** Inventoried generated artifacts and consumers; classified
@@ -141,13 +141,14 @@ Follow-up from #5 close-out.
 - **Slice B:** Added `proxy/qz_paths.py` path helpers. No physical moves.
 - **Slice B.1:** Audited CODEX_HOME/server-path usage. Removed 3 stale CODEX_HOME
   overrides. 2592 tests passing.
-- **Slice C-design (this commit):** Compared A1/A2/A3 candidates; chose A1 as
-  first physical migration target (`var/model-inventory.json` →
-  `var/generated/model-inventory.json`). Defined compatibility strategy,
-  QZ_MODEL_INVENTORY_CACHE handling, staleness plan, and future test list.
-  No files moved. No runtime behaviour changed.
+- **Slice C-design:** Compared A1/A2/A3 candidates; chose A1 as first migration target.
+  Defined compatibility strategy, QZ_MODEL_INVENTORY_CACHE handling, staleness plan.
+- **Slice C-impl (commit fb28945):** `model_inventory_path()` now returns
+  `qz_var_dir() / "generated" / "model-inventory.json"`. QZ_MODEL_INVENTORY_CACHE
+  override preserved. Staleness warnings, write_cache(), and all consumers follow
+  the helper — no other code changed. A2/A3 not moved.
 
-Next: Slice C-impl (physical move of A1).
+Next: Slice C.1 audit/polish (this commit), then Slice D-design for A2/A3.
 
 **#51** — Recovery backoff state is currently in-memory only. Should be persisted
 once #2 exists. Do not implement before #2.
@@ -198,11 +199,10 @@ A. #58  Always-HTTP qz-codex bootstrap — CLOSED (slices D2/D2.1/D3)
         and qz-up recovery coupling all removed. CODEX_HOME default: $HOME/.qz-codex/codex-home.
         See docs/edge-case-config-contract-plan.md §qz-codex always-HTTP bootstrap design.
 
-B. #56  Generated artifact path migration (var/generated/) — Slices A–C-design complete
-        Slices A–C-design done: inventoried artifacts, added path helpers
-        (qz_paths.py), audited CODEX_HOME/server-path usage, selected A1 as
-        first physical migration target, defined compatibility plan.
-        Next: Slice C-impl (physical move of A1).
+B. #56  Generated artifact path migration (var/generated/) — Slices A–C-impl complete
+        A1 migrated: var/model-inventory.json → var/generated/model-inventory.json.
+        QZ_MODEL_INVENTORY_CACHE override preserved. A2/A3 not moved.
+        Next: Slice C.1 audit/polish, then Slice D-design for A2/A3.
         See docs/edge-case-config-contract-plan.md §generated artifact path migration design.
 
 B. #37  Stream seam: fresh design micro-slice for next delicate seam

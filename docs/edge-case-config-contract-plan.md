@@ -1106,7 +1106,7 @@ conditions, and acceptance criteria for a future Slice C implementation.
 
 | Artifact | Record name | Default path | Generator | Triggered by |
 |---|---|---|---|---|
-| `model_inventory_cache` | `model_inventory_cache` | `var/model-inventory.json` (or `$QZ_MODEL_INVENTORY_CACHE`) | `ModelCatalog.refresh()` → `write_cache()` in `qz_model_catalog.py` | Proxy startup, `POST /qz/models/refresh`, `POST /qz/models/select` |
+| `model_inventory_cache` | `model_inventory_cache` | `var/generated/model-inventory.json` (or `$QZ_MODEL_INVENTORY_CACHE`) | `ModelCatalog.refresh()` → `write_cache()` in `qz_model_catalog.py` | Proxy startup, `POST /qz/models/refresh`, `POST /qz/models/select` |
 | `codex_model_catalog` | `codex_model_catalog` | `$CODEX_HOME/model-catalogs/qwenzhai-models.json` (default: `var/codex-home/model-catalogs/qwenzhai-models.json`) | `qz_codex_catalog.generate(inventory_path, catalog_dst, config_dst)` via `_refresh_codex_catalog()` in `qz_request_router.py` | `POST /qz/models/refresh`, proxy startup (once at model-selection time) |
 | `codex_config` | `codex_config` | `$CODEX_HOME/config.toml` (default: `var/codex-home/config.toml`) | Same `generate()` call as `codex_model_catalog` — patches `config.toml` in-place | Same as `codex_model_catalog` (both updated atomically) |
 
@@ -2851,13 +2851,14 @@ later (future slice) if old path exists and new path exists.
 
 1. ~~**Slice B: Path helper abstraction** — COMPLETE (commit eff2555)~~
 2. ~~**Slice B.1: CODEX_HOME/server-path audit** — COMPLETE~~
-3. ~~**Slice C-design: First migration target selection** — COMPLETE (this section)~~
-4. **Slice C-impl: Physical move of A1** — `var/model-inventory.json` → `var/generated/model-inventory.json`
-   - Change `model_inventory_path()` return value
-   - No symlink shim, no old-path deletion
-   - Validate: full suite passes, staleness warnings intact, env override works
-5. **Slice D-design: A2/A3 migration plan** — assess coupling, define compatibility for moving `var/codex-home/model-catalogs/` and `var/codex-home/config.toml` together
-6. **Slice E: var/codex-home/config.toml decision** — deprecate or keep as server-internal view; no client impact after #58
+3. ~~**Slice C-design: First migration target selection** — COMPLETE~~
+4. ~~**Slice C-impl: Physical move of A1** — COMPLETE (commit fb28945)~~
+   - ~~`model_inventory_path()` returns `var/generated/model-inventory.json`~~
+   - ~~No symlink shim, no old-path deletion, QZ_MODEL_INVENTORY_CACHE preserved~~
+5. ~~**Slice C.1: A1 migration audit/polish** — COMPLETE~~
+   - ~~Docs updated, table separator fixed, two focused tests added~~
+6. **Slice D-design: A2/A3 migration plan** — assess coupling, define compatibility for moving `var/codex-home/model-catalogs/` and `var/codex-home/config.toml` together
+7. **Slice E: var/codex-home/config.toml decision** — deprecate or keep as server-internal view; no client impact after #58
 
 ## Next steps
 

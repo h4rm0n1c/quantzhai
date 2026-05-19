@@ -782,6 +782,75 @@ class GeneratedArtifactStalenessTests(unittest.TestCase):
             self._restore_env(saved)
 
 
+class ModelInventoryA1MigrationTests(unittest.TestCase):
+    """Verify A1 migration: model_inventory_cache default is var/generated/ (#56 Slice C-impl)."""
+
+    _ENV_KEYS = (
+        "QZ_ROOT", "QZ_VAR_DIR", "QZ_MODEL_INVENTORY_CACHE",
+        "QZ_CAPTURE_MODE", "SEARXNG_POLICY", "SEARXNG_CAPABILITIES",
+    )
+
+    def _save_env(self):
+        return {k: os.environ.get(k) for k in self._ENV_KEYS}
+
+    def _restore_env(self, saved):
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def _minimal_root(self, tmp):
+        root = Path(tmp)
+        var_dir = root / "var"
+        (root / "config" / "default").mkdir(parents=True)
+        (root / "proxy").mkdir()
+        var_dir.mkdir(parents=True)
+        os.environ["QZ_ROOT"] = str(root)
+        os.environ["QZ_VAR_DIR"] = str(var_dir)
+        for k in ("QZ_MODEL_INVENTORY_CACHE", "QZ_CAPTURE_MODE", "SEARXNG_POLICY", "SEARXNG_CAPABILITIES"):
+            os.environ.pop(k, None)
+        return root, var_dir
+
+    def test_config_effective_reports_generated_inventory_path(self):
+        """model_inventory_cache default path is var/generated/model-inventory.json after A1 migration."""
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+
+                payload = effective_config_payload()
+                paths = {item["name"]: item for item in payload["paths"]}
+
+                rec = paths["model_inventory_cache"]
+                expected = str(var_dir / "generated" / "model-inventory.json")
+                self.assertEqual(rec["path"], expected)
+                self.assertEqual(rec["default"], expected)
+                self.assertEqual(rec["classification"], "generated_inventory")
+                self.assertIn("generated", Path(rec["path"]).parts)
+        finally:
+            self._restore_env(saved)
+
+    def test_qz_model_inventory_cache_override_still_wins(self):
+        """QZ_MODEL_INVENTORY_CACHE env override takes precedence over the new default path."""
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                custom_path = root / "custom" / "my-inventory.json"
+                os.environ["QZ_MODEL_INVENTORY_CACHE"] = str(custom_path)
+
+                payload = effective_config_payload()
+                paths = {item["name"]: item for item in payload["paths"]}
+
+                rec = paths["model_inventory_cache"]
+                self.assertEqual(rec["path"], str(custom_path))
+                self.assertEqual(rec["env_value"], str(custom_path))
+                self.assertEqual(rec["default"], str(var_dir / "generated" / "model-inventory.json"))
+        finally:
+            self._restore_env(saved)
+
+
 class PromptFileSourceLabellingTests(unittest.TestCase):
     """Tests for prompt-file source labelling in /qz/config/effective — #5 Slice B."""
 

@@ -2,6 +2,11 @@
 
 Date: 2026-05-10
 
+> **Note (2026-05-19):** This audit predates the #56 A1 path migration.
+> `var/model-inventory.json` references in this document describe the path
+> **before** Slice C-impl. The current default is `var/generated/model-inventory.json`.
+> See `docs/edge-case-config-contract-plan.md` §generated artifact path migration design.
+
 This is the audit called for by `docs/edge-case-config-contract-plan.md`
 before the config restructure work begins. It maps every significant data
 path: source files, runtime writes, failure modes, current errors, and gaps.
