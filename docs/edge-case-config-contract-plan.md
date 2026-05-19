@@ -2234,7 +2234,7 @@ Remaining follow-ups (not required for #57 close):
 
 ## qz-codex always-HTTP bootstrap design (Slice D-design)
 
-Date: 2026-05-19. Status: design only — no runtime implementation yet.
+Date: 2026-05-19. Status: D2 implemented (480ecdc), D2.1 audit complete.
 
 This section supersedes the "remote mode is opt-in" framing from Slices A–C2.1.
 HTTP bootstrap is now the *only* qz-codex path. localhost is just a server at
@@ -2423,12 +2423,14 @@ Implemented in #58 Slice D2:
 - Preserved atomic writes, TOML escaping, no-secret guarantees from C2.1
 - 28 tests (10 new in HttpBootstrapTests). 2576 total passing.
 
-**Slice D2.1: Audit/polish**
+**Slice D2.1: Audit/polish — COMPLETE**
+Audit confirmed:
 - No legacy local path remains
-- No qz-up coupling
+- No qz-up coupling in runtime/error text
 - No server path dependency
-- Idempotence
-- Bounded errors
+- Idempotence, atomicity, TOML escaping, no-secret preserved
+- Bounded errors without traceback or qz-up
+3 fixes: stale test names/docstrings updated; design doc status refreshed.
 
 **Slice D3: Close-out audit. Then proceed to #56 design.**
 

@@ -367,8 +367,8 @@ class BootstrapBehaviourTests(unittest.TestCase):
             surviving = json.loads(catalog_file.read_text())
             self.assertEqual(surviving["models"][0]["slug"], "existing")
 
-    def test_co_located_mode_does_not_call_remote_endpoints_without_flag(self):
-        """Without QZ_CODEX_REMOTE=1, the remote branch is not entered."""
+    def test_sourcing_qz_codex_common_makes_no_http_requests(self):
+        """Sourcing qz-codex-common does not trigger any proxy requests (side-effect-free)."""
         with _MockServer() as srv, tempfile.TemporaryDirectory() as tmp:
             codex_home = Path(tmp) / "codex-home"
             env = {
@@ -378,13 +378,10 @@ class BootstrapBehaviourTests(unittest.TestCase):
                 "QZ_PROXY_PORT": str(srv.port),
                 "QZ_ROOT": str(REPO_ROOT),
             }
-            # Explicitly unset QZ_CODEX_REMOTE
-            env.pop("QZ_CODEX_REMOTE", None)
-            # Just check the conditional, not the full qz_prepare_codex_home
-            # (which would try to POST /qz/models/refresh to the mock server)
+            # QZ_CODEX_REMOTE is unused; sourcing should produce no proxied calls
             script = (
                 f"source '{QZ_CODEX_COMMON}' && "
-                "[[ '${QZ_CODEX_REMOTE:-}' == '1' ]] && echo remote || echo local"
+                "true"
             )
             result = subprocess.run(
                 ["bash", "-c", script],
@@ -393,8 +390,8 @@ class BootstrapBehaviourTests(unittest.TestCase):
                 text=True,
                 timeout=10,
             )
-            self.assertIn("local", result.stdout)
-            # The mock server should have received no requests from this check
+            self.assertEqual(result.returncode, 0)
+            # The mock server should have received no requests from sourcing alone
             client_config_requests = [r for r in srv.requests if "client-config" in r]
             self.assertEqual(len(client_config_requests), 0)
 
@@ -560,8 +557,8 @@ class BootstrapPolishTests(unittest.TestCase):
             tmp_files = list(codex_home.rglob("*.tmp.*"))
             self.assertEqual(tmp_files, [], f"temp files found after failure: {tmp_files}")
 
-    def test_remote_mode_without_codex_home_uses_default_under_home(self):
-        """Without CODEX_HOME set, remote mode uses $HOME/.qz-remote-codex/codex-home."""
+    def test_default_codex_home_is_client_local_under_home(self):
+        """Without CODEX_HOME set, default is $HOME/.qz-codex/codex-home."""
         with _MockServer() as srv, tempfile.TemporaryDirectory() as tmp:
             fake_home = Path(tmp) / "fake-home"
             fake_home.mkdir()

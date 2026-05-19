@@ -181,11 +181,15 @@ Repeated-read v2                                         blocked on SQLite/sessi
 ## 5. Recommended next work order
 
 ```
-A. #58 / Slice D2.1  Audit/polish after always-HTTP bootstrap — NEXT
-        Refactor qz-codex-common: one HTTP path, remove QZ_CODEX_REMOTE branch,
-        remove server-local CODEX_HOME, remove POST /qz/models/refresh in launcher,
-        remove qz-up reference from error messages, clean proxy-down failure.
+A. #58 / Slice D2  Always-HTTP bootstrap — DONE (480ecdc)
+        D2 complete: qz-codex always uses HTTP bootstrap; QZ_CODEX_REMOTE removed as
+        gate/branch; server-local CODEX_HOME, codex-config.toml copy, TOML provider
+        parse, POST /qz/models/refresh, and qz-up recovery coupling all removed.
         CODEX_HOME default: $HOME/.qz-codex/codex-home.
+        See docs/edge-case-config-contract-plan.md §qz-codex always-HTTP bootstrap design.
+
+A. #58 / Slice D2.1  Audit/polish after always-HTTP bootstrap — NEXT
+        Polish and close-out audit after D2. Keeps #58 open.
         See docs/edge-case-config-contract-plan.md §qz-codex always-HTTP bootstrap design.
 
 B. #56  Generated artifact path migration design (var/generated/)
