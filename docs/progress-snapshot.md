@@ -1,6 +1,6 @@
 # QuantZhai Progress Snapshot
 
-Last updated: 2026-05-19 (post-#5/#57 close-out + #56 Slices B/B.1/C-design/C-impl/C.1/D-design/D-impl).
+Last updated: 2026-05-19 (post-#5/#57 close-out + #56 Slices A–D.1 complete).
 
 See `docs/current-stocktake.md` for the full point-in-time state summary.
 
@@ -40,8 +40,7 @@ P4 Search config split (#39) — when search work resumes
 BrainCase feature work paused: #53 and #54 are closed.
 Repeated-read v1: COMPLETE (#3/#4/#43 closed; qz_file_signal.py live).
 Config cleanup CLOSED (#5). qz-codex always-HTTP bootstrap CLOSED (#57/#58).
-#56 Slices A–D-impl complete. All generated artifacts under var/generated/.
-A2→var/generated/codex/qwenzhai-models.json, A3→var/generated/codex/config.toml. 2600 tests passing.
+#56 Slices A–D.1 complete. All generated artifacts under var/generated/. 2603 tests passing.
 
 ## Area estimates
 
@@ -133,7 +132,7 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 
 ## Immediate next priorities
 
-1. **#56 Slice D.1** — audit/polish the D-impl migration. D-impl complete: A2/A3 at var/generated/codex/.
+1. **#56 Slice E** — decide whether to deprecate/remove `codex_home_dir()` and `codex_model_catalog_dir()` stubs, or close out #56 with the physical migration complete.
 2. **#37 design micro-slice** — next delicate stream seam before coding.
 3. **#51/#46** — deferred until operational-store decision.
 

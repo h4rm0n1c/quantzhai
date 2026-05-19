@@ -851,6 +851,90 @@ class ModelInventoryA1MigrationTests(unittest.TestCase):
             self._restore_env(saved)
 
 
+class CatalogA2A3MigrationTests(unittest.TestCase):
+    """Verify A2/A3 migration: Codex catalog and config default paths (#56 Slice D-impl)."""
+
+    _ENV_KEYS = (
+        "QZ_ROOT", "QZ_VAR_DIR", "QZ_CAPTURE_MODE",
+        "SEARXNG_POLICY", "SEARXNG_CAPABILITIES",
+    )
+
+    def _save_env(self):
+        return {k: os.environ.get(k) for k in self._ENV_KEYS}
+
+    def _restore_env(self, saved):
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def _minimal_root(self, tmp):
+        root = Path(tmp)
+        var_dir = root / "var"
+        (root / "config" / "default").mkdir(parents=True)
+        (root / "proxy").mkdir()
+        var_dir.mkdir(parents=True)
+        os.environ["QZ_ROOT"] = str(root)
+        os.environ["QZ_VAR_DIR"] = str(var_dir)
+        for k in ("QZ_CAPTURE_MODE", "SEARXNG_POLICY", "SEARXNG_CAPABILITIES"):
+            os.environ.pop(k, None)
+        return root, var_dir
+
+    def test_config_effective_reports_generated_codex_catalog_path(self):
+        """codex_model_catalog path is var/generated/codex/qwenzhai-models.json after D-impl."""
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+
+                payload = effective_config_payload()
+                paths = {item["name"]: item for item in payload["paths"]}
+
+                rec = paths["codex_model_catalog"]
+                expected = str(var_dir / "generated" / "codex" / "qwenzhai-models.json")
+                self.assertEqual(rec["path"], expected)
+                self.assertEqual(rec["classification"], "generated_codex_catalog")
+                self.assertIn("generated", Path(rec["path"]).parts)
+                self.assertNotIn("codex-home", Path(rec["path"]).parts)
+        finally:
+            self._restore_env(saved)
+
+    def test_config_effective_reports_generated_codex_config_path(self):
+        """codex_config path is var/generated/codex/config.toml after D-impl."""
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+
+                payload = effective_config_payload()
+                paths = {item["name"]: item for item in payload["paths"]}
+
+                rec = paths["codex_config"]
+                expected = str(var_dir / "generated" / "codex" / "config.toml")
+                self.assertEqual(rec["path"], expected)
+                self.assertEqual(rec["classification"], "generated_codex_config")
+                self.assertIn("generated", Path(rec["path"]).parts)
+                self.assertNotIn("codex-home", Path(rec["path"]).parts)
+        finally:
+            self._restore_env(saved)
+
+    def test_old_var_codex_home_catalog_path_not_reported_as_default(self):
+        """codex_model_catalog path must not be var/codex-home/model-catalogs/..."""
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+
+                payload = effective_config_payload()
+                paths = {item["name"]: item for item in payload["paths"]}
+
+                self.assertNotIn("codex-home", paths["codex_model_catalog"]["path"])
+                self.assertNotIn("codex-home", paths["codex_config"]["path"])
+        finally:
+            self._restore_env(saved)
+
+
 class PromptFileSourceLabellingTests(unittest.TestCase):
     """Tests for prompt-file source labelling in /qz/config/effective — #5 Slice B."""
 

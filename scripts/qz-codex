@@ -40,7 +40,7 @@ if [[ "${1:-}" == "exec" ]]; then
           cat >&2 <<'EOF'
 qz-codex: exec requires an explicit -m/--model or -p/--profile.
 
-Reason: Codex persists the last selected model in var/codex-home/config.toml,
+Reason: Codex persists the last selected model in $CODEX_HOME/config.toml,
 so non-interactive captures can silently run under a roleplay profile instead
 of the intended coding/compiler profile.
 

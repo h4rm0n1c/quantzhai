@@ -232,9 +232,9 @@ QZ_* and SEARXNG_* environment variables
 Generated files:
 
 ```text
-var/model-inventory.json
-var/codex-home/config.toml
-var/codex-home/model-catalogs/qwenzhai-models.json
+var/generated/model-inventory.json            (A1 — migrated #56 Slice C-impl)
+var/generated/codex/config.toml               (A3 — migrated #56 Slice D-impl)
+var/generated/codex/qwenzhai-models.json      (A2 — migrated #56 Slice D-impl)
 ```
 
 Runtime state:
@@ -259,12 +259,12 @@ var/codex-home/sqlite/*
 
 | Path | Source read | Runtime/generated write | User-visible output | Failure mode | Preferred recovery |
 | --- | --- | --- | --- | --- | --- |
-| model discovery | `QZ_MODEL_DIR`, default `var/models`; `config/default/model-overrides.json`; `config/user/model-overrides.json`; legacy `var/model-overrides.json` when user file is absent; optional `config/example/model-overrides.json` behind `QZ_LOAD_EXAMPLE_MODEL_OVERRIDES`; legacy `config/qz-model-overrides.*.json` files are read only as compatibility fallback | `var/model-inventory.json` | `/v1/models`, `/qz/status`, generated Codex catalog | missing model dir, bad GGUF metadata, stale cache, broken symlink | compact scan error, invalid profile hidden, cache is regenerated not trusted |
+| model discovery | `QZ_MODEL_DIR`, default `var/models`; `config/default/model-overrides.json`; `config/user/model-overrides.json`; legacy `var/model-overrides.json` when user file is absent; optional `config/example/model-overrides.json` behind `QZ_LOAD_EXAMPLE_MODEL_OVERRIDES`; legacy `config/qz-model-overrides.*.json` files are read only as compatibility fallback | `var/generated/model-inventory.json` (A1, migrated #56 Slice C) | `/v1/models`, `/qz/status`, generated Codex catalog | missing model dir, bad GGUF metadata, stale cache, broken symlink | compact scan error, invalid profile hidden, cache is regenerated not trusted |
 | profile alias resolution | scanned `*.gguf` entries, override aliases, symlink filename/stem | inventory entry fields `profile_symlink`, `profile_valid`, `profile_error`, `backend_target` | Codex model picker slug stays profile identity | old synthetic aliases or backend ids leak into Codex-visible names | no synthetic alias layer; profile name is model-dir filename/stem only |
 | symlink profile target resolution | `var/models/<profile>.gguf` symlink target plus real scanned GGUF paths | inventory stores `symlink_target_path`, target backend id, validity | direct request either routes to target or fails compactly | target missing/outside scan bricks session or falls through to wrong backend | mark invalid before catalog generation; no silent fallback |
 | prompt override loading | merged override manifest; inline prompt fields; prompt files resolved relative to repo root unless absolute; optional static `turn_harness`/`turn_harnesses` selected per profile from `turn_harness_definitions` | prompt contract telemetry, latest request contract capture, `metadata.qz_turn_harness` | forwarded request instructions, generated Codex `base_instructions`, newest eligible user turn after the first user turn | missing prompt file silently empties profile prompt in some generated paths; unknown turn harness names must not silently masquerade as active | effective config view must report loaded/missing/failed prompt files; turn harness metadata reports active/unknown/applied/skipped |
 | profile reasoning visibility | per-model `reasoning_stream_format` or `hide_reasoning_stream`; optional `allow_client_reasoning_override` / `force_default_reasoning_level` | request metadata `qz_reasoning_stream_format`; prompt contract/runtime metrics | Codex-visible grey reasoning block, active reasoning level | roleplay/private-thought profiles leak internal text through summary-mode reasoning; client request silently raises profile reasoning effort | default remains proxy `summary`; private profiles set `hidden`; locked profiles ignore client `reasoning.effort` |
-| Codex catalog generation | `config/example/codex-config.toml`, `var/model-inventory.json`, default/user overrides | `var/codex-home/config.toml`, `var/codex-home/model-catalogs/qwenzhai-models.json` | Codex model list, context window, prompt metadata | generated catalog becomes second truth or keeps stale profile/context | always regenerate from proxy catalog policy; never route from generated catalog |
+| Codex catalog generation | `var/generated/model-inventory.json` (A1), default/user overrides | `var/generated/codex/qwenzhai-models.json` (A2), `var/generated/codex/config.toml` (A3) | Codex model list served via `/qz/codex/model-catalog` HTTP endpoint | generated catalog becomes second truth or keeps stale profile/context | always regenerate from proxy catalog policy; never route from generated catalog |
 | runtime status generation | live proxy catalog/router/backend status, `QZ_MODEL_STATE_PATH`, `QZ_BACKEND_STATE_PATH`, telemetry state | `/qz/status` response; telemetry events | `qz-top`, `qz-thoughts`, doctor checks, manual curl | early status reports env defaults as facts; Codex CLI `/status` may not reflect proxy-calculated token/context usage | keep source fields for context/model/load state; unknown beats fake certainty; audit whether Codex consumes usage through Responses `usage`, model catalog metadata, or another client-visible field |
 | backend state persistence | proxy/backend observations and startup scripts | `var/backend-state.json` | `/qz/status.backend`, runtime snapshot | stale backend state outlives process | proxy live facts win; file is fallback/debug only |
 | model-state persistence | selected model/profile from catalog/proxy | `var/model-state.json` | default selection after restart, status summary | removed last-selected profile can steer startup toward invalid entry | validate selected entry against current scan before use |
@@ -279,8 +279,8 @@ The biggest remaining contract risks are:
 
 ```text
 search policy has moved to `config/default/search-policy.json`; old docs path is compatibility only. Per-model policy files are profile overrides, not model-emitted paths.
-var/model-inventory.json is generated, but several scripts read it as a policy view.
-var/codex-home/config.toml is generated from an example, then patched in place.
+var/generated/model-inventory.json is generated (A1, #56 Slice C); QZ_MODEL_INVENTORY_CACHE override preserved.
+var/generated/codex/config.toml is generated by the proxy on /qz/models/refresh (A3, #56 Slice D); patched in-place with A2 absolute path.
 var/run/qz-runtime-state.json is a startup/status snapshot, not live truth.
 prompt file load failures are not yet surfaced in one shared effective-config report.
 ```
@@ -2861,8 +2861,10 @@ later (future slice) if old path exists and new path exists.
 7. ~~**Slice D-impl: Physical move of A2/A3** — COMPLETE~~
    - ~~`codex_generated_dir()` added; `codex_model_catalog_path()` and `codex_config_path()` changed~~
    - ~~No shim, no old-path deletion, 2600 tests PASS~~
-8. **Slice D.1: D-impl audit/polish** — verify migration clean, add any missing tests
-9. **Slice E: Deprecate `codex_home_dir()` / `codex_model_catalog_dir()`** — after D.1 proves stable
+8. ~~**Slice D.1: D-impl audit/polish** — COMPLETE~~
+   - ~~Stale path references fixed in edge-case doc and qz-codex exec message~~
+   - ~~3 new tests confirm /qz/config/effective reports new A2/A3 paths, 2603 tests PASS~~
+9. **Slice E: Deprecate `codex_home_dir()` / `codex_model_catalog_dir()`** — or close-out decision
 
 ---
 

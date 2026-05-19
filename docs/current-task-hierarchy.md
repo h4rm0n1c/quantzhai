@@ -658,7 +658,14 @@ No shim. No old-path deletion. No qz-codex-common changes.
 qz-doctor and config/example/codex-config.toml updated.
 6 new path tests. All A2/A3 test fixtures updated. 2600 tests PASS.
 
-Next: Slice D.1 — audit/polish the D-impl migration.
+**Slice D.1 (this commit):** CLOSED. A2/A3 migration audited. Stale paths fixed in
+`docs/edge-case-config-contract-plan.md` (generated files list, current path map, contract
+risks). Stale path in `scripts/qz-codex` exec error message fixed. 3 new tests confirm
+`/qz/config/effective` reports new A2/A3 paths and old `codex-home` path not present.
+2603 tests PASS.
+
+Next: Slice E — deprecate/remove `codex_home_dir()` and `codex_model_catalog_dir()` stubs,
+or close out #56 with migration complete and stubs as permanent deprecated helpers.
 
 ## Next implementation prompt: #37 design micro-slice for next delicate stream seam
 
