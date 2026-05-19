@@ -2232,6 +2232,217 @@ Remaining follow-ups (not required for #57 close):
 
 ---
 
+## qz-codex always-HTTP bootstrap design (Slice D-design)
+
+Date: 2026-05-19. Status: design only — no runtime implementation yet.
+
+This section supersedes the "remote mode is opt-in" framing from Slices A–C2.1.
+HTTP bootstrap is now the *only* qz-codex path. localhost is just a server at
+`127.0.0.1`. The `QZ_CODEX_REMOTE` branch becomes unnecessary.
+
+---
+
+### Architecture doctrine
+
+```text
+QuantZhai proxy:
+  - source of truth for model/catalog state
+  - serves GET /qz/codex/client-config (bootstrap metadata)
+  - serves GET /qz/codex/model-catalog (catalog JSON)
+  - never shares filesystem with qz-codex
+
+qz-codex:
+  - Codex CLI launcher / client
+  - always fetches bootstrap from proxy HTTP endpoints
+  - always writes CODEX_HOME as a local client cache
+  - never reads server-local var/codex-home or var/model-inventory.json
+  - never calls POST /qz/models/refresh (read-only client)
+  - fails cleanly and explicitly if proxy is unavailable
+
+qz-up:
+  - service management only: start/stop/check QuantZhai stack
+  - may optionally exec qz-codex as a convenience after startup
+  - qz-codex never invokes qz-up
+  - qz-codex failure message does not reference qz-up
+```
+
+---
+
+### Legacy code to remove
+
+| Behaviour | File | Remove/Replace |
+|---|---|---|
+| `QZ_CODEX_REMOTE=1` branch | `qz-codex-common` | Remove — HTTP bootstrap is the single path |
+| `CODEX_HOME="$QZ_ROOT/var/codex-home"` | `qz-codex-common` | Remove — CODEX_HOME must be client-local |
+| mkdir under `$QZ_VAR_DIR/codex-home/` | `qz-codex-common` | Remove — client creates its own CODEX_HOME |
+| Copy from `config/example/codex-config.toml` | `qz-codex-common` | Remove — HTTP bootstrap replaces template copy |
+| TOML parse for `QZ_CODEX_MODEL_PROVIDER` from server TOML | `qz-codex-common` | Remove — value comes from client-config payload |
+| `POST /qz/models/refresh` in launcher | `qz-codex-common` | Remove — client is read-only; suggest refresh manually |
+| Error message referencing `scripts/qz-up` | `qz-codex-common` | Replace with proxy-down message (see below) |
+| `$HOME/.qz-remote-codex/codex-home` default | `qz-codex-common` | Rename → `$HOME/.qz-codex/codex-home` |
+
+---
+
+### New single bootstrap path
+
+```bash
+# 1. Fetch GET /qz/codex/client-config
+#    Fail cleanly if proxy unavailable.
+
+# 2. Fetch GET /qz/codex/model-catalog using URL from client-config
+#    Fail cleanly if catalog missing.
+
+# 3. Write local CODEX_HOME/model-catalogs/<filename>  (atomic)
+# 4. Write local CODEX_HOME/config.toml                (atomic, TOML-escaped)
+
+# 5. Export CODEX_HOME, CODEX_SQLITE_HOME, CODEX_OSS_BASE_URL, etc.
+# 6. Exec codex CLI
+```
+
+No branching on `QZ_CODEX_REMOTE`. No server path reads. No template copies.
+
+---
+
+### Failure behaviour
+
+**Proxy unavailable:**
+```text
+qz-codex: QuantZhai appears to be down.
+  Tried: http://QZ_PROXY_HOST:QZ_PROXY_PORT/qz/codex/client-config
+  Start the QuantZhai proxy/service (e.g. scripts/qz-proxy or scripts/qz-up),
+  then retry.
+```
+
+**Catalog missing (proxy up but not refreshed):**
+```text
+qz-codex: The Codex model catalog is not available on the QuantZhai server.
+  Run: POST http://HOST:PORT/qz/models/refresh
+  or:  curl -X POST http://HOST:PORT/qz/models/refresh
+  Then retry.
+```
+
+No fallback to stale local catalog. Fail cleanly.
+
+---
+
+### Environment variables
+
+| Variable | Role | Final status |
+|---|---|---|
+| `QZ_PROXY_HOST` | Server hostname/IP | Keep |
+| `QZ_PROXY_PORT` | Server port | Keep |
+| `CODEX_HOME` | Client-local CODEX_HOME override | Keep (optional) |
+| `LOCAL_QWEN_API_KEY` | Codex API key (client-side) | Keep |
+| `QZ_CODEX_REMOTE` | Remote mode opt-in (was C2) | **Remove** — HTTP is always used |
+| `QZ_CODEX_MODEL_PROVIDER` | Provider override | Keep as documented override if needed |
+
+---
+
+### CODEX_HOME default
+
+Default for all qz-codex launches:
+
+```text
+$HOME/.qz-codex/codex-home
+```
+
+Criteria met:
+- Client-local, not server `var/codex-home`
+- Works identically on same host and remote host
+- Does not depend on repo checkout
+- Does not collide with server-generated state
+- Cleaner name than `$HOME/.qz-remote-codex/codex-home`
+
+---
+
+### /qz/models/refresh decision
+
+**qz-codex must not call POST /qz/models/refresh.**
+
+Rationale:
+- Launcher is a client; it should not mutate server state
+- Model catalog refresh is an operator-triggered server action
+- If the catalog is missing, the clean failure message tells the operator what to do
+
+Optional future: `QZ_CODEX_REFRESH=1` flag could trigger refresh before fetch.
+Do not add in implementation slice D2. Decide only after baseline is proven.
+
+---
+
+### Impact on #56
+
+When qz-codex always uses HTTP endpoints to fetch the model catalog, the server-side
+path of the catalog file becomes a private server implementation detail. qz-codex
+clients do not care whether the server stores the catalog under `var/codex-home` or
+`var/generated`. The `/qz/codex/model-catalog` endpoint is the stable boundary.
+
+This makes #56 safer:
+- Path migration can focus on server-side layout and shim strategy
+- qz-codex consumers only need the HTTP endpoint to remain stable
+- No client-side code changes required for #56 path moves
+
+---
+
+### qz-up boundary
+
+`qz-up --codex-model MODEL` may exec `qz-codex` as a convenience after starting
+the stack. That is a qz-up feature, not a qz-codex dependency. qz-codex must not:
+- invoke qz-up
+- reference qz-up in error messages
+- assume qz-up manages its CODEX_HOME
+
+The new proxy-down error message explicitly describes manual recovery without
+coupling to qz-up's script name.
+
+---
+
+### Implementation slices (design-only, not to implement now)
+
+**Slice D1: This design document (done)**
+
+**Slice D2: Refactor qz-codex-common to always-HTTP**
+- Remove QZ_CODEX_REMOTE branching
+- Remove server-local CODEX_HOME assignment
+- Remove config/example/codex-config.toml copy
+- Remove TOML parse for model_provider
+- Remove POST /qz/models/refresh call
+- Remove qz-up reference from error messages
+- New CODEX_HOME default: `$HOME/.qz-codex/codex-home`
+- New clean proxy-down and missing-catalog error messages
+- Preserve atomic writes, TOML escaping, no-secret guarantees from C2.1
+
+**Slice D2.1: Audit/polish**
+- No legacy local path remains
+- No qz-up coupling
+- No server path dependency
+- Idempotence
+- Bounded errors
+
+**Slice D3: Close-out audit. Then proceed to #56 design.**
+
+---
+
+### Tests for future Slice D2
+
+```text
+test_always_uses_http_client_config_endpoint
+test_qz_codex_remote_unset_still_uses_http_bootstrap
+test_no_branch_reads_server_var_codex_home
+test_no_config_example_codex_config_toml_copy
+test_proxy_down_gives_clean_bounded_message_without_qz_up_reference
+test_missing_catalog_gives_clean_bounded_message
+test_no_models_refresh_post_by_default
+test_no_qz_up_invocation
+test_codex_home_default_is_client_local
+test_codex_home_override_respected
+test_model_catalog_json_local_client_path
+test_no_api_key_value_written_or_printed
+test_localhost_works_through_http_same_as_remote
+test_shell_syntax_qz_codex_common
+```
+
+---
+
 ## Next steps
 
 1. Treat this plan as a living document.

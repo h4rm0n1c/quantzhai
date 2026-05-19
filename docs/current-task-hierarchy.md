@@ -545,6 +545,27 @@ cross-domain isolation tests
 
 ---
 
+## Next implementation prompt: Slice D2 — qz-codex always-HTTP bootstrap
+
+**Supersedes the QZ_CODEX_REMOTE opt-in model from #57.**
+
+HTTP bootstrap is now the *only* qz-codex path. Localhost is just a server at 127.0.0.1.
+
+See `docs/edge-case-config-contract-plan.md` §qz-codex always-HTTP bootstrap design for full spec.
+
+**What changes:**
+- Remove `QZ_CODEX_REMOTE=1` branching from `qz-codex-common`
+- Remove server-local `CODEX_HOME="$QZ_ROOT/var/codex-home"` assignment
+- Remove `config/example/codex-config.toml` copy
+- Remove TOML parse for `model_provider` (comes from HTTP client-config)
+- Remove `POST /qz/models/refresh` call in launcher (client is read-only)
+- Remove qz-up reference from error messages
+- New CODEX_HOME default: `$HOME/.qz-codex/codex-home`
+- Clean proxy-down and missing-catalog error messages
+- Preserve atomic writes, TOML escaping, no-secret from C2.1
+
+**New issue #58** tracks this work.
+
 ## Next implementation prompt: #37 design micro-slice for next delicate stream seam
 
 **BrainCase #53/#54 closed. Repeated-read v1 complete. #37 Slices 1–2E.1 complete.**

@@ -181,10 +181,17 @@ Repeated-read v2                                         blocked on SQLite/sessi
 ## 5. Recommended next work order
 
 ```
-A. #56  Generated artifact path migration design (var/generated/) — NEXT
-        Direct follow-up from #5/#57 close. Design-only first:
-        inventory artifacts/consumers, define compatibility plan, no path moves.
-        No CODEX_HOME breakage. Preserve qz-codex co-located AND remote modes.
+A. #58 / Slice D2  Make qz-codex always-HTTP bootstrap — NEXT
+        Refactor qz-codex-common: one HTTP path, remove QZ_CODEX_REMOTE branch,
+        remove server-local CODEX_HOME, remove POST /qz/models/refresh in launcher,
+        remove qz-up reference from error messages, clean proxy-down failure.
+        CODEX_HOME default: $HOME/.qz-codex/codex-home.
+        See docs/edge-case-config-contract-plan.md §qz-codex always-HTTP bootstrap design.
+
+B. #56  Generated artifact path migration design (var/generated/)
+        Design-only first: inventory artifacts/consumers, define compatibility plan, no path moves.
+        Safer after Slice D because qz-codex clients will no longer read server paths.
+        See docs/edge-case-config-contract-plan.md §qz-codex always-HTTP bootstrap design.
 
 B. #37  Stream seam: fresh design micro-slice for next delicate seam
         Slices 1–2F.1 are complete and paused.
