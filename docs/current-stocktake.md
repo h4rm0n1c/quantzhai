@@ -125,14 +125,12 @@ integration (qz_proxy_tools.py, qz_responses_stream.py, qz_request_router.py),
 and live smoke (scripts/qz-smoke-repeated-read). Advisory, stateless,
 input-history-seeded. V2 is blocked on SQLite/session identity.
 
-**#37** — Slices 1–2H.1 complete. Finish-plan defined. Moving to completion.
+**#37** — Slices 1–2I-impl complete. Next: 2I.1 audit/polish, then 2J close-out.
 
 Completed: StreamHopState, StreamDecision, 7 pure helpers, StreamRunState
-(terminal flags). Finish sequence: 2I-impl (timing cluster) → 2I.1 → 2J
-close-out. No decide_stream_event() required. 2609 tests passing.
-
-Next: Slice 2I-impl — add `started_at`, `first_output_at`, `final_usage`,
-`output_index_offset` to StreamRunState.
+(terminal flags + timing: started_at, first_output_at, final_usage,
+output_index_offset). completed_at/sequence/public_trace/summary_started/
+working_body/repair remain locals. No decide_stream_event(). 2615 tests passing.
 
 **#56** — CLOSED. Generated artifact path migration (var/generated/). Slices A–E + close-out complete.
 

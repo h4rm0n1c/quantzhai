@@ -3926,29 +3926,29 @@ class ReasoningOnlyAbortHelperTests(unittest.TestCase):
 
 
 class StreamRunStateTests(unittest.TestCase):
-    """Unit tests for StreamRunState dataclass — #37 Slice 2H-impl."""
+    """Unit tests for StreamRunState dataclass — #37 Slices 2H-impl/2I-impl."""
 
     def test_fresh_returns_all_false_defaults(self):
-        rs = StreamRunState.fresh()
+        rs = StreamRunState.fresh(started_at=0.0)
         self.assertFalse(rs.sent_response_start)
         self.assertFalse(rs.sent_terminal)
         self.assertFalse(rs.sent_done)
 
     def test_fresh_returns_new_instance_each_time(self):
-        rs1 = StreamRunState.fresh()
-        rs2 = StreamRunState.fresh()
+        rs1 = StreamRunState.fresh(started_at=0.0)
+        rs2 = StreamRunState.fresh(started_at=0.0)
         self.assertIsNot(rs1, rs2)
 
     def test_fields_are_independent_between_instances(self):
-        rs1 = StreamRunState.fresh()
-        rs2 = StreamRunState.fresh()
+        rs1 = StreamRunState.fresh(started_at=0.0)
+        rs2 = StreamRunState.fresh(started_at=0.0)
         rs1.sent_terminal = True
         rs1.sent_done = True
         self.assertFalse(rs2.sent_terminal)
         self.assertFalse(rs2.sent_done)
 
     def test_flags_can_be_mutated_independently(self):
-        rs = StreamRunState.fresh()
+        rs = StreamRunState.fresh(started_at=0.0)
         rs.sent_response_start = True
         self.assertTrue(rs.sent_response_start)
         self.assertFalse(rs.sent_terminal)
@@ -3956,6 +3956,37 @@ class StreamRunStateTests(unittest.TestCase):
         rs.sent_terminal = True
         self.assertTrue(rs.sent_terminal)
         self.assertFalse(rs.sent_done)
+
+    def test_fresh_requires_started_at(self):
+        with self.assertRaises(TypeError):
+            StreamRunState.fresh()  # missing required argument
+
+    def test_fresh_started_at_preserved(self):
+        rs = StreamRunState.fresh(started_at=123.456)
+        self.assertEqual(rs.started_at, 123.456)
+
+    def test_first_output_at_defaults_to_none(self):
+        rs = StreamRunState.fresh(started_at=0.0)
+        self.assertIsNone(rs.first_output_at)
+
+    def test_output_index_offset_defaults_to_zero(self):
+        rs = StreamRunState.fresh(started_at=0.0)
+        self.assertEqual(rs.output_index_offset, 0)
+
+    def test_final_usage_defaults_to_empty_normalized(self):
+        rs = StreamRunState.fresh(started_at=0.0)
+        self.assertIsInstance(rs.final_usage, dict)
+
+    def test_independence_for_timing_fields(self):
+        rs1 = StreamRunState.fresh(started_at=0.0)
+        rs2 = StreamRunState.fresh(started_at=0.0)
+        # Mutating rs1 must not affect rs2
+        rs1.final_usage["input_tokens"] = 999
+        rs1.output_index_offset = 5
+        self.assertNotEqual(rs2.final_usage.get("input_tokens"), 999)
+        self.assertEqual(rs2.output_index_offset, 0)
+        # Also confirm the dicts are different objects
+        self.assertIsNot(rs1.final_usage, rs2.final_usage)
 
 
 class ProxyLocalTerminalSuppressionHelperTests(unittest.TestCase):

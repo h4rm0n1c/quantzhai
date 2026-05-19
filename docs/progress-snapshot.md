@@ -132,7 +132,7 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 
 ## Immediate next priorities
 
-1. **#37 Slice 2I-impl** — add started_at/first_output_at/final_usage/output_index_offset to StreamRunState. Finish-plan: 2I → 2I.1 → 2J close-out.
+1. **#37 Slice 2I.1** — audit/polish timing cluster. 2I-impl done: started_at/first_output_at/final_usage/output_index_offset in rs.
 3. **#51/#46** — deferred until operational-store decision.
 
 ## Remaining big rocks

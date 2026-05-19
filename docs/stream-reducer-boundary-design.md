@@ -1580,6 +1580,36 @@ rs = StreamRunState.fresh(started_at=time.time())
 
 ---
 
+## 9Q. Slice 2I-impl — COMPLETE
+
+`StreamRunState` expanded with timing and cross-hop arithmetic fields:
+
+```text
+started_at: float           (required at construction)
+first_output_at: float|None (None default, set once lazily)
+final_usage: dict           (initialized via _normalize_response_usage({}))
+output_index_offset: int    (0 default, incremented between hops)
+```
+
+`fresh()` now requires `started_at: float` as a required argument.
+In `run()`, the 4 locals were replaced with `rs.*` references (62 changed lines).
+`completed_at` confirmed as local; sequence/public_trace/summary_started/working_body/repair state all remain locals.
+Method signatures unchanged — helpers receive `rs.started_at` etc. as keyword arguments.
+
+6 new tests in `StreamRunStateTests` (total 11):
+- `test_fresh_requires_started_at`
+- `test_fresh_started_at_preserved`
+- `test_first_output_at_defaults_to_none`
+- `test_output_index_offset_defaults_to_zero`
+- `test_final_usage_defaults_to_empty_normalized`
+- `test_independence_for_timing_fields`
+
+2615 tests passing. No behaviour change.
+
+**Recommended next: Slice 2I.1** — audit/polish Slice 2I.
+
+---
+
 ### Intentionally-kept locals (close-out documentation for Slice 2J)
 
 These remain as locals in `run()` by design, with documented reasons:

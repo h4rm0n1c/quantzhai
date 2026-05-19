@@ -216,27 +216,33 @@ class StreamDecision:
 class StreamRunState:
     """Cross-hop mutable outer-loop state for one Responses SSE streaming run.
 
-    First cut: terminal emission flags only.  Analogous to StreamHopState for
-    per-hop state; this object bundles the three locals that persist across
-    continuation hops and control terminal/completion emission.
+    Bundles cross-hop locals: terminal emission flags, run timing, final usage,
+    and the cross-hop output-index arithmetic.
 
     Does not include sequence, public_trace, working_body, repair state,
-    output_index_offset, summary_started, final_usage, or tool lifecycle state —
-    those remain locals until their own extraction slices are designed.
+    summary_started, completed_at, or tool lifecycle state — those remain locals.
 
-    Production code must use StreamRunState.fresh() to construct an instance.
+    Production code must use StreamRunState.fresh(started_at=...) to construct.
     """
+    started_at: float
     sent_response_start: bool = False
     sent_terminal: bool = False
     sent_done: bool = False
+    first_output_at: float | None = None
+    final_usage: dict = field(default_factory=dict)
+    output_index_offset: int = 0
 
     @classmethod
-    def fresh(cls) -> "StreamRunState":
-        """Return a new StreamRunState with all flags initialised to False."""
+    def fresh(cls, started_at: float) -> "StreamRunState":
+        """Return a new StreamRunState initialised for a fresh run."""
         return cls(
+            started_at=started_at,
             sent_response_start=False,
             sent_terminal=False,
             sent_done=False,
+            first_output_at=None,
+            final_usage=_normalize_response_usage({}),
+            output_index_offset=0,
         )
 
 
@@ -1340,17 +1346,13 @@ class ResponsesStreamRuntime:
         # This detects cross-request repeated reads that Codex replays in history.
         repeated_read_state = seed_repeated_read_state(working_body.get("input") or [])
 
-        started_at = time.time()
-        first_output_at = None
         completed_at = None
-        final_usage = _normalize_response_usage({})
         public_trace = []
         counters = {"search": 0, "open_page": 0}
         seen_signatures = set()
         summary_started = set()
-        output_index_offset = 0
         sequence = 0
-        rs = StreamRunState.fresh()
+        rs = StreamRunState.fresh(started_at=time.time())
         self._start_capture()
         self._emit("stream_started", {
             "model": requested_model,
@@ -1424,9 +1426,9 @@ class ResponsesStreamRuntime:
                             if timeout_kind == "no_output":
                                 return self._finish_no_output_timeout(
                                     requested_model,
-                                    started_at,
-                                    first_output_at,
-                                    final_usage,
+                                    rs.started_at,
+                                    rs.first_output_at,
+                                    rs.final_usage,
                                     public_trace,
                                     summary_started,
                                     hs.watchdog_state,
@@ -1443,9 +1445,9 @@ class ResponsesStreamRuntime:
                             if timeout_kind == "terminal":
                                 return self._finish_terminal_timeout_after_output(
                                     requested_model,
-                                    started_at,
-                                    first_output_at,
-                                    final_usage,
+                                    rs.started_at,
+                                    rs.first_output_at,
+                                    rs.final_usage,
                                     public_trace,
                                     summary_started,
                                     hs.watchdog_state,
@@ -1485,8 +1487,8 @@ class ResponsesStreamRuntime:
                             hs.stream_obs_acc,
                             observation_from_event_type(event_type, payload),
                         )
-                        if first_output_at is None and event_type not in {"response.created", "response.in_progress"}:
-                            first_output_at = time.time()
+                        if rs.first_output_at is None and event_type not in {"response.created", "response.in_progress"}:
+                            rs.first_output_at = time.time()
                         if isinstance(payload, dict) and isinstance(payload.get("output_index"), int):
                             hs.max_output_index = max(hs.max_output_index, payload["output_index"])
                         if isinstance(payload, dict) and isinstance(payload.get("sequence_number"), int):
@@ -1511,7 +1513,7 @@ class ResponsesStreamRuntime:
                         if event_type == "response.completed":
                             response = payload.get("response") if isinstance(payload, dict) else {}
                             if isinstance(response, dict):
-                                final_usage = _normalize_response_usage(response.get("usage"))
+                                rs.final_usage = _normalize_response_usage(response.get("usage"))
                         if is_terminal_stream_event(event_type, payload):
                             hs.watchdog_state.mark_terminal(event_parsed_at)
                             restore_read_timeout_once()
@@ -1521,9 +1523,9 @@ class ResponsesStreamRuntime:
                         if timeout_kind == "no_output":
                             return self._finish_no_output_timeout(
                                 requested_model,
-                                started_at,
-                                first_output_at,
-                                final_usage,
+                                rs.started_at,
+                                rs.first_output_at,
+                                rs.final_usage,
                                 public_trace,
                                 summary_started,
                                 hs.watchdog_state,
@@ -1540,9 +1542,9 @@ class ResponsesStreamRuntime:
                         if timeout_kind == "terminal":
                             return self._finish_terminal_timeout_after_output(
                                 requested_model,
-                                started_at,
-                                first_output_at,
-                                final_usage,
+                                rs.started_at,
+                                rs.first_output_at,
+                                rs.final_usage,
                                 public_trace,
                                 summary_started,
                                 hs.watchdog_state,
@@ -1584,21 +1586,21 @@ class ResponsesStreamRuntime:
                                 abort_items, sequence = self._emit_private_tool_call_aborted(
                                     requested_model,
                                     summary_started,
-                                    final_usage,
+                                    rs.final_usage,
                                     abort_reason,
                                     hs.tool_call_state.call_name,
                                     public_index=len(public_trace),
                                     sequence=sequence,
                                 )
                                 public_trace.extend(abort_items)
-                                self._emit_stream_completed(requested_model, len(public_trace), started_at, fallback=True)
+                                self._emit_stream_completed(requested_model, len(public_trace), rs.started_at, fallback=True)
                                 completed_at = time.time()
                                 return self._build_result(
                                     requested_model,
-                                    started_at,
-                                    first_output_at,
+                                    rs.started_at,
+                                    rs.first_output_at,
                                     completed_at,
-                                    final_usage,
+                                    rs.final_usage,
                                     len(public_trace),
                                 )
                         if (
@@ -1644,21 +1646,21 @@ class ResponsesStreamRuntime:
                                 abort_items, sequence = self._emit_reasoning_only_aborted(
                                     requested_model,
                                     summary_started,
-                                    final_usage,
+                                    rs.final_usage,
                                     abort_reason,
                                     hs.reasoning_only_chars,
                                     public_index=len(public_trace),
                                     sequence=sequence,
                                 )
                                 public_trace.extend(abort_items)
-                                self._emit_stream_completed(requested_model, len(public_trace), started_at, fallback=True)
+                                self._emit_stream_completed(requested_model, len(public_trace), rs.started_at, fallback=True)
                                 completed_at = time.time()
                                 return self._build_result(
                                     requested_model,
-                                    started_at,
-                                    first_output_at,
+                                    rs.started_at,
+                                    rs.first_output_at,
                                     completed_at,
-                                    final_usage,
+                                    rs.final_usage,
                                     len(public_trace),
                                     fallback=True,
                                 )
@@ -1668,7 +1670,7 @@ class ResponsesStreamRuntime:
                             public_index = hs.completed_call.get("output_index")
                             if not isinstance(public_index, int):
                                 public_index = hs.max_output_index + 1
-                            public_index += output_index_offset
+                            public_index += rs.output_index_offset
 
                             escalation = self._check_sandbox_escalation(hs.completed_call)
                             if escalation:
@@ -1796,15 +1798,15 @@ class ResponsesStreamRuntime:
                                 forwarded_bytes=forwarded_bytes,
                                 suppressed="function_call_private",
                             )
-                            self._emit_stream_completed(requested_model, len(public_trace), started_at)
+                            self._emit_stream_completed(requested_model, len(public_trace), rs.started_at)
                             completed_at = time.time()
-                            self._emit_completed(requested_model, public_trace, summary_started, usage=final_usage)
+                            self._emit_completed(requested_model, public_trace, summary_started, usage=rs.final_usage)
                             return self._build_result(
                                 requested_model,
-                                started_at,
-                                first_output_at,
+                                rs.started_at,
+                                rs.first_output_at,
                                 completed_at,
-                                final_usage,
+                                rs.final_usage,
                                 len(public_trace),
                             )
 
@@ -1873,7 +1875,7 @@ class ResponsesStreamRuntime:
                                                 requested_model,
                                                 completed_reasoning_chars,
                                                 upstream_output_items,
-                                                final_usage,
+                                                rs.final_usage,
                                                 repair_hop_index,
                                             ),
                                         )
@@ -1896,7 +1898,7 @@ class ResponsesStreamRuntime:
                                         requested_model,
                                         completed_reasoning_chars,
                                         upstream_output_items,
-                                        final_usage,
+                                        rs.final_usage,
                                         repair_hop_index,
                                     )
                                     self._emit("empty_answer_repair_failed", payload_fields)
@@ -1910,7 +1912,7 @@ class ResponsesStreamRuntime:
                                     fallback_items, sequence = self._emit_reasoning_only_completed_without_answer(
                                         requested_model,
                                         summary_started,
-                                        final_usage,
+                                        rs.final_usage,
                                         completed_reasoning_chars,
                                         public_index=len(public_trace),
                                         sequence=sequence,
@@ -1920,16 +1922,16 @@ class ResponsesStreamRuntime:
                                     self._emit_stream_completed(
                                         requested_model,
                                         len(public_trace),
-                                        started_at,
+                                        rs.started_at,
                                         fallback=True,
                                     )
                                     completed_at = time.time()
                                     return self._build_result(
                                         requested_model,
-                                        started_at,
-                                        first_output_at,
+                                        rs.started_at,
+                                        rs.first_output_at,
                                         completed_at,
-                                        final_usage,
+                                        rs.final_usage,
                                         len(public_trace),
                                         fallback=True,
                                     )
@@ -1941,7 +1943,7 @@ class ResponsesStreamRuntime:
                                             requested_model,
                                             completed_reasoning_chars,
                                             upstream_output_items,
-                                            final_usage,
+                                            rs.final_usage,
                                             active_repair_hop_index,
                                         ),
                                     )
@@ -1973,9 +1975,9 @@ class ResponsesStreamRuntime:
                                     None,
                                     suppressed="malformed_terminal",
                                 )
-                                self._emit_stream_completed(requested_model, len(public_trace), started_at)
+                                self._emit_stream_completed(requested_model, len(public_trace), rs.started_at)
                                 completed_at = time.time()
-                                self._emit_completed(requested_model, public_trace, summary_started, usage=final_usage)
+                                self._emit_completed(requested_model, public_trace, summary_started, usage=rs.final_usage)
                                 rs.sent_terminal = True
                                 rs.sent_done = True
                                 hs.watchdog_state.mark_terminal(event_parsed_at)
@@ -1993,9 +1995,9 @@ class ResponsesStreamRuntime:
                                     None,
                                     suppressed="done_without_completed",
                                 )
-                                self._emit_stream_completed(requested_model, len(public_trace), started_at)
+                                self._emit_stream_completed(requested_model, len(public_trace), rs.started_at)
                                 completed_at = time.time()
-                                self._emit_completed(requested_model, public_trace, summary_started, usage=final_usage)
+                                self._emit_completed(requested_model, public_trace, summary_started, usage=rs.final_usage)
                                 rs.sent_terminal = True
                                 rs.sent_done = True
                                 hs.watchdog_state.mark_terminal(event_parsed_at)
@@ -2006,7 +2008,7 @@ class ResponsesStreamRuntime:
                                 payload,
                                 hs.event_lines,
                                 summary_started,
-                                output_index_offset=output_index_offset,
+                                output_index_offset=rs.output_index_offset,
                                 prepend_output=public_trace,
                                 model=requested_model,
                             ))
@@ -2031,7 +2033,7 @@ class ResponsesStreamRuntime:
                             payload,
                             hs.event_lines,
                             summary_started,
-                            output_index_offset=output_index_offset,
+                            output_index_offset=rs.output_index_offset,
                             model=requested_model,
                         ))
                         self._emit_stream_event_timing(
@@ -2053,7 +2055,7 @@ class ResponsesStreamRuntime:
                     ):
                         drained_usage = self._drain_stream_for_usage(resp)
                         if drained_usage is not None:
-                            final_usage = drained_usage
+                            rs.final_usage = drained_usage
                 finally:
                     if raw_log is not None:
                         raw_log.close()
@@ -2066,7 +2068,7 @@ class ResponsesStreamRuntime:
 
                 if hs.error_injected or hs.signal_injected or (hs.completed_call and self.proxy_tool_registry.is_proxy_local_call(hs.completed_call)):
                     if hs.max_output_index >= 0:
-                        output_index_offset += hs.max_output_index + 1
+                        rs.output_index_offset += hs.max_output_index + 1
                     # Experimental: carry a compact prior-turn reasoning summary
                     # forward as a lightweight context anchor for the next hop.
                     # Controlled by reasoning_carry_forward; off by default.
@@ -2091,10 +2093,10 @@ class ResponsesStreamRuntime:
                             "hops_remaining": hops_remaining,
                             "threshold": self.hop_budget_signal_threshold,
                         })
-                    ctx_signal = self._context_pressure_signal_message(final_usage)
+                    ctx_signal = self._context_pressure_signal_message(rs.final_usage)
                     if ctx_signal is not None:
                         hs.next_input.append(ctx_signal)
-                        input_tokens = final_usage.get("input_tokens") or 0
+                        input_tokens = rs.final_usage.get("input_tokens") or 0
                         context_length = (
                             self.selected_model.get("runtime_context_length")
                             or self.selected_model.get("context_length")
@@ -2113,9 +2115,9 @@ class ResponsesStreamRuntime:
                     rs.sent_done = True
 
                 if public_trace and not rs.sent_terminal and not rs.sent_done:
-                    self._emit_stream_completed(requested_model, len(public_trace), started_at)
+                    self._emit_stream_completed(requested_model, len(public_trace), rs.started_at)
                     completed_at = time.time()
-                    self._emit_completed(requested_model, public_trace, summary_started, usage=final_usage)
+                    self._emit_completed(requested_model, public_trace, summary_started, usage=rs.final_usage)
                     rs.sent_terminal = True
                     rs.sent_done = True
 
@@ -2132,10 +2134,10 @@ class ResponsesStreamRuntime:
                 hop_obs = observation_from_dict(hs.stream_obs_acc)
                 return self._build_result(
                     requested_model,
-                    started_at,
-                    first_output_at,
+                    rs.started_at,
+                    rs.first_output_at,
                     completed_at,
-                    final_usage,
+                    rs.final_usage,
                     len(public_trace),
                     obs=hop_obs,
                 )
@@ -2144,14 +2146,14 @@ class ResponsesStreamRuntime:
                 "model": requested_model,
                 "phase": "stream_write",
                 "error": str(exc),
-                "duration_ms": round((time.time() - started_at) * 1000.0, 2),
+                "duration_ms": round((time.time() - rs.started_at) * 1000.0, 2),
             })
             raise
         except Exception as exc:
             self._emit("stream_failed", {
                 "model": requested_model,
                 "error": str(exc),
-                "duration_ms": round((time.time() - started_at) * 1000.0, 2),
+                "duration_ms": round((time.time() - rs.started_at) * 1000.0, 2),
             })
             raise
 
@@ -2167,14 +2169,14 @@ class ResponsesStreamRuntime:
                     "annotations": [],
                 }],
             }]
-        self._emit_stream_completed(requested_model, len(fallback_output), started_at, fallback=True)
-        self._emit_completed(requested_model, fallback_output, summary_started, usage=final_usage)
+        self._emit_stream_completed(requested_model, len(fallback_output), rs.started_at, fallback=True)
+        self._emit_completed(requested_model, fallback_output, summary_started, usage=rs.final_usage)
         return self._build_result(
             requested_model,
-            started_at,
-            first_output_at,
+            rs.started_at,
+            rs.first_output_at,
             completed_at,
-            final_usage,
+            rs.final_usage,
             len(fallback_output),
             fallback=True,
         )
