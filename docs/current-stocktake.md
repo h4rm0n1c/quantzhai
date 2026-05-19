@@ -104,8 +104,8 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 | #3/#4/#43 | Repeated-read v1 (parser, integration, smoke) | **CLOSED** (complete; advisory stateless v1 live) |
 | #37 | Architectural seam extraction plan | **CLOSED** — Slices 1–2J complete; StreamHopState + StreamRunState + 6 pure helpers |
 | #56 | Generated artifact path migration design (var/generated/) | **CLOSED** — A1/A2/A3 under var/generated/; helpers clean; all acceptance criteria PASS |
-| #51 | Promote recovery/backoff runtime state to SQLite | **deferred** until operational-store decision |
-| #46 | Replace qz-write-runtime-state launcher trace | **deferred** until startup-telemetry replacement |
+| #51 | Promote recovery/backoff runtime state to SQLite | **needs reframing** — backoff/cooldown persistence rejected; OperationalStore design narrowed |
+| #46 | Replace qz-write-runtime-state launcher trace | **Slice B+C next** — OperationalStore runtime_events replaces JSON trace |
 | #5 | Config/var/script ownership cleanup | **CLOSED** (#56, #57 opened for migration/thinning follow-ups) |
 | #57 | qz-codex-common thinning | **CLOSED** (Slices A–C2.1 complete; remote bootstrap endpoints delivered; superseded by #58) |
 | #58 | Always-HTTP qz-codex bootstrap | **CLOSED** (D2/D2.1/D3 complete; qz-codex always uses HTTP; #56 remains separate) |
@@ -151,15 +151,15 @@ place. 2615 tests passing. See `docs/stream-reducer-boundary-design.md §9S`.
 - Close-out audit fixed 3 stale proxy docstrings and 2 doc path references.
 - All acceptance criteria PASS.
 
-**#51** — Recovery backoff state is currently in-memory only. OperationalStore
-Slice A-design defines the persistence path: `recovery_state` table in
-`var/state/operational.sqlite3`. Implementation in Slice D. See
-`docs/operational-store-design.md`.
+**#51** — Recovery backoff state is in-memory only. Backoff/cooldown persistence
+is explicitly NOT wanted. #51 needs explicit reframing before any implementation.
+In-memory `RecoveryState` in `qz_recovery_state.py` is sufficient. See
+`docs/operational-store-design.md §7`.
 
 **#46** — qz-write-runtime-state is a launcher trace only, not live-status truth.
-OperationalStore Slice A-design defines the replacement: `runtime_events` table
-+ dual-write in Slice C; script stays compatible through C.1. See
-`docs/operational-store-design.md §6`.
+OperationalStore Phase 1 (schema_meta/runtime_events/runtime_facts) directly
+supports this. Dual-write in Slice C; JSON file stays compatible through C.1.
+See `docs/operational-store-design.md §6`.
 
 **#5** — Config/var cleanup is ongoing and never fully done. Safe to do any time
 without blocking other work. Good incremental choice between larger features.
@@ -186,8 +186,8 @@ now track. Keep as historical planning record; do not implement from it directly
 #57  qz-codex remote bootstrap                           CLOSED
 #58  always-HTTP qz-codex bootstrap                      CLOSED
 #5   config/var/script cleanup                           CLOSED
-#51  recovery state persistence                          deferred / needs operational-store-design slice
-#46  launcher trace removal                              deferred / needs startup-telemetry replacement
+#46  launcher trace removal                              Slice B+C → OperationalStore runtime_events
+#51  recovery state persistence                          needs explicit reframing; backoff NOT wanted
 #39  search config split                                 when search work resumes
 #52  backend allocator metrics                           upstream-blocked
 #8   compaction RFC                                      research; no implementation dependency
@@ -209,25 +209,23 @@ F. #5   Config/var/script cleanup — CLOSED
 G. #3/#4/#43  Repeated-read v1 — CLOSED
 
 NEXT:
-  #51/#46 Slice A-design — Operational store boundary and session identity design
+  #51/#46 Slice B-impl — OperationalStore skeleton
 
   Goal:
-    - Define what operational facts go into a lightweight SQLite store
-      (NOT BrainCaseDB — that is for model-visible memory records)
-    - Define what replaces qz-write-runtime-state
-    - Define session/workspace identity boundaries (unblocks repeated-read v2)
-    - Define what stays out of scope
+    - Create proxy/qz_operational_store.py with schema creation
+    - Phase 1 tables only: schema_meta, runtime_events, runtime_facts
+    - Path/env handling (QZ_OPERATIONAL_DB_PATH, QZ_OPERATIONAL_DB_ENABLED)
 
   Why this is next:
-    - Unblocks #51 (recovery state persistence)
-    - Unblocks #46 (startup-telemetry replacement)
-    - Unblocks repeated-read v2 (session identity needed)
-    - Design only — no database changes in this slice
+    - #46 qz-write-runtime-state replacement is the concrete driver
+    - Slice C adds dual-write; JSON trace stays compatible
 
   After this:
-    #39  Search config split        — when search work resumes
-    #52  Backend allocator metrics  — upstream-blocked
-    Repeated-read v2                — after operational-store design
+    C-impl  qz-write-runtime-state dual-write → C.1 compatibility audit
+    #46 close-out when JSON file removal confirmed
+    #51 reframing — backoff/cooldown NOT wanted; needs explicit new requirements
+    #39  Search config split — when search work resumes
+    #52  Backend allocator metrics — upstream-blocked
 ```
 
 ---
@@ -236,8 +234,8 @@ NEXT:
 
 | # | Blocked by | Action |
 |---|---|---|
-| #51 | #2 | Wait for SQLite substrate |
-| #46 | #2 or startup-telemetry | Wait for replacement path |
+| #46 | OperationalStore Slice B | Create skeleton; Slice C adds dual-write |
+| #51 | Needs explicit reframing | Backoff/cooldown persistence rejected; define new requirements first |
 | #52 | TurboQuant | Wait; no QuantZhai action needed |
 | #8 | Research decision | Keep as RFC, no implementation |
 

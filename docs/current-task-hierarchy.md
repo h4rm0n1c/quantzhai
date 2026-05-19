@@ -674,26 +674,24 @@ for `codex-home` path references updated. Artifact inventory table A2/A3 paths f
 `docs/config-data-path-audit.md` migration note extended to cover A2/A3. 2600 tests PASS.
 #56 closed.
 
-**#51/#46 Slice A-design (this commit):** CLOSED (design only).
+**#51/#46 Slice A-design (commit 69b2ba9) + A.2 correction (this commit):** CLOSED (design only).
 
-OperationalStore: lightweight SQLite for internal runtime facts.
-NOT BrainCaseDB. NOT model-visible memory.
+OperationalStore: lightweight SQLite for runtime events and operational facts.
+NOT BrainCaseDB. NOT model-visible memory. NOT recovery policy. NOT repeated-read v2.
 
 Key decisions:
 - Path: `$QZ_VAR_DIR/state/operational.sqlite3` (env: `QZ_OPERATIONAL_DB_PATH`)
 - Module: `proxy/qz_operational_store.py` (future)
-- Phase 1 tables: schema_meta, runtime_events, runtime_facts, sessions,
-  workspaces, recovery_state, repeated_read_state
-- session_id: derived from sha256(installation_id:client_session_id)[:16]
-- workspace_id: from existing `resolve_workspace_id()` in qz_codex_metadata.py
+- Phase 1 tables: schema_meta, runtime_events, runtime_facts ONLY
+- sessions/workspaces/recovery_state/repeated_read_state: removed — no Phase 1 consumer
 - qz-write-runtime-state: dual-write in Slice C; JSON file stays for compatibility
-- Recovery state: seeded from DB at startup, async write on change
-- v1 repeated-read: unaffected; v2 uses repeated_read_state table
+- #51: backoff/cooldown persistence rejected; #51 needs explicit reframing before any implementation
+- #46: primary Phase 1 consumer (runtime_events replaces JSON trace)
 
-Roadmap: B-impl → B.1 → C-impl → C.1 → D-impl → D.1 → E-impl → E.1 → close-out
+Roadmap: B-impl → B.1 → C-impl → C.1 → close-out
 See `docs/operational-store-design.md` for full design.
 
-Next: Slice B-impl — create `qz_operational_store.py` skeleton with schema.
+Next: Slice B-impl — create `qz_operational_store.py` skeleton with schema_meta/runtime_events/runtime_facts.
 
 ## #37 next stream seam: proxy-local terminal suppression (Slice 2G)
 

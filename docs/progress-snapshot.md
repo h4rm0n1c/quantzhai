@@ -129,7 +129,7 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 
 ## Immediate next priorities
 
-1. **#51/#46 Slice B-impl** — create `qz_operational_store.py` skeleton with schema creation. Slice A-design complete.
+1. **#46 Slice B-impl** — create `qz_operational_store.py` (schema_meta/runtime_events/runtime_facts only). A-design + A.2-correction complete. #51 needs reframing; backoff/cooldown NOT in scope.
 
 ## Remaining big rocks
 
@@ -154,8 +154,8 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 19. Streaming reliability — structurally improved; side-effect residual bounded in place by design.
 20. LLM signal system — repeated-read v1 done; repeated-read v2 blocked on SQLite.
 21. Phase 1 SQLite substrate — parked (#2); BrainCaseDB proven but operational store TBD.
-22. Recovery/backoff state persistence (#51) — after operational-store design (Slice A-design is next).
-23. qz-write-runtime-state replacement (#46) — after operational-store design.
+22. qz-write-runtime-state replacement (#46) — OperationalStore Slice B+C (next concrete work).
+23. Recovery/backoff state persistence (#51) — needs reframing; backoff/cooldown persistence NOT wanted.
 22. Split proxy into a conventional Python package — later.
 23. Add backend adapter boundary — later.
 24. Later: MCP/app bridge, search packet mode, redaction, run grouping, rendered

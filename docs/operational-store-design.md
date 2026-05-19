@@ -1,43 +1,45 @@
 # QuantZhai Operational Store Design
 
 Date: 2026-05-20
-Status: Slice A-design — design only, no implementation.
+Status: Slice A.2-design — corrected scope (design only, no implementation).
 
-Issues: #51 (recovery state persistence), #46 (qz-write-runtime-state replacement)
+Issues: #46 (qz-write-runtime-state replacement), #51 (reframing needed)
 
 ---
 
 ## 1. Purpose
 
 The **OperationalStore** is a lightweight SQLite database for internal QuantZhai
-runtime facts. It is NOT BrainCaseDB and NOT model-visible memory.
+runtime events and operational facts. It is the persistence layer for what
+`qz-write-runtime-state` currently traces, and nothing more.
 
 **What it stores:**
 - Startup and runtime lifecycle events (replaces `qz-write-runtime-state`)
-- Recovery/backoff state (implements #51)
-- Session and workspace identity (enables repeated-read v2)
-- Repeated-read file-access signatures per session/workspace
-- Key-value operational facts (cooldown timestamps, last-selected state, etc.)
+- Current operational key-value facts (last model, last backend start time, etc.)
+- Schema version metadata
 
 **What it does NOT store:**
-- Model-visible memory records — that is BrainCaseDB's domain
+- Model-visible memory — that is BrainCaseDB's domain
 - Prompt context or recall candidates
 - Character/persona/HSM memory
-- User archive memory
+- Recovery/backoff timer state or cooldown policy
+- Time-based backoff_until or manual_required persistence
+- Repeated-read file-access signatures (v2 is not planned)
+- Session or workspace identity (not needed for Phase 1 consumer)
+- A replacement for `var/model-state.json` or `var/backend-state.json`
 - Config files or generated artifacts
-- A replacement for `var/model-state.json` or `var/backend-state.json` in Phase 1
 
-**Key rule:** OperationalStore facts are internal only. Nothing in the
-OperationalStore is automatically injected into forwarded request bodies,
-rendered to the LLM, or made model-visible without an explicit tool call.
+**Key rule:** OperationalStore facts are internal diagnostics only. Nothing in
+the OperationalStore is automatically injected into forwarded request bodies,
+rendered to the LLM, or made model-visible.
 
 ---
 
 ## 2. Non-goals
 
 ```text
-- Not BrainCaseDB. BrainCaseDB (QZ_STATE_DB_PATH) stores StateRecords and
-  SourceRefs for model-facing memory. OperationalStore is control-plane state.
+- Not BrainCaseDB. BrainCaseDB (QZ_STATE_DB_PATH) stores model-facing memory.
+  OperationalStore is a runtime event/fact log.
 
 - Not model-visible memory. No render, recall, or write_candidate path goes
   through OperationalStore.
@@ -45,12 +47,19 @@ rendered to the LLM, or made model-visible without an explicit tool call.
 - Not a prompt injection mechanism. OperationalStore never mutates forwarded
   request bodies.
 
-- Not a replacement for var/model-state.json or var/backend-state.json in Slice B.
-  Those files handle restart-persistence for selected model and backend state.
-  That migration belongs in a later slice.
+- Not a recovery policy engine. Backoff timers, cooldown state, and
+  manual_required flags are intentionally NOT in Phase 1 and NOT desired.
+  #51 needs explicit reframing before any recovery-policy persistence is added.
+
+- Not a repeated-read persistence store. Repeated-read v2 (per-session file
+  signatures) is not wanted. v1 stateless advisory signal stays as-is.
+
+- Not a session/workspace identity store. sessions and workspaces tables are
+  not needed for the #46 consumer; they may be added later only if a concrete
+  new consumer requires them.
 
 - Not a telemetry bus. The existing telemetry event system (qz_telemetry.py)
-  stays as-is. OperationalStore complements it for persistent facts.
+  stays as-is. OperationalStore adds persistence, not a new channel.
 
 - Not a config authority. memory_domain, profiles, and all policy remain in
   config files.
@@ -66,17 +75,13 @@ rendered to the LLM, or made model-visible without an explicit tool call.
 | `QZ_OPERATIONAL_DB_ENABLED` | `0` | Explicit enable/disable gate |
 
 **Why `state/` subdirectory:**
-- Distinct from `generated/` (artifact outputs)
-- Distinct from `captures/`, `logs/`, `benchmarks/` (debug outputs)
-- Groups all persistent runtime state in one place
+- Distinct from `generated/` (artifact outputs) and `captures/`, `logs/` (debug)
 - `var/model-state.json` and `var/backend-state.json` may later migrate here
 
 **Why separate from BrainCaseDB:**
 - BrainCaseDB (`QZ_STATE_DB_PATH`) is for model-facing memory records
-- Different access patterns: OperationalStore is write-heavy / low-latency;
-  BrainCaseDB requires careful semantic review before any LLM exposure
-- Different lifecycle: operational facts may be pruned aggressively;
-  memory records have explicit retention policy
+- OperationalStore is for diagnostic/control-plane runtime facts
+- Different lifecycles and access patterns
 
 **Future module:** `proxy/qz_operational_store.py`
 This module does not exist yet. Slice B creates it.
@@ -85,7 +90,8 @@ This module does not exist yet. Slice B creates it.
 
 ## 4. Phase 1 schema
 
-All tables include `PRAGMA user_version` as schema version tracking.
+Phase 1 contains exactly three tables: `schema_meta`, `runtime_events`,
+`runtime_facts`. Nothing else.
 
 ### 4.1 `schema_meta`
 
@@ -99,7 +105,6 @@ CREATE TABLE schema_meta (
 
 Purpose: Schema version tracking, creation metadata.
 Writer: `qz_operational_store.py` at open time.
-Reader: Schema migration logic.
 Retention: Permanent.
 
 ---
@@ -121,9 +126,9 @@ CREATE INDEX idx_runtime_events_type ON runtime_events(event_type);
 Purpose: Replaces `qz-write-runtime-state` launcher trace. Records startup
 phases and runtime lifecycle events for diagnostics.
 
-Writer: `qz-write-runtime-state` (migrated in Slice C); proxy startup hook.
+Writer: `qz-write-runtime-state` (dual-write in Slice C); proxy startup hook.
 Reader: `/qz/config/effective` (shows last events); qz-doctor; qz-top.
-Retention: Prune events older than 7 days. Keep last N events per type.
+Retention: Prune events older than 7 days.
 
 **Replaces:** `var/run/qz-runtime-state.json` entries for phases:
 `requested`, `backend-started`, `proxy-started`, `backend-healthy`.
@@ -146,317 +151,88 @@ Examples: `last_selected_model`, `last_backend_start_time`, `proxy_pid`.
 
 Writer: Proxy and launcher scripts.
 Reader: `/qz/control-plane`, `/qz/status` for diagnostics.
-Retention: Keys updated on change; no auto-prune (small set).
+Retention: Keys updated on change; no auto-prune (small bounded set).
 
 ---
 
-### 4.4 `sessions`
+## 5. Tables NOT in Phase 1
 
-```sql
-CREATE TABLE sessions (
-    session_id              TEXT    PRIMARY KEY,  -- internal qz session key
-    created_at_ms           INTEGER NOT NULL,
-    last_seen_at_ms         INTEGER NOT NULL,
-    client_session_id       TEXT,                 -- from codex-session-id header
-    installation_id         TEXT,                 -- from codex-installation-id header
-    codex_conversation_id   TEXT,                 -- from turn metadata if available
-    client_kind             TEXT,                 -- "codex", "direct", "unknown"
-    workspace_id            TEXT,                 -- FK to workspaces.workspace_id
-    metadata_json           TEXT
-);
-CREATE INDEX idx_sessions_client ON sessions(client_session_id);
-CREATE INDEX idx_sessions_workspace ON sessions(workspace_id);
-CREATE INDEX idx_sessions_last_seen ON sessions(last_seen_at_ms);
-```
+The following tables were considered and explicitly excluded from Phase 1:
 
-Purpose: Session identity tracking. Associates an internal `session_id` with
-the client-provided identity from `CodexIdentity` (parsed by
-`qz_codex_metadata.py`).
+| Table | Why excluded |
+|---|---|
+| `sessions` | No Phase 1 consumer. Add only when a concrete consumer requires it. |
+| `workspaces` | No Phase 1 consumer. Same constraint. |
+| `recovery_state` | Time-based backoff/cooldown persistence is explicitly NOT wanted. #51 needs explicit reframing before any recovery-policy persistence is added. |
+| `repeated_read_state` | Repeated-read v2 is not wanted. v1 stateless advisory signal is sufficient. |
 
-Writer: `qz_operational_store.py:resolve_session()` on each incoming request.
-Reader: repeated-read v2; session-scoped telemetry; diagnostics.
-Retention: Prune sessions not seen in 30 days.
-
-**Session identity model:**
-- `session_id` is a server-generated key: `sha256(installation_id + "/" + client_session_id)[:16]` or a UUID if headers are absent.
-- `client_session_id` from `CodexIdentity.client_session_id` (the codex header).
-- If no client identity is available, a per-connection ephemeral ID is generated; it is NOT persisted.
-- Sessions that lack workspace binding use `workspace_id = NULL`.
+These are NOT deferred TODOs. They are removed from scope unless a future
+explicit design issue justifies them.
 
 ---
 
-### 4.5 `workspaces`
+## 6. #46 — qz-write-runtime-state replacement
 
-```sql
-CREATE TABLE workspaces (
-    workspace_id      TEXT    PRIMARY KEY,   -- stable derived ID
-    path              TEXT,                  -- local filesystem path
-    fingerprint       TEXT,                  -- git remote URL normalized, or path hash
-    first_seen_at_ms  INTEGER NOT NULL,
-    last_seen_at_ms   INTEGER NOT NULL
-);
-```
-
-Purpose: Stable workspace identity. `workspace_id` is derived by
-`resolve_workspace_id()` in `qz_codex_metadata.py` — the existing function
-already produces a stable ID from git remote URL or path fingerprint.
-
-Writer: `qz_operational_store.py:bind_workspace()`.
-Reader: sessions table; repeated_read_state table.
-Retention: Prune workspaces not seen in 90 days.
-
----
-
-### 4.6 `recovery_state`
-
-```sql
-CREATE TABLE recovery_state (
-    key             TEXT    PRIMARY KEY,   -- "global" or action name
-    state_json      TEXT    NOT NULL,      -- matches qz.recovery.runtime_state.v1
-    updated_at_ms   INTEGER NOT NULL,
-    expires_at_ms   INTEGER               -- NULL = no expiry; >0 = soft expiry
-);
-```
-
-Purpose: Persistent recovery/backoff state for #51. Survives proxy restarts.
-
-The `state_json` payload mirrors the in-memory `RecoveryState` fields from
-`qz_recovery_state.py`:
-
-```json
-{
-    "schema": "qz.recovery.runtime_state.v1",
-    "in_progress": false,
-    "backoff_until": {"unload_model": null, "reload_model": 1716200000.0},
-    "manual_required": {"unload_model": false},
-    "attempt_counts": {"unload_model": 3, "reload_model": 1},
-    "last_error": "connection timeout",
-    "last_updated_at": 1716200000.0
-}
-```
-
-Writer: `qz_recovery_state.py` — on state change, write to OperationalStore
-asynchronously; failure must not break recovery flow.
-Reader: `qz_recovery_state.py` — at startup, seed in-memory state from DB.
-Retention: Reset on successful recovery; prune entries older than 24 hours.
-
----
-
-### 4.7 `repeated_read_state`
-
-```sql
-CREATE TABLE repeated_read_state (
-    session_id      TEXT    NOT NULL,
-    workspace_id    TEXT,
-    file_path       TEXT    NOT NULL,
-    seen_count      INTEGER NOT NULL DEFAULT 1,
-    first_seen_at_ms INTEGER NOT NULL,
-    last_seen_at_ms  INTEGER NOT NULL,
-    PRIMARY KEY (session_id, file_path)
-);
-CREATE INDEX idx_repeated_read_session ON repeated_read_state(session_id);
-```
-
-Purpose: Enables repeated-read v2. Persists per-session file-access signatures
-across requests within the same session.
-
-**v1 status:** `RepeatedReadState` is stateless/in-memory, seeded from input
-history on each request. v1 stays as-is.
-
-**v2 design:** On each request, after the existing stateless check, the
-OperationalStore is updated with file paths seen in this session. Subsequent
-requests from the same session retrieve persisted signatures.
-
-Writer: `qz_operational_store.py:record_repeated_read_signal()`.
-Reader: `qz_file_signal.py` (future seed step).
-Retention: Prune entries older than session expiry (30 days).
-
----
-
-## 5. Session/workspace identity model
-
-### 5.1 Inputs
-
-From `CodexRequestContext` (parsed by `qz_codex_metadata.py`):
-
-| Field | Source | Use |
-|---|---|---|
-| `identity.client_session_id` | `codex-session-id` header | Primary session key |
-| `identity.installation_id` | `codex-installation-id` header | Scoping salt |
-| `identity.workspace_id` | `resolve_workspace_id()` | Workspace binding |
-| `identity.workspace_candidates` | Turn metadata `workspaces` field | Fingerprint source |
-
-### 5.2 Server-side `session_id` derivation
-
-```python
-def _derive_session_id(installation_id: str | None, client_session_id: str | None) -> str:
-    if not installation_id and not client_session_id:
-        return "ephemeral"  # not persisted
-    key = f"{installation_id or ''}:{client_session_id or ''}"
-    return hashlib.sha256(key.encode()).hexdigest()[:16]
-```
-
-### 5.3 Safety rules
-
-- **Missing identity → isolated.** No client session headers = no persistent
-  session. Ephemeral IDs are not stored in the OperationalStore.
-- **No cross-domain leakage.** `workspace_id` scopes repeated-read state;
-  facts from workspace A are never mixed with workspace B.
-- **No forwarded-body mutation.** `qz_session_id` and `workspace_id` are
-  internal operational metadata only. They must never be injected into the
-  JSON body forwarded to the upstream model server.
-- **memory_domain stays config-owned.** The OperationalStore never grants,
-  creates, or infers memory_domain values.
-
-### 5.4 Unknown workspace
-
-If `workspace_id` cannot be resolved (no turn metadata, no git remote):
-- Session is created with `workspace_id = NULL`
-- repeated-read state is session-scoped only (no workspace cross-referencing)
-- This is safe and isolated; no data loss
-
----
-
-## 6. qz-write-runtime-state replacement plan
+This is the primary concrete driver for Phase 1.
 
 ### 6.1 Current role
 
-`scripts/qz-write-runtime-state` is called by `qz-up` at 5 startup phases:
-- `requested` — launch parameters recorded
-- `backend-started` — backend process launched
-- `proxy-started` — proxy process started
-- `backend-healthy` — backend health check passed
-- each writes to `var/run/qz-runtime-state.json` (atomic write via tempfile)
+`scripts/qz-write-runtime-state` is called by `qz-up` at startup phases
+(`requested`, `backend-started`, `proxy-started`, `backend-healthy`) and writes
+`var/run/qz-runtime-state.json` as a launcher trace. It is NOT the live status
+authority (that is `/qz/control-plane`).
 
-The file is a launcher trace, not live status. The live authority is
-`GET /qz/control-plane`.
+### 6.2 Replacement
 
-### 6.2 Replacement sequence
+**Slice C:** Modify `qz-write-runtime-state` to dual-write to `runtime_events`
+and `runtime_facts` in OperationalStore when `QZ_OPERATIONAL_DB_ENABLED=1`.
+The JSON file write stays for backward compatibility.
 
-**Slice C (implementation):**
-1. Add `record_startup_event(phase, payload)` to `qz_operational_store.py`
-2. Modify `qz-write-runtime-state` to **also** write to OperationalStore when
-   `QZ_OPERATIONAL_DB_ENABLED=1`. The JSON file write stays for compatibility.
-3. Add a `runtime_events` query to `/qz/config/effective` (shows last 10 events).
-4. `qz-doctor` checks `var/run/qz-runtime-state.json` fallback if DB absent.
+**Slice C.1:** Audit launcher compatibility. Confirm JSON file can eventually
+be removed.
 
-**Slice C.1 (audit):**
-Verify backward compatibility. Script still produces the JSON file.
+**Close-out:** Remove JSON file once:
+- `/qz/config/effective` shows runtime events from OperationalStore
+- `qz-doctor` no longer reads JSON for stale-context checks
+- No other consumer reads it for routing decisions (already confirmed: zero)
 
-**Later (Slice E or close-out):**
-- Remove the JSON file write when all consumers use control-plane + OperationalStore
-- Deprecate `scripts/qz-write-runtime-state` after #46 acceptance criteria met
+### 6.3 What does NOT change
 
-### 6.3 Compatibility constraint
+- `var/model-state.json` — stays (proxy restart persistence for last-selected model)
+- `var/backend-state.json` — stays (proxy restart persistence for backend state)
 
-The JSON file `var/run/qz-runtime-state.json` remains until:
-- `/qz/config/effective` reports startup events from OperationalStore
-- `qz-doctor` no longer reads the JSON file for its stale-context checks
-- No other script reads it for routing decisions (already confirmed: zero routing consumers)
+These may migrate to OperationalStore `runtime_facts` in a later slice, but not
+in Phase 1.
 
 ---
 
-## 7. Recovery state persistence (#51)
+## 7. #51 — reframing required
 
-### 7.1 What gets persisted
+The original #51 title ("Promote recovery/backoff runtime state to SQLite") was
+written when time-based backoff/cooldown persistence was assumed desirable.
 
-From `qz_recovery_state.py` in-memory `RecoveryState`:
+**That assumption is now incorrect.** Backoff timers, cooldown state, and
+`manual_required` flags are NOT wanted in the OperationalStore. The in-memory
+`RecoveryState` in `qz_recovery_state.py` is sufficient.
 
-| Field | Persistence priority | Notes |
-|---|---|---|
-| `_backoff_until` (per action) | High | Lost on restart; causes excessive retries |
-| `_in_progress` flag | Medium | Reset to False on fresh start is safe |
-| `_manual_required` (per action) | High | Operator must re-intervene after restart |
-| Attempt counts (per action) | Medium | Useful for backoff schedule continuity |
-| `last_error` string | Low | Diagnostic only |
+**What #51 might mean after reframing:**
+- Persistence of last-known recovery diagnostic facts (not timers) as `runtime_facts`
+  entries for operator inspection only
+- Or: #51 may be closed or downgraded to a documentation task once #46 lands
+- No new issue needs to be created now
 
-### 7.2 Write path
+**What #51 does NOT mean:**
+- No `recovery_state` table
+- No `backoff_until` or `expires_at_ms` fields
+- No seeding in-memory RecoveryState from a database at startup
+- No async write path on recovery state change
 
-On each state transition in `RecoveryState`:
-1. Update in-memory state as today (no behaviour change)
-2. Asynchronously write to `recovery_state` table via OperationalStore
-3. Failure to write must not block recovery flow (non-fatal)
-
-### 7.3 Read path (startup)
-
-At proxy startup, before accepting requests:
-1. Open OperationalStore if enabled
-2. Read `recovery_state WHERE key = 'global'`
-3. If found and not expired, seed in-memory `RecoveryState` from JSON payload
-4. If absent or expired, start with fresh in-memory state (current behaviour)
-
-### 7.4 Expiry
-
-- `backoff_until` timestamps are naturally self-expiring (past timestamps = no backoff)
-- `manual_required` flags persist until operator intervention
-- `expires_at_ms` set to `updated_at_ms + 86400000` (24 hours); stale state is dropped
+#51 remains open but its implementation scope is now undefined pending explicit
+requirements from the operator.
 
 ---
 
-## 8. Repeated-read v2 dependency
-
-**v1** (current): stateless, per-request, seeded from input history only.
-Advisory signal only. No persistence.
-
-**v2** (future): cross-request within a session.
-
-**How OperationalStore enables v2:**
-
-1. On each request with a resolved `session_id`:
-   - After existing v1 stateless check runs
-   - Record file paths seen this request to `repeated_read_state` table
-   - On next request with same `session_id`: seed `RepeatedReadState` from DB
-   - The signal now fires for files seen in prior requests in same session
-
-2. Workspace scoping:
-   - `(session_id, file_path)` is the primary key
-   - `workspace_id` is stored for diagnostics but not used for cross-workspace lookup
-
-3. Safety:
-   - v1 advisory signal is unaffected
-   - v2 signal is also advisory only (never blocks requests)
-   - No cross-session or cross-workspace sharing
-   - `session_id = NULL` means v2 is disabled for that request
-
-**v2 is not implemented in #51. It is a separate design/implementation issue
-that depends on OperationalStore being live. #51 close-out does not require v2.**
-
----
-
-## 9. Safety and privacy rules
-
-```text
-1. Internal only.
-   OperationalStore facts never reach the LLM prompt automatically.
-   No automatic injection. No forwarded-body mutation.
-
-2. session_id / workspace_id are operational metadata.
-   They scope OperationalStore reads/writes only.
-   They are never forwarded in the upstream request body.
-
-3. memory_domain stays config-owned.
-   OperationalStore never grants, creates, infers, or revokes memory_domain values.
-
-4. BrainCaseDB is separate.
-   Model-facing memory records go through BrainCaseDB.
-   Operational facts go through OperationalStore.
-   No data flows between them automatically.
-
-5. Non-fatal DB failures.
-   OperationalStore open/write failures must not break proxy responses.
-   Failure mode: log, telemetry emit, continue without persistence.
-
-6. No cross-domain leakage.
-   workspace_id scopes data. workspace A state is never visible to workspace B.
-
-7. Operator-controlled enable gate.
-   QZ_OPERATIONAL_DB_ENABLED=0 means no DB is opened.
-   Default is disabled in Phase 1; admin must explicitly enable.
-```
-
----
-
-## 10. Module design (future: proxy/qz_operational_store.py)
+## 8. Module design (future: proxy/qz_operational_store.py)
 
 **Design only — do not implement yet.**
 
@@ -464,9 +240,10 @@ that depends on OperationalStore being live. #51 close-out does not require v2.*
 # proxy/qz_operational_store.py — Phase 1 API sketch
 
 class OperationalStore:
-    """Lightweight SQLite store for internal QuantZhai operational facts.
+    """Lightweight SQLite store for QuantZhai runtime events and operational facts.
 
-    Not BrainCaseDB. Not model-visible memory. Internal control-plane state only.
+    Phase 1 scope: schema_meta, runtime_events, runtime_facts.
+    Not BrainCaseDB. Not model-visible memory. Not recovery policy.
     """
 
     @classmethod
@@ -482,112 +259,72 @@ class OperationalStore:
         """Upsert a key-value operational fact."""
         ...
 
-    def resolve_session(self, identity: "CodexIdentity") -> str | None:
-        """Create or update the session record. Returns server-side session_id."""
+    def get_runtime_fact(self, key: str) -> dict | None:
+        """Read a persisted operational fact, or None if absent."""
         ...
 
-    def bind_workspace(self, workspace_id: str, path: str, fingerprint: str) -> None:
-        """Ensure a workspace record exists."""
-        ...
-
-    def record_recovery_state(self, state_json: dict) -> None:
-        """Upsert recovery/backoff state."""
-        ...
-
-    def get_recovery_state(self) -> dict | None:
-        """Read persisted recovery state, or None if absent/expired."""
-        ...
-
-    def record_repeated_read_signal(
-        self,
-        session_id: str,
-        workspace_id: str | None,
-        file_path: str,
-    ) -> None:
-        """Record that a file was read in this session."""
-        ...
-
-    def get_session_read_paths(self, session_id: str) -> frozenset[str]:
-        """Return file paths seen by this session across all prior requests."""
+    def recent_events(self, event_type: str | None = None, limit: int = 20) -> list[dict]:
+        """Return recent runtime events for diagnostics."""
         ...
 
     def close(self) -> None: ...
 ```
 
-**Accessor pattern:** One `OperationalStore` instance per proxy process, opened
-at startup if `QZ_OPERATIONAL_DB_ENABLED=1`. Reads/writes are synchronous with
-non-fatal fallback. No connection pooling in Phase 1.
+**Accessor pattern:** One instance per proxy process, opened at startup if
+`QZ_OPERATIONAL_DB_ENABLED=1`. Reads/writes synchronous with non-fatal fallback.
 
 ---
 
-## 11. Implementation slice roadmap
+## 9. Implementation slice roadmap
 
 | Slice | Content | Closes |
 |---|---|---|
-| **A-design** (this doc) | Boundary, schema, identity model, roadmap | — |
+| **A-design** (Slice A + A.2) | Boundary, schema, non-goals, #46 replacement path | — |
 | **B-impl** | `qz_operational_store.py` skeleton: open/close, schema creation, path/env | — |
 | **B.1** | Audit/polish path, env, schema | — |
 | **C-impl** | Startup event writer; `qz-write-runtime-state` dual-write | — |
-| **C.1** | Launcher compatibility audit | partial #46 |
-| **D-impl** | `recovery_state` table + `RecoveryState` startup seed + write | #51 |
-| **D.1** | Audit recovery persistence behaviour | — |
-| **E-impl** | Session/workspace identity integration + `sessions`/`workspaces` tables | — |
-| **E.1** | Audit identity model | — |
-| **F-design** | Repeated-read v2 design (separate issue) | new issue |
-| **Close-out B+C** | Confirm #46 replacement criteria met, close #46 | #46 |
+| **C.1** | Launcher compatibility audit; JSON file stays | partial #46 |
+| **Close-out** | Confirm #46 criteria met when JSON removed; decide #51 fate | #46 |
 
 ---
 
-## 12. Test plan (future)
+## 10. Test plan
 
 ```text
 test_operational_store_path_respects_qz_var_dir
   QZ_VAR_DIR=/custom -> store at /custom/state/operational.sqlite3
 
+test_operational_store_path_env_override
+  QZ_OPERATIONAL_DB_PATH=/override.sqlite3 -> uses override path
+
 test_schema_created_idempotently
-  open() twice does not error; schema_meta has correct version
+  open() twice does not error; schema_meta has correct version row
 
 test_runtime_event_insert_roundtrip
-  record_startup_event("proxy_started", {...}) -> readable from runtime_events
+  record_startup_event("proxy_started", {"pid": 123})
+  recent_events() returns the row
 
 test_runtime_fact_upsert
   record_runtime_fact("last_model", {"slug": "qwen"})
   record_runtime_fact("last_model", {"slug": "apex"})
-  only one row exists with "apex"
+  get_runtime_fact("last_model") returns "apex"
 
-test_session_identity_stable_for_same_codex_metadata
-  resolve_session(identity_A) == resolve_session(identity_A)
-
-test_session_identity_isolated_when_workspace_missing
-  identity with no workspace -> session created with workspace_id = NULL
-  no error, no cross-leakage
-
-test_workspace_binding_does_not_mutate_forwarded_request
-  bind_workspace(...) does not add keys to any request dict
-
-test_recovery_state_roundtrip
-  record_recovery_state({...}) -> get_recovery_state() returns same payload
-
-test_recovery_state_expired_returns_none
-  record with expires_at_ms in past -> get_recovery_state() returns None
+test_operational_store_disabled_is_noop
+  QZ_OPERATIONAL_DB_ENABLED=0 -> no file created; no error
 
 test_operational_store_failure_is_non_fatal
-  DB write failure -> no exception raised; error logged
+  DB write failure -> no exception raised; error emitted to telemetry
 
-test_repeated_read_paths_persist_across_calls
-  record_repeated_read_signal(session_id, ws, "foo.py")
-  get_session_read_paths(session_id) -> {"foo.py"}
+test_qz_write_runtime_state_json_compatibility
+  script still writes JSON file when OperationalStore disabled
 
-test_repeated_read_isolated_by_session
-  session_A and session_B have separate read path sets
-
-test_qz_write_runtime_state_compatibility
-  script still writes JSON file; also writes to DB if enabled
+test_qz_write_runtime_state_dual_write_when_enabled
+  QZ_OPERATIONAL_DB_ENABLED=1 -> script also writes to runtime_events
 ```
 
 ---
 
-## 13. Migration / compatibility constraints
+## 11. Migration / compatibility constraints
 
 ```text
 - var/run/qz-runtime-state.json:  stays until Slice C.1 confirms compatibility
@@ -601,11 +338,10 @@ test_qz_write_runtime_state_compatibility
 
 ## Related documents
 
-- `proxy/qz_recovery_state.py` — recovery state in-memory implementation
-- `proxy/qz_codex_metadata.py` — identity parsing and workspace resolution
-- `proxy/qz_file_signal.py` — repeated-read v1 stateless signal
+- `scripts/qz-write-runtime-state` — current launcher trace script
+- `scripts/qz-up` — calls qz-write-runtime-state at each phase
+- `proxy/qz_recovery_state.py` — in-memory recovery state (unchanged by Phase 1)
 - `proxy/qz_braincase_db.py` — BrainCaseDB (model-facing memory, separate)
 - `docs/braincase-memory-tool-api.md` — BrainCaseDB doctrine
-- `scripts/qz-write-runtime-state` — current launcher trace script
-- Issue #51 — recovery state persistence
-- Issue #46 — qz-write-runtime-state replacement
+- Issue #51 — recovery state (needs explicit reframing before implementation)
+- Issue #46 — qz-write-runtime-state replacement (primary Phase 1 driver)
