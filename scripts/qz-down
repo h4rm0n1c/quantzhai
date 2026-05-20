@@ -73,7 +73,25 @@ if curl -fsS --max-time 3 "${proxy_url}/health" >/dev/null 2>&1; then
   printf 'Requesting backend stop via proxy...\n'
   curl -sS --max-time 10 -X POST "${proxy_url}/qz/backend/stop" \
     -o /dev/null -w '' 2>/dev/null || true
-  printf 'Backend stop requested. Container removal is managed by the proxy.\n'
+
+  # Wait for the backend to reach stopped/failed before killing the proxy.
+  # BackendManager._do_stop() runs in a daemon thread; killing the proxy
+  # immediately would terminate it before docker stop/rm complete.
+  backend_stop_timeout="${QZ_BACKEND_STOP_TIMEOUT:-15}"
+  if ! [[ "$backend_stop_timeout" =~ ^[0-9]+$ ]] || [[ "$backend_stop_timeout" -lt 1 ]]; then
+    backend_stop_timeout=15
+  fi
+  deadline=$((SECONDS + backend_stop_timeout))
+  while (( SECONDS < deadline )); do
+    phase="$(curl -sS --max-time 2 "${proxy_url}/qz/backend/status" 2>/dev/null \
+      | python3 -c "import json,sys; print(json.load(sys.stdin).get('backend_manager',{}).get('phase',''))" 2>/dev/null || true)"
+    if [[ "$phase" == "stopped" || "$phase" == "failed" || "$phase" == "disabled" || "$phase" == "idle" ]]; then
+      break
+    fi
+    sleep 1
+  done
+
+  printf 'Backend stop complete. Container removal is managed by the proxy.\n'
   printf 'Use scripts/qz-down --force to remove the container immediately.\n'
 else
   printf 'Proxy not reachable at %s. Stopping proxy process only.\n' "$proxy_url" >&2

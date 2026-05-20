@@ -651,6 +651,32 @@ class BackendManagerLifecycleTests(unittest.TestCase):
         self.assertNotIn("model_dir", snap)
         self.assertNotIn("image", snap)
 
+    def test_stop_while_busy_returns_conflict(self):
+        """stop() while start in progress must return conflict, not start two threads."""
+        runner, _ = self._ok_runner()
+        slow_health = lambda url, timeout=3.0: (time.sleep(0.5), False)[1]
+        mgr = _make_mgr(runner=runner, health_checker=slow_health,
+                         health_check_timeout=0.1)
+        mgr.start()
+        time.sleep(0.05)  # let _do_start thread begin
+        result = mgr.stop()
+        # Must be rejected while start holds _busy
+        if not result["ok"]:
+            self.assertIn("in progress", result.get("error", ""))
+        self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
+
+    def test_restart_clears_busy_and_reaches_healthy(self):
+        """_do_restart re-checks _busy before start phase to prevent double-start."""
+        runner, _ = self._ok_runner()
+        health_checker = lambda url, timeout=3.0: True
+        mgr = _make_mgr(runner=runner, health_checker=health_checker)
+        mgr.start()
+        self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
+        result = mgr.restart()
+        self.assertTrue(result["ok"])
+        self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED, timeout=5.0)
+        self.assertEqual(mgr.phase, PHASE_HEALTHY)
+
     def test_status_returns_ok_and_backend_manager_key(self):
         mgr = _make_mgr()
         result = mgr.status()

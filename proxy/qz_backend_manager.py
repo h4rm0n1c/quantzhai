@@ -283,9 +283,9 @@ class BackendManager:
                 return {"ok": False, "action": "stop",
                         "error": f"backend is already {phase}",
                         "backend_manager": self._state.as_dict()}
-            if self._busy and phase not in _RUNNING_PHASES:
+            if self._busy:
                 return {"ok": False, "action": "stop",
-                        "error": "another operation is in progress",
+                        "error": f"another operation is in progress ({phase})",
                         "backend_manager": self._state.as_dict()}
             self._busy = True
             self._state.phase = PHASE_STOPPING
@@ -369,6 +369,12 @@ class BackendManager:
         """Build the full `docker run` invocation.
 
         Exact port of scripts/qz-up qz_docker run call (lines 121-130).
+
+        docker_cmd note: must be a simple space-separated command prefix,
+        e.g. "docker", "sudo docker", "sudo -n /usr/local/sbin/qz-docker-quantzhai".
+        Shell function forms such as "sg docker -c" cannot be represented here
+        because sg's -c flag expects a single shell string, not separate argv
+        entries. Use QZ_DOCKER_CMD="sudo docker" or a thin wrapper script instead.
         """
         cmd = self._docker_cmd.split()
         container_flags = [
@@ -498,10 +504,15 @@ class BackendManager:
             self._emit("backend_stopped")
 
     def _do_restart(self) -> None:
-        """Background: stop then start."""
+        """Background: stop then start.
+
+        _do_stop() clears _busy=False. Before re-taking _busy for the start
+        phase, we check it again to avoid a race with a concurrent start().
+        """
         self._do_stop()
         with self._lock:
-            if self._state.phase != PHASE_STOPPED:
+            if self._state.phase != PHASE_STOPPED or self._busy:
+                # Stop failed, or another operation snuck in during the window.
                 return
             self._busy = True
             self._state.phase = PHASE_START_REQUESTED

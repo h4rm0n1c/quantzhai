@@ -954,6 +954,7 @@ Slices:
   B1-impl   — ✅ COMPLETE. BackendManager skeleton + Docker command builder; 49 tests; 2870 pass.
   B2-impl   — ✅ COMPLETE. Lifecycle + proxy integration + endpoints + control-plane. 2892 pass.
   B3-impl   — ✅ COMPLETE. qz-up stripped; qz-down graceful+force; qz-backend added. 2924 pass.
+  B.1-audit — ✅ COMPLETE. 4 bugs fixed; docker_cmd documented; 2929 pass.
   B.1-audit — Docker command fidelity, state machine, compat
   C-doc     — README, operator guide
   D-smoke   — cold-start smoke (§12 of design doc)

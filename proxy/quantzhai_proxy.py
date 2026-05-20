@@ -680,34 +680,45 @@ def main():
             print(f"QuantZhai proxy initialization failed: {exc}", flush=True)
 
     # Instantiate BackendManager — no Docker calls yet.
+    # Use safe int parse: bad/empty env vars disable backend rather than crash proxy.
+    def _eint(name: str, default: int) -> int:
+        try:
+            return int(os.environ.get(name, str(default)))
+        except (TypeError, ValueError):
+            return default
+
     _backend_autostart = _parse_bool_env(os.environ.get("QZ_BACKEND_AUTOSTART", "1"), default=True)
-    _backend_manager = BackendManager(
-        docker_cmd=os.environ.get("QZ_DOCKER_CMD", "docker"),
-        container_name=os.environ.get("QZ_CONTAINER", "qwen36turbo"),
-        image=os.environ.get("QZ_IMAGE", "thetom-llama-cpp-turboquant:cuda-server"),
-        model_dir=os.environ.get("QZ_MODEL_DIR", str(root / "var" / "models")),
-        server_host=os.environ.get("QZ_SERVER_HOST", "127.0.0.1"),
-        server_port=int(os.environ.get("QZ_SERVER_PORT", "18084")),
-        context=int(os.environ.get("QZ_CONTEXT", "262144")),
-        parallel=int(os.environ.get("QZ_PARALLEL", "1")),
-        batch=int(os.environ.get("QZ_BATCH", "4096")),
-        ubatch=int(os.environ.get("QZ_UBATCH", "512")),
-        threads=int(os.environ.get("QZ_THREADS", "12")),
-        thread_batch=int(os.environ.get("QZ_THREAD_BATCH", "12")),
-        tensor_split=os.environ.get("QZ_TENSOR_SPLIT", "9,17"),
-        main_gpu=int(os.environ.get("QZ_MAIN_GPU", "0")),
-        cache_ram=int(os.environ.get("QZ_CACHE_RAM", "8192")),
-        cache_reuse=int(os.environ.get("QZ_CACHE_REUSE", "256")),
-        kv_key=os.environ.get("QZ_KV_KEY", "q8_0"),
-        kv_value=os.environ.get("QZ_KV_VALUE", "turbo3"),
-        reasoning_budget=os.environ.get("QZ_REASONING_BUDGET", "-1"),
-        reasoning_budget_message=os.environ.get(
-            "QZ_REASONING_BUDGET_MESSAGE",
-            "I have reasoned long enough. Let me now produce my final answer.",
-        ),
-        spec_default=_parse_bool_env(os.environ.get("QZ_SPEC_DEFAULT", "0")),
-        autostart=_backend_autostart,
-    )
+    try:
+        _backend_manager = BackendManager(
+            docker_cmd=os.environ.get("QZ_DOCKER_CMD", "docker"),
+            container_name=os.environ.get("QZ_CONTAINER", "qwen36turbo"),
+            image=os.environ.get("QZ_IMAGE", "thetom-llama-cpp-turboquant:cuda-server"),
+            model_dir=os.environ.get("QZ_MODEL_DIR", str(root / "var" / "models")),
+            server_host=os.environ.get("QZ_SERVER_HOST", "127.0.0.1"),
+            server_port=_eint("QZ_SERVER_PORT", 18084),
+            context=_eint("QZ_CONTEXT", 262144),
+            parallel=_eint("QZ_PARALLEL", 1),
+            batch=_eint("QZ_BATCH", 4096),
+            ubatch=_eint("QZ_UBATCH", 512),
+            threads=_eint("QZ_THREADS", 12),
+            thread_batch=_eint("QZ_THREAD_BATCH", 12),
+            tensor_split=os.environ.get("QZ_TENSOR_SPLIT", "9,17"),
+            main_gpu=_eint("QZ_MAIN_GPU", 0),
+            cache_ram=_eint("QZ_CACHE_RAM", 8192),
+            cache_reuse=_eint("QZ_CACHE_REUSE", 256),
+            kv_key=os.environ.get("QZ_KV_KEY", "q8_0"),
+            kv_value=os.environ.get("QZ_KV_VALUE", "turbo3"),
+            reasoning_budget=os.environ.get("QZ_REASONING_BUDGET", "-1"),
+            reasoning_budget_message=os.environ.get(
+                "QZ_REASONING_BUDGET_MESSAGE",
+                "I have reasoned long enough. Let me now produce my final answer.",
+            ),
+            spec_default=_parse_bool_env(os.environ.get("QZ_SPEC_DEFAULT", "0")),
+            autostart=_backend_autostart,
+        )
+    except Exception as _bm_exc:
+        print(f"BackendManager init failed (backend disabled): {_bm_exc}", flush=True)
+        _backend_manager = BackendManager(autostart=False)
     ProxyHandler.backend_manager = _backend_manager
 
     threading.Thread(target=_initialize_proxy_state, daemon=True).start()

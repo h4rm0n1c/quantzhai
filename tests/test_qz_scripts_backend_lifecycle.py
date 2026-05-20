@@ -131,6 +131,28 @@ class QzDownTests(unittest.TestCase):
         self.assertIn("usage", self.src.lower())
 
 
+class QzDownAuditTests(unittest.TestCase):
+    """Additional qz-down audit tests for B.1 fixes."""
+
+    def setUp(self):
+        self.src = _read("qz-down")
+
+    def test_qz_down_waits_for_backend_stopped(self):
+        """qz-down must poll /qz/backend/status after posting stop."""
+        self.assertIn("/qz/backend/status", self.src)
+
+    def test_qz_down_has_backend_stop_timeout(self):
+        """qz-down must have a bounded wait timeout for backend stop."""
+        self.assertTrue(
+            "QZ_BACKEND_STOP_TIMEOUT" in self.src or "backend_stop_timeout" in self.src
+        )
+
+    def test_qz_down_checks_stopped_or_failed_phase(self):
+        """Wait loop must check for stopped/failed phase to exit."""
+        self.assertIn("stopped", self.src)
+        self.assertIn("failed", self.src)
+
+
 class QzBackendTests(unittest.TestCase):
     """scripts/qz-backend must be a thin proxy wrapper with no Docker calls."""
 
