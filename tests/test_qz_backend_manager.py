@@ -18,6 +18,22 @@ from proxy.qz_backend_manager import (
     _iso_now,
 )
 
+# GPU log samples used across several test classes
+_GPU_LOG_CUDA_INIT_FAIL = (
+    "ggml_cuda_init: failed to initialize CUDA: initialization error\n"
+    "warning: no usable GPU found, --gpu-layers option will be ignored\n"
+)
+_GPU_LOG_CPU_MAPPED = (
+    "load_tensors: CPU_Mapped model buffer size = 17691.34 MiB\n"
+)
+_GPU_LOG_OFFLOADED = (
+    "load_tensors: offloaded 94 layers to GPU\n"
+    "load_tensors: CUDA0 model buffer size =  9012.34 MiB\n"
+)
+_GPU_LOG_CUDA_HOST = (
+    "load_tensors: CUDA_Host model buffer size =  1234.56 MiB\n"
+)
+
 
 # ---------------------------------------------------------------------------
 # BackendState snapshot
@@ -684,6 +700,263 @@ class BackendManagerLifecycleTests(unittest.TestCase):
         self.assertEqual(result["action"], "status")
         self.assertIn("backend_manager", result)
         self.assertIsInstance(result["backend_manager"], dict)
+
+
+# ---------------------------------------------------------------------------
+# GPU docker run args
+# ---------------------------------------------------------------------------
+
+class BuildDockerRunArgsGPUTests(unittest.TestCase):
+    """Verify GPU-related flags added by build_docker_run_args()."""
+
+    def _mgr(self, explicit_nvidia_devices=False, device_exists=None):
+        return BackendManager(
+            docker_cmd="docker",
+            container_name="test-ctr",
+            image="test-image:latest",
+            model_dir="/tmp/models",
+            server_host="127.0.0.1",
+            server_port=18084,
+            context=8192, parallel=1, batch=512, ubatch=128,
+            threads=4, thread_batch=4, tensor_split="0", main_gpu=0,
+            cache_ram=1024, cache_reuse=64, kv_key="q8_0", kv_value="f16",
+            reasoning_budget="-1", reasoning_budget_message="Done.",
+            spec_default=False,
+            explicit_nvidia_devices=explicit_nvidia_devices,
+            device_exists=device_exists,
+        )
+
+    def test_nvidia_visible_devices_env_present(self):
+        args = self._mgr().build_docker_run_args()
+        e_flags = [args[i + 1] for i, a in enumerate(args) if a == "-e"]
+        self.assertTrue(
+            any("NVIDIA_VISIBLE_DEVICES=all" in f for f in e_flags),
+            f"-e NVIDIA_VISIBLE_DEVICES=all not found; -e values: {e_flags}",
+        )
+
+    def test_nvidia_driver_capabilities_env_present(self):
+        args = self._mgr().build_docker_run_args()
+        e_flags = [args[i + 1] for i, a in enumerate(args) if a == "-e"]
+        self.assertTrue(
+            any("NVIDIA_DRIVER_CAPABILITIES=compute,utility" in f for f in e_flags),
+            f"-e NVIDIA_DRIVER_CAPABILITIES=compute,utility not found; -e values: {e_flags}",
+        )
+
+    def test_explicit_nvidia_devices_added_when_enabled(self):
+        # Inject device_exists=always_true so test is host-independent.
+        args = self._mgr(
+            explicit_nvidia_devices=True,
+            device_exists=lambda _: True,
+        ).build_docker_run_args()
+        device_vals = [args[i + 1] for i, a in enumerate(args) if a == "--device"]
+        self.assertIn("/dev/nvidiactl", device_vals)
+        self.assertIn("/dev/nvidia0", device_vals)
+        self.assertIn("/dev/nvidia1", device_vals)
+        self.assertIn("/dev/nvidia-uvm", device_vals)
+        self.assertIn("/dev/nvidia-uvm-tools", device_vals)
+
+    def test_explicit_nvidia_devices_absent_when_disabled(self):
+        args = self._mgr(explicit_nvidia_devices=False).build_docker_run_args()
+        self.assertNotIn("--device", args)
+
+    def test_explicit_nvidia_devices_skips_missing_host_devices(self):
+        # device_exists returns False for nvidia1 only.
+        def _exists(path):
+            return path != "/dev/nvidia1"
+        args = self._mgr(
+            explicit_nvidia_devices=True,
+            device_exists=_exists,
+        ).build_docker_run_args()
+        device_vals = [args[i + 1] for i, a in enumerate(args) if a == "--device"]
+        self.assertIn("/dev/nvidia0", device_vals)
+        self.assertNotIn("/dev/nvidia1", device_vals)
+
+    def test_backend_args_still_appended_after_gpu_flags(self):
+        mgr = self._mgr(explicit_nvidia_devices=True, device_exists=lambda _: True)
+        full = mgr.build_docker_run_args()
+        backend = mgr.build_backend_args()
+        self.assertEqual(full[-len(backend):], backend)
+
+
+# ---------------------------------------------------------------------------
+# GPU offload log check
+# ---------------------------------------------------------------------------
+
+class GPUOffloadLogCheckTests(unittest.TestCase):
+    """Unit tests for _check_gpu_offload_from_logs() and _do_start GPU gate."""
+
+    def _mgr_with_logs(self, gpu_logs: str, require_gpu: bool = True, **kwargs):
+        """Return a manager whose runner returns gpu_logs for 'logs' commands."""
+        def runner(args, timeout=None):
+            if "ps" in args:
+                return 0, "test-ctr", ""
+            if "logs" in args:
+                return 0, gpu_logs, ""
+            return 0, "", ""
+
+        return _make_mgr(
+            runner=runner,
+            health_checker=lambda url, timeout=3.0: True,
+            require_gpu=require_gpu,
+            **kwargs,
+        )
+
+    def _wait_phase(self, mgr, *phases, timeout=3.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if mgr.phase in phases:
+                return True
+            time.sleep(0.02)
+        return False
+
+    # --- _check_gpu_offload_from_logs() unit ---
+
+    def test_offloaded_layers_returns_gpu(self):
+        mgr = self._mgr_with_logs(_GPU_LOG_OFFLOADED)
+        state, err = mgr._check_gpu_offload_from_logs()
+        self.assertEqual(state, "gpu")
+        self.assertIsNone(err)
+
+    def test_cuda_host_buffer_returns_gpu(self):
+        mgr = self._mgr_with_logs(_GPU_LOG_CUDA_HOST)
+        state, err = mgr._check_gpu_offload_from_logs()
+        self.assertEqual(state, "gpu")
+        self.assertIsNone(err)
+
+    def test_cuda_init_fail_returns_failed(self):
+        mgr = self._mgr_with_logs(_GPU_LOG_CUDA_INIT_FAIL)
+        state, err = mgr._check_gpu_offload_from_logs()
+        self.assertEqual(state, "failed")
+        self.assertIsNotNone(err)
+
+    def test_cpu_mapped_returns_cpu_fallback(self):
+        mgr = self._mgr_with_logs(_GPU_LOG_CPU_MAPPED)
+        state, err = mgr._check_gpu_offload_from_logs()
+        self.assertEqual(state, "cpu_fallback")
+        self.assertIsNotNone(err)
+
+    def test_empty_logs_returns_unknown(self):
+        mgr = self._mgr_with_logs("")
+        state, err = mgr._check_gpu_offload_from_logs()
+        self.assertEqual(state, "unknown")
+        self.assertIsNone(err)
+
+    def test_logs_command_failure_returns_unknown(self):
+        def runner(args, timeout=None):
+            if "ps" in args:
+                return 0, "test-ctr", ""
+            if "logs" in args:
+                return 1, "", "no such container"
+            return 0, "", ""
+        mgr = _make_mgr(runner=runner, health_checker=lambda url, timeout=3.0: True)
+        state, err = mgr._check_gpu_offload_from_logs()
+        self.assertEqual(state, "unknown")
+
+    # --- _do_start GPU gate ---
+
+    def test_cuda_init_failure_marks_phase_failed_when_require_gpu(self):
+        mgr = self._mgr_with_logs(_GPU_LOG_CUDA_INIT_FAIL, require_gpu=True)
+        mgr.start()
+        reached = self._wait_phase(mgr, PHASE_FAILED, PHASE_HEALTHY)
+        self.assertTrue(reached, f"timed out in phase {mgr.phase}")
+        self.assertEqual(mgr.phase, PHASE_FAILED)
+        snap = mgr.snapshot()
+        self.assertFalse(snap["backend_health_ok"])
+        self.assertIn(snap["gpu_offload_state"], ("failed", "cpu_fallback"))
+        self.assertIsNotNone(snap["gpu_error"])
+        self.assertIsNotNone(snap["last_error"])
+
+    def test_cpu_mapped_marks_phase_failed_when_require_gpu(self):
+        mgr = self._mgr_with_logs(_GPU_LOG_CPU_MAPPED, require_gpu=True)
+        mgr.start()
+        reached = self._wait_phase(mgr, PHASE_FAILED, PHASE_HEALTHY)
+        self.assertTrue(reached, f"timed out in phase {mgr.phase}")
+        self.assertEqual(mgr.phase, PHASE_FAILED)
+        snap = mgr.snapshot()
+        self.assertEqual(snap["gpu_offload_state"], "cpu_fallback")
+
+    def test_success_cuda_log_marks_healthy(self):
+        mgr = self._mgr_with_logs(_GPU_LOG_OFFLOADED, require_gpu=True)
+        mgr.start()
+        reached = self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
+        self.assertTrue(reached, f"timed out in phase {mgr.phase}")
+        self.assertEqual(mgr.phase, PHASE_HEALTHY)
+        snap = mgr.snapshot()
+        self.assertTrue(snap["backend_health_ok"])
+        self.assertEqual(snap["gpu_offload_state"], "gpu")
+        self.assertIsNone(snap["gpu_error"])
+
+    def test_require_gpu_false_allows_cpu_fallback_but_records_state(self):
+        mgr = self._mgr_with_logs(_GPU_LOG_CPU_MAPPED, require_gpu=False)
+        mgr.start()
+        reached = self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
+        self.assertTrue(reached, f"timed out in phase {mgr.phase}")
+        self.assertEqual(mgr.phase, PHASE_HEALTHY)
+        snap = mgr.snapshot()
+        self.assertTrue(snap["backend_health_ok"])
+        self.assertEqual(snap["gpu_offload_state"], "cpu_fallback")
+
+    def test_require_gpu_false_cuda_init_fail_still_healthy(self):
+        mgr = self._mgr_with_logs(_GPU_LOG_CUDA_INIT_FAIL, require_gpu=False)
+        mgr.start()
+        reached = self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
+        self.assertTrue(reached, f"timed out in phase {mgr.phase}")
+        self.assertEqual(mgr.phase, PHASE_HEALTHY)
+
+    def test_unknown_gpu_state_does_not_fail_when_require_gpu(self):
+        # Empty logs → unknown → should not trigger GPU failure
+        mgr = self._mgr_with_logs("", require_gpu=True)
+        mgr.start()
+        reached = self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
+        self.assertTrue(reached, f"timed out in phase {mgr.phase}")
+        self.assertEqual(mgr.phase, PHASE_HEALTHY)
+
+
+# ---------------------------------------------------------------------------
+# BackendState GPU fields in snapshot
+# ---------------------------------------------------------------------------
+
+class BackendStateGPUFieldTests(unittest.TestCase):
+
+    def test_snapshot_exposes_gpu_required(self):
+        state = BackendState(gpu_required=True)
+        d = state.as_dict()
+        self.assertIn("gpu_required", d)
+        self.assertTrue(d["gpu_required"])
+
+    def test_snapshot_exposes_gpu_offload_state(self):
+        state = BackendState(gpu_offload_state="gpu")
+        d = state.as_dict()
+        self.assertIn("gpu_offload_state", d)
+        self.assertEqual(d["gpu_offload_state"], "gpu")
+
+    def test_snapshot_exposes_gpu_error(self):
+        state = BackendState(gpu_error="CUDA init failed")
+        d = state.as_dict()
+        self.assertIn("gpu_error", d)
+        self.assertEqual(d["gpu_error"], "CUDA init failed")
+
+    def test_snapshot_gpu_error_defaults_none(self):
+        state = BackendState()
+        d = state.as_dict()
+        self.assertIsNone(d["gpu_error"])
+
+    def test_snapshot_does_not_expose_raw_logs(self):
+        state = BackendState()
+        d = state.as_dict()
+        self.assertNotIn("logs", d)
+        self.assertNotIn("container_logs", d)
+        self.assertNotIn("raw_logs", d)
+
+    def test_manager_snapshot_includes_gpu_fields(self):
+        mgr = _make_mgr(require_gpu=True)
+        snap = mgr.snapshot()
+        self.assertIn("gpu_required", snap)
+        self.assertIn("gpu_offload_state", snap)
+        self.assertIn("gpu_error", snap)
+        self.assertTrue(snap["gpu_required"])
+        self.assertEqual(snap["gpu_offload_state"], "unknown")
+        self.assertIsNone(snap["gpu_error"])
 
 
 # ---------------------------------------------------------------------------

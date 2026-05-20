@@ -715,6 +715,9 @@ def main():
             ),
             spec_default=_parse_bool_env(os.environ.get("QZ_SPEC_DEFAULT", "0")),
             autostart=_backend_autostart,
+            require_gpu=_parse_bool_env(os.environ.get("QZ_REQUIRE_GPU", "1"), default=True),
+            gpu_log_tail=_eint("QZ_GPU_LOG_TAIL", 1000),
+            explicit_nvidia_devices=_parse_bool_env(os.environ.get("QZ_EXPLICIT_NVIDIA_DEVICES", "0"), default=False),
         )
     except Exception as _bm_exc:
         print(f"BackendManager init failed (backend disabled): {_bm_exc}", flush=True)

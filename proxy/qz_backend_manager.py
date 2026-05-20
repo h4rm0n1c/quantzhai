@@ -9,6 +9,8 @@ This module is import-safe: no Docker or network calls at import time.
 
 from __future__ import annotations
 
+import os
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -116,6 +118,9 @@ class BackendState:
     last_stopped_at: str | None = None
     last_error: str | None = None
     autostart: bool = True
+    gpu_required: bool = True
+    gpu_offload_state: str = "unknown"  # unknown | gpu | cpu_fallback | failed
+    gpu_error: str | None = None
 
     def as_dict(self) -> dict:
         """Return a safe dict — no secrets, no paths, no Docker commands."""
@@ -130,6 +135,9 @@ class BackendState:
             "last_stopped_at":          self.last_stopped_at,
             "last_error":               self.last_error,
             "autostart":                self.autostart,
+            "gpu_required":             self.gpu_required,
+            "gpu_offload_state":        self.gpu_offload_state,
+            "gpu_error":                self.gpu_error,
         }
 
 
@@ -169,12 +177,16 @@ class BackendManager:
         reasoning_budget_message: str = "I have reasoned long enough. Let me now produce my final answer.",
         spec_default: bool = False,
         autostart: bool = True,
+        require_gpu: bool = True,
+        gpu_log_tail: int = 1000,
+        explicit_nvidia_devices: bool = False,
         health_check_interval: float = 5.0,
         health_check_timeout: float = 120.0,
         autostart_delay: float = 0.5,
         operational_store: Any = None,
         runner: Callable[..., tuple[int, str, str]] | None = None,
         health_checker: Callable[[str, float], bool] | None = None,
+        device_exists: Callable[[str], bool] | None = None,
     ) -> None:
         # Config — private; never exposed in snapshot or logs
         self._docker_cmd             = _safe_str(docker_cmd, "docker")
@@ -198,12 +210,16 @@ class BackendManager:
         self._reasoning_budget       = _safe_str(reasoning_budget, "-1")
         self._reasoning_budget_msg   = _safe_str(reasoning_budget_message)
         self._spec_default           = bool(spec_default)
+        self._require_gpu            = bool(require_gpu)
+        self._gpu_log_tail           = int(gpu_log_tail)
+        self._explicit_nvidia_devices = bool(explicit_nvidia_devices)
         self._health_check_interval  = float(health_check_interval)
         self._health_check_timeout   = float(health_check_timeout)
         self._autostart_delay        = float(autostart_delay)
         self._operational_store      = operational_store
         self._runner                 = runner or _default_runner
         self._health_checker         = health_checker or _default_health_checker
+        self._device_exists          = device_exists if device_exists is not None else os.path.exists
 
         # Threading
         self._lock = threading.Lock()
@@ -215,6 +231,7 @@ class BackendManager:
             phase=initial_phase,
             container_name=self._container_name,
             autostart=bool(autostart),
+            gpu_required=self._require_gpu,
         )
 
     # ------------------------------------------------------------------
@@ -383,11 +400,25 @@ class BackendManager:
             "--gpus", "all",
             "--cap-add", "IPC_LOCK",
             "--ulimit", "memlock=-1:-1",
+            "-e", "NVIDIA_VISIBLE_DEVICES=all",
+            "-e", "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
             "-p", f"{self._server_port}:8080",
             "--mount", f"type=bind,src={self._model_dir},dst=/models,readonly",
-            self._image,
-            "--models-dir", "/models",
         ]
+        if self._explicit_nvidia_devices:
+            # Explicit device passthrough: covers nvidiactl + up to two GPUs + UVM.
+            # Only passes devices that exist on the host; fixed two-GPU assumption
+            # for /dev/nvidia0 and /dev/nvidia1.
+            for dev in (
+                "/dev/nvidiactl",
+                "/dev/nvidia0",
+                "/dev/nvidia1",
+                "/dev/nvidia-uvm",
+                "/dev/nvidia-uvm-tools",
+            ):
+                if self._device_exists(dev):
+                    container_flags.extend(["--device", dev])
+        container_flags += [self._image, "--models-dir", "/models"]
         return cmd + container_flags + self.build_backend_args()
 
     def build_docker_rm_args(self, force: bool = True) -> list[str]:
@@ -407,6 +438,56 @@ class BackendManager:
             + ["ps", "--filter", f"name=^/{self._container_name}$",
                "--format", "{{.Names}}"]
         )
+
+    def build_docker_logs_args(self) -> list[str]:
+        """Build `docker logs --tail <gpu_log_tail> <container>` args."""
+        return (
+            self._docker_cmd.split()
+            + ["logs", "--tail", str(self._gpu_log_tail), self._container_name]
+        )
+
+    # ------------------------------------------------------------------
+    # GPU offload verification
+    # ------------------------------------------------------------------
+
+    def _check_gpu_offload_from_logs(self) -> tuple[str, str | None]:
+        """Inspect container logs for GPU offload evidence after health passes.
+
+        Returns (state, error_msg):
+          'gpu'          — at least one layer offloaded to GPU / CUDA buffer present
+          'cpu_fallback' — model loaded CPU-only after GPU-related warning
+          'failed'       — hard CUDA init or compile failure
+          'unknown'      — logs unavailable or no recognisable signal
+        """
+        rc, logs, _ = self._runner(self.build_docker_logs_args(), timeout=15.0)
+        if rc != 0:
+            return "unknown", None
+
+        # Hard failure patterns — checked before success patterns.
+        # Ordered: CUDA init/compile failures first, then CPU fallback evidence.
+        _FAILURE_PATTERNS: list[tuple[str, str]] = [
+            ("ggml_cuda_init: failed to initialize CUDA", "failed"),
+            ("no usable GPU found",                       "failed"),
+            ("--gpu-layers option will be ignored",       "failed"),
+            ("compiled without support for GPU offload",  "failed"),
+            ("CPU_Mapped model buffer size",              "cpu_fallback"),
+        ]
+        for pattern, state in _FAILURE_PATTERNS:
+            if pattern in logs:
+                return state, f"GPU not used: {pattern!r} in container logs"
+
+        # Success patterns (regex).
+        _SUCCESS_PATTERNS = [
+            r"offloaded .* layers to GPU",
+            r"CUDA_Host model buffer size",
+            r"CUDA\d+ model buffer size",
+            r"load_tensors: .*CUDA",
+        ]
+        for pattern in _SUCCESS_PATTERNS:
+            if re.search(pattern, logs):
+                return "gpu", None
+
+        return "unknown", None
 
     # ------------------------------------------------------------------
     # Background lifecycle workers
@@ -455,10 +536,23 @@ class BackendManager:
                 if rc_ps != 0 or self._container_name not in out_ps:
                     raise RuntimeError("container exited before becoming healthy")
                 if self._health_checker(health_url, timeout=3.0):
+                    gpu_state, gpu_err = self._check_gpu_offload_from_logs()
+                    if self._require_gpu and gpu_state in ("cpu_fallback", "failed"):
+                        err_str = gpu_err or f"GPU not used (gpu_offload_state={gpu_state})"
+                        with self._lock:
+                            self._state.phase = PHASE_FAILED
+                            self._state.backend_health_ok = False
+                            self._state.gpu_offload_state = gpu_state
+                            self._state.gpu_error = gpu_err
+                            self._state.last_error = err_str
+                        self._emit("backend_failed", {"error": err_str})
+                        return
                     with self._lock:
                         self._state.phase = PHASE_HEALTHY
                         self._state.backend_health_ok = True
                         self._state.last_healthy_at = _iso_now()
+                        self._state.gpu_offload_state = gpu_state
+                        self._state.gpu_error = gpu_err
                     self._emit("backend_healthy")
                     return
                 time.sleep(self._health_check_interval)

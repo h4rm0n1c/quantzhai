@@ -543,7 +543,8 @@ From fully stopped state:
 | **B3-impl** | ✅ qz-up stripped; qz-down graceful + --force; qz-backend wrapper; 32 structural tests |
 | **B.1-audit** | ✅ 4 bugs fixed; docker_cmd documented; 5 new tests; 2929 pass |
 | **C-doc** | ✅ Operator guide, QZ_DOCKER_CMD guidance, status URLs documented |
-| **D-smoke** | Cold-start smoke test (§12) |
+| **D-smoke** | Cold-start smoke test (§12) — **amended**: HTTP health is not enough; `gpu_offload_state` must not be `cpu_fallback`/`failed`; verify `nvidia-smi` shows llama/server GPU memory |
+| **D.1-gpu-fix** | ✅ GPU offload gate: NVIDIA env vars, explicit device passthrough, post-health log check, QZ_REQUIRE_GPU/QZ_GPU_LOG_TAIL/QZ_EXPLICIT_NVIDIA_DEVICES; 97 tests; 2953 pass |
 
 ---
 
@@ -615,6 +616,9 @@ scripts/qz-down --force
 | `QZ_BACKEND_AUTOSTART` | `1` | Set to `0` to disable automatic backend start at proxy launch |
 | `QZ_BACKEND_STOP_TIMEOUT` | `15` | Seconds qz-down waits for backend to reach stopped/failed before killing proxy |
 | `QZ_DOCKER_CMD` | `docker` | Docker command; see §15.6 |
+| `QZ_REQUIRE_GPU` | `1` | Set to `0` to allow CPU fallback; with `1` (default), `phase=failed` if GPU offload is not confirmed from container logs |
+| `QZ_GPU_LOG_TAIL` | `1000` | Number of log lines fetched when checking GPU offload after health passes |
+| `QZ_EXPLICIT_NVIDIA_DEVICES` | `0` | Set to `1` to pass `--device /dev/nvidiactl /dev/nvidia0 /dev/nvidia1 /dev/nvidia-uvm /dev/nvidia-uvm-tools` explicitly; use as a fallback if CUDA init fails despite `--gpus all` |
 
 ### 15.6 QZ_DOCKER_CMD guidance
 
@@ -636,6 +640,37 @@ QZ_DOCKER_CMD="sg docker -c"
 If your shell lacks an active docker group, use `sudo docker` or install the
 `scripts/qz-install-sudo-helper` wrapper and set `QZ_DOCKER_CMD` accordingly.
 See `.env.example` for the supported patterns.
+
+### 15.8 GPU offload verification
+
+After `phase=healthy`, the proxy confirms GPU offload by reading container logs.
+BackendState exposes `gpu_offload_state` (one of `gpu | cpu_fallback | failed | unknown`)
+and `gpu_error` (null on success).
+
+When `QZ_REQUIRE_GPU=1` (default) and offload fails, the manager sets `phase=failed`
+even though `/health` returned 200. HTTP health is not sufficient — GPU offload must
+be confirmed.
+
+Failure patterns that trigger `phase=failed`:
+- `ggml_cuda_init: failed to initialize CUDA`
+- `no usable GPU found`
+- `--gpu-layers option will be ignored`
+- `compiled without support for GPU offload`
+- `CPU_Mapped model buffer size` (model loaded onto host RAM)
+
+**Troubleshooting: CUDA init fails despite `--gpus all`**
+
+If you see `ggml_cuda_init: failed to initialize CUDA: initialization error` and
+`nvidia-smi` works inside the container, try:
+
+```bash
+QZ_EXPLICIT_NVIDIA_DEVICES=1
+```
+
+This adds explicit `--device` flags for `/dev/nvidiactl`, `/dev/nvidia0`,
+`/dev/nvidia1`, `/dev/nvidia-uvm`, and `/dev/nvidia-uvm-tools` (only devices that
+exist on the host are passed). This is a fixed two-GPU assumption; on a one-GPU
+host, `/dev/nvidia1` is silently skipped.
 
 ### 15.7 Waiting for backend after qz-up
 

@@ -25,6 +25,27 @@ they are not automatic operational logs.
 No automatic ingestion. No clever memory. No cross-domain sharing.
 ```
 
+## Recently completed (2026-05-21 run — #65 D.1 GPU regression fix)
+
+```text
+#65 D.1 — GPU offload regression in BackendManager (proxy-owned backend)
+  - Root cause: BackendManager's docker run lacked explicit NVIDIA env vars;
+    proxy-started containers silently fell back to CPU with no detection.
+  - Fix: added NVIDIA_VISIBLE_DEVICES=all and NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    to every docker run invocation.
+  - Added QZ_EXPLICIT_NVIDIA_DEVICES=1 fallback for hosts where --gpus all
+    does not propagate CUDA context (explicit --device passthrough).
+  - Added post-health GPU log check: _check_gpu_offload_from_logs() parses
+    container logs for hard failure and success patterns; sets gpu_offload_state.
+  - QZ_REQUIRE_GPU=1 (default): phase=failed if CPU fallback/CUDA init failure
+    detected. HTTP health alone is no longer sufficient.
+  - BackendState gains gpu_required, gpu_offload_state, gpu_error.
+  - New env: QZ_REQUIRE_GPU (default 1), QZ_GPU_LOG_TAIL (default 1000),
+    QZ_EXPLICIT_NVIDIA_DEVICES (default 0).
+  - 27 new tests; 2953 total PASS.
+  - docs/backend-lifecycle-control-plane.md updated (§15.8, §15.5, §14 roadmap).
+```
+
 ## Recently completed (2026-05-19 run — #5/#57 close-out + #58 always-HTTP + #56 Slices B/B.1)
 
 ```text
