@@ -34,6 +34,33 @@ _GPU_LOG_CUDA_HOST = (
     "load_tensors: CUDA_Host model buffer size =  1234.56 MiB\n"
 )
 
+# Real-world log: two large CUDA buffers + small CPU_Mapped residual.
+# CPU_Mapped appears AFTER CUDA success lines — must be classified as gpu.
+_GPU_LOG_REAL_MIXED = (
+    "ggml_cuda_init: found 2 CUDA devices\n"
+    "load_tensors: offloading output layer to GPU\n"
+    "load_tensors: offloading 47 repeating layers to GPU\n"
+    "load_tensors: offloaded 49/49 layers to GPU\n"
+    "load_tensors: CUDA0 model buffer size = 7200.42 MiB\n"
+    "load_tensors: CUDA1 model buffer size = 10324.02 MiB\n"
+    "load_tensors: CPU_Mapped model buffer size = 166.92 MiB\n"
+)
+
+# Ordering: failure lines appear first, then successful GPU load.
+_GPU_LOG_FAIL_THEN_SUCCESS = (
+    "ggml_cuda_init: failed to initialize CUDA: initialization error\n"
+    "retrying with different device...\n"
+    "load_tensors: offloaded 49/49 layers to GPU\n"
+    "load_tensors: CUDA0 model buffer size = 7200.42 MiB\n"
+)
+
+# Ordering: success lines appear first, then a late failure.
+_GPU_LOG_SUCCESS_THEN_FAIL = (
+    "load_tensors: offloaded 49/49 layers to GPU\n"
+    "load_tensors: CUDA0 model buffer size = 7200.42 MiB\n"
+    "ggml_cuda_init: failed to initialize CUDA: reinitialization error\n"
+)
+
 
 # ---------------------------------------------------------------------------
 # BackendState snapshot
@@ -826,6 +853,27 @@ class GPUOffloadLogCheckTests(unittest.TestCase):
         state, err = mgr._check_gpu_offload_from_logs()
         self.assertEqual(state, "unknown")
 
+    def test_real_mixed_cuda_with_cpu_mapped_residual_returns_gpu(self):
+        """Core regression: CUDA0/CUDA1 buffers + small CPU_Mapped residual == gpu."""
+        mgr = self._mgr_with_logs(_GPU_LOG_REAL_MIXED)
+        state, err = mgr._check_gpu_offload_from_logs()
+        self.assertEqual(state, "gpu")
+        self.assertIsNone(err)
+
+    def test_fail_then_success_returns_gpu(self):
+        """If success signal appears after a failure line, success wins."""
+        mgr = self._mgr_with_logs(_GPU_LOG_FAIL_THEN_SUCCESS)
+        state, err = mgr._check_gpu_offload_from_logs()
+        self.assertEqual(state, "gpu")
+        self.assertIsNone(err)
+
+    def test_success_then_fail_returns_failed(self):
+        """If failure line appears after a success line, failure wins."""
+        mgr = self._mgr_with_logs(_GPU_LOG_SUCCESS_THEN_FAIL)
+        state, err = mgr._check_gpu_offload_from_logs()
+        self.assertEqual(state, "failed")
+        self.assertIsNotNone(err)
+
     # --- _do_start GPU gate ---
 
     def test_cuda_init_failure_marks_phase_failed_when_require_gpu(self):
@@ -851,6 +899,18 @@ class GPUOffloadLogCheckTests(unittest.TestCase):
 
     def test_success_cuda_log_marks_healthy(self):
         mgr = self._mgr_with_logs(_GPU_LOG_OFFLOADED, require_gpu=True)
+        mgr.start()
+        reached = self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
+        self.assertTrue(reached, f"timed out in phase {mgr.phase}")
+        self.assertEqual(mgr.phase, PHASE_HEALTHY)
+        snap = mgr.snapshot()
+        self.assertTrue(snap["backend_health_ok"])
+        self.assertEqual(snap["gpu_offload_state"], "gpu")
+        self.assertIsNone(snap["gpu_error"])
+
+    def test_real_mixed_cuda_cpu_mapped_residual_marks_healthy_when_require_gpu(self):
+        """Regression: CUDA0+CUDA1 buffers + small CPU_Mapped must reach healthy."""
+        mgr = self._mgr_with_logs(_GPU_LOG_REAL_MIXED, require_gpu=True)
         mgr.start()
         reached = self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
         self.assertTrue(reached, f"timed out in phase {mgr.phase}")

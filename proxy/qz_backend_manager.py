@@ -434,40 +434,59 @@ class BackendManager:
     def _check_gpu_offload_from_logs(self) -> tuple[str, str | None]:
         """Inspect container logs for GPU offload evidence after health passes.
 
+        Uses a "latest relevant signal wins" strategy so that small CPU_Mapped
+        residual buffers that appear alongside CUDA/offload lines do not falsely
+        trigger cpu_fallback.  (llama.cpp routinely maps a small host-side buffer
+        even when the bulk of the model is on GPU.)
+
         Returns (state, error_msg):
-          'gpu'          — at least one layer offloaded to GPU / CUDA buffer present
-          'cpu_fallback' — model loaded CPU-only after GPU-related warning
-          'failed'       — hard CUDA init or compile failure
+          'gpu'          — GPU offload confirmed (success signal is the last signal)
+          'cpu_fallback' — CPU_Mapped present, no GPU success signal anywhere
+          'failed'       — hard CUDA init/compile failure is the last signal
           'unknown'      — logs unavailable or no recognisable signal
         """
         rc, logs, _ = self._runner(self.build_docker_logs_args(), timeout=15.0)
         if rc != 0:
             return "unknown", None
 
-        # Hard failure patterns — checked before success patterns.
-        # Ordered: CUDA init/compile failures first, then CPU fallback evidence.
-        _FAILURE_PATTERNS: list[tuple[str, str]] = [
-            ("ggml_cuda_init: failed to initialize CUDA", "failed"),
-            ("no usable GPU found",                       "failed"),
-            ("--gpu-layers option will be ignored",       "failed"),
-            ("compiled without support for GPU offload",  "failed"),
-            ("CPU_Mapped model buffer size",              "cpu_fallback"),
+        _HARD_FAIL_PATTERNS = [
+            "ggml_cuda_init: failed to initialize CUDA",
+            "no usable GPU found",
+            "--gpu-layers option will be ignored",
+            "compiled without support for GPU offload",
         ]
-        for pattern, state in _FAILURE_PATTERNS:
-            if pattern in logs:
-                return state, f"GPU not used: {pattern!r} in container logs"
-
-        # Success patterns (regex).
         _SUCCESS_PATTERNS = [
+            r"offloaded \d+/\d+ layers to GPU",
             r"offloaded .* layers to GPU",
-            r"CUDA_Host model buffer size",
             r"CUDA\d+ model buffer size",
-            r"load_tensors: .*CUDA",
+            r"CUDA_Host model buffer size",
         ]
-        for pattern in _SUCCESS_PATTERNS:
-            if re.search(pattern, logs):
-                return "gpu", None
+        _CPU_MAPPED = "CPU_Mapped model buffer size"
 
+        last_fail = -1
+        last_fail_msg: str | None = None
+        last_success = -1
+        last_cpu_mapped = -1
+
+        for i, line in enumerate(logs.splitlines()):
+            for pat in _HARD_FAIL_PATTERNS:
+                if pat in line:
+                    last_fail = i
+                    last_fail_msg = pat
+            for pat in _SUCCESS_PATTERNS:
+                if re.search(pat, line):
+                    last_success = i
+            if _CPU_MAPPED in line:
+                last_cpu_mapped = i
+
+        # Latest relevant signal wins.
+        if last_success >= 0 and last_success >= last_fail:
+            return "gpu", None
+        if last_fail >= 0 and last_fail > last_success:
+            return "failed", f"GPU not used: {last_fail_msg!r} in container logs"
+        if last_cpu_mapped >= 0:
+            # CPU_Mapped with no GPU success anywhere: full CPU fallback.
+            return "cpu_fallback", f"GPU not used: {_CPU_MAPPED!r} in container logs"
         return "unknown", None
 
     # ------------------------------------------------------------------

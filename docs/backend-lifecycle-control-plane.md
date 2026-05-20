@@ -546,6 +546,7 @@ From fully stopped state:
 | **D-smoke** | Cold-start smoke test (§12) — **amended**: HTTP health is not enough; `gpu_offload_state` must not be `cpu_fallback`/`failed`; verify `nvidia-smi` shows llama/server GPU memory |
 | **D.1-gpu-fix** | ✅ GPU offload gate: post-health log check, QZ_REQUIRE_GPU/QZ_GPU_LOG_TAIL; docker args unchanged (helper-compatible); 2953 pass |
 | **D.2-helper-compat** | ✅ Remove `-e`/`--device` flags added in D.1; they break qz-docker-root-helper (rc=126); restore original qz-up flag set |
+| **D.3-log-detection** | ✅ Fix false cpu_fallback: CPU_Mapped + CUDA buffers == gpu; latest-signal-wins algorithm; 6 new tests |
 
 ---
 
@@ -651,12 +652,24 @@ When `QZ_REQUIRE_GPU=1` (default) and offload fails, the manager sets `phase=fai
 even though `/health` returned 200. HTTP health is not sufficient — GPU offload must
 be confirmed.
 
-Failure patterns that trigger `phase=failed`:
+Detection uses a "latest relevant signal wins" strategy across container log lines.
+
+Hard failure patterns (trigger `phase=failed` when they are the last signal):
 - `ggml_cuda_init: failed to initialize CUDA`
 - `no usable GPU found`
 - `--gpu-layers option will be ignored`
 - `compiled without support for GPU offload`
-- `CPU_Mapped model buffer size` (model loaded onto host RAM)
+
+GPU success patterns (trigger `phase=healthy` when they are the last signal):
+- `offloaded N/N layers to GPU`
+- `CUDA0 model buffer size` / `CUDA1 model buffer size`
+- `CUDA_Host model buffer size`
+
+`CPU_Mapped model buffer size` is **not** a hard failure by itself. llama.cpp
+routinely maps a small host-side buffer even when the bulk of the model is on
+GPU (e.g. 166 MiB CPU_Mapped alongside 7200 + 10324 MiB CUDA buffers).
+`cpu_fallback` is returned only when `CPU_Mapped` is present with **no** GPU
+success signal anywhere in the logs.
 
 **Docker invocation compatibility**
 
