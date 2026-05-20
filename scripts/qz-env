@@ -14,7 +14,7 @@ _qz_env_names=(
   QZ_UBATCH QZ_THREADS QZ_THREAD_BATCH QZ_TENSOR_SPLIT QZ_MAIN_GPU
   QZ_CACHE_RAM QZ_CACHE_REUSE QZ_KV_KEY QZ_KV_VALUE QZ_MODEL_LOAD_TIMEOUT
   QZ_REASONING_BUDGET QZ_SPEC_DEFAULT SEARXNG_BASE_URL SEARXNG_TIMEOUT SEARXNG_POLICY
-  SEARXNG_CAPABILITIES
+  SEARXNG_CAPABILITIES QZ_SEARCH_CONFIG_PATH
 )
 
 for _qz_name in "${_qz_env_names[@]}"; do
@@ -87,6 +87,9 @@ export QZ_REASONING_BUDGET_MESSAGE="${QZ_REASONING_BUDGET_MESSAGE:-I have reason
 export QZ_REASONING_CARRY_FORWARD="${QZ_REASONING_CARRY_FORWARD:-0}"
 export QZ_SPEC_DEFAULT="${QZ_SPEC_DEFAULT:-0}"
 
+# Primary search config: config/default/search.json (qz.search.v1).
+# User overrides: config/user/search.json. QZ_SEARCH_CONFIG_PATH for explicit path.
+# SEARXNG_POLICY is legacy fallback; search.json takes precedence when present.
 export SEARXNG_BASE_URL="${SEARXNG_BASE_URL:-}"
 export SEARXNG_TIMEOUT="${SEARXNG_TIMEOUT:-15}"
 export SEARXNG_POLICY="${SEARXNG_POLICY:-$QZ_ROOT/config/default/search-policy.json}"
@@ -94,6 +97,7 @@ if [[ "$SEARXNG_POLICY" == "$QZ_ROOT/docs/searxng-agent-policy-profiled.json" &&
   export SEARXNG_POLICY="$QZ_ROOT/config/default/search-policy.json"
 fi
 export SEARXNG_CAPABILITIES="${SEARXNG_CAPABILITIES:-}"
+export QZ_SEARCH_CONFIG_PATH="${QZ_SEARCH_CONFIG_PATH:-}"
 
 qz_docker() {
   $QZ_DOCKER_CMD "$@"

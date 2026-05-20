@@ -1,6 +1,6 @@
 {
   "version": "profiled-web-search-v1",
-  "purpose": "Policy for profile-aware SearXNG-backed web_search in the QuantZhai local Codex proxy.",
+  "purpose": "LEGACY: Policy for profile-aware SearXNG-backed web_search. This file is now the legacy compatibility fallback. The primary config is config/default/search.json (qz.search.v1). This file remains for users who have not migrated to search.json. Removal will be tracked in a future issue.",
   "searxng_base": "",
   "compatibility": {
     "keeps_legacy_keys": true,

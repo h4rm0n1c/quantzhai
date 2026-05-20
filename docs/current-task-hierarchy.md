@@ -835,7 +835,12 @@ Loader not yet wired into proxy startup. All validation PASS.
 **#39 Slice D (this commit):** CLOSED. qz.profiles.v1 bundle search.default_profile
 wired into SearchPolicySelection. Precedence: per-model override > bundle default >
 search.json defaults.profile > auto. Routing rules stay in search.json/legacy policy.
-8 new tests. 2704 tests PASS. Close-out next.
+8 new tests. 2704 tests PASS.
+
+**#39 close-out (this commit):** CLOSED. All acceptance criteria PASS.
+QZ_SEARCH_CONFIG_PATH added to qz-env. .env.example updated.
+search-policy.json deprecation note added — remains as legacy compat only.
+search.json is primary. Future removal → new issue. 2704 tests PASS.
 
 ## Reference: BrainCase Slice completion history
 

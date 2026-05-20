@@ -1,7 +1,7 @@
 # Search Config Contract
 
 Date: 2026-05-20
-Status: Slices A–D complete. Profile bundle search.default_profile wired. Close-out next.
+Status: CLOSED. Slices A–D + close-out complete. All acceptance criteria PASS.
 
 ---
 
