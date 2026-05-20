@@ -1257,6 +1257,117 @@ class WebSearchBudgetModeTests(unittest.TestCase):
         )
         self.assertEqual(captured[0], WEB_SEARCH_MODE_DEFAULTS["normal"]["max_results"])
 
+    # --- Precedence edge cases ---
+
+    def test_flat_all_none_no_table_uses_default_mode(self):
+        """All flat values None and no mode_table → else branch → normal mode defaults."""
+        from proxy.qz_tool_web import _resolve_budget_mode, WEB_SEARCH_MODE_DEFAULTS
+        flat_all_none = {"max_results": None, "max_searches_per_turn": None,
+                         "max_page_opens_per_turn": None, "max_retrievals_per_turn": None,
+                         "max_retrieved_chars": None}
+        result = _resolve_budget_mode("", None, flat_all_none, {})
+        self.assertEqual(result["budget_mode"], "normal")
+        self.assertEqual(result["max_results"], WEB_SEARCH_MODE_DEFAULTS["normal"]["max_results"])
+
+    def test_mode_table_beats_flat_fields(self):
+        """budget_modes present: flat routing.max_* are ignored even if flat values differ."""
+        from proxy.qz_tool_web import _resolve_budget_mode
+        table = {"normal": {"max_results": 15, "max_searches_per_turn": 9,
+                             "max_page_opens_per_turn": 9, "max_retrievals_per_turn": 5,
+                             "max_retrieved_chars": 15000}}
+        flat = {"max_results": 3, "max_searches_per_turn": 1, "max_page_opens_per_turn": 1,
+                "max_retrievals_per_turn": 1, "max_retrieved_chars": 1000}
+        result = _resolve_budget_mode("", table, flat, {})
+        # Mode table entry for "normal" wins over flat
+        self.assertEqual(result["max_results"], 15)
+        self.assertEqual(result["max_searches_per_turn"], 9)
+
+    def test_mode_not_in_table_uses_builtin_defaults(self):
+        """Table present but mode not found → falls back to built-in WEB_SEARCH_MODE_DEFAULTS."""
+        from proxy.qz_tool_web import _resolve_budget_mode, WEB_SEARCH_MODE_DEFAULTS
+        table = {"normal": WEB_SEARCH_MODE_DEFAULTS["normal"]}  # no "deep" entry
+        result = _resolve_budget_mode("deep", table, {}, {})
+        self.assertEqual(result["budget_mode"], "deep")
+        self.assertEqual(result["max_results"], WEB_SEARCH_MODE_DEFAULTS["deep"]["max_results"])
+
+    def test_partial_flat_budgets_fills_missing_with_quick_defaults(self):
+        """Partial flat config: missing fields use quick-mode defaults (old constant equivalents)."""
+        from proxy.qz_tool_web import _resolve_budget_mode, WEB_SEARCH_MODE_DEFAULTS
+        flat = {"max_results": 5, "max_searches_per_turn": None,
+                "max_page_opens_per_turn": None, "max_retrievals_per_turn": None,
+                "max_retrieved_chars": None}
+        result = _resolve_budget_mode("", None, flat, {})
+        self.assertEqual(result["max_results"], 5)
+        # Missing fields fall back to quick-mode defaults
+        self.assertEqual(result["max_searches_per_turn"],
+                         WEB_SEARCH_MODE_DEFAULTS["quick"]["max_searches_per_turn"])
+
+    def test_different_modes_in_same_turn_share_counters(self):
+        """Two calls with different budget_mode values share the same turn counters."""
+        from proxy.qz_tool_web import WEB_SEARCH_MODE_DEFAULTS
+        runtime = WebSearchRuntime()
+        runtime._query_searxng = lambda q, categories=None, engines=None, top_k=12: {"results": [{"title": "t", "url": "https://x.test/"}]}
+        counters = self._counters()
+        # First call: quick mode (searches=4)
+        runtime.execute_web_search_call(
+            {"type": "function_call", "call_id": "c1", "name": "web_search",
+             "arguments": json.dumps({"action": "search", "query": "q1", "budget_mode": "quick"})},
+            counters, set()
+        )
+        self.assertEqual(counters["search"], 1)
+        # Second call: deep mode (searches=20) — counter continues from 1
+        runtime.execute_web_search_call(
+            {"type": "function_call", "call_id": "c2", "name": "web_search",
+             "arguments": json.dumps({"action": "search", "query": "q2", "budget_mode": "deep"})},
+            counters, set()
+        )
+        self.assertEqual(counters["search"], 2)
+
+    def test_quick_mode_counter_limit_enforced(self):
+        """quick mode limit (4 searches) is enforced even if previous calls used deep mode."""
+        runtime = WebSearchRuntime()
+        counters = {**self._counters(), "search": 4}  # already at quick limit
+        _wc, to, _ = runtime.execute_web_search_call(
+            {"type": "function_call", "call_id": "c", "name": "web_search",
+             "arguments": json.dumps({"action": "search", "query": "q", "budget_mode": "quick"})},
+            counters, set()
+        )
+        out = json.loads(to["output"])
+        self.assertFalse(out["ok"])
+        self.assertIn("4", out["error"])
+
+    def test_deep_mode_counter_allows_more_searches(self):
+        """deep mode limit (20 searches) allows calls beyond quick limit of 4."""
+        runtime = WebSearchRuntime()
+        runtime._query_searxng = lambda q, categories=None, engines=None, top_k=12: {"results": []}
+        counters = {**self._counters(), "search": 5}  # would be refused under quick
+        _wc, to, _ = runtime.execute_web_search_call(
+            {"type": "function_call", "call_id": "c", "name": "web_search",
+             "arguments": json.dumps({"action": "search", "query": "q", "budget_mode": "deep"})},
+            counters, set()
+        )
+        out = json.loads(to["output"])
+        self.assertTrue(out["ok"])
+
+    def test_absolute_cap_from_config_cannot_exceed_builtin(self):
+        """routing.absolute_max_results=9999 is clamped to WEB_SEARCH_ABSOLUTE_MAX_RESULTS."""
+        from proxy.qz_tool_web import _resolve_budget_mode, WEB_SEARCH_ABSOLUTE_MAX_RESULTS
+        result = _resolve_budget_mode("audit", {}, {}, {"results": 9999})
+        self.assertLessEqual(result["max_results"], WEB_SEARCH_ABSOLUTE_MAX_RESULTS)
+
+    def test_default_budget_mode_respected_when_no_budget_mode_arg(self):
+        """default_budget_mode=quick causes no-arg calls to use quick limits."""
+        from proxy.qz_tool_web import WEB_SEARCH_MODE_DEFAULTS, _resolve_budget_mode
+        result = _resolve_budget_mode("", {}, {}, {}, default_mode="quick")
+        self.assertEqual(result["budget_mode"], "quick")
+        self.assertEqual(result["max_results"], WEB_SEARCH_MODE_DEFAULTS["quick"]["max_results"])
+
+    def test_invalid_default_mode_falls_through_to_builtin_default(self):
+        """default_budget_mode=gibberish → built-in WEB_SEARCH_DEFAULT_BUDGET_MODE (normal)."""
+        from proxy.qz_tool_web import _resolve_budget_mode, WEB_SEARCH_MODE_DEFAULTS
+        result = _resolve_budget_mode("", {}, {}, {}, default_mode="gibberish")
+        self.assertEqual(result["budget_mode"], "normal")
+
 
 if __name__ == "__main__":
     unittest.main()

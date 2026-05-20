@@ -540,24 +540,15 @@ def _resolve_budget_mode(
         retrievals = _resolve_budget_int(mt_entry.get("max_retrievals_per_turn"), mode_base["max_retrievals_per_turn"], 1)
         chars      = _resolve_budget_int(mt_entry.get("max_retrieved_chars"),   mode_base["max_retrieved_chars"],   1)
     elif not mode and any(v is not None for v in fb.values()):
-        # No mode_table and no explicit budget_mode: use flat #60 compat fields
+        # No mode_table and no explicit budget_mode: use flat #60 compat fields.
+        # The outer any() guarantees at least one flat value is not None, so the
+        # "all None" sub-case is impossible here and handled by the else branch below.
         quick_base = WEB_SEARCH_MODE_DEFAULTS["quick"]
-        results    = _resolve_budget_int(fb.get("max_results"),           quick_base["max_results"],           1)
-        searches   = _resolve_budget_int(fb.get("max_searches_per_turn"), quick_base["max_searches_per_turn"], 1)
+        results    = _resolve_budget_int(fb.get("max_results"),             quick_base["max_results"],             1)
+        searches   = _resolve_budget_int(fb.get("max_searches_per_turn"),   quick_base["max_searches_per_turn"],   1)
         opens      = _resolve_budget_int(fb.get("max_page_opens_per_turn"), quick_base["max_page_opens_per_turn"], 1)
         retrievals = _resolve_budget_int(fb.get("max_retrievals_per_turn"), quick_base["max_retrievals_per_turn"], 1)
-        chars      = _resolve_budget_int(fb.get("max_retrieved_chars"),   quick_base["max_retrieved_chars"],   1)
-        # When using flat compat and no explicit mode, honour the default mode upgrade
-        # only if flat budgets are all absent (i.e., fresh unconfigured install)
-        if all(fb.get(k) is None for k in ("max_results", "max_searches_per_turn",
-                                            "max_page_opens_per_turn", "max_retrievals_per_turn",
-                                            "max_retrieved_chars")):
-            mode_base = WEB_SEARCH_MODE_DEFAULTS[effective_mode]
-            results, searches, opens, retrievals, chars = (
-                mode_base["max_results"], mode_base["max_searches_per_turn"],
-                mode_base["max_page_opens_per_turn"], mode_base["max_retrievals_per_turn"],
-                mode_base["max_retrieved_chars"],
-            )
+        chars      = _resolve_budget_int(fb.get("max_retrieved_chars"),     quick_base["max_retrieved_chars"],     1)
     else:
         # No mode_table, explicit mode requested: use built-in mode defaults
         mode_base = WEB_SEARCH_MODE_DEFAULTS[effective_mode]
