@@ -483,11 +483,10 @@ annotations derived from the result URL + metadata without external lookups.
 | ~~**C-impl**~~ | ~~Add `web_search_budget_exceeded` telemetry event~~ |
 | ~~**C.1**~~ | ~~Audit telemetry coverage (done; no gaps)~~ |
 | ~~**D0-discovery**~~ | ~~Inventory local SearXNG Agent API (8890); engine taxonomy; retrieval surface~~ |
-| ~~**D1-rescope**~~ | ~~Add character_cards/furry/gaming_wikis/archives profiles; fix broad; add auto_keywords~~ |
+| ~~**D1-rescope**~~ | ~~Add character_cards/furry/gaming_wikis/archives profiles; fix broad~~ |
+| ~~**D1.1**~~ | ~~Remove auto_keywords/auto_precedence; cancel keyword-routing plan~~ |
 | **D2-impl** | Two-layer source annotations in `_unique_sources()` |
 | **D2.1** | Audit annotation accuracy |
-| **D3-impl** | Wire `search.json routing.auto_keywords` and `auto_precedence` into `_infer_search_profile()` |
-| **D3.1** | Audit auto-profile routing with new profiles |
 | **E-audit** | Live smoke with `http://127.0.0.1:8890`; annotated results in qz-thoughts |
 | **Close-out** | Wire 8890 as SEARXNG_BASE_URL example; update acceptance; close issue |
 
@@ -548,6 +547,27 @@ Only present when QuantZhai is using the 8890 Agent API endpoint.
 3. Current year → `recent`; year ≥ 2 years ago → `dated`; no signal → `unknown`.
 
 ---
+
+### 60.5a Profile selection philosophy
+
+**The model chooses profiles, not a keyword classifier.**
+
+The `web_search` tool accepts an explicit `profile` argument. The system/tool
+prompt (set by QuantZhai search config and profile bundles) guides the model
+to choose the right profile for the query. Hard-coded keyword routing in the
+proxy is brittle, hard to reason about, and produces worse outcomes than
+well-structured system prompt guidance.
+
+`auto_keywords` and `auto_precedence` are **not wired** in the proxy. They were
+added to `search.json` in D1 and removed in D1.1. The auto-inference path in
+`_infer_search_profile()` continues to work with existing keyword tables in the
+legacy `search-policy.json` for backward compatibility, but no new keyword
+routing will be added via `search.json` in #60.
+
+Future improvements to profile selection belong in:
+- System/tool prompt guidance (`AGENTS.md`, profile bundles)
+- Explicit `profile` argument in web_search calls
+- Not in proxy-side keyword routing
 
 ### 60.6 Non-goals
 
