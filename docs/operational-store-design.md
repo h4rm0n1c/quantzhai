@@ -3,7 +3,7 @@
 Date: 2026-05-20
 Status: Slice A.2-design — corrected scope (design only, no implementation).
 
-Issues: #46 (qz-write-runtime-state replacement), #51 (reframing needed)
+Issues: #46 CLOSED (qz-write-runtime-state replacement), #51 CLOSED (not planned)
 
 ---
 
@@ -211,29 +211,22 @@ in Phase 1.
 
 ---
 
-## 7. #51 — reframing required
+## 7. #51 — CLOSED (not planned)
 
 The original #51 title ("Promote recovery/backoff runtime state to SQLite") was
 written when time-based backoff/cooldown persistence was assumed desirable.
 
-**That assumption is now incorrect.** Backoff timers, cooldown state, and
-`manual_required` flags are NOT wanted in the OperationalStore. The in-memory
+**That assumption was rejected in Slice A.2.** Backoff timers, cooldown state,
+and `manual_required` flags are NOT wanted in the OperationalStore. The in-memory
 `RecoveryState` in `qz_recovery_state.py` is sufficient.
 
-**What #51 might mean after reframing:**
-- Persistence of last-known recovery diagnostic facts (not timers) as `runtime_facts`
-  entries for operator inspection only
-- Or: #51 may be closed or downgraded to a documentation task once #46 lands
-- No new issue needs to be created now
+**#46 is now closed.** With the OperationalStore substrate live and launcher events
+replaced, there is nothing concrete left under #51. No implementation is planned.
 
-**What #51 does NOT mean:**
-- No `recovery_state` table
-- No `backoff_until` or `expires_at_ms` fields
-- No seeding in-memory RecoveryState from a database at startup
-- No async write path on recovery state change
-
-#51 remains open but its implementation scope is now undefined pending explicit
-requirements from the operator.
+If a future recovery diagnostic is needed (e.g. a `runtime_facts` entry recording
+the last recovery attempt reason for operator inspection), that requires a new issue
+with concrete fact keys, writer, reader, retention, and non-goals. Do not reopen
+#51 for that work.
 
 ---
 
@@ -362,5 +355,5 @@ test_qz_write_runtime_state_dual_write_when_enabled
 - `proxy/qz_recovery_state.py` — in-memory recovery state (unchanged by Phase 1)
 - `proxy/qz_braincase_db.py` — BrainCaseDB (model-facing memory, separate)
 - `docs/braincase-memory-tool-api.md` — BrainCaseDB doctrine
-- Issue #51 — recovery state (needs explicit reframing before implementation)
+- Issue #51 — CLOSED (not planned); in-memory RecoveryState is sufficient
 - Issue #46 — qz-write-runtime-state replacement (primary Phase 1 driver)

@@ -685,7 +685,7 @@ Key decisions:
 - Phase 1 tables: schema_meta, runtime_events, runtime_facts ONLY
 - sessions/workspaces/recovery_state/repeated_read_state: removed — no Phase 1 consumer
 - qz-write-runtime-state: dual-write in Slice C; JSON file stays for compatibility
-- #51: backoff/cooldown persistence rejected; #51 needs explicit reframing before any implementation
+- #51: CLOSED not-planned — backoff/cooldown persistence rejected; in-memory RecoveryState is sufficient
 - #46: primary Phase 1 consumer (runtime_events replaces JSON trace)
 
 Slices B-impl → B.1 → C-impl → C.1 complete. Close-out next.
@@ -805,7 +805,7 @@ Remaining locals (sequence, public_trace, summary_started, working_body, repair 
 documented as intentionally bounded in place. No decide_stream_event() required.
 #37 CLOSED.
 
-Next recommended: stocktake / #51 operational-state design or #39 search config split.
+Next recommended: #39 search config split, or general stocktake. #51 closed.
 
 ## Reference: BrainCase Slice completion history
 

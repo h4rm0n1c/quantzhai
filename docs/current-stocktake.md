@@ -104,7 +104,7 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 | #3/#4/#43 | Repeated-read v1 (parser, integration, smoke) | **CLOSED** (complete; advisory stateless v1 live) |
 | #37 | Architectural seam extraction plan | **CLOSED** — Slices 1–2J complete; StreamHopState + StreamRunState + 6 pure helpers |
 | #56 | Generated artifact path migration design (var/generated/) | **CLOSED** — A1/A2/A3 under var/generated/; helpers clean; all acceptance criteria PASS |
-| #51 | Promote recovery/backoff runtime state to SQLite | **needs reframing** — backoff/cooldown persistence rejected; OperationalStore design narrowed |
+| #51 | Promote recovery/backoff runtime state to SQLite | **CLOSED (not planned)** — backoff/cooldown persistence rejected; in-memory RecoveryState is sufficient |
 | #46 | Replace qz-write-runtime-state launcher trace | **CLOSED** — JSON retired; OperationalStore + /qz/config/effective are the authority |
 | #5 | Config/var/script ownership cleanup | **CLOSED** (#56, #57 opened for migration/thinning follow-ups) |
 | #57 | qz-codex-common thinning | **CLOSED** (Slices A–C2.1 complete; remote bootstrap endpoints delivered; superseded by #58) |
@@ -151,10 +151,9 @@ place. 2615 tests passing. See `docs/stream-reducer-boundary-design.md §9S`.
 - Close-out audit fixed 3 stale proxy docstrings and 2 doc path references.
 - All acceptance criteria PASS.
 
-**#51** — Recovery backoff state is in-memory only. Backoff/cooldown persistence
-is explicitly NOT wanted. #51 needs explicit reframing before any implementation.
-In-memory `RecoveryState` in `qz_recovery_state.py` is sufficient. See
-`docs/operational-store-design.md §7`.
+**#51** — CLOSED (not planned). Backoff/cooldown persistence rejected in Slice A.2.
+In-memory `RecoveryState` is sufficient. Future recovery diagnostics need a new
+issue with concrete requirements.
 
 **#46** — CLOSED. qz-runtime-state.json retired. QZ_RUNTIME_STATE_PATH removed.
 OperationalStore + /qz/config/effective are the authority for launcher events.
@@ -185,7 +184,7 @@ now track. Keep as historical planning record; do not implement from it directly
 #58  always-HTTP qz-codex bootstrap                      CLOSED
 #5   config/var/script cleanup                           CLOSED
 #46  launcher trace removal                              Slice B+C → OperationalStore runtime_events
-#51  recovery state persistence                          needs explicit reframing; backoff NOT wanted
+#51  recovery state persistence                          CLOSED not-planned; in-memory is sufficient
 #39  search config split                                 when search work resumes
 #52  backend allocator metrics                           upstream-blocked
 #8   compaction RFC                                      research; no implementation dependency
@@ -218,7 +217,7 @@ NEXT:
     /qz/config/effective must surface OperationalStore runtime events
 
   After #46:
-    #51 reframing — backoff/cooldown NOT wanted; needs explicit new requirements
+    #51 CLOSED not-planned — in-memory RecoveryState is sufficient
     #39  Search config split — when search work resumes
     #52  Backend allocator metrics — upstream-blocked
 ```
@@ -230,7 +229,7 @@ NEXT:
 | # | Blocked by | Action |
 |---|---|---|
 | #46 | OperationalStore close-out | Wire /qz/config/effective; then remove JSON |
-| #51 | Needs explicit reframing | Backoff/cooldown persistence rejected; define new requirements first |
+| #51 | CLOSED not-planned | In-memory RecoveryState is sufficient; no implementation planned |
 | #52 | TurboQuant | Wait; no QuantZhai action needed |
 | #8 | Research decision | Keep as RFC, no implementation |
 
