@@ -538,7 +538,8 @@ From fully stopped state:
 | Slice | Content |
 |---|---|
 | **A-design** | ✅ this document |
-| **B-impl** | BackendManager module + proxy integration + new endpoints + qz-up/qz-down redesign + qz-backend script |
+| **B1-impl** | ✅ BackendManager skeleton + Docker command builder + 49 tests |
+| **B2-impl** | Proxy integration + lifecycle thread + /qz/backend/* endpoints + qz-up/qz-down redesign + qz-backend script |
 | **B.1-audit** | Compat, Docker command fidelity, state machine, telemetry |
 | **C-doc** | Update README, docs/current-architecture-authority.md, operator guide |
 | **D-smoke** | Cold-start smoke test (§12) |
