@@ -1263,9 +1263,8 @@ class WebSearchRuntime:
                 sources = [{"url": payload.get("url"), "title": payload.get("title")}]
 
         elif action == "retrieve":
-            retrieve_url = args.get("url") or url
             retrieval_source = args.get("retrieval_source") or ""
-            if not retrieve_url or not str(retrieve_url).strip():
+            if not url or not str(url).strip():
                 error = "retrieve action requires a non-empty url."
                 self._emit("web_search_retrieve_failed", {
                     "url": "",
@@ -1276,20 +1275,20 @@ class WebSearchRuntime:
             elif counters.get("retrieve", 0) >= self.max_retrievals_per_turn:
                 error = f"Refusing retrieve: reached per-turn limit of {self.max_retrievals_per_turn} retrieve calls."
                 self._emit("web_search_retrieve_budget_exceeded", {
-                    "url": str(retrieve_url),
+                    "url": str(url),
                     "limit": self.max_retrievals_per_turn,
                     "counter": counters.get("retrieve", 0),
                     "call_id": call_item.get("call_id") or call_item.get("id"),
                 })
             else:
                 self._emit("web_search_retrieve_started", {
-                    "url": str(retrieve_url),
+                    "url": str(url),
                     "retrieval_source": retrieval_source,
                     "call_id": call_item.get("call_id") or call_item.get("id"),
                 })
                 _t0 = _now_float()
                 counters["retrieve"] = counters.get("retrieve", 0) + 1
-                payload = self._retrieve(str(retrieve_url).strip(), retrieval_source)
+                payload = self._retrieve(str(url).strip(), retrieval_source)
                 _dur = int((_now_float() - _t0) * 1000)
                 if payload.get("ok"):
                     self._emit("web_search_retrieve_completed", {

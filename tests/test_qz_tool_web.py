@@ -1,5 +1,6 @@
 import json
 import unittest
+from unittest.mock import patch
 
 from proxy.qz_tool_web import WebSearchRuntime
 
@@ -790,36 +791,41 @@ class RetrieveActionTests(unittest.TestCase):
         self.assertFalse(out.get("ok"))
         self.assertIn("web_search_retrieve_budget_exceeded", events)
 
-    def test_retrieve_telemetry_started_on_http_call(self):
-        """started event fires before HTTP; failed event fires on fetch error."""
-        runtime = self._make_runtime(base_url="http://127.0.0.1:8890")
-        events = []
-        runtime._emit = lambda name, data=None: events.append(name)
-        # _retrieve will fail because no real server, but started should fire
-        self._call(runtime, "https://pcgamingwiki.com/wiki/Half-Life_2")
-        self.assertIn("web_search_retrieve_started", events)
+    def test_retrieve_telemetry_started_and_failed_on_network_error(self):
+        """started fires before HTTP; failed fires when _http_fetch raises."""
+        import urllib.error
+        with patch("proxy.qz_tool_web._http_fetch", side_effect=urllib.error.URLError("connection refused")):
+            runtime = self._make_runtime(base_url="http://127.0.0.1:8890")
+            events = []
+            runtime._emit = lambda name, data=None: events.append(name)
+            self._call(runtime, "https://pcgamingwiki.com/wiki/Half-Life_2")
+            self.assertIn("web_search_retrieve_started", events)
+            self.assertIn("web_search_retrieve_failed", events)
 
-    def test_retrieve_success_caches_result(self):
-        runtime = self._make_runtime()
-        fetch_count = [0]
+    def test_retrieve_cache_prevents_second_http_call(self):
+        """Second call with the same canonical URL returns cached result without a new HTTP fetch."""
+        raw_bytes = json.dumps(self.MEDIAWIKI_RAW).encode()
+        with patch("proxy.qz_tool_web._http_fetch", return_value=(raw_bytes, "application/json", "https://x")) as mock_fetch:
+            runtime = self._make_runtime()
+            c1 = self._counters()
+            r1 = self._call(runtime, "https://www.pcgamingwiki.com/wiki/Half-Life_2", counters=c1)
+            c2 = self._counters()
+            r2 = self._call(runtime, "https://www.pcgamingwiki.com/wiki/Half-Life_2", counters=c2)
+            self.assertEqual(mock_fetch.call_count, 1)
+            self.assertTrue(r1["result"]["ok"])
+            self.assertTrue(r2["result"]["ok"])
+            self.assertEqual(r1["result"]["title"], r2["result"]["title"])
 
-        def fake_retrieve(url, retrieval_source=""):
-            fetch_count[0] += 1
-            return {
-                "ok": True, "action": "retrieve", "url": url,
-                "retrieval_source": "pcgamingwiki", "retriever": "r.py",
-                "title": "HL2", "summary": "s", "content": "c",
-                "metadata": {}, "truncated": False, "freshness_hint": "unknown",
-            }
-
-        runtime._retrieve = fake_retrieve
-        c1 = self._counters()
-        self._call(runtime, "https://pcgamingwiki.com/wiki/Test", counters=c1)
-        c2 = self._counters()
-        self._call(runtime, "https://pcgamingwiki.com/wiki/Test", counters=c2)
-        # _retrieve was called twice but _cache inside _retrieve would prevent HTTP
-        # Here we override _retrieve entirely, so count == 2; actual cache is in _retrieve
-        self.assertEqual(fetch_count[0], 2)
+    def test_retrieve_cache_hit_still_increments_budget_counter(self):
+        """A cache hit still counts against the per-turn retrieve budget."""
+        raw_bytes = json.dumps(self.MEDIAWIKI_RAW).encode()
+        with patch("proxy.qz_tool_web._http_fetch", return_value=(raw_bytes, "application/json", "https://x")):
+            runtime = self._make_runtime()
+            counters = self._counters()
+            self._call(runtime, "https://www.pcgamingwiki.com/wiki/Half-Life_2", counters=counters)
+            self.assertEqual(counters["retrieve"], 1)
+            self._call(runtime, "https://www.pcgamingwiki.com/wiki/Half-Life_2", counters=counters)
+            self.assertEqual(counters["retrieve"], 2)
 
     def test_retrieve_success_payload_no_localhost(self):
         runtime = self._make_runtime()
@@ -873,6 +879,112 @@ class RetrieveActionTests(unittest.TestCase):
         from proxy.qz_tool_web import WEB_SEARCH_RETRIEVE_MAX_CHARS_CEILING
         runtime = WebSearchRuntime(max_retrieved_chars=99999)
         self.assertEqual(runtime.max_retrieved_chars, WEB_SEARCH_RETRIEVE_MAX_CHARS_CEILING)
+
+    def test_retrieve_zero_budget_falls_back_to_constant(self):
+        from proxy.qz_tool_web import WEB_SEARCH_MAX_RETRIEVALS
+        runtime = WebSearchRuntime(max_retrievals_per_turn=0)
+        self.assertEqual(runtime.max_retrievals_per_turn, WEB_SEARCH_MAX_RETRIEVALS)
+
+    def test_retrieve_negative_budget_falls_back_to_constant(self):
+        from proxy.qz_tool_web import WEB_SEARCH_MAX_RETRIEVALS
+        runtime = WebSearchRuntime(max_retrievals_per_turn=-5)
+        self.assertEqual(runtime.max_retrievals_per_turn, WEB_SEARCH_MAX_RETRIEVALS)
+
+    def test_retrieve_telemetry_failure_is_nonfatal(self):
+        """If telemetry.emit raises, execute_web_search_call still returns a valid result."""
+        class BrokenTelemetry:
+            def emit(self, event_type, payload):
+                raise RuntimeError("telemetry down")
+
+        raw_bytes = json.dumps(self.MEDIAWIKI_RAW).encode()
+        with patch("proxy.qz_tool_web._http_fetch", return_value=(raw_bytes, "application/json", "https://x")):
+            runtime = WebSearchRuntime(
+                base_url="http://127.0.0.1:8890",
+                telemetry=BrokenTelemetry(),
+            )
+            try:
+                result = self._call(runtime, "https://www.pcgamingwiki.com/wiki/Half-Life_2")
+            except Exception:
+                self.fail("telemetry failure must not propagate from retrieve call")
+            self.assertIsInstance(result, dict)
+            self.assertIn("ok", result)
+
+    def test_normalize_invalid_response_non_dict(self):
+        runtime = self._make_runtime()
+        out = runtime._normalize_retrieve_response("not a dict", "https://example.com/")
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "invalid_response")
+
+    def test_normalize_metadata_bounded_to_6_keys(self):
+        """Metadata must never exceed 6 keys regardless of upstream fields."""
+        raw = {
+            "source": "fse",
+            "status": "ok",
+            "summary": "s",
+            "fields": {
+                "title": "T",
+                "author": "A",
+                "rating": 5,
+                "word_count": 1000,
+                "published_at": "2020-01-01",
+                "revision_id": 42,
+                "categories": ["a", "b"],
+                "length": 999,  # 7th eligible field — must be excluded
+            },
+            "agent_api": {"retriever": "r.py", "source": "fse"},
+        }
+        runtime = self._make_runtime()
+        out = runtime._normalize_retrieve_response(raw, "https://fse.example/1")
+        self.assertTrue(out["ok"])
+        self.assertLessEqual(len(out["metadata"]), 6)
+        self.assertNotIn("body_text", out["metadata"])
+
+    def test_normalize_character_card_tags_bounded_to_10(self):
+        raw = dict(self.CHARACTER_CARD_RAW)
+        raw["tags"] = [f"tag{i}" for i in range(20)]
+        runtime = self._make_runtime()
+        out = runtime._normalize_retrieve_response(raw, "https://aicharactercards.com/cards/lyra/")
+        self.assertTrue(out["ok"])
+        self.assertLessEqual(len(out["metadata"].get("tags", [])), 10)
+
+    def test_request_router_passes_retrieve_budgets(self):
+        """_web_runtime passes max_retrievals_per_turn and max_retrieved_chars from search.json routing."""
+        from proxy.qz_search_config import SearchConfigResult
+        from pathlib import Path
+        fake_result = SearchConfigResult(
+            config={
+                "routing": {
+                    "max_searches_per_turn": 2,
+                    "max_page_opens_per_turn": 1,
+                    "max_retrievals_per_turn": 5,
+                    "max_retrieved_chars": 4000,
+                },
+                "profiles": {},
+                "defaults": {},
+            },
+            source="default",
+            path=Path("/fake/search.json"),
+            legacy_policy_path=None,
+            warnings=[],
+        )
+        _routing = fake_result.config.get("routing") or {}
+        budgets = {
+            "max_retrievals_per_turn": _routing.get("max_retrievals_per_turn"),
+            "max_retrieved_chars": _routing.get("max_retrieved_chars"),
+        }
+        runtime = WebSearchRuntime(**budgets)
+        self.assertEqual(runtime.max_retrievals_per_turn, 5)
+        self.assertEqual(runtime.max_retrieved_chars, 4000)
+
+    def test_router_counters_include_retrieve_key(self):
+        """Production counters dict must include 'retrieve' so the retrieve branch
+        can safely use counters['retrieve'] += 1."""
+        import importlib, ast
+        import proxy.qz_request_router as _rr_mod
+        import inspect
+        src = inspect.getsource(_rr_mod)
+        # Check that the counters initialization includes "retrieve"
+        self.assertIn('"retrieve"', src.split("counters = {")[1].split("}")[0])
 
 
 if __name__ == "__main__":

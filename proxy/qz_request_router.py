@@ -2002,7 +2002,7 @@ class RequestRouter:
 
         public_trace = []
         gathered_sources = []
-        counters = {"search": 0, "open_page": 0}
+        counters = {"search": 0, "open_page": 0, "retrieve": 0}
         seen_signatures = set()
         web_runtime = self._web_runtime(selected_model)
         proxy_tool_registry = self._proxy_tool_registry(web_runtime)
