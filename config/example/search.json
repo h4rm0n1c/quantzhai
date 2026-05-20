@@ -1,0 +1,30 @@
+{
+  "_comment": "QuantZhai search config template. Copy to config/user/search.json and fill in your SearXNG base URL. Never commit config/user/search.json.",
+  "schema": "qz.search.v1",
+
+  "searxng": {
+    "base_url": "http://YOUR_SEARXNG_HOST:PORT",
+    "timeout_s": 15,
+    "enabled": true
+  },
+
+  "defaults": {
+    "profile": "auto",
+    "language": "en",
+    "safe_search": 0
+  },
+
+  "_profiles_comment": "Override profile definitions here. Omit to inherit from config/default/search.json.",
+  "profiles": {},
+
+  "_routing_comment": "Override routing here. Omit to inherit defaults.",
+  "routing": {},
+
+  "_disabled_comment": "Add engine names to disable them for your instance.",
+  "disabled_engines": [],
+
+  "compatibility": {
+    "_comment": "Set legacy_policy_path to use an existing search-policy.json for web_search_profiles routing.",
+    "legacy_policy_path": ""
+  }
+}

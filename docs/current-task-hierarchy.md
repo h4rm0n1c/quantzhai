@@ -810,7 +810,11 @@ defines: config/default/search.json schema, precedence rules (QZ_SEARCH_CONFIG_P
 > user > default > legacy SEARXNG_POLICY), compatibility with all existing env vars,
 /qz/config/effective exposure plan, qz_tool_web.py integration path, slice roadmap.
 
-Next: #39 Slice B-impl — create config/default/search.json + proxy/qz_search_config.py loader.
+**#39 Slice B-impl (this commit):** CLOSED. config/default/search.json,
+config/example/search.json, proxy/qz_search_config.py loader, 23 tests.
+Loader not yet wired into proxy startup. All validation PASS.
+
+Next: #39 Slice B.1 audit/polish, then Slice C (wire loader into proxy).
 
 ## Reference: BrainCase Slice completion history
 

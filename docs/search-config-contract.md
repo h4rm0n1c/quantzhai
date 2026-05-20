@@ -1,7 +1,7 @@
 # Search Config Contract
 
 Date: 2026-05-20
-Status: #39 Slice A-design — design only, no runtime migration yet.
+Status: Slices A-design + B-impl complete. Loader live; not yet wired into proxy startup.
 
 ---
 
@@ -235,8 +235,8 @@ In Slice B:
 
 | Slice | Content | Notes |
 |---|---|---|
-| **A-design** (this doc) | Contract, schema, precedence, compat, roadmap | — |
-| **B-impl** | Create `config/default/search.json` + `proxy/qz_search_config.py` loader + tests | No routing change yet |
+| ~~**A-design**~~ | ~~Contract, schema, precedence, compat, roadmap~~ | ~~—~~ |
+| ~~**B-impl**~~ | ~~Create `config/default/search.json` + `proxy/qz_search_config.py` loader + tests~~ | ~~No routing change yet~~ |
 | **B.1** | Audit/polish loader | — |
 | **C-impl** | Wire loader into proxy handler; expose in `/qz/config/effective` | Light routing impact |
 | **C.1** | Audit effective config exposure | — |

@@ -1,0 +1,111 @@
+{
+  "schema": "qz.search.v1",
+
+  "searxng": {
+    "base_url": "",
+    "timeout_s": 15,
+    "enabled": true
+  },
+
+  "defaults": {
+    "profile": "auto",
+    "language": "en",
+    "safe_search": 0
+  },
+
+  "profiles": {
+    "auto": {
+      "description": "Infer best profile from query keywords. Falls back to broad.",
+      "primary": "auto",
+      "fallback_profiles": ["broad"]
+    },
+    "broad": {
+      "description": "General web search across healthy text engines.",
+      "categories": ["general", "web"],
+      "engines": [
+        "duckduckgo", "bing", "mojeek", "startpage",
+        "presearch", "wiby", "searchmysite", "crowdview", "yacy"
+      ],
+      "fallback_profiles": ["reference", "news", "coding"]
+    },
+    "coding": {
+      "description": "Repos, package registries, programming Q&A, official technical docs.",
+      "categories": ["it", "repos", "q&a", "packages", "software wikis"],
+      "engines": [
+        "github", "gitlab", "gitea.com", "stackoverflow", "superuser",
+        "askubuntu", "discuss.python", "mdn", "microsoft learn",
+        "docker hub", "npm", "crates.io", "lib.rs", "pkg.go.dev",
+        "hackernews", "lobste.rs"
+      ],
+      "fallback_profiles": ["broad"]
+    },
+    "sysadmin": {
+      "description": "Linux, networking, services, manpages, distro docs.",
+      "categories": ["it", "q&a", "packages", "software wikis"],
+      "engines": [
+        "superuser", "askubuntu", "mankier", "nixos wiki",
+        "gentoo", "alpine linux packages", "mdn", "microsoft learn"
+      ],
+      "fallback_profiles": ["coding", "broad"]
+    },
+    "research": {
+      "description": "Papers, DOI-style searches, academic discovery.",
+      "categories": ["science", "scientific publications"],
+      "engines": [
+        "arxiv", "crossref", "google scholar", "semantic scholar",
+        "pubmed", "openairepublications"
+      ],
+      "fallback_profiles": ["broad"]
+    },
+    "news": {
+      "description": "Current-events and release queries.",
+      "categories": ["news"],
+      "engines": [
+        "reuters", "bing news", "duckduckgo news",
+        "mojeek news", "presearch news", "startpage news"
+      ],
+      "fallback_profiles": ["broad"]
+    },
+    "ai_models": {
+      "description": "Model, dataset, Hugging Face and Ollama discovery.",
+      "categories": ["it", "repos"],
+      "engines": ["huggingface", "huggingface datasets", "ollama"],
+      "fallback_profiles": ["broad", "coding"]
+    },
+    "reference": {
+      "description": "Definitions, dictionaries, reference texts.",
+      "categories": ["dictionaries", "wikimedia", "general"],
+      "engines": ["wiktionary", "wikibooks", "wolframalpha", "jisho"],
+      "fallback_profiles": ["broad"]
+    }
+  },
+
+  "routing": {
+    "default_profile": "broad",
+    "allow_explicit_profile_override": true,
+    "low_result_fallback_threshold": 2,
+    "max_results": 8,
+    "max_searches_per_turn": 3,
+    "max_page_opens_per_turn": 3,
+    "dedup_by_canonical_url": true
+  },
+
+  "disabled_engines": [
+    "pypi", "wikipedia", "wikidata", "arch linux wiki",
+    "google", "google news", "google images",
+    "qwant", "yahoo", "yep", "brave", "brave.news",
+    "codeberg", "sourcehut", "metacpan", "mwmbl"
+  ],
+
+  "quarantined_engines": [
+    "360search", "alexandria", "baidu kaifa", "cloudflareai",
+    "goo", "right dao", "wikiversity", "wikivoyage",
+    "yahoo news", "yep news"
+  ],
+
+  "non_text_engines_disabled": true,
+
+  "compatibility": {
+    "legacy_policy_path": "config/default/search-policy.json"
+  }
+}
