@@ -191,10 +191,13 @@ The JSON file write stays for backward compatibility.
 **Slice C.1:** Audit launcher compatibility. Confirm JSON file can eventually
 be removed.
 
-**Close-out:** Remove JSON file once:
-- `/qz/config/effective` shows runtime events from OperationalStore
-- `qz-doctor` no longer reads JSON for stale-context checks
-- No other consumer reads it for routing decisions (already confirmed: zero)
+**Close-out conditions — all now met (after Slice D):**
+- ✅ `/qz/config/effective` shows runtime events from OperationalStore (Slice D)
+- ✅ `qz-doctor` does NOT read JSON for stale-context checks (C.1 audit)
+- ✅ No other consumer reads it for routing decisions (C.1 audit, zero consumers)
+
+**Next:** Remove the `atomic_write_json` call from qz-write-runtime-state, confirm
+`/qz/config/effective` is the authority, and close #46.
 
 ### 6.3 What does NOT change
 
@@ -296,7 +299,8 @@ process; disabled mode is a complete no-op (no file created).
 | **B.1** | Audit/polish path, env, schema | — |
 | ~~**C-impl**~~ | ~~Startup event writer; `qz-write-runtime-state` dual-write~~ | ~~—~~ |
 | ~~**C.1**~~ | ~~Launcher compatibility audit; JSON file stays~~ | ~~partial #46~~ |
-| **Close-out** | Wire `/qz/config/effective` to show OperationalStore events; remove JSON; decide #51 fate | #46 |
+| ~~**D-impl**~~ | ~~Wire `/qz/config/effective` → `operational_store` section~~ | ~~—~~ |
+| **Close-out** | Remove JSON write from script; confirm /qz/config/effective is the authority; decide #51 fate | #46 |
 
 ---
 

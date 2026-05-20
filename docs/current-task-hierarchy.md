@@ -698,10 +698,18 @@ Slices B-impl → B.1 → C-impl → C.1 complete. Close-out next.
 - /qz/control-plane is live authority: confirmed
 - var/model-state.json + var/backend-state.json untouched: confirmed
 
-Remaining close-out condition: wire /qz/config/effective to surface OperationalStore
-runtime events; then JSON file can be removed and #46 closed.
+**Slice D (this commit):** CLOSED. operational_store section added to
+/qz/config/effective payload. Shows enabled, available, schema_version,
+recent_events (limit 10), runtime_facts (5 standard keys). Disabled mode
+is a clean no-op. 6 new tests. 2664 tests PASS.
 
-Next: #46 close-out slice — /qz/config/effective integration + JSON removal.
+All three #46 close-out conditions are now met:
+  - /qz/config/effective shows OperationalStore runtime events ✅
+  - qz-doctor does not read qz-runtime-state.json ✅
+  - Zero routing consumers of qz-runtime-state.json ✅
+
+Next: #46 close-out — remove atomic_write_json from qz-write-runtime-state,
+confirm /qz/config/effective is the authority, close #46.
 
 ## #37 next stream seam: proxy-local terminal suppression (Slice 2G)
 

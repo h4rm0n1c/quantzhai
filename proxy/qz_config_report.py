@@ -13,6 +13,7 @@ try:
         qz_var_dir as _qz_var_dir,
     )
     from .qz_runtime_io import capture_policy
+    from .qz_operational_store import OperationalStore as _OperationalStore
 except ImportError:
     from qz_paths import (
         codex_config_path as _codex_config_path,
@@ -21,6 +22,10 @@ except ImportError:
         qz_var_dir as _qz_var_dir,
     )
     from qz_runtime_io import capture_policy
+    try:
+        from qz_operational_store import OperationalStore as _OperationalStore
+    except ImportError:
+        _OperationalStore = None  # type: ignore
 
 
 EFFECTIVE_CONFIG_SCHEMA = "qz.config.effective.v1"
@@ -378,6 +383,62 @@ def _first_existing_path(*paths: Path) -> Path:
     return paths[0]
 
 
+_OPERATIONAL_STORE_FACT_KEYS = (
+    "current_phase",
+    "requested_model",
+    "effective_model",
+    "backend_status",
+    "proxy_status",
+)
+
+
+def _operational_store_report() -> Dict[str, Any]:
+    """Return a bounded operational_store section for /qz/config/effective.
+
+    Non-fatal: any DB error returns the section with available=False.
+    Disabled mode returns enabled=False without touching the filesystem.
+    """
+    if _OperationalStore is None:
+        return {"enabled": False, "available": False, "last_error": "module unavailable"}
+    try:
+        store = _OperationalStore.from_env()
+        if not store.enabled:
+            return {
+                "enabled": False,
+                "path": str(store.path),
+                "available": False,
+                "last_error": None,
+                "recent_events": [],
+                "runtime_facts": {},
+            }
+        store.init()
+        h = store.health()
+        recent = store.recent_events(limit=10)
+        facts: Dict[str, Any] = {}
+        for key in _OPERATIONAL_STORE_FACT_KEYS:
+            val = store.get_runtime_fact(key)
+            if val is not None:
+                facts[key] = val
+        store.close()
+        return {
+            "enabled": True,
+            "path": h["path"],
+            "available": h["available"],
+            "schema_version": h["schema_version"],
+            "last_error": h["last_error"],
+            "recent_events": recent,
+            "runtime_facts": facts,
+        }
+    except Exception as exc:
+        return {
+            "enabled": True,
+            "available": False,
+            "last_error": f"{type(exc).__name__}: {exc}",
+            "recent_events": [],
+            "runtime_facts": {},
+        }
+
+
 def effective_config_payload(handler=None) -> Dict[str, Any]:
     root = _root_dir()
     var_dir = _var_dir(root)
@@ -611,4 +672,5 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
         "memory_domains": memory_domain_report,
         "warnings": warnings,
         "proxy_initialization": proxy_initialization,
+        "operational_store": _operational_store_report(),
     }

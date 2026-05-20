@@ -1556,5 +1556,142 @@ class SourceFileMetaTests(unittest.TestCase):
             self._restore_env(saved)
 
 
+class OperationalStoreConfigReportTests(unittest.TestCase):
+    """Tests for the operational_store section in /qz/config/effective."""
+
+    _ENV_KEYS = (
+        "QZ_ROOT", "QZ_VAR_DIR", "QZ_OPERATIONAL_DB_ENABLED", "QZ_OPERATIONAL_DB_PATH",
+        "QZ_CAPTURE_MODE", "SEARXNG_POLICY", "SEARXNG_CAPABILITIES",
+    )
+
+    def _save_env(self):
+        return {k: os.environ.get(k) for k in self._ENV_KEYS}
+
+    def _restore_env(self, saved):
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def _minimal_root(self, tmp):
+        root = Path(tmp)
+        var_dir = root / "var"
+        (root / "config" / "default").mkdir(parents=True)
+        (root / "proxy").mkdir()
+        var_dir.mkdir(parents=True)
+        os.environ["QZ_ROOT"] = str(root)
+        os.environ["QZ_VAR_DIR"] = str(var_dir)
+        for k in ("QZ_CAPTURE_MODE", "SEARXNG_POLICY", "SEARXNG_CAPABILITIES"):
+            os.environ.pop(k, None)
+        return root, var_dir
+
+    def test_operational_store_key_present_when_disabled(self):
+        """operational_store key is always present in the payload."""
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                self._minimal_root(tmp)
+                os.environ["QZ_OPERATIONAL_DB_ENABLED"] = "0"
+                payload = effective_config_payload()
+                self.assertIn("operational_store", payload)
+                op_store = payload["operational_store"]
+                self.assertFalse(op_store["enabled"])
+                self.assertFalse(op_store["available"])
+        finally:
+            self._restore_env(saved)
+
+    def test_disabled_does_not_create_db_file(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                db_path = var_dir / "state" / "operational.sqlite3"
+                os.environ["QZ_OPERATIONAL_DB_ENABLED"] = "0"
+                os.environ["QZ_OPERATIONAL_DB_PATH"] = str(db_path)
+                effective_config_payload()
+                self.assertFalse(db_path.exists())
+        finally:
+            self._restore_env(saved)
+
+    def test_enabled_store_with_events_appears_in_payload(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                db_path = var_dir / "state" / "operational.sqlite3"
+                os.environ["QZ_OPERATIONAL_DB_ENABLED"] = "1"
+                os.environ["QZ_OPERATIONAL_DB_PATH"] = str(db_path)
+                # Pre-seed event
+                from proxy.qz_operational_store import OperationalStore
+                store = OperationalStore(path=db_path, enabled=True)
+                store.init()
+                store.record_startup_event("proxy-started", {"pid": 1})
+                store.close()
+
+                payload = effective_config_payload()
+                ops = payload["operational_store"]
+                self.assertTrue(ops["enabled"])
+                self.assertTrue(ops["available"])
+                self.assertIsInstance(ops["recent_events"], list)
+                self.assertGreater(len(ops["recent_events"]), 0)
+                self.assertEqual(ops["recent_events"][0]["event_type"], "proxy-started")
+        finally:
+            self._restore_env(saved)
+
+    def test_enabled_store_with_facts_appears_in_payload(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                db_path = var_dir / "state" / "operational.sqlite3"
+                os.environ["QZ_OPERATIONAL_DB_ENABLED"] = "1"
+                os.environ["QZ_OPERATIONAL_DB_PATH"] = str(db_path)
+                from proxy.qz_operational_store import OperationalStore
+                store = OperationalStore(path=db_path, enabled=True)
+                store.init()
+                store.record_runtime_fact("current_phase", {"phase": "backend-healthy"})
+                store.record_runtime_fact("effective_model", {"model": "qwen"})
+                store.close()
+
+                payload = effective_config_payload()
+                ops = payload["operational_store"]
+                self.assertIn("runtime_facts", ops)
+                self.assertEqual(ops["runtime_facts"].get("current_phase", {}).get("phase"), "backend-healthy")
+                self.assertEqual(ops["runtime_facts"].get("effective_model", {}).get("model"), "qwen")
+        finally:
+            self._restore_env(saved)
+
+    def test_existing_payload_shape_unchanged(self):
+        """Adding operational_store must not remove any existing top-level keys."""
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                self._minimal_root(tmp)
+                os.environ["QZ_OPERATIONAL_DB_ENABLED"] = "0"
+                payload = effective_config_payload()
+                for key in ("schema", "root", "var_dir", "paths", "settings",
+                            "capture", "prompt_files", "memory_domains", "warnings"):
+                    self.assertIn(key, payload, f"existing key missing: {key}")
+        finally:
+            self._restore_env(saved)
+
+    def test_empty_store_shows_empty_events_and_facts(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                db_path = var_dir / "state" / "operational.sqlite3"
+                os.environ["QZ_OPERATIONAL_DB_ENABLED"] = "1"
+                os.environ["QZ_OPERATIONAL_DB_PATH"] = str(db_path)
+                payload = effective_config_payload()
+                ops = payload["operational_store"]
+                self.assertTrue(ops["enabled"])
+                self.assertEqual(ops["recent_events"], [])
+                self.assertEqual(ops["runtime_facts"], {})
+        finally:
+            self._restore_env(saved)
+
+
 if __name__ == "__main__":
     unittest.main()
