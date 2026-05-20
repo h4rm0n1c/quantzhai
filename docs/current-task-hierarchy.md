@@ -919,7 +919,7 @@ Keep the patch boring.
 BrainCase work is paused until tool policy is improved and audited.
 
 ```text
-#59  Tool coercion/advice policy audit   — OPEN; prerequisite gate
+#59  Tool coercion/advice policy audit   — Slice A-audit CLOSED; gaps documented
 #60  web_search quality improvements     — OPEN; depends on #59
 #61  Native exec/tool advisory policy    — OPEN; depends on #59
 #62  apply_patch coercion audit          — OPEN; depends on #59

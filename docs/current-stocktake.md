@@ -121,7 +121,7 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 | #57 | qz-codex-common thinning | **CLOSED** (Slices A–C2.1 complete; remote bootstrap endpoints delivered; superseded by #58) |
 | #58 | Always-HTTP qz-codex bootstrap | **CLOSED** (D2/D2.1/D3 complete; qz-codex always uses HTTP; #56 remains separate) |
 | #39 | Split search routing policy into search.json | **CLOSED** — search.json primary; legacy search-policy.json compat kept; all criteria PASS |
-| #59 | Tool coercion/advice policy audit | **OPEN** — prerequisite for #60–#62 |
+| #59 | Tool coercion/advice policy audit | **Slice A-audit complete** — docs/tool-policy-audit.md; #60–#62 can start |
 | #60 | web_search budgets, routing, source quality | **OPEN** — depends on #59 |
 | #61 | Advisory policy for native exec/tool use | **OPEN** — depends on #59 |
 | #62 | apply_patch coercion and advisory audit | **OPEN** — depends on #59 |
@@ -202,7 +202,7 @@ closed issues. Do not reopen; future work needs concrete scoped issues.
 #46  launcher trace removal                              CLOSED — OperationalStore live; JSON retired
 #51  recovery state persistence                          CLOSED not-planned; in-memory is sufficient
 #39  search config split                                 CLOSED — search.json primary; profile bundle wired
-#59  tool coercion/advice policy audit                   OPEN — active next chain
+#59  tool coercion/advice policy audit                   Slice A-audit CLOSED; #60–#62 unblocked
 #60  web_search quality improvements                     OPEN — depends on #59
 #61  native exec/tool advisory policy                   OPEN — depends on #59
 #62  apply_patch coercion audit                         OPEN — depends on #59
