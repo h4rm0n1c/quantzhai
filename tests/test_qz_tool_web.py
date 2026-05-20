@@ -92,5 +92,70 @@ class WebSearchRuntimeTests(unittest.TestCase):
         self.assertIn("repeated search", payload["error"])
 
 
+class SearchConfigProfilesTests(unittest.TestCase):
+    """Tests for search_config_profiles (qz.search.v1) integration — #39 Slice C."""
+
+    def test_v1_profiles_added_to_valid_profiles(self):
+        """Profile names from search_config_profiles appear in _valid_profiles()."""
+        runtime = WebSearchRuntime(
+            search_config_profiles={"myprofile": {"categories": ["it"]}},
+        )
+        self.assertIn("myprofile", runtime._valid_profiles())
+
+    def test_v1_profile_used_when_legacy_has_no_entry(self):
+        """v1 profile cfg is used when legacy web_search_profiles has no matching entry."""
+        runtime = WebSearchRuntime(
+            policy={"web_search_profiles": {"broad": {"categories": ["general"]}}},
+            search_config_profiles={"v1only": {"categories": ["science"], "engines": ["arxiv"]}},
+            capabilities={"engine_probe": {"arxiv": {"status": "ok"}}},
+        )
+        calls = []
+
+        def fake_query(query, categories=None, engines=None, top_k=8):
+            calls.append({"categories": categories, "engines": engines})
+            return {"results": [{"title": "x", "url": "https://x.test/"}]}
+
+        runtime._query_searxng = fake_query
+        out = runtime._search_web("some query", profile="v1only")
+
+        self.assertEqual(out["profile"], "v1only")
+        self.assertEqual(out["categories"], ["science"])
+        self.assertIn("arxiv", out["engines"])
+
+    def test_legacy_profile_wins_over_v1_when_both_present(self):
+        """Legacy web_search_profiles wins over v1 profiles for the same name."""
+        runtime = WebSearchRuntime(
+            policy={"web_search_profiles": {
+                "overlap": {"categories": ["from-legacy"], "engines": ["legacy-engine"]},
+            }},
+            search_config_profiles={
+                "overlap": {"categories": ["from-v1"], "engines": ["v1-engine"]},
+            },
+            capabilities={"engine_probe": {
+                "legacy-engine": {"status": "ok"},
+                "v1-engine": {"status": "ok"},
+            }},
+        )
+        calls = []
+
+        def fake_query(query, categories=None, engines=None, top_k=8):
+            calls.append({"categories": categories, "engines": engines})
+            return {"results": [{"title": "x", "url": "https://x.test/"}]}
+
+        runtime._query_searxng = fake_query
+        out = runtime._search_web("query", profile="overlap")
+
+        self.assertEqual(out["profile"], "overlap")
+        self.assertIn("from-legacy", out["categories"])
+
+    def test_empty_search_config_profiles_does_not_break_runtime(self):
+        runtime = WebSearchRuntime(search_config_profiles={})
+        self.assertIsInstance(runtime._valid_profiles(), set)
+
+    def test_none_search_config_profiles_treated_as_empty(self):
+        runtime = WebSearchRuntime(search_config_profiles=None)
+        self.assertEqual(runtime.search_config_profiles, {})
+
+
 if __name__ == "__main__":
     unittest.main()

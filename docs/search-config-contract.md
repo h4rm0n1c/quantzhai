@@ -1,7 +1,7 @@
 # Search Config Contract
 
 Date: 2026-05-20
-Status: Slices A-design + B-impl + C-impl complete. Loader wired into proxy; /qz/config/effective exposes active_search_config.
+Status: Slices A-design + B-impl/B.1 + C-impl/C.1 complete. Loader wired; /qz/config/effective exposes active_search_config. Profile precedence confirmed and tested.
 
 ---
 

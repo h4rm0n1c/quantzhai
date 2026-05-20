@@ -823,7 +823,16 @@ Loader not yet wired into proxy startup. All validation PASS.
 - qz_config_report.py: active_search_config section via effective_summary(); never exposes base URL
 - 7 new tests (ActiveSearchConfigReportTests). 2691 tests PASS.
 
-Next: #39 Slice C.1 audit/polish.
+**#39 Slice C.1 (this commit):** CLOSED. Audit clean with 5 new profile-precedence tests.
+  - Legacy web_search_profiles wins when present: confirmed
+  - v1 profiles are fallback only when legacy has no entry: confirmed and tested
+  - Same-name profile: legacy wins (tested)
+  - None/empty search_config_profiles: handled safely
+  - active_search_config stable and base-URL-free: confirmed
+  - SEARXNG_* env compat: confirmed
+  2696 tests PASS.
+
+Next: #39 Slice D (profile bundle search.default_profile) or close-out.
 
 ## Reference: BrainCase Slice completion history
 
