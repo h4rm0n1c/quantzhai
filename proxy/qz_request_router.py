@@ -1516,15 +1516,20 @@ class RequestRouter:
         self.proxy_raw("POST")
 
     def _web_runtime(self, selected_model=None):
+        scr = getattr(self.handler, "search_config_result", None)
+        search_config_profiles = (
+            (scr.config.get("profiles") or {}) if scr is not None else {}
+        )
+        search_config_default = (
+            ((scr.config.get("defaults") or {}).get("profile") or "")
+            if scr is not None else ""
+        )
         selection = resolve_search_policy_selection(
             base_policy=self.handler.searxng_policy,
             base_policy_path=getattr(self.handler, "searxng_policy_path", ""),
             selected_model=selected_model,
             root=getattr(self.handler, "root", Path(__file__).resolve().parents[1]),
-        )
-        scr = getattr(self.handler, "search_config_result", None)
-        search_config_profiles = (
-            (scr.config.get("profiles") or {}) if scr is not None else {}
+            search_config_default_profile=search_config_default,
         )
         return WebSearchRuntime(
             base_url=self.handler.searxng_base_url,

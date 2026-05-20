@@ -832,7 +832,10 @@ Loader not yet wired into proxy startup. All validation PASS.
   - SEARXNG_* env compat: confirmed
   2696 tests PASS.
 
-Next: #39 Slice D (profile bundle search.default_profile) or close-out.
+**#39 Slice D (this commit):** CLOSED. qz.profiles.v1 bundle search.default_profile
+wired into SearchPolicySelection. Precedence: per-model override > bundle default >
+search.json defaults.profile > auto. Routing rules stay in search.json/legacy policy.
+8 new tests. 2704 tests PASS. Close-out next.
 
 ## Reference: BrainCase Slice completion history
 

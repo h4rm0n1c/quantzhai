@@ -86,10 +86,15 @@ def resolve_search_policy_selection(
     base_policy_path: str = "",
     selected_model: dict | None = None,
     root: Path | str | None = None,
+    search_config_default_profile: str = "",
 ) -> SearchPolicySelection:
     base = base_policy if isinstance(base_policy, dict) else {}
     cfg = _search_override_config(selected_model)
-    default_profile = cfg.get("default_profile", "")
+    # Precedence: per-model override > profile bundle > search.json default
+    default_profile = (
+        cfg.get("default_profile")
+        or (search_config_default_profile.strip() if isinstance(search_config_default_profile, str) else "")
+    )
 
     if cfg.get("policy_file"):
         repo_root = Path(root or ".").expanduser().resolve()

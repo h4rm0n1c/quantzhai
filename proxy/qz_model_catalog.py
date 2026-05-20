@@ -339,6 +339,16 @@ def _profiles_v1_to_manifest(data: Dict[str, Any]) -> Dict[str, Any]:
             if k in bundle:
                 overrides[k] = bundle[k]
 
+        # search.default_profile: profile bundle may specify a preferred search
+        # profile name. This flows through to resolve_search_policy_selection()
+        # via overrides["search"]["default_profile"] and is the lowest-priority
+        # source (per-model overrides in search.policy_file win; see qz_search_policy.py).
+        search_meta = bundle.get("search")
+        if isinstance(search_meta, dict):
+            bundle_search_profile = search_meta.get("default_profile")
+            if isinstance(bundle_search_profile, str) and bundle_search_profile.strip():
+                overrides.setdefault("search", {})["default_profile"] = bundle_search_profile.strip()
+
         # When the profile slug differs from the GGUF stem, add the slug (and
         # slug+".gguf") as aliases so build_entry can merge them into the
         # scanned entry's alias set, making match_model("alice") work even
