@@ -940,6 +940,30 @@ After tool policy chain:
 - #8  RFC/research — later
 - #52 Upstream-blocked on TurboQuant — no action needed
 
+## #65 Backend lifecycle control plane
+
+```text
+Goal: move Docker/backend lifecycle out of qz-up shell script into
+      proxy BackendManager; qz-up starts proxy only; proxy autostarts
+      backend; /qz/backend/* endpoints expose control.
+
+Design doc: docs/backend-lifecycle-control-plane.md
+
+Slices:
+  A-design  — ✅ COMPLETE. Full design in docs/backend-lifecycle-control-plane.md.
+  B-impl    — BackendManager module + proxy integration + endpoints + qz-up/qz-down
+  B.1-audit — Docker command fidelity, state machine, compat
+  C-doc     — README, operator guide
+  D-smoke   — cold-start smoke (§12 of design doc)
+
+Key code targets:
+  scripts/qz-up          — remove docker run, qz-wait-ready, /health loop
+  scripts/qz-down        — add --force; normal path calls proxy stop endpoint
+  proxy/qz_backend_manager.py  — new module (BackendManager, BackendState)
+  proxy/quantzhai_proxy.py     — instantiate BackendManager in main()
+  proxy/qz_config_report.py    — add backend_manager to /qz/control-plane
+```
+
 ## #64 Research-grade web_search budgets and modes
 
 ```text
