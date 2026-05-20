@@ -101,7 +101,7 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 | Search | [Profiled web search pickup README](profiled-web-search-pickup-README.md) | Pickup notes for the profiled web-search implementation/policy work. |
 | Research | [Deep research report](deep-research-report.md) | Longer-form research/background notes relevant to QuantZhai direction. |
 | Tooling roadmap | [Patch tool roadmap](patch-tool-roadmap.md) | Patch/edit tooling plans for safer repo modification. |
-| Backend lifecycle | [Backend lifecycle control plane](backend-lifecycle-control-plane.md) | #65 Slice A: design for moving Docker/backend lifecycle out of qz-up and into proxy BackendManager. |
+| Backend lifecycle | [Backend lifecycle control plane](backend-lifecycle-control-plane.md) | #65: BackendManager owns Docker lifecycle; qz-up starts proxy only; /qz/backend/* endpoints; operator guide in §15. |
 | Proxy roadmap | [Proxy capability roadmap](proxy-capability-roadmap.md) | Proxy feature expansion and compatibility work. |
 | Conversation history | [Conversation history audit plan](conversation-history-audit-plan.md) | Plan for auditing/using conversation history safely. |
 | Signal inventory | [Codex request signal inventory](codex-request-signal-inventory.md) | Historical signal checklist; use current parser/tests for implementation state. |

@@ -541,18 +541,127 @@ From fully stopped state:
 | **B1-impl** | ✅ BackendManager skeleton + Docker command builder + 49 tests |
 | **B2-impl** | ✅ Lifecycle methods + proxy integration + /qz/backend/* endpoints + control-plane section; 71 new tests |
 | **B3-impl** | ✅ qz-up stripped; qz-down graceful + --force; qz-backend wrapper; 32 structural tests |
-| **B.1-audit** | ✅ 4 bugs fixed; docker_cmd limitation documented; 5 new tests; 2929 pass |
-| **B.1-audit** | Compat, Docker command fidelity, state machine, telemetry |
-| **C-doc** | Update README, docs/current-architecture-authority.md, operator guide |
+| **B.1-audit** | ✅ 4 bugs fixed; docker_cmd documented; 5 new tests; 2929 pass |
+| **C-doc** | ✅ Operator guide, QZ_DOCKER_CMD guidance, status URLs documented |
 | **D-smoke** | Cold-start smoke test (§12) |
+
+---
+
+## 15. Operator guide (C-doc)
+
+### 15.1 Starting the stack
+
+```bash
+# Start proxy only. Backend starts asynchronously.
+scripts/qz-up
+
+# Start proxy + keep terminal attached via qz-top
+scripts/qz-up --hold
+
+# Start proxy + immediately open Codex
+scripts/qz-up --codex-model <model-id>
+```
+
+`qz-up` returns as soon as the proxy answers `/health` (seconds). The backend
+container is started by the proxy in the background. It will not be ready
+immediately. Poll `/qz/backend/status` to check.
+
+### 15.2 Checking backend status
+
+```bash
+# Via script wrapper (recommended)
+scripts/qz-backend status
+
+# Direct curl
+curl http://127.0.0.1:18180/qz/backend/status
+
+# Full stack status (proxy + catalog + backend + VRAM)
+curl http://127.0.0.1:18180/qz/control-plane
+```
+
+Backend `phase` values:
+- `idle` — manager ready; autostart pending or not yet triggered
+- `starting` — `docker run` issued
+- `running` — container up; `/health` check in progress
+- `healthy` — container up AND `/health` OK
+- `failed` — last operation failed; `last_error` set
+- `stopped` — container removed
+
+### 15.3 Backend lifecycle commands
+
+```bash
+scripts/qz-backend start    # POST /qz/backend/start
+scripts/qz-backend stop     # POST /qz/backend/stop
+scripts/qz-backend restart  # POST /qz/backend/restart
+scripts/qz-backend status   # GET  /qz/backend/status
+```
+
+These are thin curl wrappers. They do not touch Docker directly.
+
+### 15.4 Stopping the stack
+
+```bash
+# Graceful: proxy asks backend to stop, waits, then exits
+scripts/qz-down
+
+# Force: kill proxy pid + docker rm -f (use when proxy is unreachable)
+scripts/qz-down --force
+```
+
+### 15.5 Environment variables
+
+| Variable | Default | Notes |
+|---|---|---|
+| `QZ_BACKEND_AUTOSTART` | `1` | Set to `0` to disable automatic backend start at proxy launch |
+| `QZ_BACKEND_STOP_TIMEOUT` | `15` | Seconds qz-down waits for backend to reach stopped/failed before killing proxy |
+| `QZ_DOCKER_CMD` | `docker` | Docker command; see §15.6 |
+
+### 15.6 QZ_DOCKER_CMD guidance
+
+`QZ_DOCKER_CMD` must be a simple space-separated command prefix.
+
+**Valid forms:**
+```bash
+QZ_DOCKER_CMD=docker                                 # default
+QZ_DOCKER_CMD="sudo docker"                          # sudo access
+QZ_DOCKER_CMD="sudo -n /usr/local/sbin/qz-docker-quantzhai"  # wrapper helper
+```
+
+**Avoid:**
+```bash
+# Does NOT work — sg -c expects a single shell string, not split argv
+QZ_DOCKER_CMD="sg docker -c"
+```
+
+If your shell lacks an active docker group, use `sudo docker` or install the
+`scripts/qz-install-sudo-helper` wrapper and set `QZ_DOCKER_CMD` accordingly.
+See `.env.example` for the supported patterns.
+
+### 15.7 Waiting for backend after qz-up
+
+`qz-up` now exits as soon as the proxy is ready, not when the backend is healthy.
+If you need to gate a subsequent step on backend readiness:
+
+```bash
+scripts/qz-up
+# Poll until healthy or failed
+until [[ "$(scripts/qz-backend status 2>/dev/null | python3 -c \
+  "import json,sys; print(json.load(sys.stdin).get('backend_manager',{}).get('phase',''))" \
+  2>/dev/null)" =~ ^(healthy|failed)$ ]]; do
+  sleep 2
+done
+scripts/qz-backend status
+```
 
 ---
 
 ## Related
 
-- `scripts/qz-up` — current owner of Docker lifecycle (to be stripped)
-- `scripts/qz-down` — current unconditional rm (to be made graceful)
-- `proxy/quantzhai_proxy.py` — proxy entry point; BackendManager attached here
-- `proxy/qz_operational_store.py` — event/fact store for lifecycle events
-- `proxy/qz_config_report.py` — control-plane section builder; gains backend_manager
+- `scripts/qz-up` — starts proxy only; proxy autostarts backend
+- `scripts/qz-down` — graceful stop via proxy; `--force` for hard cleanup
+- `scripts/qz-backend` — thin curl wrapper for `/qz/backend/*` endpoints
+- `proxy/qz_backend_manager.py` — BackendManager module
+- `proxy/quantzhai_proxy.py` — proxy entry point; BackendManager instantiated in main()
+- `proxy/qz_operational_store.py` — event/fact store for backend lifecycle events
+- `proxy/qz_control_plane.py` — control-plane section builder; includes backend_manager
 - `docs/current-task-hierarchy.md` — active task DAG

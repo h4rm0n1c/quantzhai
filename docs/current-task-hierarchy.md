@@ -955,16 +955,10 @@ Slices:
   B2-impl   — ✅ COMPLETE. Lifecycle + proxy integration + endpoints + control-plane. 2892 pass.
   B3-impl   — ✅ COMPLETE. qz-up stripped; qz-down graceful+force; qz-backend added. 2924 pass.
   B.1-audit — ✅ COMPLETE. 4 bugs fixed; docker_cmd documented; 2929 pass.
-  B.1-audit — Docker command fidelity, state machine, compat
-  C-doc     — README, operator guide
+  C-doc     — ✅ COMPLETE. Operator guide added; QZ_DOCKER_CMD guidance; duplicates cleaned.
   D-smoke   — cold-start smoke (§12 of design doc)
 
-Key code targets:
-  scripts/qz-up          — remove docker run, qz-wait-ready, /health loop
-  scripts/qz-down        — add --force; normal path calls proxy stop endpoint
-  proxy/qz_backend_manager.py  — new module (BackendManager, BackendState)
-  proxy/quantzhai_proxy.py     — instantiate BackendManager in main()
-  proxy/qz_config_report.py    — add backend_manager to /qz/control-plane
+Design doc: docs/backend-lifecycle-control-plane.md §15 (operator guide)
 ```
 
 ## #64 Research-grade web_search budgets and modes
