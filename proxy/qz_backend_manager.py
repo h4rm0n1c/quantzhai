@@ -480,14 +480,25 @@ class BackendManager:
                 self._busy = False
 
     def _do_stop(self) -> None:
-        """Background: docker stop, docker rm."""
+        """Background: graceful stop then force-remove.
+
+        docker stop is a best-effort hint (some installations deny it).
+        docker rm -f is the authoritative cleanup step; its return code
+        determines whether the container was actually removed.
+        Phase is set to STOPPED only when rm -f succeeds (rc==0).
+        """
         err_str: str | None = None
         try:
-            self._runner(self.build_docker_stop_args(), timeout=30.0)
-            self._runner(self.build_docker_rm_args(force=False), timeout=30.0)
+            # Best-effort graceful stop; ignore rc — some wrappers deny "stop"
+            rc_stop, _, _ = self._runner(self.build_docker_stop_args(), timeout=30.0)
+
+            # Force-remove: this is the authoritative step
+            rc_rm, _, err_rm = self._runner(self.build_docker_rm_args(force=True), timeout=30.0)
+            if rc_rm != 0 and err_rm.strip():
+                err_str = f"docker rm -f failed (rc={rc_rm}): {err_rm.strip()}"
         except Exception as exc:
-            err_str = str(exc)
-            # Force rm even on stop failure
+            err_str = f"stop exception: {exc}"
+            # Try force-remove even on exception
             try:
                 self._runner(self.build_docker_rm_args(force=True), timeout=15.0)
             except Exception:
