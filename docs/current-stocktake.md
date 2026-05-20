@@ -122,7 +122,8 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 | #58 | Always-HTTP qz-codex bootstrap | **CLOSED** (D2/D2.1/D3 complete; qz-codex always uses HTTP; #56 remains separate) |
 | #39 | Split search routing policy into search.json | **CLOSED** — search.json primary; legacy search-policy.json compat kept; all criteria PASS |
 | #59 | Tool coercion/advice policy audit | **Slice A-audit complete** — docs/tool-policy-audit.md; #60–#62 can start |
-| #60 | web_search budgets, routing, source quality | **CLOSED** — budgets/telemetry/profiles/annotations delivered; retrieve action is a new issue |
+| #60 | web_search budgets, routing, source quality | **CLOSED** — all slices delivered |
+| #63 | web_search retrieve action | **Slice A-design complete** — contract, response shapes, normalization; Slice B next |
 | #61 | Advisory policy for native exec/tool use | **OPEN** — depends on #59 |
 | #62 | apply_patch coercion and advisory audit | **OPEN** — depends on #59 |
 | #52 | Backend-confirmed VRAM allocator metrics | **upstream-blocked** (TurboQuant side) |
@@ -228,7 +229,8 @@ G. #3/#4/#43  Repeated-read v1 — CLOSED
 COMPLETED (all CLOSED):
   #58 #57 #56 #5 #37 #53 #54 #3/#4/#43 #46 #51 #39 #60
 
-NEXT — remaining tool policy chain:
+NEXT — active open work:
+  #63 web_search retrieve action — Slice A-design done; Slice B-impl next
   #59 Tool coercion/advice policy audit — Slice A-audit done; Slice B+ ongoing
   #61 Advisory policy for native exec/tool use patterns — OPEN
   #62 apply_patch coercion and advisory path audit/polish — OPEN
