@@ -963,7 +963,7 @@ Slices:
   B-impl    — ✅ COMPLETE. budget_mode wired; hard ceilings removed; 2804 tests pass.
   B.1-audit — ✅ COMPLETE. Dead code removed; 10 new edge-case tests; 2814 pass.
   C-doc     — ✅ COMPLETE. Tool description expanded; §64.8 updated; budget table added.
-  D-live-smoke — deep mode >8 results, >12000 chars; telemetry includes mode
+  D-live-smoke — ✅ COMPLETE. deep=25 results, audit=50, chars per-mode. docs/search-config-contract.md §64.12.
 
 Key code targets:
   proxy/qz_tool_web.py line 798  — WEB_SEARCH_MAX_RESULTS hard ceiling to remove

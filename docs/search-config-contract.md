@@ -668,7 +668,7 @@ test_source_annotations_backwards_compatible (Slice D)
 ## §64. Research-grade web_search budget modes (#64 Slice A-design)
 
 Date: 2026-05-21
-Status: A-design COMPLETE. B-impl COMPLETE. B.1-audit COMPLETE. C-doc COMPLETE. D-live-smoke next.
+Status: ALL SLICES COMPLETE. #64 closed.
 
 ### 64.0 Problem statement
 
@@ -1094,4 +1094,51 @@ test_tool_schema_includes_budget_mode
 | **B-impl** | ✅ complete | Budget mode wired; hard ceilings removed; 22 new tests; 2804 pass |
 | **B.1-audit** | ✅ complete | 10 new precedence tests; dead code removed; 2814 pass |
 | **C-doc** | ✅ complete | Tool description updated; §64.8 expanded; budget mode table added |
-| **D-live-smoke** | pending | Deep mode >8 results; audit chars >12 000; telemetry includes mode |
+| **D-live-smoke** | ✅ complete | See §64.12 for results |
+
+### 64.12 Live smoke results (Slice D — 2026-05-21)
+
+Live tests run against `http://127.0.0.1:8890` using `WebSearchRuntime.execute_web_search_call`.
+
+#### Search result counts
+
+| Mode | top_k requested | Results returned | Old ceiling (8) respected |
+|---|---|---|---|
+| `deep` | 25 | **25** | No — ceiling removed ✓ |
+| `audit` | 50 | **50** | No — ceiling removed ✓ |
+| `quick` | 25 | **8** | Yes — mode limit applied ✓ |
+| `normal` (default) | — | **12** | Mode default applied ✓ |
+
+`deep` and `audit` return results beyond the old hard cap of 8. `quick` clamps to its mode limit.
+
+#### Retrieved content lengths (per-mode truncation)
+
+Tested against FSE story `the-black-wizard` (upstream body_text = 6016 chars):
+
+| Mode | content_len | mode limit | truncated |
+|---|---|---|---|
+| `quick` | **6 000** | 6 000 | True ✓ |
+| `deep` | **6 016** | 30 000 | False ✓ |
+
+Tested with synthetic 20 000-char upstream body:
+
+| Mode | content_len | mode limit | truncated |
+|---|---|---|---|
+| `quick` | **6 000** | 6 000 | True ✓ |
+| `normal` | **12 000** | 12 000 | True ✓ |
+| `deep` | **20 000** | 30 000 | False ✓ |
+| `audit` | **20 000** | 60 000 | False ✓ |
+
+The old 12 000-char hard ceiling is gone. `deep`/`audit` pass content up to their mode limit. Live upstream sources (FSE, PCGamingWiki mediawiki) do not produce content longer than ~6 000 chars in the Agent API — this is an upstream per-source limit, not a proxy constraint.
+
+#### Telemetry
+
+- `tool_call_started`: `budget_mode='deep'` ✓
+- `tool_call_completed`: `budget_mode='deep'` ✓
+- `web_search_budget_exceeded`: `budget_mode='deep'`, `limit=20` ✓
+- `web_search_retrieve_budget_exceeded`: `budget_mode` present ✓
+
+#### Safety
+
+- No `127.0.0.1` or `:8890` in any model-visible output ✓
+- No localhost in any telemetry payload ✓
