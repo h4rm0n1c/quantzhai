@@ -914,6 +914,15 @@ conflict storage, request-body non-mutation, and non-fatal DB failure.
 Keep the patch boring.
 ```
 
+## Recently completed (2026-05-21 run — #63 retrieve action)
+
+```text
+#63  web_search retrieve action     — CLOSED (all slices delivered; live smoke passed)
+     Slices: A-design, B-impl, B.1-audit, C-live-smoke
+     Bug fixed: FSE freshness now uses fields.updated_at/published_at as fallback
+     Known limit: max_results=8 and max_retrieved_chars=12000 ceilings → #64
+```
+
 ## Active next chain: tool policy improvement
 
 BrainCase work is paused until tool policy is improved and audited.
@@ -923,11 +932,45 @@ BrainCase work is paused until tool policy is improved and audited.
 #60  web_search quality improvements     — CLOSED. All slices A–close-out delivered.
 #61  Native exec/tool advisory policy    — OPEN; depends on #59
 #62  apply_patch coercion audit          — OPEN; depends on #59
+#63  web_search retrieve action          — CLOSED. All slices delivered.
+#64  Research-grade web_search budgets   — OPEN; new. Depends on #63.
 ```
 
 After tool policy chain:
 - #8  RFC/research — later
 - #52 Upstream-blocked on TurboQuant — no action needed
+
+## #64 Research-grade web_search budgets and modes
+
+```text
+Goal: replace hard-coded ceilings (max_results=8, max_retrieved_chars=12000)
+      with named budget modes and operator-configurable absolute limits.
+
+Budget modes:
+  quick:  max_results=8,  max_searches=4,  max_opens=3,  max_retrievals=2,  max_chars=6000
+  normal: max_results=12, max_searches=8,  max_opens=8,  max_retrievals=4,  max_chars=12000
+  deep:   max_results=25, max_searches=20, max_opens=20, max_retrievals=10, max_chars=30000
+  audit:  max_results=50, max_searches=40, max_opens=40, max_retrievals=20, max_chars=60000
+
+web_search gains budget_mode argument.
+Flat routing.max_* fields remain as compatibility fallback.
+Operator-configurable absolute_max_* replace hardcoded ceilings.
+Telemetry budget-exceeded events include budget_mode.
+Default when no mode given: normal (document this decision in Slice A-design).
+
+Slices:
+  A-design  — contract doc: config shape, precedence, absolute ceiling semantics
+  B-impl    — wire budget_mode through parser/runtime; remove hard ceiling at line 798
+  B.1-audit — compat, fallback precedence, ceiling removal, telemetry fields
+  C-doc     — search-config-contract.md §64; tool prompt guidance
+  D-live-smoke — deep mode >8 results, >12000 chars; telemetry includes mode
+
+Key code targets:
+  proxy/qz_tool_web.py line 798  — WEB_SEARCH_MAX_RESULTS hard ceiling to remove
+  proxy/qz_tool_web.py line 515  — WEB_SEARCH_RETRIEVE_MAX_CHARS_CEILING to replace
+  config/default/search.json     — add budget_modes + absolute_max_* to routing
+  config/example/search.json     — document new fields
+```
 
 ## Maintenance rule
 
