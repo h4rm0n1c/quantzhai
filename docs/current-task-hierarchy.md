@@ -119,8 +119,7 @@ VRAM telemetry (#6, now closed)
 Backend control-plane and recovery (#44, #47-#50, #45, now closed)
   - /qz/control-plane is the live status authority
   - Full recovery trigger/plan/backoff/async-job API (six actions)
-  - recovery_state.py: in-memory backoff/attempt counts (to be SQLite later)
-  - #51 opened: SQLite persistence of recovery state (blocked by #2)
+  - recovery_state.py: in-memory backoff/attempt counts (sufficient as-is; #51 CLOSED not-planned)
   - Legacy catalog fallback removed (#45)
 
 Stream watchdog and signal planning (#40, #42, now closed)

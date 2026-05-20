@@ -1,7 +1,7 @@
 # QuantZhai Post-Stabilisation Stocktake
 
-Date: 2026-05-19 (updated — post-#5/#57 close-out stocktake)
-Status: post-BrainCase/repeated-read/stream-seam/config-cleanup/qz-codex-remote stocktake.
+Date: 2026-05-20 (updated — post-#46/#51/#39 close-out stocktake)
+Status: post-OperationalStore/search-config/stream-seam close-out stocktake.
 
 This document is a rolling point-in-time snapshot. For the live execution order,
 read `docs/current-task-hierarchy.md`. For architecture authority, read
@@ -13,10 +13,11 @@ read `docs/current-task-hierarchy.md`. For architecture authority, read
 
 The local Codex + Qwen stack is usable, observable, has a working recovery
 system, a tool-mediated BrainCase memory layer, a live repeated-read advisory
-signal, and a partial stream-seam extraction.
+signal, a complete stream-seam extraction, an OperationalStore for launcher
+events, and a dedicated search config contract.
 
 ```text
-Full test suite:         2615 tests passing
+Full test suite:         2704 tests passing
 Live smoke:              qz-live-smoke passes
 Repeated-read smoke:     qz-smoke-repeated-read passes
 BrainCase smoke:         qz-braincase-smoke 12/12 passes
@@ -26,9 +27,11 @@ Stream watchdog:         terminal/no-output classifications operational
 BrainCase memory:        braincase.render/recall/write_candidate (#53 closed)
 Repeated-read signal v1: advisory, stateless, input-history-seeded (#3/#4/#43 closed)
 Stream seam (#37):       CLOSED — StreamHopState + StreamRunState + 6 pure helpers
-Config observability:    /qz/config/effective full source/staleness coverage (#5 closed)
+Config observability:    /qz/config/effective + active_search_config + operational_store
 Generated artifacts:     all A1/A2/A3 under var/generated/ (#56 closed)
 qz-codex bootstrap:      always HTTP via /qz/codex/client-config (#58 closed)
+OperationalStore (#46):  CLOSED — launcher events in var/state/operational.sqlite3
+Search config (#39):     CLOSED — search.json primary; search-policy.json legacy compat
 Docs doctrine:           docs/patterns/provenance-telemetry.md active
 Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 ```
@@ -36,6 +39,14 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 ---
 
 ## 2. Recently completed work
+
+### 2026-05-20 run (OperationalStore #46 + search config #39 + #51 not-planned)
+
+| Item | What shipped |
+|---|---|
+| #46 OperationalStore close-out | CLOSED. qz-runtime-state.json retired. OperationalStore (runtime_events/runtime_facts) live. /qz/config/effective shows operational_store + active_search_config. |
+| #51 recovery state persistence | CLOSED (not planned). Backoff/cooldown persistence rejected. In-memory RecoveryState sufficient. |
+| #39 search config split | CLOSED. search.json primary (qz.search.v1 + loader + wired + profile bundle search.default_profile). search-policy.json kept as legacy compat. |
 
 ### 2026-05-20 run (#37 close-out + #56 close-out + stocktake)
 
@@ -158,13 +169,12 @@ issue with concrete requirements.
 **#46** — CLOSED. qz-runtime-state.json retired. QZ_RUNTIME_STATE_PATH removed.
 OperationalStore + /qz/config/effective are the authority for launcher events.
 
-**#5** — Config/var cleanup is ongoing and never fully done. Safe to do any time
-without blocking other work. Good incremental choice between larger features.
+**#5** — CLOSED. Config/var cleanup delivered. Follow-ups #56/#57/#58 all closed.
 
-**#39** — Slice A-design complete. `search-config-contract.md` defines the v1 contract:
-`config/default/search.json` + `config/user/search.json`, precedence rules,
-`SEARXNG_*` compat, `/qz/config/effective` exposure. Slice B creates the files
-and `proxy/qz_search_config.py` loader. See `docs/search-config-contract.md`.
+**#39** — CLOSED. search.json primary (qz.search.v1). Loader, proxy wiring,
+active_search_config in /qz/config/effective, profile bundle search.default_profile
+all live. search-policy.json kept as legacy compat; future removal is a new issue.
+See `docs/search-config-contract.md`.
 
 **#52** — QuantZhai already handles the priority correctly. Waiting for TurboQuant
 to expose `model_size_bytes` / `kv_cache_size_bytes`. Keep as a tracker only.
@@ -186,9 +196,9 @@ now track. Keep as historical planning record; do not implement from it directly
 #57  qz-codex remote bootstrap                           CLOSED
 #58  always-HTTP qz-codex bootstrap                      CLOSED
 #5   config/var/script cleanup                           CLOSED
-#46  launcher trace removal                              Slice B+C → OperationalStore runtime_events
+#46  launcher trace removal                              CLOSED — OperationalStore live; JSON retired
 #51  recovery state persistence                          CLOSED not-planned; in-memory is sufficient
-#39  search config split                                 Slice A-design done; B-impl creates files + loader
+#39  search config split                                 CLOSED — search.json primary; profile bundle wired
 #52  backend allocator metrics                           upstream-blocked
 #8   compaction RFC                                      research; no implementation dependency
 #7   LimbiCore/SQLite planning                           deferred; superseded by #53/#54
@@ -208,21 +218,15 @@ E. #54  BrainCase retention policy — CLOSED
 F. #5   Config/var/script cleanup — CLOSED
 G. #3/#4/#43  Repeated-read v1 — CLOSED
 
-NEXT:
-  #46 close-out — wire /qz/config/effective to show OperationalStore events, then remove JSON
+COMPLETED (all CLOSED):
+  #58 #57 #56 #5 #37 #53 #54 #3/#4/#43 #46 #51 #39
 
-  Slices B–C.1 complete:
-    - qz_operational_store.py skeleton (runtime_events/runtime_facts)
-    - qz-write-runtime-state dual-write live
-    - C.1 audit confirmed: qz-doctor not a consumer; no routing consumers
-
-  Remaining close-out condition:
-    /qz/config/effective must surface OperationalStore runtime events
-
-  After #46:
-    #51 CLOSED not-planned — in-memory RecoveryState is sufficient
-    #39  Search config split — Slice A-design done; Slice B-impl next
-    #52  Backend allocator metrics — upstream-blocked
+NEXT — no active engineering blocker; options in priority order:
+  A. Decide #7 fate: historical, superseded by #53/#54. Close as not-planned.
+  B. Decide #2 fate: BrainCaseDB is stable; #2 may be closed or refocused.
+  C. #8 research RFC if a contained compaction experiment is wanted.
+  D. #52 waits on TurboQuant upstream; no QuantZhai action.
+  E. General polish or new features as direction warrants.
 ```
 
 ---
@@ -231,10 +235,10 @@ NEXT:
 
 | # | Blocked by | Action |
 |---|---|---|
-| #46 | OperationalStore close-out | Wire /qz/config/effective; then remove JSON |
-| #51 | CLOSED not-planned | In-memory RecoveryState is sufficient; no implementation planned |
+| #2 | No active consumer yet | Decide: close or refocus; BrainCaseDB stable |
+| #7 | Superseded | Close as not-planned; work done by #53/#54 |
 | #52 | TurboQuant | Wait; no QuantZhai action needed |
-| #8 | Research decision | Keep as RFC, no implementation |
+| #8 | Research decision | Keep as RFC; contained experiment when ready |
 
 ---
 
@@ -315,6 +319,24 @@ qz-codex remote bootstrap (#57)
     TOML-escaped values. Co-located mode unchanged.
   → Do not reopen unless a real production bug appears.
   → Optional follow-up: live two-host LAN smoke test (manual).
+
+OperationalStore launcher trace (#46)
+  → CLOSED. qz-runtime-state.json retired. OperationalStore
+    (runtime_events/runtime_facts) is the authority. /qz/config/effective
+    exposes operational_store section. Do not reopen; a new issue is needed
+    for any further OperationalStore expansion.
+
+Recovery state persistence (#51)
+  → CLOSED not-planned. Backoff/cooldown persistence rejected.
+  → In-memory RecoveryState is sufficient. Future recovery diagnostics
+    need a new issue with concrete fact keys and non-goals.
+  → Do not reopen; do not implement under this issue.
+
+Search config split (#39)
+  → CLOSED. search.json (qz.search.v1) is the primary config.
+  → search-policy.json kept as legacy compatibility fallback.
+  → Future removal of search-policy.json → new issue.
+  → Do not move routing rules into qz.profiles.v1.
 ```
 
 ---
