@@ -109,7 +109,7 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 | #5 | Config/var/script ownership cleanup | **CLOSED** (#56, #57 opened for migration/thinning follow-ups) |
 | #57 | qz-codex-common thinning | **CLOSED** (Slices A–C2.1 complete; remote bootstrap endpoints delivered; superseded by #58) |
 | #58 | Always-HTTP qz-codex bootstrap | **CLOSED** (D2/D2.1/D3 complete; qz-codex always uses HTTP; #56 remains separate) |
-| #39 | Split search routing policy into search.json | **optional-polish** (resume when search work resumes) |
+| #39 | Split search routing policy into search.json | **Slice A-design complete** — contract defined; Slice B-impl next |
 | #52 | Backend-confirmed VRAM allocator metrics | **upstream-blocked** (TurboQuant side) |
 | #8 | RFC: NetTTS survival-weighted compaction | **research/later** |
 | #7 | What next: LimbiCore seam, memory_domain, SQLite | **deferred** — superseded by #53/#54; informational only |
@@ -161,7 +161,10 @@ OperationalStore + /qz/config/effective are the authority for launcher events.
 **#5** — Config/var cleanup is ongoing and never fully done. Safe to do any time
 without blocking other work. Good incremental choice between larger features.
 
-**#39** — Useful when search work resumes. Not urgent.
+**#39** — Slice A-design complete. `search-config-contract.md` defines the v1 contract:
+`config/default/search.json` + `config/user/search.json`, precedence rules,
+`SEARXNG_*` compat, `/qz/config/effective` exposure. Slice B creates the files
+and `proxy/qz_search_config.py` loader. See `docs/search-config-contract.md`.
 
 **#52** — QuantZhai already handles the priority correctly. Waiting for TurboQuant
 to expose `model_size_bytes` / `kv_cache_size_bytes`. Keep as a tracker only.
@@ -185,7 +188,7 @@ now track. Keep as historical planning record; do not implement from it directly
 #5   config/var/script cleanup                           CLOSED
 #46  launcher trace removal                              Slice B+C → OperationalStore runtime_events
 #51  recovery state persistence                          CLOSED not-planned; in-memory is sufficient
-#39  search config split                                 when search work resumes
+#39  search config split                                 Slice A-design done; B-impl creates files + loader
 #52  backend allocator metrics                           upstream-blocked
 #8   compaction RFC                                      research; no implementation dependency
 #7   LimbiCore/SQLite planning                           deferred; superseded by #53/#54
@@ -218,7 +221,7 @@ NEXT:
 
   After #46:
     #51 CLOSED not-planned — in-memory RecoveryState is sufficient
-    #39  Search config split — when search work resumes
+    #39  Search config split — Slice A-design done; Slice B-impl next
     #52  Backend allocator metrics — upstream-blocked
 ```
 

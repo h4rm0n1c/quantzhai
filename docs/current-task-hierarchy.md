@@ -805,7 +805,12 @@ Remaining locals (sequence, public_trace, summary_started, working_body, repair 
 documented as intentionally bounded in place. No decide_stream_event() required.
 #37 CLOSED.
 
-Next recommended: #39 search config split, or general stocktake. #51 closed.
+**#39 Slice A-design (this commit):** CLOSED (design only). search-config-contract.md
+defines: config/default/search.json schema, precedence rules (QZ_SEARCH_CONFIG_PATH
+> user > default > legacy SEARXNG_POLICY), compatibility with all existing env vars,
+/qz/config/effective exposure plan, qz_tool_web.py integration path, slice roadmap.
+
+Next: #39 Slice B-impl — create config/default/search.json + proxy/qz_search_config.py loader.
 
 ## Reference: BrainCase Slice completion history
 
