@@ -253,6 +253,129 @@ class WebSearchBudgetConfigTests(unittest.TestCase):
         self.assertEqual(runtime.low_result_fallback_threshold, 1)
 
 
+class WebSearchBudgetTelemetryTests(unittest.TestCase):
+    """Tests for web_search_budget_exceeded telemetry — #60 Slice C."""
+
+    def _runtime_with_telemetry(self, max_searches=2, max_opens=1):
+        emitted = []
+
+        class FakeTelemetry:
+            def emit(self, event_type, payload):
+                emitted.append({"event_type": event_type, "payload": payload})
+
+        runtime = WebSearchRuntime(
+            max_searches_per_turn=max_searches,
+            max_page_opens_per_turn=max_opens,
+            telemetry=FakeTelemetry(),
+        )
+        return runtime, emitted
+
+    def _call(self, action, **kwargs):
+        args = {"action": action}
+        args.update(kwargs)
+        return {
+            "type": "function_call",
+            "call_id": "c_test",
+            "name": "web_search",
+            "arguments": json.dumps(args),
+        }
+
+    def test_search_budget_exceeded_emits_telemetry(self):
+        runtime, emitted = self._runtime_with_telemetry(max_searches=1)
+        counters = {"search": 1, "open_page": 0}
+        runtime.execute_web_search_call(self._call("search", query="q"), counters, set())
+        budget_events = [e for e in emitted if e["event_type"] == "web_search_budget_exceeded"]
+        self.assertEqual(len(budget_events), 1)
+        p = budget_events[0]["payload"]
+        self.assertEqual(p["action"], "search")
+        self.assertEqual(p["limit"], 1)
+        self.assertEqual(p["counter"], 1)
+        self.assertEqual(p["query"], "q")
+        self.assertEqual(p["call_id"], "c_test")
+
+    def test_open_page_budget_exceeded_emits_telemetry(self):
+        runtime, emitted = self._runtime_with_telemetry(max_opens=1)
+        counters = {"search": 0, "open_page": 1}
+        runtime.execute_web_search_call(
+            self._call("open_page", url="https://example.com/"), counters, set()
+        )
+        budget_events = [e for e in emitted if e["event_type"] == "web_search_budget_exceeded"]
+        self.assertEqual(len(budget_events), 1)
+        p = budget_events[0]["payload"]
+        self.assertEqual(p["action"], "open_page")
+        self.assertEqual(p["limit"], 1)
+        self.assertEqual(p["counter"], 1)
+        self.assertEqual(p["url"], "https://example.com/")
+        self.assertEqual(p["call_id"], "c_test")
+
+    def test_model_error_output_unchanged_when_budget_exceeded(self):
+        """Hard error to model still fires with {"ok": false, "error": "..."}."""
+        runtime, emitted = self._runtime_with_telemetry(max_searches=1)
+        counters = {"search": 1, "open_page": 0}
+        public_item, tool_output, _sources = runtime.execute_web_search_call(
+            self._call("search", query="q"), counters, set()
+        )
+        out = json.loads(tool_output["output"])
+        self.assertFalse(out["ok"])
+        self.assertIn("limit", out["error"].lower())
+
+    def test_repeated_search_does_not_emit_budget_event(self):
+        """Repeated-search guard fires before budget check; no budget event."""
+        runtime, emitted = self._runtime_with_telemetry(max_searches=4)
+        seen = set()
+        counters = {"search": 0, "open_page": 0}
+        # First call — allowed
+        call = self._call("search", query="duplicate")
+        runtime.execute_web_search_call(call, counters, seen)
+        # Second identical call — repeated guard triggers, budget not hit
+        runtime.execute_web_search_call(call, counters, seen)
+        budget_events = [e for e in emitted if e["event_type"] == "web_search_budget_exceeded"]
+        self.assertEqual(len(budget_events), 0)
+
+    def test_telemetry_failure_does_not_break_tool_call(self):
+        """If telemetry.emit() raises, the tool call still returns an error result."""
+        class BrokenTelemetry:
+            def emit(self, event_type, payload):
+                raise RuntimeError("telemetry down")
+
+        runtime = WebSearchRuntime(
+            max_searches_per_turn=1,
+            telemetry=BrokenTelemetry(),
+        )
+        counters = {"search": 1, "open_page": 0}
+        try:
+            public_item, tool_output, _sources = runtime.execute_web_search_call(
+                self._call("search", query="q"), counters, set()
+            )
+        except Exception:
+            self.fail("telemetry failure must not propagate")
+        out = json.loads(tool_output["output"])
+        self.assertFalse(out["ok"])
+
+    def test_no_budget_event_for_successful_search(self):
+        runtime, emitted = self._runtime_with_telemetry(max_searches=4)
+        counters = {"search": 0, "open_page": 0}
+
+        def fake_query(query, categories=None, engines=None, top_k=8):
+            return {"results": [{"title": "x", "url": "https://x.test/"}]}
+
+        runtime._query_searxng = fake_query
+        runtime.execute_web_search_call(
+            self._call("search", query="fine"), counters, set()
+        )
+        budget_events = [e for e in emitted if e["event_type"] == "web_search_budget_exceeded"]
+        self.assertEqual(len(budget_events), 0)
+
+    def test_search_profile_included_in_payload(self):
+        runtime, emitted = self._runtime_with_telemetry(max_searches=1)
+        counters = {"search": 1, "open_page": 0}
+        runtime.execute_web_search_call(
+            self._call("search", query="q", profile="coding"), counters, set()
+        )
+        p = [e for e in emitted if e["event_type"] == "web_search_budget_exceeded"][0]["payload"]
+        self.assertEqual(p["profile"], "coding")
+
+
 class SearchConfigProfilesTests(unittest.TestCase):
     """Tests for search_config_profiles (qz.search.v1) integration — #39 Slice C."""
 

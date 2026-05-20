@@ -909,6 +909,14 @@ class WebSearchRuntime:
         if action == "search":
             if counters["search"] >= self.max_searches_per_turn:
                 error = f"Refusing search: reached per-turn limit of {self.max_searches_per_turn} search calls."
+                self._emit("web_search_budget_exceeded", {
+                    "action": "search",
+                    "limit": self.max_searches_per_turn,
+                    "counter": counters["search"],
+                    "query": query if isinstance(query, str) else None,
+                    "profile": profile,
+                    "call_id": call_item.get("call_id") or call_item.get("id"),
+                })
             elif repeated:
                 error = "Refusing repeated search request; use the cached result or open a page instead."
             elif not isinstance(query, str) or not query.strip():
@@ -927,6 +935,13 @@ class WebSearchRuntime:
         elif action == "open_page":
             if counters["open_page"] >= self.max_page_opens_per_turn:
                 error = f"Refusing open_page: reached per-turn limit of {self.max_page_opens_per_turn} page opens."
+                self._emit("web_search_budget_exceeded", {
+                    "action": "open_page",
+                    "limit": self.max_page_opens_per_turn,
+                    "counter": counters["open_page"],
+                    "url": url if isinstance(url, str) else None,
+                    "call_id": call_item.get("call_id") or call_item.get("id"),
+                })
             elif repeated:
                 error = "Refusing repeated open_page request for the same page."
             elif not isinstance(url, str) or not url.strip():

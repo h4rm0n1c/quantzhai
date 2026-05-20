@@ -480,7 +480,7 @@ annotations derived from the result URL + metadata without external lookups.
 | ~~**A-design**~~ | ~~Budget contract, telemetry spec, source annotation spec~~ |
 | ~~**B-impl**~~ | ~~Wire `search.json routing.*` fields into `WebSearchRuntime`; constants remain as fallbacks~~ |
 | **B.1** | Audit/polish budget wiring |
-| **C-impl** | Add `web_search_budget_exceeded` telemetry event |
+| ~~**C-impl**~~ | ~~Add `web_search_budget_exceeded` telemetry event~~ |
 | **C.1** | Audit telemetry coverage |
 | **D-impl** | Add source quality annotations (`source_kind`, `trust_hint`, `freshness_hint`) |
 | **D.1** | Audit annotation accuracy and coverage |
