@@ -1524,6 +1524,14 @@ class RequestRouter:
             ((scr.config.get("defaults") or {}).get("profile") or "")
             if scr is not None else ""
         )
+        # Read budget overrides from search.json routing.*; None → runtime falls back to constants.
+        _routing = (scr.config.get("routing") or {}) if scr is not None else {}
+        search_config_budgets = {
+            "max_searches_per_turn": _routing.get("max_searches_per_turn"),
+            "max_page_opens_per_turn": _routing.get("max_page_opens_per_turn"),
+            "max_results_per_query": _routing.get("max_results") or _routing.get("max_results_per_query"),
+            "low_result_fallback_threshold": _routing.get("low_result_fallback_threshold"),
+        }
         selection = resolve_search_policy_selection(
             base_policy=self.handler.searxng_policy,
             base_policy_path=getattr(self.handler, "searxng_policy_path", ""),
@@ -1543,6 +1551,7 @@ class RequestRouter:
             default_profile=selection.default_profile,
             policy_selection=selection.metadata(),
             search_config_profiles=search_config_profiles,
+            **search_config_budgets,
         )
 
     def _proxy_tool_registry(self, web_runtime):

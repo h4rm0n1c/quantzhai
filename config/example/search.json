@@ -17,8 +17,15 @@
   "_profiles_comment": "Override profile definitions here. Omit to inherit from config/default/search.json.",
   "profiles": {},
 
-  "_routing_comment": "Override routing here. Omit to inherit defaults.",
-  "routing": {},
+  "_routing_comment": "Override per-turn limits here. Omit individual fields to use defaults.",
+  "routing": {
+    "_budgets_comment": "Budget limits read by web_search at runtime. Omit to use built-in defaults.",
+    "max_searches_per_turn": 4,
+    "max_page_opens_per_turn": 3,
+    "max_results": 8,
+    "low_result_fallback_threshold": 2,
+    "dedup_by_canonical_url": true
+  },
 
   "_disabled_comment": "Add engine names to disable them for your instance.",
   "disabled_engines": [],

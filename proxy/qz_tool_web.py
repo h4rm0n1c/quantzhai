@@ -296,6 +296,15 @@ def _extract_page_text(raw: bytes, content_type: str):
         text = _normalize_ws(decoded)
     return title, text
 
+def _resolve_budget_int(value, default: int, min_val: int = 1) -> int:
+    """Return a valid positive int budget, falling back to *default* on any error."""
+    try:
+        ival = int(value)
+        return ival if ival >= min_val else default
+    except (TypeError, ValueError):
+        return default
+
+
 class WebSearchRuntime:
     def __init__(
         self,
@@ -310,6 +319,10 @@ class WebSearchRuntime:
         default_profile: str = "",
         policy_selection=None,
         search_config_profiles=None,
+        max_searches_per_turn=None,
+        max_page_opens_per_turn=None,
+        max_results_per_query=None,
+        low_result_fallback_threshold=None,
     ):
         self.searxng_base_url = base_url
         self.searxng_timeout = timeout
@@ -322,6 +335,21 @@ class WebSearchRuntime:
         self.default_search_profile = str(default_profile or "").strip()
         self.search_policy_selection = policy_selection if isinstance(policy_selection, dict) else {}
         self.search_config_profiles = search_config_profiles if isinstance(search_config_profiles, dict) else {}
+        # Budget limits: prefer explicit params; fall back to module constants.
+        self.max_searches_per_turn = _resolve_budget_int(max_searches_per_turn, WEB_SEARCH_MAX_SEARCHES)
+        self.max_page_opens_per_turn = _resolve_budget_int(max_page_opens_per_turn, WEB_SEARCH_MAX_OPENS)
+        self.max_results_per_query = _resolve_budget_int(max_results_per_query, WEB_SEARCH_MAX_RESULTS)
+        # low_result_fallback_threshold: try param, then legacy policy key, then default 2.
+        if low_result_fallback_threshold is not None:
+            self.low_result_fallback_threshold = _resolve_budget_int(low_result_fallback_threshold, 2)
+        else:
+            try:
+                legacy = int(
+                    (self.searxng_policy.get("routing") or {}).get("low_result_fallback_threshold") or 2
+                )
+                self.low_result_fallback_threshold = max(1, legacy)
+            except Exception:
+                self.low_result_fallback_threshold = 2
 
     def _emit(self, event_type: str, payload: dict | None = None):
         if not self.telemetry:
@@ -611,12 +639,7 @@ class WebSearchRuntime:
         primary_engines = self._filter_engines(explicit_engines, route["profile"]) if explicit_engines else route["engines"]
         query_categories = [] if route["profile"] in ("ai_models", "broad") and primary_engines else primary_categories
 
-        threshold = 1
-        try:
-            threshold = int(((self.searxng_policy or {}).get("routing") or {}).get("low_result_fallback_threshold") or 1)
-        except Exception:
-            threshold = 1
-        threshold = max(1, min(threshold, WEB_SEARCH_MAX_RESULTS))
+        threshold = max(1, min(self.low_result_fallback_threshold, self.max_results_per_query))
 
         self._emit("web_search_route", {
             "query": query,
@@ -827,10 +850,10 @@ class WebSearchRuntime:
         engines = data.get("engines") if isinstance(data.get("engines"), list) else None
         top_k = data.get("top_k")
         try:
-            top_k = int(top_k) if top_k is not None else WEB_SEARCH_MAX_RESULTS
+            top_k = int(top_k) if top_k is not None else self.max_results_per_query
         except Exception:
-            top_k = WEB_SEARCH_MAX_RESULTS
-        top_k = max(1, min(top_k, WEB_SEARCH_MAX_RESULTS))
+            top_k = self.max_results_per_query
+        top_k = max(1, min(top_k, self.max_results_per_query))
         return {
             "action": action,
             "query": query,
@@ -880,8 +903,8 @@ class WebSearchRuntime:
         sources = []
 
         if action == "search":
-            if counters["search"] >= WEB_SEARCH_MAX_SEARCHES:
-                error = f"Refusing search: reached per-turn limit of {WEB_SEARCH_MAX_SEARCHES} search calls."
+            if counters["search"] >= self.max_searches_per_turn:
+                error = f"Refusing search: reached per-turn limit of {self.max_searches_per_turn} search calls."
             elif repeated:
                 error = "Refusing repeated search request; use the cached result or open a page instead."
             elif not isinstance(query, str) or not query.strip():
@@ -893,13 +916,13 @@ class WebSearchRuntime:
                     profile=profile,
                     categories=args.get("categories"),
                     engines=args.get("engines"),
-                    top_k=args.get("top_k") or WEB_SEARCH_MAX_RESULTS,
+                    top_k=args.get("top_k") or self.max_results_per_query,
                 )
                 sources = [{"url": r.get("url"), "title": r.get("title")} for r in payload.get("results") or []]
 
         elif action == "open_page":
-            if counters["open_page"] >= WEB_SEARCH_MAX_OPENS:
-                error = f"Refusing open_page: reached per-turn limit of {WEB_SEARCH_MAX_OPENS} page opens."
+            if counters["open_page"] >= self.max_page_opens_per_turn:
+                error = f"Refusing open_page: reached per-turn limit of {self.max_page_opens_per_turn} page opens."
             elif repeated:
                 error = "Refusing repeated open_page request for the same page."
             elif not isinstance(url, str) or not url.strip():

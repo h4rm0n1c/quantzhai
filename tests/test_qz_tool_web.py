@@ -92,6 +92,99 @@ class WebSearchRuntimeTests(unittest.TestCase):
         self.assertIn("repeated search", payload["error"])
 
 
+class WebSearchBudgetConfigTests(unittest.TestCase):
+    """Tests for search.json routing budget wiring — #60 Slice B."""
+
+    def test_default_budgets_from_constants_when_no_params(self):
+        from proxy.qz_tool_web import WEB_SEARCH_MAX_SEARCHES, WEB_SEARCH_MAX_OPENS, WEB_SEARCH_MAX_RESULTS
+        runtime = WebSearchRuntime()
+        self.assertEqual(runtime.max_searches_per_turn, WEB_SEARCH_MAX_SEARCHES)
+        self.assertEqual(runtime.max_page_opens_per_turn, WEB_SEARCH_MAX_OPENS)
+        self.assertEqual(runtime.max_results_per_query, WEB_SEARCH_MAX_RESULTS)
+
+    def test_max_searches_from_param(self):
+        runtime = WebSearchRuntime(max_searches_per_turn=2)
+        self.assertEqual(runtime.max_searches_per_turn, 2)
+
+    def test_max_page_opens_from_param(self):
+        runtime = WebSearchRuntime(max_page_opens_per_turn=1)
+        self.assertEqual(runtime.max_page_opens_per_turn, 1)
+
+    def test_max_results_from_param(self):
+        runtime = WebSearchRuntime(max_results_per_query=5)
+        self.assertEqual(runtime.max_results_per_query, 5)
+
+    def test_invalid_budget_falls_back_to_constant(self):
+        from proxy.qz_tool_web import WEB_SEARCH_MAX_SEARCHES
+        runtime = WebSearchRuntime(max_searches_per_turn="not_a_number")
+        self.assertEqual(runtime.max_searches_per_turn, WEB_SEARCH_MAX_SEARCHES)
+
+    def test_zero_budget_falls_back_to_constant(self):
+        from proxy.qz_tool_web import WEB_SEARCH_MAX_SEARCHES
+        runtime = WebSearchRuntime(max_searches_per_turn=0)
+        self.assertEqual(runtime.max_searches_per_turn, WEB_SEARCH_MAX_SEARCHES)
+
+    def test_negative_budget_falls_back_to_constant(self):
+        from proxy.qz_tool_web import WEB_SEARCH_MAX_OPENS
+        runtime = WebSearchRuntime(max_page_opens_per_turn=-1)
+        self.assertEqual(runtime.max_page_opens_per_turn, WEB_SEARCH_MAX_OPENS)
+
+    def test_search_budget_enforced_at_custom_limit(self):
+        """Budget enforcement uses max_searches_per_turn, not the hard-coded constant."""
+        runtime = WebSearchRuntime(max_searches_per_turn=2)
+        calls = []
+
+        def fake_query(query, categories=None, engines=None, top_k=8):
+            calls.append(query)
+            return {"results": [{"title": "x", "url": "https://x.test/"}]}
+
+        runtime._query_searxng = fake_query
+        counters = {"search": 2, "open_page": 0}
+        seen = set()
+        public_item, tool_output, _sources = runtime.execute_web_search_call(
+            {"type": "function_call", "call_id": "c1", "name": "web_search",
+             "arguments": '{"action":"search","query":"test"}'},
+            counters, seen,
+        )
+        payload = json.loads(tool_output["output"])
+        self.assertFalse(payload["ok"])
+        self.assertIn("2", payload["error"])  # limit of 2 mentioned
+        self.assertEqual(len(calls), 0)  # no actual search
+
+    def test_top_k_clamped_to_max_results_per_query(self):
+        """top_k from args cannot exceed max_results_per_query."""
+        runtime = WebSearchRuntime(max_results_per_query=3)
+        args = runtime._parse_web_search_arguments(
+            '{"action":"search","query":"q","top_k":999}'
+        )
+        self.assertEqual(args["top_k"], 3)
+
+    def test_default_search_json_max_searches_is_4(self):
+        """config/default/search.json routing.max_searches_per_turn should be 4."""
+        import json
+        from pathlib import Path
+        cfg_path = Path(__file__).resolve().parents[1] / "config" / "default" / "search.json"
+        data = json.loads(cfg_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["routing"]["max_searches_per_turn"], 4)
+
+    def test_low_result_fallback_from_param(self):
+        runtime = WebSearchRuntime(low_result_fallback_threshold=3)
+        self.assertEqual(runtime.low_result_fallback_threshold, 3)
+
+    def test_low_result_fallback_from_legacy_policy(self):
+        runtime = WebSearchRuntime(
+            policy={"routing": {"low_result_fallback_threshold": 5}},
+        )
+        self.assertEqual(runtime.low_result_fallback_threshold, 5)
+
+    def test_low_result_fallback_param_overrides_legacy_policy(self):
+        runtime = WebSearchRuntime(
+            policy={"routing": {"low_result_fallback_threshold": 5}},
+            low_result_fallback_threshold=1,
+        )
+        self.assertEqual(runtime.low_result_fallback_threshold, 1)
+
+
 class SearchConfigProfilesTests(unittest.TestCase):
     """Tests for search_config_profiles (qz.search.v1) integration — #39 Slice C."""
 

@@ -85,7 +85,7 @@
     "allow_explicit_profile_override": true,
     "low_result_fallback_threshold": 2,
     "max_results": 8,
-    "max_searches_per_turn": 3,
+    "max_searches_per_turn": 4,
     "max_page_opens_per_turn": 3,
     "dedup_by_canonical_url": true
   },

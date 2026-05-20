@@ -478,8 +478,8 @@ annotations derived from the result URL + metadata without external lookups.
 | Slice | Content |
 |---|---|
 | ~~**A-design**~~ | ~~Budget contract, telemetry spec, source annotation spec~~ |
-| **B-impl** | Wire `search.json routing.*` fields into `WebSearchRuntime`; constants remain as fallbacks |
-| **B.1** | Audit/polish; confirm no regressions |
+| ~~**B-impl**~~ | ~~Wire `search.json routing.*` fields into `WebSearchRuntime`; constants remain as fallbacks~~ |
+| **B.1** | Audit/polish budget wiring |
 | **C-impl** | Add `web_search_budget_exceeded` telemetry event |
 | **C.1** | Audit telemetry coverage |
 | **D-impl** | Add source quality annotations (`source_kind`, `trust_hint`, `freshness_hint`) |
