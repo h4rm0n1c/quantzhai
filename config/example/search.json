@@ -20,10 +20,10 @@
 
   "_routing_comment": "Override per-turn limits here. Omit individual fields to use defaults.",
   "routing": {
-    "_budget_mode_comment": "default_budget_mode controls limits when the model does not pass budget_mode. Choices: quick, normal, deep, audit.",
+    "_budget_mode_comment": "default_budget_mode: limits used when the model omits budget_mode. Choices: quick, normal (default), deep, audit. quick=single fact check, normal=routine work, deep=research, audit=exhaustive scan.",
     "default_budget_mode": "normal",
 
-    "_budget_modes_comment": "Named budget modes. Each mode sets all five budget fields. Omit entire budget_modes key to use built-in defaults.",
+    "_budget_modes_comment": "Named mode table. Each mode sets all five budget fields. Omit the entire budget_modes key to use built-in defaults. Operator-tunable: raise or lower any field. Values are clamped by absolute_max_* below.",
     "budget_modes": {
       "quick":  { "max_results": 8,  "max_searches_per_turn": 4,  "max_page_opens_per_turn": 3,  "max_retrievals_per_turn": 2,  "max_retrieved_chars": 6000  },
       "normal": { "max_results": 12, "max_searches_per_turn": 8,  "max_page_opens_per_turn": 8,  "max_retrievals_per_turn": 4,  "max_retrieved_chars": 12000 },
@@ -31,7 +31,7 @@
       "audit":  { "max_results": 50, "max_searches_per_turn": 40, "max_page_opens_per_turn": 40, "max_retrievals_per_turn": 20, "max_retrieved_chars": 60000 }
     },
 
-    "_absolute_caps_comment": "Operator safety rails. Clamp all mode values. Lower to restrict; cannot raise above built-in code constants.",
+    "_absolute_caps_comment": "Operator safety rails. Clamp all mode values regardless of budget_mode. Lower to restrict. Cannot raise above the built-in code constants (100/100/100/50/120000).",
     "absolute_max_results":               100,
     "absolute_max_searches_per_turn":     100,
     "absolute_max_page_opens_per_turn":   100,

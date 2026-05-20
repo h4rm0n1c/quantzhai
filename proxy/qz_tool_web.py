@@ -80,14 +80,33 @@ class WebSearchToolAdapter:
     def to_upstream_tool(self, tool: dict) -> dict:
         return function_tool(
             "web_search",
-            "Search the web, open a page, find text in an opened page, or retrieve full content for a result URL using the local web runtime.",
+            (
+                "Search the web, open a page, find text in an opened page, or retrieve full structured content "
+                "for a result URL using the local web runtime.\n\n"
+                "Choose budget_mode explicitly based on the task:\n"
+                "  quick  — single fact check, narrow lookup, verify one thing. Conservative limits.\n"
+                "  normal — default for routine agent work: multi-step research, tool-use loops. Moderate limits.\n"
+                "  deep   — serious research: source comparison, multi-source retrieval, longer content. High limits.\n"
+                "  audit  — citation-heavy or evidence-heavy scans: exhaustive source review, cross-checking. Maximum limits.\n\n"
+                "Profile and budget_mode are explicit choices — there is no automatic keyword routing.\n"
+                "When retrieving content: extract or summarize relevant sections rather than dumping raw content "
+                "into the final answer. Large retrieved chunks should inform the answer, not fill it.\n"
+                "Typical research pattern: search → retrieve or open_page → extract key facts → continue or answer."
+            ),
             {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
                         "enum": ["search", "open_page", "find_in_page", "retrieve"],
-                        "description": "The web action to perform. retrieve: fetch full structured content for a result URL via the local Agent API.",
+                        "description": (
+                            "search: query the web and get annotated results. "
+                            "open_page: fetch and read a full page by URL. "
+                            "find_in_page: search for a text needle within a previously opened page. "
+                            "retrieve: fetch full structured content (title, summary, content, metadata) "
+                            "for a result URL via the local Agent API; use retrieval_available/retrieval_source "
+                            "annotations from search results to know which URLs support this."
+                        ),
                     },
                     "query": {
                         "type": "string",
@@ -95,12 +114,25 @@ class WebSearchToolAdapter:
                     },
                     "profile": {
                         "type": "string",
-                        "description": "Search profile used to select SearXNG categories and engines. Common profiles: auto, broad, coding, research, news, ai_models, reference, sysadmin, character_cards, furry, gaming_wikis, archives. Local policy may define more.",
+                        "description": (
+                            "Search profile controlling which SearXNG engines and categories are used. "
+                            "Choose based on the kind of source you want, not the query topic. "
+                            "Common profiles: auto, broad, coding, research, news, ai_models, reference, sysadmin, "
+                            "character_cards, furry, gaming_wikis, archives. Local policy may define more. "
+                            "Profile is an explicit choice; it is not inferred automatically from the query."
+                        ),
                     },
                     "budget_mode": {
                         "type": "string",
                         "enum": ["quick", "normal", "deep", "audit"],
-                        "description": "Research depth mode. quick: single fact check (conservative limits). normal: routine agent work (default). deep: multi-source research with more results and larger retrievals. audit: exhaustive citation/evidence scan.",
+                        "description": (
+                            "Research depth. Controls per-turn limits on searches, page opens, retrievals, "
+                            "and retrieved content size. Default when omitted: normal. "
+                            "quick: single fact, narrow lookup. "
+                            "normal: routine agent work. "
+                            "deep: multi-source research, larger retrievals. "
+                            "audit: exhaustive citation/evidence scan, maximum limits."
+                        ),
                     },
                     "url": {
                         "type": "string",
@@ -108,26 +140,34 @@ class WebSearchToolAdapter:
                     },
                     "retrieval_source": {
                         "type": "string",
-                        "description": "Optional source hint for retrieve action (e.g. mediawiki, fse, character-card). Use the retrieval_source annotation from search results.",
+                        "description": (
+                            "Optional source hint for retrieve action. "
+                            "Use the retrieval_source annotation from search results "
+                            "(e.g. mediawiki, fse, character-card). Helps the Agent API dispatch correctly."
+                        ),
                     },
                     "page_id": {
                         "type": "string",
-                        "description": "Previously opened page identifier for find_in_page.",
+                        "description": "Previously opened page identifier returned by open_page, for use with find_in_page.",
                     },
                     "categories": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Optional SearXNG categories to use for search.",
+                        "description": "Optional SearXNG categories to use for search. Overrides profile default.",
                     },
                     "engines": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Optional SearXNG engines to use for search.",
+                        "description": "Optional SearXNG engines to use for search. Overrides profile default.",
                     },
                     "top_k": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "Optional maximum number of search results to return. Clamped to the effective budget_mode limit.",
+                        "description": (
+                            "Optional maximum number of search results to return. "
+                            "Clamped to the effective budget_mode limit. "
+                            "Omit to use the mode default."
+                        ),
                     },
                 },
                 "required": ["action"],

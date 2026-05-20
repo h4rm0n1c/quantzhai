@@ -668,7 +668,7 @@ test_source_annotations_backwards_compatible (Slice D)
 ## §64. Research-grade web_search budget modes (#64 Slice A-design)
 
 Date: 2026-05-21
-Status: A-design COMPLETE. B-impl COMPLETE. B.1-audit next.
+Status: A-design COMPLETE. B-impl COMPLETE. B.1-audit COMPLETE. C-doc COMPLETE. D-live-smoke next.
 
 ### 64.0 Problem statement
 
@@ -972,17 +972,58 @@ Same for `web_search_retrieve_budget_exceeded`:
 Add `budget_mode` field (string, the resolved mode name). This is cheap —
 already a dict that touches every call. Provides observability without model noise.
 
-### 64.8 Tool schema changes (Slice B + C-doc)
+### 64.8 Tool schema and guidance (Slice B + C-doc)
 
-Add `budget_mode` to the `web_search` function schema:
+**Schema — delivered in Slice B, confirmed in C-doc:**
 
-```json
-"budget_mode": {
-  "type": "string",
-  "enum": ["quick", "normal", "deep", "audit"],
-  "description": "Research depth mode. quick: single fact check. normal: routine agent work (default). deep: multi-source research with more results and larger retrievals. audit: exhaustive citation/evidence scan."
-}
+- `budget_mode` enum `["quick", "normal", "deep", "audit"]` present with description.
+- `retrieve` in `action` enum; `retrieval_source` documented as property.
+- `maximum: 8` removed from `top_k`; description says "clamped to effective budget_mode limit".
+- Tool-level description updated (Slice C-doc) to include explicit usage guidance.
+
+**Tool-level description (Slice C-doc):**
+
 ```
+Search the web, open a page, find text in an opened page, or retrieve full
+structured content for a result URL using the local web runtime.
+
+Choose budget_mode explicitly based on the task:
+  quick  — single fact check, narrow lookup, verify one thing. Conservative limits.
+  normal — default for routine agent work: multi-step research, tool-use loops. Moderate limits.
+  deep   — serious research: source comparison, multi-source retrieval, longer content. High limits.
+  audit  — citation-heavy or evidence-heavy scans: exhaustive source review, cross-checking. Maximum limits.
+
+Profile and budget_mode are explicit choices — there is no automatic keyword routing.
+When retrieving content: extract or summarize relevant sections rather than dumping raw
+content into the final answer. Large retrieved chunks should inform the answer, not fill it.
+Typical research pattern: search → retrieve or open_page → extract key facts → continue or answer.
+```
+
+**Context discipline (C-doc):**
+
+```
+search    → get annotated result list; note retrieval_available annotations
+retrieve  → fetch structured content for a specific URL (mediawiki/FSE/character-card)
+open_page → fetch and read a full page when retrieve is not available for the source
+find_in_page → locate a needle in a previously opened page
+
+After retrieving: extract or summarize what is relevant.
+Do not copy large content blocks verbatim into final answers.
+Retrieval fills context for reasoning; it does not replace reasoning.
+```
+
+**Budget mode quick reference:**
+
+| Mode | Use when | Results | Searches | Opens | Retrievals | Max chars |
+|---|---|---|---|---|---|---|
+| `quick` | Verify a single fact | 8 | 4 | 3 | 2 | 6 000 |
+| `normal` | Routine agent work (default) | 12 | 8 | 8 | 4 | 12 000 |
+| `deep` | Multi-source research, comparison | 25 | 20 | 20 | 10 | 30 000 |
+| `audit` | Evidence/citation scan, exhaustive | 50 | 40 | 40 | 20 | 60 000 |
+
+Operator may override all values via `search.json routing.budget_modes.*`.
+Absolute safety rails in `routing.absolute_max_*` clamp everything; cannot exceed
+built-in constants (`WEB_SEARCH_ABSOLUTE_MAX_*`).
 
 Remove `"maximum": 8` from `top_k` schema — the model can now suggest a higher
 `top_k` for deep/audit mode (still clamped to the resolved `max_results_per_query`
@@ -1051,6 +1092,6 @@ test_tool_schema_includes_budget_mode
 |---|---|---|
 | **A-design** | ✅ complete | This section |
 | **B-impl** | ✅ complete | Budget mode wired; hard ceilings removed; 22 new tests; 2804 pass |
-| **B.1-audit** | pending | Compat, fallback precedence, ceiling removal confirmed, telemetry |
-| **C-doc** | pending | Tool prompt guidance; update this contract §64.8 |
+| **B.1-audit** | ✅ complete | 10 new precedence tests; dead code removed; 2814 pass |
+| **C-doc** | ✅ complete | Tool description updated; §64.8 expanded; budget mode table added |
 | **D-live-smoke** | pending | Deep mode >8 results; audit chars >12 000; telemetry includes mode |
