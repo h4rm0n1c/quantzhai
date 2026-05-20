@@ -232,12 +232,12 @@ requirements from the operator.
 
 ---
 
-## 8. Module design (future: proxy/qz_operational_store.py)
+## 8. Module: proxy/qz_operational_store.py
 
-**Design only — do not implement yet.**
+**Implemented in Slice B (commit 3fe042b).**
 
 ```python
-# proxy/qz_operational_store.py — Phase 1 API sketch
+# proxy/qz_operational_store.py — Phase 1 implemented API
 
 class OperationalStore:
     """Lightweight SQLite store for QuantZhai runtime events and operational facts.
@@ -247,31 +247,43 @@ class OperationalStore:
     """
 
     @classmethod
-    def open(cls, path: Path) -> "OperationalStore":
-        """Open or create the store at path. Idempotent. Non-fatal on failure."""
+    def from_env(cls, env: dict | None = None) -> "OperationalStore":
+        """Construct from QZ_OPERATIONAL_DB_ENABLED and QZ_OPERATIONAL_DB_PATH."""
         ...
 
-    def record_startup_event(self, phase: str, payload: dict) -> None:
+    def init(self) -> bool:
+        """Open/create DB. Idempotent. Non-fatal. Returns True when available."""
+        ...
+
+    def record_startup_event(self, phase: str, payload: dict | None = None,
+                             source: str = "launcher") -> None:
         """Record a startup lifecycle event (replaces qz-write-runtime-state)."""
         ...
 
-    def record_runtime_fact(self, key: str, value: dict, provenance: str = "proxy") -> None:
+    def record_runtime_fact(self, key: str, value: dict,
+                            provenance: str = "proxy") -> None:
         """Upsert a key-value operational fact."""
         ...
 
     def get_runtime_fact(self, key: str) -> dict | None:
-        """Read a persisted operational fact, or None if absent."""
+        """Read a persisted operational fact, or None if absent or disabled."""
         ...
 
-    def recent_events(self, event_type: str | None = None, limit: int = 20) -> list[dict]:
-        """Return recent runtime events for diagnostics."""
+    def recent_events(self, event_type: str | None = None,
+                      limit: int = 20) -> list[dict]:
+        """Return recent runtime events, newest first. [] when disabled."""
+        ...
+
+    def health(self) -> dict:
+        """Return {enabled, path, available, schema_version, last_error}."""
         ...
 
     def close(self) -> None: ...
 ```
 
-**Accessor pattern:** One instance per proxy process, opened at startup if
-`QZ_OPERATIONAL_DB_ENABLED=1`. Reads/writes synchronous with non-fatal fallback.
+**Accessor pattern:** `OperationalStore.from_env()` constructs from environment.
+`store.init()` opens/creates the DB (idempotent, non-fatal). One instance per proxy
+process; disabled mode is a complete no-op (no file created).
 
 ---
 

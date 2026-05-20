@@ -10,7 +10,8 @@ the LLM.  This is internal diagnostics/control-plane state only.
 Enable:   QZ_OPERATIONAL_DB_ENABLED=1
 Path:     QZ_OPERATIONAL_DB_PATH  (overrides all)
 Default:  $QZ_VAR_DIR/state/operational.sqlite3
-          or var/state/operational.sqlite3
+          or $QZ_ROOT/var/state/operational.sqlite3
+          or <repo>/var/state/operational.sqlite3
 """
 
 import json
