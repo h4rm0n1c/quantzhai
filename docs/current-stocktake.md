@@ -123,7 +123,7 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 | #39 | Split search routing policy into search.json | **CLOSED** — search.json primary; legacy search-policy.json compat kept; all criteria PASS |
 | #52 | Backend-confirmed VRAM allocator metrics | **upstream-blocked** (TurboQuant side) |
 | #8 | RFC: NetTTS survival-weighted compaction | **research/later** |
-| #7 | What next: LimbiCore seam, memory_domain, SQLite | **deferred** — superseded by #53/#54; informational only |
+| #7 | What next: LimbiCore seam, memory_domain, SQLite | **CLOSED (not planned)** — superseded by #53/#54 and related completed work |
 
 ### Notes on each
 
@@ -181,8 +181,9 @@ to expose `model_size_bytes` / `kv_cache_size_bytes`. Keep as a tracker only.
 
 **#8** — Research RFC. No implementation target yet.
 
-**#7** — Created before #1, #2 were started. Describes what #2 and related issues
-now track. Keep as historical planning record; do not implement from it directly.
+**#7** — CLOSED (not planned). Early planning breadcrumb, fully superseded by
+#53/#54 (BrainCase), #46 (OperationalStore), #39 (search config), and related
+closed issues. Do not reopen; future work needs concrete scoped issues.
 
 ---
 
@@ -201,7 +202,7 @@ now track. Keep as historical planning record; do not implement from it directly
 #39  search config split                                 CLOSED — search.json primary; profile bundle wired
 #52  backend allocator metrics                           upstream-blocked
 #8   compaction RFC                                      research; no implementation dependency
-#7   LimbiCore/SQLite planning                           deferred; superseded by #53/#54
+#7   LimbiCore/SQLite planning                           CLOSED not-planned; superseded by #53/#54
 Repeated-read v2                                         blocked on SQLite/session identity
 ```
 
@@ -222,7 +223,7 @@ COMPLETED (all CLOSED):
   #58 #57 #56 #5 #37 #53 #54 #3/#4/#43 #46 #51 #39
 
 NEXT — no active engineering blocker; options in priority order:
-  A. Decide #7 fate: historical, superseded by #53/#54. Close as not-planned.
+  A. Decide #2 fate: BrainCaseDB stable; consider close or refocus.
   B. Decide #2 fate: BrainCaseDB is stable; #2 may be closed or refocused.
   C. #8 research RFC if a contained compaction experiment is wanted.
   D. #52 waits on TurboQuant upstream; no QuantZhai action.
@@ -236,7 +237,7 @@ NEXT — no active engineering blocker; options in priority order:
 | # | Blocked by | Action |
 |---|---|---|
 | #2 | No active consumer yet | Decide: close or refocus; BrainCaseDB stable |
-| #7 | Superseded | Close as not-planned; work done by #53/#54 |
+| #2 | No active consumer yet | Decide: close or refocus; BrainCaseDB stable |
 | #52 | TurboQuant | Wait; no QuantZhai action needed |
 | #8 | Research decision | Keep as RFC; contained experiment when ready |
 
@@ -319,6 +320,11 @@ qz-codex remote bootstrap (#57)
     TOML-escaped values. Co-located mode unchanged.
   → Do not reopen unless a real production bug appears.
   → Optional follow-up: live two-host LAN smoke test (manual).
+
+LimbiCore/memory_domain/SQLite planning (#7)
+  → CLOSED not-planned. Superseded by #53/#54 (BrainCase), #46 (OperationalStore),
+    #39 (search config), and all related completed issues.
+  → Do not reopen. Future work needs concrete scoped issues with clear non-goals.
 
 OperationalStore launcher trace (#46)
   → CLOSED. qz-runtime-state.json retired. OperationalStore
