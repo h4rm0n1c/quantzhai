@@ -478,14 +478,74 @@ annotations derived from the result URL + metadata without external lookups.
 | Slice | Content |
 |---|---|
 | ~~**A-design**~~ | ~~Budget contract, telemetry spec, source annotation spec~~ |
-| ~~**B-impl**~~ | ~~Wire `search.json routing.*` fields into `WebSearchRuntime`; constants remain as fallbacks~~ |
-| **B.1** | Audit/polish budget wiring |
+| ~~**B-impl**~~ | ~~Wire `search.json routing.*` fields into `WebSearchRuntime`~~ |
+| ~~**B.1**~~ | ~~Audit/polish budget wiring; max_results ceiling~~ |
 | ~~**C-impl**~~ | ~~Add `web_search_budget_exceeded` telemetry event~~ |
-| **C.1** | Audit telemetry coverage |
-| **D-impl** | Add source quality annotations (`source_kind`, `trust_hint`, `freshness_hint`) |
-| **D.1** | Audit annotation accuracy and coverage |
-| **E-audit** | Live smoke with local SearXNG; confirm telemetry visible in qz-thoughts |
-| **Close-out** | Update #60 acceptance criteria; close issue |
+| ~~**C.1**~~ | ~~Audit telemetry coverage (done; no gaps)~~ |
+| ~~**D0-discovery**~~ | ~~Inventory local SearXNG Agent API (8890); engine taxonomy; retrieval surface~~ |
+| ~~**D1-rescope**~~ | ~~Add character_cards/furry/gaming_wikis/archives profiles; fix broad; add auto_keywords~~ |
+| **D2-impl** | Two-layer source annotations in `_unique_sources()` |
+| **D2.1** | Audit annotation accuracy |
+| **D3-impl** | Wire `search.json routing.auto_keywords` and `auto_precedence` into `_infer_search_profile()` |
+| **D3.1** | Audit auto-profile routing with new profiles |
+| **E-audit** | Live smoke with `http://127.0.0.1:8890`; annotated results in qz-thoughts |
+| **Close-out** | Wire 8890 as SEARXNG_BASE_URL example; update acceptance; close issue |
+
+---
+
+---
+
+### 60.D1 Source annotation final spec (after D0 discovery)
+
+**Two-layer annotation** — confirmed after D0 inventory.
+
+#### Layer 1: URL/domain-derived (always available)
+
+Computed from the result URL without extra network calls.
+
+| Field | Type | Derivation |
+|---|---|---|
+| `domain` | str | Extracted TLD+1 from URL |
+| `source_kind` | str | Domain pattern match (see taxonomy) |
+| `trust_hint` | str | Derived from `source_kind` |
+| `freshness_hint` | str | URL path year or `publishedDate` field if present |
+
+#### Layer 2: Agent API retrieval metadata (when `retrieval.available = true`)
+
+Only present when QuantZhai is using the 8890 Agent API endpoint.
+
+| Field | Type | Notes |
+|---|---|---|
+| `retrieval_available` | bool | Whether content can be retrieved |
+| `retrieval_source` | str or null | Source key (see mapping below) |
+
+`retrieval_endpoint` is **NOT** exposed in model-visible output — it's a `http://127.0.0.1:8890/...` URL that should not appear in agent context.
+
+#### `retrieval.source` → `source_kind` mapping
+
+| retrieval.source | source_kind |
+|---|---|
+| `character-card` | `character_card` |
+| `fse` | `prose_archive` |
+| `furbooru` | `furry_community` |
+| `mediawiki` | domain-specific: `gaming_wiki` (pcgamingwiki), `official_docs` (alliedmodders, tf2w), `wiki` (pantheon) |
+| `valve-developer-community` | `official_docs` |
+| `bitmagnet` | `local_index` |
+
+#### `trust_hint` rules
+
+| source_kind | trust_hint |
+|---|---|
+| official_docs, package_registry, source_repo, academic | high |
+| q_and_a, wiki, gaming_wiki, encyclopedia | medium |
+| character_card, prose_archive, furry_community, forum, blog, news, local_index | low |
+| unknown | unknown |
+
+#### `freshness_hint` rules
+
+1. If `publishedDate` is present in the result, parse year from it.
+2. Otherwise, extract a 4-digit year from the URL path.
+3. Current year → `recent`; year ≥ 2 years ago → `dated`; no signal → `unknown`.
 
 ---
 

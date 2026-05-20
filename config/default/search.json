@@ -23,7 +23,7 @@
       "description": "General web search across healthy text engines.",
       "categories": ["general", "web"],
       "engines": [
-        "duckduckgo", "bing", "mojeek", "startpage",
+        "duckduckgo", "bing", "mojeek",
         "presearch", "wiby", "searchmysite", "crowdview", "yacy"
       ],
       "fallback_profiles": ["reference", "news", "coding"]
@@ -77,6 +77,34 @@
       "categories": ["dictionaries", "wikimedia", "general"],
       "engines": ["wiktionary", "wikibooks", "wolframalpha", "jisho"],
       "fallback_profiles": ["broad"]
+    },
+
+    "character_cards": {
+      "description": "Character card metadata (taverncard, aicharactercards). Agent API retrieval available. SFW default.",
+      "categories": ["general"],
+      "engines": ["taverncard", "aicharactercards"],
+      "fallback_profiles": ["broad"]
+    },
+
+    "furry": {
+      "description": "Furry community: prose/story discovery (FSE) and image metadata (e926, furbooru). SFW-biased.",
+      "categories": ["general", "images"],
+      "engines": ["fse", "e926", "furbooru"],
+      "fallback_profiles": ["broad"]
+    },
+
+    "gaming_wikis": {
+      "description": "Gaming and mod wiki pages (PCGamingWiki, AlliedModders, TF2 wiki, Pantheon). Agent API retrieval available.",
+      "categories": ["general", "it"],
+      "engines": ["pcgamingwiki", "alliedmodders wiki", "official tf2 wiki", "pantheon wiki"],
+      "fallback_profiles": ["coding", "broad"]
+    },
+
+    "archives": {
+      "description": "File/torrent archives and retro/old-web (bitmagnet local, nyaa, wiby). Prefer bitmagnet for local corpus.",
+      "categories": ["files", "general"],
+      "engines": ["bitmagnet", "nyaa", "wiby"],
+      "fallback_profiles": ["broad"]
     }
   },
 
@@ -87,7 +115,24 @@
     "max_results": 8,
     "max_searches_per_turn": 4,
     "max_page_opens_per_turn": 3,
-    "dedup_by_canonical_url": true
+    "dedup_by_canonical_url": true,
+    "auto_keywords": {
+      "character_cards": [
+        "character card", "character cards", "persona card",
+        "taverncard", "aicharactercards", "sillytavern"
+      ],
+      "gaming_wikis": [
+        "pcgamingwiki", "alliedmodders", "sourcemod", "metamod",
+        "tf2 wiki", "source sdk", "valve developer"
+      ],
+      "furry": [
+        "furry", "fse anthro", "e926", "furbooru", "anthro art", "furfiction"
+      ]
+    },
+    "auto_precedence": [
+      "ai_models", "sysadmin", "coding", "research", "news",
+      "character_cards", "gaming_wikis", "reference", "furry", "archives", "broad"
+    ]
   },
 
   "disabled_engines": [
