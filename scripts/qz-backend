@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qz-env"
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/qz-backend <command>
+
+Thin wrapper around proxy /qz/backend/* endpoints. No Docker calls.
+
+Commands:
+  status    GET  /qz/backend/status   — current backend phase and health
+  start     POST /qz/backend/start    — request backend start
+  stop      POST /qz/backend/stop     — request backend stop
+  restart   POST /qz/backend/restart  — request backend restart
+
+The proxy manages the backend container. These commands do not touch Docker directly.
+Check /qz/control-plane for full stack status.
+EOF
+}
+
+_call_proxy() {
+  local method="$1"
+  local path="$2"
+  local proxy_url="http://${QZ_PROXY_HOST}:${QZ_PROXY_PORT}"
+  local url="${proxy_url}${path}"
+
+  if ! curl -fsS --max-time 3 "${proxy_url}/health" >/dev/null 2>&1; then
+    printf 'qz-backend: proxy not reachable at %s\n' "$proxy_url" >&2
+    printf 'Start the proxy with: scripts/qz-proxy\n' >&2
+    exit 1
+  fi
+
+  if python3 -c "import json, sys" 2>/dev/null; then
+    curl -sS --max-time 10 -X "$method" "$url" | python3 -m json.tool
+  else
+    curl -sS --max-time 10 -X "$method" "$url"
+  fi
+}
+
+if [[ $# -lt 1 ]]; then
+  usage >&2
+  exit 2
+fi
+
+case "$1" in
+  status)
+    _call_proxy GET /qz/backend/status
+    ;;
+  start)
+    _call_proxy POST /qz/backend/start
+    ;;
+  stop)
+    _call_proxy POST /qz/backend/stop
+    ;;
+  restart)
+    _call_proxy POST /qz/backend/restart
+    ;;
+  -h|--help)
+    usage
+    ;;
+  *)
+    printf 'qz-backend: unknown command: %s\n' "$1" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

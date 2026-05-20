@@ -3,18 +3,83 @@ set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qz-env"
 
+usage() {
+  cat <<'EOF'
+Usage: scripts/qz-down [--force]
+
+Stop the QuantZhai stack.
+
+Normal path (no --force):
+  Asks the proxy to stop the backend container gracefully, then stops the proxy.
+  Does NOT remove the Docker container directly.
+
+Force path (--force):
+  Stops the proxy pid and force-removes the backend Docker container.
+  Use when the proxy is unreachable or normal stop failed.
+
+Options:
+  --force   Hard stop: kill proxy pid and force-remove the container.
+  -h, --help  Show this help.
+EOF
+}
+
+force=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --force)
+      force=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'unknown option: %s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
 pid_file="$QZ_VAR_DIR/run/qz-proxy.pid"
 
-if [[ -f "$pid_file" ]]; then
-  old_pid="$(cat "$pid_file" 2>/dev/null || true)"
-  if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
-    kill "$old_pid"
+kill_proxy_pid() {
+  if [[ -f "$pid_file" ]]; then
+    old_pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+      kill "$old_pid"
+    fi
+    rm -f "$pid_file"
   fi
-  rm -f "$pid_file"
+}
+
+if [[ "$force" == "1" ]]; then
+  # Force path: kill proxy + docker rm -f
+  kill_proxy_pid
+  if qz_docker ps -a --format '{{.Names}}' | grep -qx "$QZ_CONTAINER"; then
+    qz_docker rm -f "$QZ_CONTAINER" >/dev/null
+    printf 'Force removed backend container: %s\n' "$QZ_CONTAINER"
+  fi
+  printf 'QuantZhai force-stopped.\n'
+  exit 0
 fi
 
-if qz_docker ps -a --format '{{.Names}}' | grep -qx "$QZ_CONTAINER"; then
-  qz_docker rm -f "$QZ_CONTAINER" >/dev/null
+# Normal path: ask proxy to stop backend, then kill proxy pid
+proxy_url="http://${QZ_PROXY_HOST}:${QZ_PROXY_PORT}"
+
+if curl -fsS --max-time 3 "${proxy_url}/health" >/dev/null 2>&1; then
+  printf 'Requesting backend stop via proxy...\n'
+  curl -sS --max-time 10 -X POST "${proxy_url}/qz/backend/stop" \
+    -o /dev/null -w '' 2>/dev/null || true
+  printf 'Backend stop requested. Container removal is managed by the proxy.\n'
+  printf 'Use scripts/qz-down --force to remove the container immediately.\n'
+else
+  printf 'Proxy not reachable at %s. Stopping proxy process only.\n' "$proxy_url" >&2
+  printf 'Backend container may still be running.\n' >&2
+  printf 'Use scripts/qz-down --force to remove the container.\n' >&2
 fi
 
-echo "QuantZhai stopped."
+kill_proxy_pid
+printf 'QuantZhai stopped.\n'
