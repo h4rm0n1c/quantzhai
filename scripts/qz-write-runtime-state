@@ -16,11 +16,22 @@ Consumers of runtime truth should use /qz/control-plane, not this file.
 import argparse
 import json
 import os
+import sys
 import tempfile
 import time
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+# Optional OperationalStore dual-write (Slice C — non-fatal if unavailable).
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+try:
+    from proxy.qz_operational_store import OperationalStore as _OperationalStore
+    _STORE_CLS = _OperationalStore
+except ImportError:
+    _STORE_CLS = None  # type: ignore
 
 
 SCHEMA = 1
@@ -206,6 +217,43 @@ def merge_proxy_status(state: dict[str, Any]) -> None:
     })
 
 
+def _dual_write_to_store(state: dict[str, Any]) -> None:
+    """Write runtime event + facts to OperationalStore when enabled.
+
+    Non-fatal: any failure is silently swallowed so the JSON write is
+    never blocked.  The JSON file is written before this is called.
+    """
+    if _STORE_CLS is None:
+        return
+    try:
+        store = _STORE_CLS.from_env()
+        if not store.enabled:
+            return
+        if not store.init():
+            return
+        phase = state.get("phase", "unknown")
+        store.record_startup_event(
+            phase=phase,
+            payload=state,
+            source="launcher",
+        )
+        eff = state.get("effective") or {}
+        req = state.get("requested") or {}
+        backend = state.get("backend") or {}
+        proxy_ = state.get("proxy") or {}
+        for key, value in (
+            ("current_phase",       {"phase": phase}),
+            ("requested_model",     {"model": req.get("model", ""), "profile": req.get("profile", ""), "context": req.get("context")}),
+            ("effective_model",     {"model": eff.get("model", ""), "context": eff.get("context")}),
+            ("backend_status",      {"url": backend.get("url", ""), "healthy": bool(backend.get("healthy")), "loaded": bool(backend.get("loaded")), "loaded_model": backend.get("loaded_model", "")}),
+            ("proxy_status",        {"url": proxy_.get("url", ""), "healthy": bool(proxy_.get("healthy"))}),
+        ):
+            store.record_runtime_fact(key, value, provenance="launcher")
+        store.close()
+    except Exception:
+        pass
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -240,6 +288,7 @@ def main() -> int:
             state["effective"]["model"] = old_model
             state["source"]["model"] = "previous"
     atomic_write_json(path, state)
+    _dual_write_to_store(state)
 
     if args.print_state:
         print(json.dumps(state, indent=2, ensure_ascii=False, sort_keys=True))
