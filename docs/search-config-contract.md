@@ -487,7 +487,7 @@ annotations derived from the result URL + metadata without external lookups.
 | ~~**D1.1**~~ | ~~Remove auto_keywords/auto_precedence; cancel keyword-routing plan~~ |
 | ~~**D2-impl**~~ | ~~Two-layer source annotations in `_query_searxng()` + `_unique_sources()`~~ |
 | ~~**D2.1**~~ | ~~Audit: add retrieval_retriever; confirm endpoint redaction; define retrieve action~~ |
-| **E-audit** | Live smoke with `http://127.0.0.1:8890`; annotated results in qz-thoughts |
+| ~~**E-audit**~~ | ~~Live smoke with `http://127.0.0.1:8890`; all profiles/annotations verified~~ |
 | **Close-out** | Wire 8890 as SEARXNG_BASE_URL example; update acceptance; close issue |
 
 ---

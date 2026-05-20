@@ -3,6 +3,7 @@
   "schema": "qz.search.v1",
 
   "searxng": {
+    "_base_url_comment": "Use http://127.0.0.1:8890 for the Agent API (retrieval metadata); use http://127.0.0.1:8888 for raw SearXNG.",
     "base_url": "http://YOUR_SEARXNG_HOST:PORT",
     "timeout_s": 15,
     "enabled": true
