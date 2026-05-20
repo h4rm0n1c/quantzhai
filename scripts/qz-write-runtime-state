@@ -1,29 +1,23 @@
 #!/usr/bin/env python3
-"""Write a QuantZhai launcher trace snapshot to var/run/qz-runtime-state.json.
+"""Record a QuantZhai launcher event to the OperationalStore.
 
-This is a startup breadcrumb written by scripts/qz-up to track launch phases
+Called by scripts/qz-up at each startup phase
 (requested, backend-started, proxy-started, backend-healthy, etc.).
 
-IMPORTANT: This file is NOT the live status authority.
-- Live proxy/backend/model status: GET /qz/control-plane
-- Live proxy telemetry: GET /qz/telemetry/recent
-- This file is a transitional launcher trace kept for compatibility while the
-  #44 control-plane migration completes.
-
-Consumers of runtime truth should use /qz/control-plane, not this file.
+The legacy var/run/qz-runtime-state.json file is no longer written.
+Runtime status authority: GET /qz/control-plane
+Startup event history:    GET /qz/config/effective (operational_store section)
 """
 
 import argparse
 import json
 import os
 import sys
-import tempfile
 import time
 import urllib.request
 from pathlib import Path
 from typing import Any
 
-# Optional OperationalStore dual-write (Slice C — non-fatal if unavailable).
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -67,28 +61,6 @@ def env_int(name: str, default: int | None = None) -> int | None:
     return parse_context(os.environ.get(name), default)
 
 
-def runtime_path() -> Path:
-    default_var = Path(os.environ.get("QZ_VAR_DIR") or "var")
-    return Path(os.environ.get("QZ_RUNTIME_STATE_PATH") or default_var / "run" / "qz-runtime-state.json").expanduser()
-
-
-def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=str(path.parent), delete=False) as handle:
-        handle.write(text)
-        tmp_name = handle.name
-    os.replace(tmp_name, path)
-
-
-def read_json(path: Path) -> dict[str, Any]:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
 def fetch_json(url: str, timeout: float = 1.0) -> dict[str, Any]:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
@@ -102,6 +74,25 @@ def proxy_base_url() -> str:
     host = os.environ.get("QZ_PROXY_HOST", "127.0.0.1")
     port = os.environ.get("QZ_PROXY_PORT", "18180")
     return f"http://{host}:{port}"
+
+
+def _get_previous_model_from_store() -> str:
+    """Read the last effective_model from OperationalStore, or '' on any failure."""
+    if _STORE_CLS is None:
+        return ""
+    try:
+        store = _STORE_CLS.from_env()
+        if not store.enabled:
+            return ""
+        if not store.init():
+            return ""
+        fact = store.get_runtime_fact("effective_model")
+        store.close()
+        if isinstance(fact, dict):
+            return fact.get("model", "") or ""
+    except Exception:
+        pass
+    return ""
 
 
 def base_state(phase: str, source: str) -> dict[str, Any]:
@@ -217,11 +208,11 @@ def merge_proxy_status(state: dict[str, Any]) -> None:
     })
 
 
-def _dual_write_to_store(state: dict[str, Any]) -> None:
-    """Write runtime event + facts to OperationalStore when enabled.
+def _write_to_store(state: dict[str, Any]) -> None:
+    """Write runtime event + facts to OperationalStore.
 
-    Non-fatal: any failure is silently swallowed so the JSON write is
-    never blocked.  The JSON file is written before this is called.
+    Non-fatal: any failure is silently swallowed.
+    When disabled, this is a complete no-op.
     """
     if _STORE_CLS is None:
         return
@@ -242,11 +233,11 @@ def _dual_write_to_store(state: dict[str, Any]) -> None:
         backend = state.get("backend") or {}
         proxy_ = state.get("proxy") or {}
         for key, value in (
-            ("current_phase",       {"phase": phase}),
-            ("requested_model",     {"model": req.get("model", ""), "profile": req.get("profile", ""), "context": req.get("context")}),
-            ("effective_model",     {"model": eff.get("model", ""), "context": eff.get("context")}),
-            ("backend_status",      {"url": backend.get("url", ""), "healthy": bool(backend.get("healthy")), "loaded": bool(backend.get("loaded")), "loaded_model": backend.get("loaded_model", "")}),
-            ("proxy_status",        {"url": proxy_.get("url", ""), "healthy": bool(proxy_.get("healthy"))}),
+            ("current_phase",   {"phase": phase}),
+            ("requested_model", {"model": req.get("model", ""), "profile": req.get("profile", ""), "context": req.get("context")}),
+            ("effective_model", {"model": eff.get("model", ""), "context": eff.get("context")}),
+            ("backend_status",  {"url": backend.get("url", ""), "healthy": bool(backend.get("healthy")), "loaded": bool(backend.get("loaded")), "loaded_model": backend.get("loaded_model", "")}),
+            ("proxy_status",    {"url": proxy_.get("url", ""), "healthy": bool(proxy_.get("healthy"))}),
         ):
             store.record_runtime_fact(key, value, provenance="launcher")
         store.close()
@@ -257,9 +248,9 @@ def _dual_write_to_store(state: dict[str, Any]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Write a QuantZhai launcher trace snapshot to var/run/qz-runtime-state.json. "
-            "This is NOT the live status authority. "
-            "Use GET /qz/control-plane for live proxy/backend/model status."
+            "Record a QuantZhai launcher event to the OperationalStore. "
+            "Runtime status: GET /qz/control-plane. "
+            "Event history: GET /qz/config/effective (operational_store section)."
         )
     )
     parser.add_argument("--phase", default="manual", help="startup phase label")
@@ -267,7 +258,7 @@ def main() -> int:
     parser.add_argument("--merge-proxy", action="store_true", help="merge live proxy status when reachable")
     parser.add_argument("--backend-healthy", action="store_true", help="mark backend health as confirmed")
     parser.add_argument("--proxy-healthy", action="store_true", help="mark proxy health as confirmed")
-    parser.add_argument("--print", dest="print_state", action="store_true", help="print written state")
+    parser.add_argument("--print", dest="print_state", action="store_true", help="print state dict")
     args = parser.parse_args()
 
     state = base_state(args.phase, args.source)
@@ -280,15 +271,14 @@ def main() -> int:
     if args.merge_proxy:
         merge_proxy_status(state)
 
-    path = runtime_path()
-    previous = read_json(path)
-    if previous and state["effective"].get("model") in (None, ""):
-        old_model = ((previous.get("effective") or {}).get("model") or "")
+    # Carry forward effective model from OperationalStore when env doesn't provide one.
+    if state["effective"].get("model") in (None, ""):
+        old_model = _get_previous_model_from_store()
         if old_model:
             state["effective"]["model"] = old_model
             state["source"]["model"] = "previous"
-    atomic_write_json(path, state)
-    _dual_write_to_store(state)
+
+    _write_to_store(state)
 
     if args.print_state:
         print(json.dumps(state, indent=2, ensure_ascii=False, sort_keys=True))

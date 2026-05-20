@@ -105,7 +105,7 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 | #37 | Architectural seam extraction plan | **CLOSED** — Slices 1–2J complete; StreamHopState + StreamRunState + 6 pure helpers |
 | #56 | Generated artifact path migration design (var/generated/) | **CLOSED** — A1/A2/A3 under var/generated/; helpers clean; all acceptance criteria PASS |
 | #51 | Promote recovery/backoff runtime state to SQLite | **needs reframing** — backoff/cooldown persistence rejected; OperationalStore design narrowed |
-| #46 | Replace qz-write-runtime-state launcher trace | **Slices B–D complete** — all close-out conditions met; close-out next |
+| #46 | Replace qz-write-runtime-state launcher trace | **CLOSED** — JSON retired; OperationalStore + /qz/config/effective are the authority |
 | #5 | Config/var/script ownership cleanup | **CLOSED** (#56, #57 opened for migration/thinning follow-ups) |
 | #57 | qz-codex-common thinning | **CLOSED** (Slices A–C2.1 complete; remote bootstrap endpoints delivered; superseded by #58) |
 | #58 | Always-HTTP qz-codex bootstrap | **CLOSED** (D2/D2.1/D3 complete; qz-codex always uses HTTP; #56 remains separate) |
@@ -156,9 +156,8 @@ is explicitly NOT wanted. #51 needs explicit reframing before any implementation
 In-memory `RecoveryState` in `qz_recovery_state.py` is sufficient. See
 `docs/operational-store-design.md §7`.
 
-**#46** — Slices B–D complete. All close-out conditions met. Next: close-out slice
-removes JSON write, confirms /qz/config/effective authority. See
-`docs/operational-store-design.md §6`.
+**#46** — CLOSED. qz-runtime-state.json retired. QZ_RUNTIME_STATE_PATH removed.
+OperationalStore + /qz/config/effective are the authority for launcher events.
 
 **#5** — Config/var cleanup is ongoing and never fully done. Safe to do any time
 without blocking other work. Good incremental choice between larger features.

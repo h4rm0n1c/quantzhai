@@ -449,7 +449,6 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
     inventory = Path(os.environ.get("QZ_MODEL_INVENTORY_CACHE", str(_model_inventory_path()))).expanduser()
     model_state = Path(os.environ.get("QZ_MODEL_STATE_PATH", str(var_dir / "model-state.json"))).expanduser()
     backend_state = Path(os.environ.get("QZ_BACKEND_STATE_PATH", str(var_dir / "backend-state.json"))).expanduser()
-    runtime_state = Path(os.environ.get("QZ_RUNTIME_STATE_PATH", str(var_dir / "run" / "qz-runtime-state.json"))).expanduser()
     codex_catalog_path = _codex_model_catalog_path()
     codex_config_path = _codex_config_path()
 
@@ -508,7 +507,6 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
         _record("codex_model_catalog", codex_catalog_path, source_layer="generated", classification="generated_codex_catalog"),
         _record("model_state", model_state, source_layer="runtime_state", classification="state_fallback", env_var="QZ_MODEL_STATE_PATH", default=str(var_dir / "model-state.json")),
         _record("backend_state", backend_state, source_layer="runtime_state", classification="state_fallback", env_var="QZ_BACKEND_STATE_PATH", default=str(var_dir / "backend-state.json")),
-        _record("runtime_state_snapshot", runtime_state, source_layer="runtime_state", classification="startup_snapshot", env_var="QZ_RUNTIME_STATE_PATH", default=str(var_dir / "run" / "qz-runtime-state.json")),
         _record("capture_dir", var_dir / "captures", source_layer="debug_replay", classification="captures"),
         _record("log_dir", var_dir / "logs", source_layer="debug", classification="logs"),
         _record("benchmark_summary", var_dir / "benchmarks" / "latest-summary.json", source_layer="debug_replay", classification="benchmark_cache"),

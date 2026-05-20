@@ -708,8 +708,11 @@ All three #46 close-out conditions are now met:
   - qz-doctor does not read qz-runtime-state.json ✅
   - Zero routing consumers of qz-runtime-state.json ✅
 
-Next: #46 close-out — remove atomic_write_json from qz-write-runtime-state,
-confirm /qz/config/effective is the authority, close #46.
+**#46 close-out (this commit):** CLOSED. qz-runtime-state.json no longer written.
+QZ_RUNTIME_STATE_PATH removed from qz-env. runtime_state_snapshot record removed
+from /qz/config/effective. qz-write-runtime-state updated to write solely to
+OperationalStore. Model carryover uses OperationalStore effective_model fact.
+2660 tests PASS. #46 closed.
 
 ## #37 next stream seam: proxy-local terminal suppression (Slice 2G)
 

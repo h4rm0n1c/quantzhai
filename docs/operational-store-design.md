@@ -196,8 +196,10 @@ be removed.
 - ✅ `qz-doctor` does NOT read JSON for stale-context checks (C.1 audit)
 - ✅ No other consumer reads it for routing decisions (C.1 audit, zero consumers)
 
-**Next:** Remove the `atomic_write_json` call from qz-write-runtime-state, confirm
-`/qz/config/effective` is the authority, and close #46.
+**#46 CLOSED.** `qz-runtime-state.json` no longer written (close-out slice).
+`QZ_RUNTIME_STATE_PATH` removed from qz-env. `runtime_state_snapshot` record
+removed from `/qz/config/effective`. `/qz/config/effective` (operational_store
+section) is now the authority for launcher startup events.
 
 ### 6.3 What does NOT change
 
@@ -343,11 +345,8 @@ test_qz_write_runtime_state_dual_write_when_enabled
 ## 11. Migration / compatibility constraints
 
 ```text
-- var/run/qz-runtime-state.json:  stays until close-out condition is met:
-    /qz/config/effective must show runtime events from OperationalStore,
-    AND qz-doctor must not need the JSON for stale-context checks.
-    Slice C.1 audit confirmed: qz-doctor does NOT read the JSON file.
-    Remaining condition: /qz/config/effective OperationalStore integration.
+- var/run/qz-runtime-state.json:  RETIRED (#46 close-out). No longer written.
+    /qz/config/effective (operational_store section) is the authority.
 - var/model-state.json:           not touched by OperationalStore in Phase 1
 - var/backend-state.json:         not touched by OperationalStore in Phase 1
 - BrainCaseDB (QZ_STATE_DB_PATH): untouched; separate module/schema/lifecycle
