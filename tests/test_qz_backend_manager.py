@@ -706,10 +706,16 @@ class BackendManagerLifecycleTests(unittest.TestCase):
 # GPU docker run args
 # ---------------------------------------------------------------------------
 
-class BuildDockerRunArgsGPUTests(unittest.TestCase):
-    """Verify GPU-related flags added by build_docker_run_args()."""
+class BuildDockerRunArgsHelperCompatTests(unittest.TestCase):
+    """Regression: build_docker_run_args() must be safe for qz-docker-root-helper.
 
-    def _mgr(self, explicit_nvidia_devices=False, device_exists=None):
+    The helper (sudo -n /usr/local/sbin/qz-docker-quantzhai) allowlists a fixed
+    set of docker run flags.  -e and --device are NOT in the allowlist.  Any
+    addition of those flags will cause rc=126 before the container launches.
+    This class guards that invariant.
+    """
+
+    def _mgr(self):
         return BackendManager(
             docker_cmd="docker",
             container_name="test-ctr",
@@ -722,57 +728,25 @@ class BuildDockerRunArgsGPUTests(unittest.TestCase):
             cache_ram=1024, cache_reuse=64, kv_key="q8_0", kv_value="f16",
             reasoning_budget="-1", reasoning_budget_message="Done.",
             spec_default=False,
-            explicit_nvidia_devices=explicit_nvidia_devices,
-            device_exists=device_exists,
         )
 
-    def test_nvidia_visible_devices_env_present(self):
+    def test_no_e_flags_by_default(self):
+        """Regression: -e must not appear — helper denies it (rc=126)."""
         args = self._mgr().build_docker_run_args()
-        e_flags = [args[i + 1] for i, a in enumerate(args) if a == "-e"]
-        self.assertTrue(
-            any("NVIDIA_VISIBLE_DEVICES=all" in f for f in e_flags),
-            f"-e NVIDIA_VISIBLE_DEVICES=all not found; -e values: {e_flags}",
-        )
+        self.assertNotIn("-e", args, "-e flag must not be passed to helper-wrapped docker")
 
-    def test_nvidia_driver_capabilities_env_present(self):
+    def test_no_device_flags_by_default(self):
+        """Regression: --device must not appear — helper denies it (rc=126)."""
         args = self._mgr().build_docker_run_args()
-        e_flags = [args[i + 1] for i, a in enumerate(args) if a == "-e"]
-        self.assertTrue(
-            any("NVIDIA_DRIVER_CAPABILITIES=compute,utility" in f for f in e_flags),
-            f"-e NVIDIA_DRIVER_CAPABILITIES=compute,utility not found; -e values: {e_flags}",
-        )
+        self.assertNotIn("--device", args, "--device flag must not be passed to helper-wrapped docker")
 
-    def test_explicit_nvidia_devices_added_when_enabled(self):
-        # Inject device_exists=always_true so test is host-independent.
-        args = self._mgr(
-            explicit_nvidia_devices=True,
-            device_exists=lambda _: True,
-        ).build_docker_run_args()
-        device_vals = [args[i + 1] for i, a in enumerate(args) if a == "--device"]
-        self.assertIn("/dev/nvidiactl", device_vals)
-        self.assertIn("/dev/nvidia0", device_vals)
-        self.assertIn("/dev/nvidia1", device_vals)
-        self.assertIn("/dev/nvidia-uvm", device_vals)
-        self.assertIn("/dev/nvidia-uvm-tools", device_vals)
+    def test_gpus_all_present(self):
+        args = self._mgr().build_docker_run_args()
+        self.assertIn("--gpus", args)
+        self.assertEqual(args[args.index("--gpus") + 1], "all")
 
-    def test_explicit_nvidia_devices_absent_when_disabled(self):
-        args = self._mgr(explicit_nvidia_devices=False).build_docker_run_args()
-        self.assertNotIn("--device", args)
-
-    def test_explicit_nvidia_devices_skips_missing_host_devices(self):
-        # device_exists returns False for nvidia1 only.
-        def _exists(path):
-            return path != "/dev/nvidia1"
-        args = self._mgr(
-            explicit_nvidia_devices=True,
-            device_exists=_exists,
-        ).build_docker_run_args()
-        device_vals = [args[i + 1] for i, a in enumerate(args) if a == "--device"]
-        self.assertIn("/dev/nvidia0", device_vals)
-        self.assertNotIn("/dev/nvidia1", device_vals)
-
-    def test_backend_args_still_appended_after_gpu_flags(self):
-        mgr = self._mgr(explicit_nvidia_devices=True, device_exists=lambda _: True)
+    def test_backend_args_still_appended(self):
+        mgr = self._mgr()
         full = mgr.build_docker_run_args()
         backend = mgr.build_backend_args()
         self.assertEqual(full[-len(backend):], backend)

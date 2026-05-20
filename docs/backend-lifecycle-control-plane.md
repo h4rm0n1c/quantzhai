@@ -544,7 +544,8 @@ From fully stopped state:
 | **B.1-audit** | ✅ 4 bugs fixed; docker_cmd documented; 5 new tests; 2929 pass |
 | **C-doc** | ✅ Operator guide, QZ_DOCKER_CMD guidance, status URLs documented |
 | **D-smoke** | Cold-start smoke test (§12) — **amended**: HTTP health is not enough; `gpu_offload_state` must not be `cpu_fallback`/`failed`; verify `nvidia-smi` shows llama/server GPU memory |
-| **D.1-gpu-fix** | ✅ GPU offload gate: NVIDIA env vars, explicit device passthrough, post-health log check, QZ_REQUIRE_GPU/QZ_GPU_LOG_TAIL/QZ_EXPLICIT_NVIDIA_DEVICES; 97 tests; 2953 pass |
+| **D.1-gpu-fix** | ✅ GPU offload gate: post-health log check, QZ_REQUIRE_GPU/QZ_GPU_LOG_TAIL; docker args unchanged (helper-compatible); 2953 pass |
+| **D.2-helper-compat** | ✅ Remove `-e`/`--device` flags added in D.1; they break qz-docker-root-helper (rc=126); restore original qz-up flag set |
 
 ---
 
@@ -618,7 +619,6 @@ scripts/qz-down --force
 | `QZ_DOCKER_CMD` | `docker` | Docker command; see §15.6 |
 | `QZ_REQUIRE_GPU` | `1` | Set to `0` to allow CPU fallback; with `1` (default), `phase=failed` if GPU offload is not confirmed from container logs |
 | `QZ_GPU_LOG_TAIL` | `1000` | Number of log lines fetched when checking GPU offload after health passes |
-| `QZ_EXPLICIT_NVIDIA_DEVICES` | `0` | Set to `1` to pass `--device /dev/nvidiactl /dev/nvidia0 /dev/nvidia1 /dev/nvidia-uvm /dev/nvidia-uvm-tools` explicitly; use as a fallback if CUDA init fails despite `--gpus all` |
 
 ### 15.6 QZ_DOCKER_CMD guidance
 
@@ -658,19 +658,17 @@ Failure patterns that trigger `phase=failed`:
 - `compiled without support for GPU offload`
 - `CPU_Mapped model buffer size` (model loaded onto host RAM)
 
-**Troubleshooting: CUDA init fails despite `--gpus all`**
+**Docker invocation compatibility**
 
-If you see `ggml_cuda_init: failed to initialize CUDA: initialization error` and
-`nvidia-smi` works inside the container, try:
+`build_docker_run_args()` uses the same flag set as the original `qz-up`:
+`--gpus all`, `--cap-add IPC_LOCK`, `--ulimit memlock=-1:-1`, `-p`, `--mount`.
+No `-e` or `--device` flags are added. The `qz-docker-root-helper` allowlist
+only permits the original flag set; `-e` and `--device` cause rc=126 before
+the container launches.
 
-```bash
-QZ_EXPLICIT_NVIDIA_DEVICES=1
-```
-
-This adds explicit `--device` flags for `/dev/nvidiactl`, `/dev/nvidia0`,
-`/dev/nvidia1`, `/dev/nvidia-uvm`, and `/dev/nvidia-uvm-tools` (only devices that
-exist on the host are passed). This is a fixed two-GPU assumption; on a one-GPU
-host, `/dev/nvidia1` is silently skipped.
+If a future deployment needs explicit `-e NVIDIA_VISIBLE_DEVICES` or `--device`
+passthrough, that requires a helper allowlist update first — not a BackendManager
+change alone.
 
 ### 15.7 Waiting for backend after qz-up
 

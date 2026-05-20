@@ -9,7 +9,6 @@ This module is import-safe: no Docker or network calls at import time.
 
 from __future__ import annotations
 
-import os
 import re
 import threading
 import time
@@ -179,14 +178,12 @@ class BackendManager:
         autostart: bool = True,
         require_gpu: bool = True,
         gpu_log_tail: int = 1000,
-        explicit_nvidia_devices: bool = False,
         health_check_interval: float = 5.0,
         health_check_timeout: float = 120.0,
         autostart_delay: float = 0.5,
         operational_store: Any = None,
         runner: Callable[..., tuple[int, str, str]] | None = None,
         health_checker: Callable[[str, float], bool] | None = None,
-        device_exists: Callable[[str], bool] | None = None,
     ) -> None:
         # Config — private; never exposed in snapshot or logs
         self._docker_cmd             = _safe_str(docker_cmd, "docker")
@@ -212,14 +209,12 @@ class BackendManager:
         self._spec_default           = bool(spec_default)
         self._require_gpu            = bool(require_gpu)
         self._gpu_log_tail           = int(gpu_log_tail)
-        self._explicit_nvidia_devices = bool(explicit_nvidia_devices)
         self._health_check_interval  = float(health_check_interval)
         self._health_check_timeout   = float(health_check_timeout)
         self._autostart_delay        = float(autostart_delay)
         self._operational_store      = operational_store
         self._runner                 = runner or _default_runner
         self._health_checker         = health_checker or _default_health_checker
-        self._device_exists          = device_exists if device_exists is not None else os.path.exists
 
         # Threading
         self._lock = threading.Lock()
@@ -400,25 +395,11 @@ class BackendManager:
             "--gpus", "all",
             "--cap-add", "IPC_LOCK",
             "--ulimit", "memlock=-1:-1",
-            "-e", "NVIDIA_VISIBLE_DEVICES=all",
-            "-e", "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
             "-p", f"{self._server_port}:8080",
             "--mount", f"type=bind,src={self._model_dir},dst=/models,readonly",
+            self._image,
+            "--models-dir", "/models",
         ]
-        if self._explicit_nvidia_devices:
-            # Explicit device passthrough: covers nvidiactl + up to two GPUs + UVM.
-            # Only passes devices that exist on the host; fixed two-GPU assumption
-            # for /dev/nvidia0 and /dev/nvidia1.
-            for dev in (
-                "/dev/nvidiactl",
-                "/dev/nvidia0",
-                "/dev/nvidia1",
-                "/dev/nvidia-uvm",
-                "/dev/nvidia-uvm-tools",
-            ):
-                if self._device_exists(dev):
-                    container_flags.extend(["--device", dev])
-        container_flags += [self._image, "--models-dir", "/models"]
         return cmd + container_flags + self.build_backend_args()
 
     def build_docker_rm_args(self, force: bool = True) -> list[str]:
