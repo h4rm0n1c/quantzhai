@@ -94,6 +94,7 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 | Runtime debugging | [Runtime observability notes](runtime-observability-notes.md) | Captures, logs, thoughts stream, telemetry, and runtime inspection. |
 | Telemetry pattern | [Provenance telemetry pattern](patterns/provenance-telemetry.md) | Doctrine for source/confidence/subtractive fields in telemetry and status components. Use for any new telemetry/status work. |
 | Tool policy | [Tool policy audit](tool-policy-audit.md) | #59 Slice A-audit: coercion/advice policy map for all tool types, budget enforcement gaps, telemetry coverage, handoff to #60/#61/#62. |
+| Local search inventory | [Local SearXNG inventory](web-search-local-searxng-inventory.md) | #60 Slice D0: engine taxonomy, Agent API retrieval surface, profile gap analysis, Slice D annotation approach. |
 | Search | [Search config contract](search-config-contract.md) | #39 Slice A-design: search.json contract, precedence rules, compat with SEARXNG_POLICY, /qz/config/effective exposure, slice roadmap. |
 | Search | [Search roadmap](search-roadmap.md) | Planned search capabilities, routing, and local SearXNG policy direction. |
 | Search | [Profiled web search pickup README](profiled-web-search-pickup-README.md) | Pickup notes for the profiled web-search implementation/policy work. |
