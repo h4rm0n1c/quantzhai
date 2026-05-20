@@ -1313,7 +1313,8 @@ class WebSearchRuntime:
         if cached is not None:
             return cached
 
-        params: dict = {"url": canonical}
+        effective_max_chars = max_chars if (isinstance(max_chars, int) and max_chars > 0) else self.max_retrieved_chars
+        params: dict = {"url": canonical, "max_chars": effective_max_chars}
         if retrieval_source:
             params["source"] = retrieval_source
         retrieve_url = self.searxng_base_url.rstrip("/") + "/retrieve?" + urllib.parse.urlencode(params)

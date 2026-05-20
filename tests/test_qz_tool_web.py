@@ -1369,5 +1369,122 @@ class WebSearchBudgetModeTests(unittest.TestCase):
         self.assertEqual(result["budget_mode"], "normal")
 
 
+class RetrieveMaxCharsParamTests(unittest.TestCase):
+    """Tests that _retrieve passes max_chars to /retrieve query string."""
+
+    MEDIAWIKI_RAW = {
+        "source": "pcgamingwiki",
+        "input": "https://www.pcgamingwiki.com/wiki/Half-Life_2",
+        "status": "ok",
+        "summary": "HL2 is a game.",
+        "fields": {"title": "Half-Life 2", "body_text": "A" * 40000, "body_text_truncated": False},
+        "freshness": {},
+        "agent_api": {"retriever": "fetch-mediawiki-page.py", "source": "pcgamingwiki",
+                      "input": "https://www.pcgamingwiki.com/wiki/Half-Life_2"},
+    }
+
+    def _captured_url(self, max_chars, mode=None, retrieval_source=""):
+        """Call _retrieve with the given max_chars and capture the URL passed to _http_fetch."""
+        raw_bytes = json.dumps(self.MEDIAWIKI_RAW).encode()
+        captured = []
+        def fake_fetch(url, timeout, accept):
+            captured.append(url)
+            return raw_bytes, "application/json", "https://x"
+        with patch("proxy.qz_tool_web._http_fetch", side_effect=fake_fetch):
+            rt = WebSearchRuntime(base_url="http://127.0.0.1:8890")
+            rt._retrieve("https://www.pcgamingwiki.com/wiki/Half-Life_2",
+                         retrieval_source=retrieval_source, max_chars=max_chars)
+        return captured[0] if captured else ""
+
+    def _captured_url_via_execute(self, budget_mode):
+        """Drive _retrieve via execute_web_search_call to get the URL with per-call budget."""
+        raw_bytes = json.dumps(self.MEDIAWIKI_RAW).encode()
+        captured = []
+        def fake_fetch(url, timeout, accept):
+            captured.append(url)
+            return raw_bytes, "application/json", "https://x"
+        with patch("proxy.qz_tool_web._http_fetch", side_effect=fake_fetch):
+            rt = WebSearchRuntime(base_url="http://127.0.0.1:8890")
+            call = {"type": "function_call", "call_id": "c", "name": "web_search",
+                    "arguments": json.dumps({
+                        "action": "retrieve",
+                        "url": "https://www.pcgamingwiki.com/wiki/Half-Life_2",
+                        "budget_mode": budget_mode,
+                        "retrieval_source": "mediawiki",
+                    })}
+            rt.execute_web_search_call(call, {"search": 0, "open_page": 0, "retrieve": 0}, set())
+        return captured[0] if captured else ""
+
+    def _parse_max_chars(self, url):
+        import urllib.parse
+        qs = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+        return int(qs["max_chars"][0]) if "max_chars" in qs else None
+
+    def test_quick_mode_sends_max_chars_6000(self):
+        from proxy.qz_tool_web import WEB_SEARCH_MODE_DEFAULTS
+        url = self._captured_url_via_execute("quick")
+        self.assertEqual(self._parse_max_chars(url),
+                         WEB_SEARCH_MODE_DEFAULTS["quick"]["max_retrieved_chars"])
+
+    def test_deep_mode_sends_max_chars_30000(self):
+        from proxy.qz_tool_web import WEB_SEARCH_MODE_DEFAULTS
+        url = self._captured_url_via_execute("deep")
+        self.assertEqual(self._parse_max_chars(url),
+                         WEB_SEARCH_MODE_DEFAULTS["deep"]["max_retrieved_chars"])
+
+    def test_audit_mode_sends_max_chars_60000(self):
+        from proxy.qz_tool_web import WEB_SEARCH_MODE_DEFAULTS
+        url = self._captured_url_via_execute("audit")
+        self.assertEqual(self._parse_max_chars(url),
+                         WEB_SEARCH_MODE_DEFAULTS["audit"]["max_retrieved_chars"])
+
+    def test_direct_max_chars_forwarded(self):
+        url = self._captured_url(max_chars=25000)
+        self.assertEqual(self._parse_max_chars(url), 25000)
+
+    def test_none_max_chars_uses_instance_default(self):
+        from proxy.qz_tool_web import WEB_SEARCH_MODE_DEFAULTS
+        url = self._captured_url(max_chars=None)
+        # Instance default from normal mode (default budget)
+        self.assertEqual(self._parse_max_chars(url),
+                         WEB_SEARCH_MODE_DEFAULTS["normal"]["max_retrieved_chars"])
+
+    def test_upstream_over_return_still_clamped_by_proxy(self):
+        """Even if upstream ignores max_chars hint, proxy-side _max_chars truncates."""
+        long_body = "B" * 50000
+        big_raw = dict(self.MEDIAWIKI_RAW)
+        big_raw = {**self.MEDIAWIKI_RAW,
+                   "fields": {**self.MEDIAWIKI_RAW["fields"], "body_text": long_body}}
+        raw_bytes = json.dumps(big_raw).encode()
+        with patch("proxy.qz_tool_web._http_fetch",
+                   return_value=(raw_bytes, "application/json", "https://x")):
+            rt = WebSearchRuntime(base_url="http://127.0.0.1:8890")
+            result = rt._retrieve("https://www.pcgamingwiki.com/wiki/Half-Life_2",
+                                  max_chars=6000)
+            self.assertTrue(result["ok"])
+            self.assertLessEqual(len(result["content"]), 6000)
+            self.assertTrue(result["truncated"])
+
+    def test_max_chars_not_in_model_output(self):
+        """max_chars param must not appear in model-visible tool output."""
+        raw_bytes = json.dumps(self.MEDIAWIKI_RAW).encode()
+        with patch("proxy.qz_tool_web._http_fetch",
+                   return_value=(raw_bytes, "application/json", "https://x")):
+            rt = WebSearchRuntime(base_url="http://127.0.0.1:8890")
+            call = {"type": "function_call", "call_id": "c", "name": "web_search",
+                    "arguments": json.dumps({
+                        "action": "retrieve",
+                        "url": "https://www.pcgamingwiki.com/wiki/Half-Life_2",
+                        "budget_mode": "deep",
+                    })}
+            _, to, _ = rt.execute_web_search_call(
+                call, {"search": 0, "open_page": 0, "retrieve": 0}, set()
+            )
+            serialized = to["output"]
+            self.assertNotIn("127.0.0.1", serialized)
+            self.assertNotIn("8890", serialized)
+            self.assertNotIn("/retrieve?", serialized)
+
+
 if __name__ == "__main__":
     unittest.main()
