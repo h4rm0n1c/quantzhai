@@ -240,6 +240,41 @@ class SourceAnnotationTests(unittest.TestCase):
         self.assertEqual(result[0]["source_kind"], "source_repo")
         self.assertEqual(result[0]["trust_hint"], "high")
 
+    def test_retrieval_retriever_exposed_in_annotation(self):
+        """retrieval_retriever should appear in annotation for model use."""
+        ret = {"available": True, "source": "character-card",
+               "retriever": "fetch-character-card.py",
+               "endpoint": "http://127.0.0.1:8890/retrieve?url=x"}
+        a = self._ann("https://taverncard.com/cards/1", ret)
+        self.assertEqual(a.get("retrieval_retriever"), "fetch-character-card.py")
+
+    def test_retrieval_retriever_absent_when_not_retrievable(self):
+        ret = {"available": False}
+        a = self._ann("https://taverncard.com/cards/1", ret)
+        self.assertNotIn("retrieval_retriever", a)
+        self.assertFalse(a.get("retrieval_available"))
+
+    def test_result_entry_has_no_raw_retrieval_dict(self):
+        """Payload result entries must not contain the raw retrieval dict (with endpoint)."""
+        from proxy.qz_tool_web import _annotate_source
+        ret = {"available": True, "source": "fse",
+               "endpoint": "http://127.0.0.1:8890/retrieve?url=x"}
+        ann = _annotate_source("https://fse.anthro.fr/stories/123", ret)
+        # The annotation dict must not contain the raw retrieval dict
+        self.assertNotIn("retrieval", ann)
+        self.assertNotIn("endpoint", ann)
+        self.assertNotIn("127.0.0.1", json.dumps(ann))
+
+    def test_unique_sources_carries_retrieval_retriever(self):
+        from proxy.qz_tool_web import _unique_sources
+        sources = [{"url": "https://taverncard.com/cards/1", "title": "t",
+                    "source_kind": "character_card",
+                    "retrieval_available": True,
+                    "retrieval_source": "character-card",
+                    "retrieval_retriever": "fetch-character-card.py"}]
+        result = _unique_sources(sources)
+        self.assertEqual(result[0].get("retrieval_retriever"), "fetch-character-card.py")
+
     def test_unique_sources_no_retrieval_endpoint(self):
         from proxy.qz_tool_web import _unique_sources
         sources = [{"url": "https://taverncard.com/cards/1", "title": "t",

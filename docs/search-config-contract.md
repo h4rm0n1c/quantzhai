@@ -486,7 +486,7 @@ annotations derived from the result URL + metadata without external lookups.
 | ~~**D1-rescope**~~ | ~~Add character_cards/furry/gaming_wikis/archives profiles; fix broad~~ |
 | ~~**D1.1**~~ | ~~Remove auto_keywords/auto_precedence; cancel keyword-routing plan~~ |
 | ~~**D2-impl**~~ | ~~Two-layer source annotations in `_query_searxng()` + `_unique_sources()`~~ |
-| **D2.1** | Audit annotation accuracy |
+| ~~**D2.1**~~ | ~~Audit: add retrieval_retriever; confirm endpoint redaction; define retrieve action~~ |
 | **E-audit** | Live smoke with `http://127.0.0.1:8890`; annotated results in qz-thoughts |
 | **Close-out** | Wire 8890 as SEARXNG_BASE_URL example; update acceptance; close issue |
 
@@ -545,6 +545,55 @@ Only present when QuantZhai is using the 8890 Agent API endpoint.
 1. If `publishedDate` is present in the result, parse year from it.
 2. Otherwise, extract a 4-digit year from the URL path.
 3. Current year → `recent`; year ≥ 2 years ago → `dated`; no signal → `unknown`.
+
+---
+
+---
+
+### 60.D2.1 Retrieval handoff design
+
+**Audit findings (D2.1):**
+
+1. `payload["results"]` entries do NOT contain raw `retrieval.endpoint` — confirmed. The entry dict is built from explicit fields; `_annotate_source()` adds only safe annotation fields.
+2. `sources` list does NOT contain `retrieval.endpoint` — confirmed.
+3. `retrieval_retriever` was missing from D2 — added in D2.1. It identifies the retrieval script (`fetch-character-card.py` etc.) without exposing a network URL.
+4. No localhost URL leaks in any model-facing output — confirmed.
+5. Annotations appear in both `payload["results"]` and `sources` list — confirmed.
+6. No extra network calls — confirmed.
+7. No auto keyword routing — confirmed.
+
+**Safe retrieval annotation set (final):**
+
+```json
+{
+  "retrieval_available": true,
+  "retrieval_source": "character-card",
+  "retrieval_retriever": "fetch-character-card.py"
+}
+```
+
+`retrieval.endpoint` is intentionally NOT included. The model never sees a raw `http://127.0.0.1:8890/retrieve?url=...` URL.
+
+**Retrieve action design (for future E slice):**
+
+The model should be able to retrieve content for a single selected result using a new `web_search` action `"retrieve"`:
+
+```json
+{
+  "action": "retrieve",
+  "url": "https://taverncard.com/cards/123",
+  "retrieval_source": "character-card"
+}
+```
+
+The proxy calls `http://127.0.0.1:8890/retrieve?url=<url>&source=<source>` server-side.
+The model never constructs or sees the localhost endpoint URL.
+
+Budget: a separate `max_retrievals_per_turn` limit (default 2), configurable in `search.json routing`.
+
+Operator telemetry: `web_search_retrieve_started` / `web_search_retrieve_completed` (same pattern as budget-exceeded events).
+
+This is NOT in #60. It should be opened as a new issue when ready.
 
 ---
 

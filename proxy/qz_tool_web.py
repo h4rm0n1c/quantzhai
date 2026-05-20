@@ -253,7 +253,7 @@ def _unique_sources(sources):
         entry: dict = {"url": url, "title": title or url}
         # Carry through safe annotation fields if already present.
         for _af in ("domain", "source_kind", "trust_hint", "freshness_hint",
-                    "retrieval_available", "retrieval_source"):
+                    "retrieval_available", "retrieval_source", "retrieval_retriever"):
             if _af in source:
                 entry[_af] = source[_af]
         out.append(entry)
@@ -410,6 +410,10 @@ def _annotate_source(url: str, retrieval: dict | None = None,
         rsource = retrieval.get("source")
         if rsource:
             ann["retrieval_source"] = str(rsource)
+        rretriever = retrieval.get("retriever")
+        if rretriever:
+            ann["retrieval_retriever"] = str(rretriever)
+        # retrieval.endpoint is deliberately NOT included (localhost URL)
     return ann
 
 
@@ -1097,7 +1101,7 @@ class WebSearchRuntime:
                         continue
                     src: dict = {"url": r.get("url"), "title": r.get("title")}
                     for _af in ("domain", "source_kind", "trust_hint", "freshness_hint",
-                                "retrieval_available", "retrieval_source"):
+                                "retrieval_available", "retrieval_source", "retrieval_retriever"):
                         if _af in r:
                             src[_af] = r[_af]
                     sources.append(src)

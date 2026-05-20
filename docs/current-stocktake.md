@@ -122,7 +122,7 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 | #58 | Always-HTTP qz-codex bootstrap | **CLOSED** (D2/D2.1/D3 complete; qz-codex always uses HTTP; #56 remains separate) |
 | #39 | Split search routing policy into search.json | **CLOSED** — search.json primary; legacy search-policy.json compat kept; all criteria PASS |
 | #59 | Tool coercion/advice policy audit | **Slice A-audit complete** — docs/tool-policy-audit.md; #60–#62 can start |
-| #60 | web_search budgets, routing, source quality | **Slice D2 complete** — source annotations live; D2.1 audit next |
+| #60 | web_search budgets, routing, source quality | **Slice D2.1 complete** — annotations audited; retrieval_retriever added; retrieve action designed; E-audit next |
 | #61 | Advisory policy for native exec/tool use | **OPEN** — depends on #59 |
 | #62 | apply_patch coercion and advisory audit | **OPEN** — depends on #59 |
 | #52 | Backend-confirmed VRAM allocator metrics | **upstream-blocked** (TurboQuant side) |
