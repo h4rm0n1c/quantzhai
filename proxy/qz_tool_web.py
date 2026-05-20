@@ -1085,9 +1085,15 @@ class WebSearchRuntime:
                 v = fields.get(k)
                 if v is not None and len(meta) < 6:
                     meta[k] = v[:10] if isinstance(v, list) else v
-            # Freshness from freshness dict
+            # Freshness: prefer freshness dict, fall back to fields timestamps (FSE)
             freshness = raw.get("freshness") or {}
-            src_updated = str(freshness.get("source_updated_at") or freshness.get("last_seen") or "")
+            src_updated = str(
+                freshness.get("source_updated_at")
+                or freshness.get("last_seen")
+                or fields.get("updated_at")
+                or fields.get("published_at")
+                or ""
+            )
             freshness_hint = _freshness_hint(canonical_url, src_updated or None)
         else:
             # Character-card format
