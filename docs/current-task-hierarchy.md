@@ -127,14 +127,12 @@ Stream watchdog and signal planning (#40, #42, now closed)
   - qz_stream_watchdog.py detects no-output and terminal-after-output timeouts
   - qz-thoughts renders non-ok stream_terminal_classified rows
   - qz_feedback.py exists for bounded future signal adoption
-  - Runtime signal migration is deferred until after #2 unless a concrete bug
-    requires touching that path
+  - Runtime signal migration is deferred; needs a concrete bug or new scoped issue
 
 Foundation audit before SQLite
   - docs/foundation-audit-before-sqlite.md maps gravity wells, signal paths,
-    duplicated/underused signals, Codex feedback gaps, and #2 prerequisites
-  - #2 may start as parser-boundary SQLite only; do not turn it into a broad
-    runtime signal store or model-visible memory path
+    duplicated/underused signals, and Codex feedback gaps
+  - #2 CLOSED not-planned; BrainCaseDB (#53/#54) and OperationalStore (#46) deliver the substrate
 ```
 
 ## Recently completed (2026-05-14 run — profiles/sandbox/smoke)
@@ -232,13 +230,10 @@ Schema: version metadata only, PRAGMA user_version = 1.
 No parser facts, runtime signal history, stream telemetry, recovery/backoff
 state, or model-visible memory are persisted yet.
 
-#2 PARKED — waiting for StateRecord / memory-write API design.
-Next implementation slice is NOT automatic parser-fact ingestion.
-BrainCaseDB must not store data merely because QuantZhai observed it.
-All write paths must be explicit (StateRecord, promotion, user-approved save,
-or provenance attached to an actual stored memory/state record).
-Do not proceed with sessions/turns/requests tables until the explicit
-memory/state write API design is settled.
+#2 CLOSED not-planned — original automatic-session/request-log shape rejected.
+BrainCaseDB (explicit writes, model-facing memory) delivered by #53/#54.
+OperationalStore (runtime events/facts) delivered by #46.
+All existing doctrine still applies: no automatic ingestion, explicit writes only.
 ```
 
 Scope:
@@ -396,8 +391,8 @@ V1 COMPLETE (#3/#4/#43 closed).
   Live smoke: scripts/qz-smoke-repeated-read
   Advisory, stateless, input-history-seeded. No BrainCase writes. No persistence.
 
-Do not implement persistent v2 until SQLite substrate and session identity scope
-are proven. V2 is blocked on #2 / session key design.
+Do not implement persistent v2 without a new scoped issue defining session identity,
+retention, non-goals, and explicit non-BrainCaseDB/non-OperationalStore boundaries.
 ```
 
 V1 likely files:

@@ -109,7 +109,7 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 
 | # | Title | Classification |
 |---|---|---|
-| #2 | Add optional Phase 1 SQLite storage substrate | **parked** (BrainCaseDB done via #53/#54; #2 may be closed or refocused) |
+| #2 | Add optional Phase 1 SQLite storage substrate | **CLOSED (not planned)** — original automatic-ingestion shape rejected; BrainCaseDB delivered by #53/#54 |
 | #53 | BrainCase memory tool API | **CLOSED** (Slices A–I.1 complete) |
 | #54 | BrainCase retention/lifetime policy | **CLOSED** (Slices A–D complete) |
 | #3/#4/#43 | Repeated-read v1 (parser, integration, smoke) | **CLOSED** (complete; advisory stateless v1 live) |
@@ -127,11 +127,9 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 
 ### Notes on each
 
-**#2** — BrainCaseDB storage substrate. #53 and #54 delivered the full BrainCase
-tool plane (render/recall/write_candidate) and retention policy on top of it.
-#2 may be closed or converted to a tracking issue; BrainCaseDB is stable and
-proven. Do not add new BrainCase features here. BrainCase work is paused.
-See `docs/braincase-memory-tool-api.md`, `docs/braincase-retention-policy.md`.
+**#2** — CLOSED (not planned). Original automatic-session/request-log shape was
+rejected. BrainCaseDB substrate delivered under #53/#54; OperationalStore for
+runtime facts under #46. Do not reopen; future work needs scoped concrete issues.
 
 **#53** — CLOSED. BrainCase memory tool API: render/recall/write_candidate,
 operator review CLI, candidate write, retention policy evaluator, prune CLI.
@@ -222,11 +220,10 @@ G. #3/#4/#43  Repeated-read v1 — CLOSED
 COMPLETED (all CLOSED):
   #58 #57 #56 #5 #37 #53 #54 #3/#4/#43 #46 #51 #39
 
-NEXT — no active engineering blocker; options in priority order:
-  A. Decide #2 fate: BrainCaseDB stable; #2 may be closed or refocused.
-  B. #8 research RFC if a contained compaction experiment is wanted.
-  C. #52 waits on TurboQuant upstream; no QuantZhai action.
-  D. General polish or new features as direction warrants.
+NEXT — no active engineering blocker; options:
+  A. #8 research RFC if a contained compaction experiment is wanted.
+  B. #52 waits on TurboQuant upstream; no QuantZhai action.
+  C. General polish or new feature work as direction warrants.
 ```
 
 ---
@@ -235,9 +232,8 @@ NEXT — no active engineering blocker; options in priority order:
 
 | # | Blocked by | Action |
 |---|---|---|
-| #2 | No active consumer yet | Decide: close or refocus; BrainCaseDB stable |
-| #52 | TurboQuant | Wait; no QuantZhai action needed |
 | #8 | Research decision | Keep as RFC; contained experiment when ready |
+| #52 | TurboQuant | Wait; no QuantZhai action needed |
 
 ---
 
@@ -318,6 +314,12 @@ qz-codex remote bootstrap (#57)
     TOML-escaped values. Co-located mode unchanged.
   → Do not reopen unless a real production bug appears.
   → Optional follow-up: live two-host LAN smoke test (manual).
+
+Phase 1 SQLite operational substrate (#2)
+  → CLOSED not-planned. Original automatic-session/request-log shape rejected.
+  → BrainCaseDB (explicit writes only, model-facing memory) delivered by #53/#54.
+  → OperationalStore (runtime events/facts) delivered by #46.
+  → Do not reopen. Future work needs scoped concrete issues with explicit non-goals.
 
 LimbiCore/memory_domain/SQLite planning (#7)
   → CLOSED not-planned. Superseded by #53/#54 (BrainCase), #46 (OperationalStore),
