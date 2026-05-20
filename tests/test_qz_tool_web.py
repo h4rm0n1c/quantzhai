@@ -92,6 +92,165 @@ class WebSearchRuntimeTests(unittest.TestCase):
         self.assertIn("repeated search", payload["error"])
 
 
+class SourceAnnotationTests(unittest.TestCase):
+    """Tests for two-layer web_search source annotations — #60 Slice D2."""
+
+    def _ann(self, url, retrieval=None, published_date=None):
+        from proxy.qz_tool_web import _annotate_source
+        return _annotate_source(url, retrieval, published_date)
+
+    # --- Layer 1: domain-based ---
+
+    def test_official_docs_python(self):
+        a = self._ann("https://docs.python.org/3/library/pathlib.html")
+        self.assertEqual(a["source_kind"], "official_docs")
+        self.assertEqual(a["trust_hint"], "high")
+
+    def test_official_docs_mdn(self):
+        a = self._ann("https://developer.mozilla.org/en-US/docs/Web/API")
+        self.assertEqual(a["source_kind"], "official_docs")
+        self.assertEqual(a["trust_hint"], "high")
+
+    def test_source_repo_github(self):
+        a = self._ann("https://github.com/owner/repo")
+        self.assertEqual(a["source_kind"], "source_repo")
+        self.assertEqual(a["trust_hint"], "high")
+
+    def test_q_and_a_stackoverflow(self):
+        a = self._ann("https://stackoverflow.com/questions/12345/some-question")
+        self.assertEqual(a["source_kind"], "q_and_a")
+        self.assertEqual(a["trust_hint"], "medium")
+
+    def test_package_registry_pypi(self):
+        a = self._ann("https://pypi.org/project/requests/")
+        self.assertEqual(a["source_kind"], "package_registry")
+        self.assertEqual(a["trust_hint"], "high")
+
+    def test_academic_arxiv(self):
+        a = self._ann("https://arxiv.org/abs/2303.08774")
+        self.assertEqual(a["source_kind"], "academic")
+        self.assertEqual(a["trust_hint"], "high")
+
+    def test_encyclopedia_wikipedia(self):
+        a = self._ann("https://en.wikipedia.org/wiki/Python_(programming_language)")
+        self.assertEqual(a["source_kind"], "encyclopedia")
+        self.assertEqual(a["trust_hint"], "medium")
+
+    def test_gaming_wiki_pcgamingwiki(self):
+        a = self._ann("https://www.pcgamingwiki.com/wiki/Half-Life_2")
+        self.assertEqual(a["source_kind"], "gaming_wiki")
+        self.assertEqual(a["trust_hint"], "medium")
+
+    def test_unknown_domain(self):
+        a = self._ann("https://some-random-blog.example.com/post")
+        self.assertEqual(a["source_kind"], "unknown")
+        self.assertEqual(a["trust_hint"], "unknown")
+
+    def test_domain_field_present(self):
+        a = self._ann("https://docs.python.org/3/")
+        self.assertEqual(a["domain"], "docs.python.org")
+
+    # --- Layer 2: retrieval metadata ---
+
+    def test_character_card_retrieval_overrides(self):
+        ret = {"available": True, "source": "character-card"}
+        a = self._ann("https://aicharactercards.com/charactercards/foo/bar/", ret)
+        self.assertEqual(a["source_kind"], "character_card")
+        self.assertEqual(a["trust_hint"], "low")
+        self.assertTrue(a["retrieval_available"])
+        self.assertEqual(a["retrieval_source"], "character-card")
+
+    def test_fse_retrieval_gives_prose_archive(self):
+        ret = {"available": True, "source": "fse"}
+        a = self._ann("https://fse.anthro.fr/stories/12345-some-story", ret)
+        self.assertEqual(a["source_kind"], "prose_archive")
+        self.assertTrue(a["retrieval_available"])
+
+    def test_furbooru_retrieval_gives_furry_community(self):
+        ret = {"available": True, "source": "furbooru"}
+        a = self._ann("https://furbooru.org/images/12345", ret)
+        self.assertEqual(a["source_kind"], "furry_community")
+
+    def test_mediawiki_pcgamingwiki_gives_gaming_wiki(self):
+        ret = {"available": True, "source": "mediawiki"}
+        a = self._ann("https://www.pcgamingwiki.com/wiki/Half-Life_2", ret)
+        self.assertEqual(a["source_kind"], "gaming_wiki")
+        self.assertEqual(a["trust_hint"], "medium")
+
+    def test_mediawiki_alliedmodders_gives_official_docs(self):
+        ret = {"available": True, "source": "mediawiki"}
+        a = self._ann("https://wiki.alliedmods.net/SourceMod_Scripting", ret)
+        self.assertEqual(a["source_kind"], "official_docs")
+        self.assertEqual(a["trust_hint"], "high")
+
+    def test_bitmagnet_retrieval_gives_local_index(self):
+        ret = {"available": True, "source": "bitmagnet"}
+        a = self._ann("http://127.0.0.1:3333/torrents/abc123", ret)
+        self.assertEqual(a["source_kind"], "local_index")
+        self.assertEqual(a["trust_hint"], "low")
+
+    def test_retrieval_endpoint_not_exposed(self):
+        ret = {
+            "available": True,
+            "source": "character-card",
+            "endpoint": "http://127.0.0.1:8890/retrieve?url=https://...",
+        }
+        a = self._ann("https://taverncard.com/cards/123", ret)
+        self.assertNotIn("endpoint", a)
+        self.assertNotIn("retrieval_endpoint", a)
+        # no localhost URL in any string value
+        ann_str = json.dumps(a)
+        self.assertNotIn("127.0.0.1", ann_str)
+
+    def test_retrieval_available_false_when_not_available(self):
+        ret = {"available": False, "reason": "unsupported host"}
+        a = self._ann("https://example.com/page", ret)
+        self.assertFalse(a["retrieval_available"])
+        self.assertNotIn("retrieval_source", a)
+
+    # --- Freshness ---
+
+    def test_freshness_recent_from_url_year(self):
+        from proxy.qz_tool_web import _freshness_hint
+        self.assertEqual(_freshness_hint("https://example.com/2026/post", None), "recent")
+
+    def test_freshness_dated_from_url_year(self):
+        from proxy.qz_tool_web import _freshness_hint
+        self.assertEqual(_freshness_hint("https://example.com/2020/post", None), "dated")
+
+    def test_freshness_recent_from_published_date(self):
+        from proxy.qz_tool_web import _freshness_hint
+        self.assertEqual(_freshness_hint("https://example.com/", "2026-03-15"), "recent")
+
+    def test_freshness_dated_from_published_date(self):
+        from proxy.qz_tool_web import _freshness_hint
+        self.assertEqual(_freshness_hint("https://example.com/", "2019-01-01"), "dated")
+
+    def test_freshness_unknown_no_signal(self):
+        from proxy.qz_tool_web import _freshness_hint
+        self.assertEqual(_freshness_hint("https://example.com/no-date-here", None), "unknown")
+
+    # --- sources list safety ---
+
+    def test_unique_sources_carries_annotation_fields(self):
+        from proxy.qz_tool_web import _unique_sources
+        sources = [{"url": "https://github.com/x/y", "title": "repo",
+                    "source_kind": "source_repo", "trust_hint": "high"}]
+        result = _unique_sources(sources)
+        self.assertEqual(result[0]["source_kind"], "source_repo")
+        self.assertEqual(result[0]["trust_hint"], "high")
+
+    def test_unique_sources_no_retrieval_endpoint(self):
+        from proxy.qz_tool_web import _unique_sources
+        sources = [{"url": "https://taverncard.com/cards/1", "title": "t",
+                    "source_kind": "character_card",
+                    "retrieval_endpoint": "http://127.0.0.1:8890/retrieve?url=x"}]
+        result = _unique_sources(sources)
+        self.assertNotIn("retrieval_endpoint", result[0])
+        out_str = json.dumps(result)
+        self.assertNotIn("127.0.0.1", out_str)
+
+
 class WebSearchBudgetConfigTests(unittest.TestCase):
     """Tests for search.json routing budget wiring — #60 Slice B."""
 

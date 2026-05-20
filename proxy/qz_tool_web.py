@@ -250,11 +250,167 @@ def _unique_sources(sources):
         if key in seen:
             continue
         seen.add(key)
-        out.append({
-            "url": url,
-            "title": title or url,
-        })
+        entry: dict = {"url": url, "title": title or url}
+        # Carry through safe annotation fields if already present.
+        for _af in ("domain", "source_kind", "trust_hint", "freshness_hint",
+                    "retrieval_available", "retrieval_source"):
+            if _af in source:
+                entry[_af] = source[_af]
+        out.append(entry)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Source annotation helpers
+# ---------------------------------------------------------------------------
+
+def _extract_domain(url: str) -> str:
+    """Return the netloc hostname (lower-case, no port) from a URL."""
+    try:
+        host = urllib.parse.urlsplit(url.strip()).netloc.lower()
+        return host.split(":")[0] if ":" in host else host
+    except Exception:
+        return ""
+
+
+# Layer-1 domain → (source_kind, trust_hint)
+_DOMAIN_SOURCE_KIND: dict = {
+    # Official docs
+    "docs.python.org": ("official_docs", "high"),
+    "developer.mozilla.org": ("official_docs", "high"),
+    "learn.microsoft.com": ("official_docs", "high"),
+    "docs.microsoft.com": ("official_docs", "high"),
+    "developer.apple.com": ("official_docs", "high"),
+    "docs.oracle.com": ("official_docs", "high"),
+    "wiki.alliedmods.net": ("official_docs", "high"),
+    "wiki.teamfortress.com": ("official_docs", "high"),
+    "developer.valvesoftware.com": ("official_docs", "high"),
+    # Source repos
+    "github.com": ("source_repo", "high"),
+    "gitlab.com": ("source_repo", "high"),
+    "codeberg.org": ("source_repo", "high"),
+    "sourcehut.org": ("source_repo", "high"),
+    "gitea.com": ("source_repo", "high"),
+    "bitbucket.org": ("source_repo", "high"),
+    # Q&A
+    "stackoverflow.com": ("q_and_a", "medium"),
+    "superuser.com": ("q_and_a", "medium"),
+    "askubuntu.com": ("q_and_a", "medium"),
+    "discuss.python.org": ("q_and_a", "medium"),
+    "serverfault.com": ("q_and_a", "medium"),
+    # Package registries
+    "pypi.org": ("package_registry", "high"),
+    "npmjs.com": ("package_registry", "high"),
+    "crates.io": ("package_registry", "high"),
+    "lib.rs": ("package_registry", "high"),
+    "hub.docker.com": ("package_registry", "high"),
+    "pkg.go.dev": ("package_registry", "high"),
+    "rubygems.org": ("package_registry", "high"),
+    # Academic
+    "arxiv.org": ("academic", "high"),
+    "pubmed.ncbi.nlm.nih.gov": ("academic", "high"),
+    "semanticscholar.org": ("academic", "high"),
+    # Encyclopedia
+    "wikipedia.org": ("encyclopedia", "medium"),
+    "en.wikipedia.org": ("encyclopedia", "medium"),
+    "wikibooks.org": ("encyclopedia", "medium"),
+    # Gaming wikis
+    "www.pcgamingwiki.com": ("gaming_wiki", "medium"),
+    "pcgamingwiki.com": ("gaming_wiki", "medium"),
+    # Character cards (domain-based)
+    "www.taverncard.com": ("character_card", "low"),
+    "taverncard.com": ("character_card", "low"),
+    "aicharactercards.com": ("character_card", "low"),
+    "www.aicharactercards.com": ("character_card", "low"),
+    # Furry community (domain-based)
+    "fse.anthro.fr": ("furry_community", "low"),
+    "furbooru.org": ("furry_community", "low"),
+    "www.furbooru.org": ("furry_community", "low"),
+    "e926.net": ("furry_community", "low"),
+    "www.e926.net": ("furry_community", "low"),
+    # Hackernews/community
+    "news.ycombinator.com": ("forum", "low"),
+    "lobste.rs": ("forum", "low"),
+    "reddit.com": ("forum", "low"),
+    "www.reddit.com": ("forum", "low"),
+}
+
+# Layer-2 retrieval.source → (source_kind, trust_hint)
+_RETRIEVAL_SOURCE_KIND: dict = {
+    "character-card": ("character_card", "low"),
+    "fse": ("prose_archive", "low"),
+    "furbooru": ("furry_community", "low"),
+    "valve-developer-community": ("official_docs", "high"),
+    "bitmagnet": ("local_index", "low"),
+}
+
+# mediawiki retrieval: domain-specific override
+_MEDIAWIKI_DOMAIN_KIND: dict = {
+    "pcgamingwiki.com": ("gaming_wiki", "medium"),
+    "www.pcgamingwiki.com": ("gaming_wiki", "medium"),
+    "wiki.alliedmods.net": ("official_docs", "high"),
+    "wiki.teamfortress.com": ("official_docs", "high"),
+    "developer.valvesoftware.com": ("official_docs", "high"),
+}
+
+
+def _source_kind_and_trust(domain: str, retrieval: dict | None) -> tuple[str, str]:
+    """Return (source_kind, trust_hint), preferring Layer 2 retrieval metadata."""
+    if retrieval and isinstance(retrieval, dict) and retrieval.get("available"):
+        rsource = str(retrieval.get("source") or "")
+        if rsource == "mediawiki":
+            # mediawiki: resolve by domain
+            if domain in _MEDIAWIKI_DOMAIN_KIND:
+                return _MEDIAWIKI_DOMAIN_KIND[domain]
+            return "wiki", "medium"
+        if rsource in _RETRIEVAL_SOURCE_KIND:
+            return _RETRIEVAL_SOURCE_KIND[rsource]
+    # Layer 1: domain lookup
+    if domain in _DOMAIN_SOURCE_KIND:
+        return _DOMAIN_SOURCE_KIND[domain]
+    return "unknown", "unknown"
+
+
+def _freshness_hint(url: str, published_date: str | None) -> str:
+    """Derive freshness from publishedDate then URL year. Returns recent/dated/unknown."""
+    import datetime as _dt, re as _re
+    current_year = _dt.date.today().year
+    # Try publishedDate
+    for src in (published_date,):
+        if not src:
+            continue
+        m = _re.search(r"\b(20\d{2})\b", str(src))
+        if m:
+            y = int(m.group(1))
+            return "recent" if y >= current_year - 1 else "dated"
+    # Try URL path year
+    m = _re.search(r"(?<![0-9])(20\d{2})(?![0-9])", url or "")
+    if m:
+        y = int(m.group(1))
+        return "recent" if y >= current_year - 1 else "dated"
+    return "unknown"
+
+
+def _annotate_source(url: str, retrieval: dict | None = None,
+                     published_date: str | None = None) -> dict:
+    """Return source annotation fields for one result.
+
+    Never exposes retrieval.endpoint (localhost URL).
+    """
+    domain = _extract_domain(url)
+    source_kind, trust_hint = _source_kind_and_trust(domain, retrieval)
+    ann: dict = {
+        "domain": domain,
+        "source_kind": source_kind,
+        "trust_hint": trust_hint,
+        "freshness_hint": _freshness_hint(url, published_date),
+    }
+    if retrieval and isinstance(retrieval, dict):
+        ann["retrieval_available"] = bool(retrieval.get("available"))
+        rsource = retrieval.get("source")
+        if rsource:
+            ann["retrieval_source"] = str(rsource)
+    return ann
 
 
 def _now_float():
@@ -613,14 +769,18 @@ class WebSearchRuntime:
             if not item_url or item_url in seen:
                 continue
             seen.add(item_url)
-            results.append({
+            pub_date = item.get("publishedDate") or item.get("pubdate")
+            retrieval_meta = item.get("retrieval") if isinstance(item.get("retrieval"), dict) else None
+            entry: dict = {
                 "title": _normalize_ws(item.get("title") or "") or item_url,
                 "url": item_url,
                 "snippet": _truncate(_normalize_ws(item.get("content") or ""), 400),
                 "engine": item.get("engine"),
                 "engines": item.get("engines") or [],
-                "published_date": item.get("publishedDate") or item.get("pubdate"),
-            })
+                "published_date": pub_date,
+            }
+            entry.update(_annotate_source(item_url, retrieval_meta, pub_date))
+            results.append(entry)
             if len(results) >= max(1, min(int(top_k or WEB_SEARCH_MAX_RESULTS), WEB_SEARCH_MAX_RESULTS)):
                 break
 
@@ -930,7 +1090,17 @@ class WebSearchRuntime:
                     engines=args.get("engines"),
                     top_k=args.get("top_k") or self.max_results_per_query,
                 )
-                sources = [{"url": r.get("url"), "title": r.get("title")} for r in payload.get("results") or []]
+                # Build sources with safe annotation fields; never expose retrieval.endpoint.
+                sources = []
+                for r in payload.get("results") or []:
+                    if not isinstance(r, dict):
+                        continue
+                    src: dict = {"url": r.get("url"), "title": r.get("title")}
+                    for _af in ("domain", "source_kind", "trust_hint", "freshness_hint",
+                                "retrieval_available", "retrieval_source"):
+                        if _af in r:
+                            src[_af] = r[_af]
+                    sources.append(src)
 
         elif action == "open_page":
             if counters["open_page"] >= self.max_page_opens_per_turn:
