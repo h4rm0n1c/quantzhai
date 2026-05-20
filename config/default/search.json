@@ -115,6 +115,8 @@
     "max_results": 8,
     "max_searches_per_turn": 4,
     "max_page_opens_per_turn": 3,
+    "max_retrievals_per_turn": 3,
+    "max_retrieved_chars": 6000,
     "dedup_by_canonical_url": true
   },
 

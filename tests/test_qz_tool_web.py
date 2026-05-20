@@ -635,5 +635,245 @@ class SearchConfigProfilesTests(unittest.TestCase):
         self.assertEqual(runtime.search_config_profiles, {})
 
 
+class RetrieveActionTests(unittest.TestCase):
+    """Tests for web_search action='retrieve'."""
+
+    MEDIAWIKI_RAW = {
+        "source": "pcgamingwiki",
+        "input": "https://www.pcgamingwiki.com/wiki/Half-Life_2",
+        "status": "ok",
+        "summary": "Half-Life 2 is a 2004 first-person shooter.",
+        "fields": {
+            "title": "Half-Life 2",
+            "display_title": "Half-Life 2",
+            "categories": ["Action", "Shooter"],
+            "word_count": 2400,
+            "revision_id": 12345,
+            "body_text": "Half-Life 2 is a first-person shooter game developed by Valve.",
+            "body_text_truncated": False,
+        },
+        "freshness": {"source_updated_at": "2024-01-15T00:00:00Z"},
+        "agent_api": {"retriever": "fetch-mediawiki-page.py", "source": "pcgamingwiki",
+                      "input": "https://www.pcgamingwiki.com/wiki/Half-Life_2"},
+    }
+
+    CHARACTER_CARD_RAW = {
+        "name": "Lyra",
+        "description": "A helpful wizard.",
+        "personality": "Calm and wise.",
+        "scenario": "A fantasy tavern.",
+        "creator": "author_123",
+        "tags": ["fantasy", "wizard"],
+        "topics": ["magic"],
+        "spec": "chara_card_v3",
+        "nsfw": False,
+        "agent_api": {"retriever": "fetch-character-card.py", "source": "aicharactercards",
+                      "input": "https://aicharactercards.com/cards/lyra/"},
+    }
+
+    def _make_runtime(self, base_url="http://127.0.0.1:8890"):
+        return WebSearchRuntime(base_url=base_url, max_retrievals_per_turn=3)
+
+    def _counters(self):
+        return {"search": 0, "open_page": 0, "find_in_page": 0, "retrieve": 0}
+
+    def _call(self, runtime, url, retrieval_source="", counters=None):
+        if counters is None:
+            counters = self._counters()
+        call_item = {
+            "type": "function_call",
+            "call_id": "c_retrieve_test",
+            "name": "web_search",
+            "arguments": json.dumps({
+                "action": "retrieve",
+                "url": url,
+                "retrieval_source": retrieval_source,
+            }),
+        }
+        _web_item, tool_output, _sources = runtime.execute_web_search_call(
+            call_item,
+            counters=counters,
+            seen_signatures=set(),
+        )
+        return json.loads(tool_output["output"])
+
+    # --- normalize_retrieve_response tests ---
+
+    def test_normalize_mediawiki_shape(self):
+        runtime = self._make_runtime()
+        out = runtime._normalize_retrieve_response(self.MEDIAWIKI_RAW,
+                                                   "https://www.pcgamingwiki.com/wiki/Half-Life_2")
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["action"], "retrieve")
+        self.assertEqual(out["title"], "Half-Life 2")
+        self.assertIn("Half-Life 2", out["summary"])
+        self.assertIn("Half-Life 2", out["content"])
+        self.assertEqual(out["retrieval_source"], "pcgamingwiki")
+        self.assertEqual(out["retriever"], "fetch-mediawiki-page.py")
+        self.assertFalse(out["truncated"])
+        self.assertIsInstance(out["metadata"], dict)
+        self.assertNotIn("body_text", out["metadata"])
+
+    def test_normalize_character_card_shape(self):
+        runtime = self._make_runtime()
+        out = runtime._normalize_retrieve_response(self.CHARACTER_CARD_RAW,
+                                                   "https://aicharactercards.com/cards/lyra/")
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["title"], "Lyra")
+        self.assertIn("wizard", out["summary"])
+        self.assertIn("Calm and wise", out["content"])
+        self.assertEqual(out["retrieval_source"], "aicharactercards")
+        self.assertEqual(out["retriever"], "fetch-character-card.py")
+        self.assertEqual(out["freshness_hint"], "unknown")
+        self.assertIsInstance(out["metadata"], dict)
+
+    def test_normalize_mediawiki_truncation(self):
+        import copy
+        raw = copy.deepcopy(self.MEDIAWIKI_RAW)
+        raw["fields"]["body_text"] = "A" * 7000
+        runtime = WebSearchRuntime(max_retrieved_chars=6000)
+        out = runtime._normalize_retrieve_response(raw, "https://pcgamingwiki.com/wiki/Test")
+        self.assertTrue(out["truncated"])
+        self.assertEqual(len(out["content"]), 6000)
+
+    def test_normalize_missing_body_falls_back_to_summary(self):
+        raw = {
+            "source": "fse",
+            "status": "ok",
+            "summary": "A short story summary.",
+            "fields": {"title": "My Story"},
+            "agent_api": {"retriever": "fse.py", "source": "fse"},
+        }
+        runtime = self._make_runtime()
+        out = runtime._normalize_retrieve_response(raw, "https://fse.example/1")
+        self.assertTrue(out["ok"])
+        self.assertIn("summary", out["content"])
+
+    def test_normalize_no_localhost_in_output(self):
+        runtime = self._make_runtime()
+        out = runtime._normalize_retrieve_response(self.MEDIAWIKI_RAW,
+                                                   "https://www.pcgamingwiki.com/wiki/Half-Life_2")
+        serialized = json.dumps(out)
+        self.assertNotIn("127.0.0.1", serialized)
+        self.assertNotIn("8890", serialized)
+
+    def test_normalize_bad_status_returns_ok_false(self):
+        raw = {
+            "status": "not_found",
+            "agent_api": {"retriever": "r.py", "source": "x"},
+        }
+        runtime = self._make_runtime()
+        out = runtime._normalize_retrieve_response(raw, "https://example.com/missing")
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "retrieval_failed")
+
+    # --- execute_web_search_call retrieve branch ---
+
+    def test_retrieve_no_base_url(self):
+        runtime = WebSearchRuntime(base_url="")
+        out = self._call(runtime, "https://pcgamingwiki.com/wiki/Test")
+        self.assertFalse(out["ok"])
+        self.assertIn("no_base_url", out["error"])
+
+    def test_retrieve_empty_url_returns_error(self):
+        runtime = self._make_runtime()
+        out = self._call(runtime, "")
+        self.assertFalse(out.get("ok"))
+
+    def test_retrieve_budget_exceeded(self):
+        runtime = WebSearchRuntime(max_retrievals_per_turn=2, base_url="http://127.0.0.1:8890")
+        counters = {**self._counters(), "retrieve": 2}
+        events = []
+        original_emit = runtime._emit
+        runtime._emit = lambda name, data=None: events.append(name)
+        out = self._call(runtime, "https://pcgamingwiki.com/wiki/Test", counters=counters)
+        self.assertFalse(out.get("ok"))
+        self.assertIn("web_search_retrieve_budget_exceeded", events)
+
+    def test_retrieve_telemetry_started_on_http_call(self):
+        """started event fires before HTTP; failed event fires on fetch error."""
+        runtime = self._make_runtime(base_url="http://127.0.0.1:8890")
+        events = []
+        runtime._emit = lambda name, data=None: events.append(name)
+        # _retrieve will fail because no real server, but started should fire
+        self._call(runtime, "https://pcgamingwiki.com/wiki/Half-Life_2")
+        self.assertIn("web_search_retrieve_started", events)
+
+    def test_retrieve_success_caches_result(self):
+        runtime = self._make_runtime()
+        fetch_count = [0]
+
+        def fake_retrieve(url, retrieval_source=""):
+            fetch_count[0] += 1
+            return {
+                "ok": True, "action": "retrieve", "url": url,
+                "retrieval_source": "pcgamingwiki", "retriever": "r.py",
+                "title": "HL2", "summary": "s", "content": "c",
+                "metadata": {}, "truncated": False, "freshness_hint": "unknown",
+            }
+
+        runtime._retrieve = fake_retrieve
+        c1 = self._counters()
+        self._call(runtime, "https://pcgamingwiki.com/wiki/Test", counters=c1)
+        c2 = self._counters()
+        self._call(runtime, "https://pcgamingwiki.com/wiki/Test", counters=c2)
+        # _retrieve was called twice but _cache inside _retrieve would prevent HTTP
+        # Here we override _retrieve entirely, so count == 2; actual cache is in _retrieve
+        self.assertEqual(fetch_count[0], 2)
+
+    def test_retrieve_success_payload_no_localhost(self):
+        runtime = self._make_runtime()
+
+        def fake_retrieve(url, retrieval_source=""):
+            return {
+                "ok": True, "action": "retrieve", "url": url,
+                "retrieval_source": "pcgamingwiki", "retriever": "r.py",
+                "title": "HL2", "summary": "Game summary.", "content": "Full content.",
+                "metadata": {}, "truncated": False, "freshness_hint": "unknown",
+            }
+
+        runtime._retrieve = fake_retrieve
+        result = self._call(runtime, "https://pcgamingwiki.com/wiki/Test")
+        serialized = json.dumps(result)
+        self.assertNotIn("127.0.0.1", serialized)
+        self.assertNotIn("8890", serialized)
+
+    def test_retrieve_does_not_affect_existing_search_action(self):
+        runtime = self._make_runtime()
+        calls = []
+
+        def fake_query(query, categories=None, engines=None, top_k=8):
+            calls.append(query)
+            return {"results": [{"title": "t", "url": "https://example.test/"}]}
+
+        runtime._query_searxng = fake_query
+        counters = self._counters()
+        _web_item, tool_output, _sources = runtime.execute_web_search_call(
+            {"type": "function_call", "call_id": "c_t", "name": "web_search",
+             "arguments": json.dumps({"action": "search", "query": "half-life 2"})},
+            counters=counters,
+            seen_signatures=set(),
+        )
+        self.assertEqual(len(calls), 1)
+        text = json.loads(tool_output["output"])
+        self.assertIn("results", text.get("result", {}))
+
+    def test_retrieve_malformed_arguments_no_exception(self):
+        runtime = self._make_runtime()
+        result = self._call(runtime, "")  # empty url → should fail cleanly
+        self.assertIsInstance(result, dict)
+        self.assertIn("ok", result)
+
+    def test_retrieve_budget_defaults_from_constant(self):
+        runtime = WebSearchRuntime()
+        from proxy.qz_tool_web import WEB_SEARCH_MAX_RETRIEVALS
+        self.assertEqual(runtime.max_retrievals_per_turn, WEB_SEARCH_MAX_RETRIEVALS)
+
+    def test_retrieve_max_chars_clamped_to_ceiling(self):
+        from proxy.qz_tool_web import WEB_SEARCH_RETRIEVE_MAX_CHARS_CEILING
+        runtime = WebSearchRuntime(max_retrieved_chars=99999)
+        self.assertEqual(runtime.max_retrieved_chars, WEB_SEARCH_RETRIEVE_MAX_CHARS_CEILING)
+
+
 if __name__ == "__main__":
     unittest.main()

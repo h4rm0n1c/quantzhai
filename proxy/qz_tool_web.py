@@ -147,6 +147,10 @@ WEB_SEARCH_MAX_RESULTS = 8
 WEB_SEARCH_MAX_HOPS = WEB_SEARCH_TOOL_ADAPTER.lifecycle.continuation_hops
 WEB_SEARCH_MAX_SEARCHES = 4
 WEB_SEARCH_MAX_OPENS = 3
+WEB_SEARCH_MAX_RETRIEVALS = 3
+WEB_SEARCH_RETRIEVE_MAX_CHARS = 6000
+WEB_SEARCH_RETRIEVE_MAX_CHARS_CEILING = 12000
+WEB_SEARCH_RETRIEVE_CACHE_TTL = 900
 WEB_SEARCH_USER_AGENT = "qwen36turbo-web-runtime/1.0"
 VALID_WEB_SEARCH_PROFILES = {
     "auto",
@@ -483,6 +487,8 @@ class WebSearchRuntime:
         max_page_opens_per_turn=None,
         max_results_per_query=None,
         low_result_fallback_threshold=None,
+        max_retrievals_per_turn=None,
+        max_retrieved_chars=None,
     ):
         self.searxng_base_url = base_url
         self.searxng_timeout = timeout
@@ -504,6 +510,10 @@ class WebSearchRuntime:
             WEB_SEARCH_MAX_RESULTS,
         )
         # low_result_fallback_threshold: try param, then legacy policy key, then default 2.
+        self.max_retrievals_per_turn = _resolve_budget_int(max_retrievals_per_turn, WEB_SEARCH_MAX_RETRIEVALS)
+        _raw_chars = _resolve_budget_int(max_retrieved_chars, WEB_SEARCH_RETRIEVE_MAX_CHARS)
+        self.max_retrieved_chars = min(_raw_chars, WEB_SEARCH_RETRIEVE_MAX_CHARS_CEILING)
+        self.retrieval_cache: dict = {}
         if low_result_fallback_threshold is not None:
             self.low_result_fallback_threshold = _resolve_budget_int(low_result_fallback_threshold, 2)
         else:
@@ -1022,6 +1032,7 @@ class WebSearchRuntime:
         except Exception:
             top_k = self.max_results_per_query
         top_k = max(1, min(top_k, self.max_results_per_query))
+        retrieval_source = str(data.get("retrieval_source") or "").strip()
         return {
             "action": action,
             "query": query,
@@ -1031,7 +1042,122 @@ class WebSearchRuntime:
             "categories": categories,
             "engines": engines,
             "top_k": top_k,
+            "retrieval_source": retrieval_source,
         }
+
+    def _normalize_retrieve_response(self, raw: dict, url: str) -> dict:
+        """Normalize Agent API /retrieve response into unified output.
+
+        Handles two upstream shapes:
+          - Normalized format (mediawiki, FSE): has status/summary/fields/agent_api
+          - Character-card format: flat top-level with name/description/creator/tags/agent_api
+        Never includes retrieval.endpoint or localhost URLs.
+        """
+        if not isinstance(raw, dict):
+            return {"ok": False, "error": "invalid_response"}
+
+        agent_api = raw.get("agent_api") or {}
+        retriever = str(agent_api.get("retriever") or "")
+        retrieval_source = str(agent_api.get("source") or raw.get("source") or "")
+        canonical_url = str(raw.get("input") or url or "")
+
+        # Detect normalized format vs character-card format
+        is_normalized = "status" in raw or "fields" in raw or "summary" in raw
+
+        if is_normalized:
+            status = str(raw.get("status") or "")
+            if status and status != "ok":
+                return {
+                    "ok": False, "action": "retrieve",
+                    "url": canonical_url, "retrieval_source": retrieval_source,
+                    "error": "retrieval_failed", "error_detail": status,
+                }
+            fields = raw.get("fields") or {}
+            title = str(fields.get("title") or fields.get("display_title") or canonical_url)
+            summary = _truncate(_normalize_ws(str(raw.get("summary") or "")), 500)
+            body = str(fields.get("body_text") or fields.get("body_visible") or summary)
+            truncated = bool(fields.get("body_text_truncated")) or (len(body) > self.max_retrieved_chars)
+            content = body[:self.max_retrieved_chars] if truncated else body
+            # Bounded metadata — never include body_text
+            meta = {}
+            for k in ("categories", "word_count", "length", "author", "rating",
+                      "published_at", "revision_id"):
+                v = fields.get(k)
+                if v is not None and len(meta) < 6:
+                    meta[k] = v[:10] if isinstance(v, list) else v
+            # Freshness from freshness dict
+            freshness = raw.get("freshness") or {}
+            src_updated = str(freshness.get("source_updated_at") or freshness.get("last_seen") or "")
+            freshness_hint = _freshness_hint(canonical_url, src_updated or None)
+        else:
+            # Character-card format
+            title = str(raw.get("name") or canonical_url)
+            desc = str(raw.get("description") or "")
+            personality = str(raw.get("personality") or "")
+            scenario = str(raw.get("scenario") or "")
+            assembled = "\n\n".join(p for p in (desc, personality, scenario) if p.strip())
+            truncated = len(assembled) > self.max_retrieved_chars
+            content = assembled[:self.max_retrieved_chars] if truncated else assembled
+            summary = _truncate(_normalize_ws(desc), 500)
+            tags = (raw.get("tags") or [])[:10] if isinstance(raw.get("tags"), list) else []
+            topics = (raw.get("topics") or [])[:10] if isinstance(raw.get("topics"), list) else []
+            meta = {}
+            for k, v in [("creator", raw.get("creator")), ("tags", tags),
+                          ("topics", topics), ("spec", raw.get("spec")),
+                          ("nsfw", raw.get("nsfw"))]:
+                if v is not None and len(meta) < 6:
+                    meta[k] = v
+            freshness_hint = "unknown"
+
+        return {
+            "ok": True,
+            "action": "retrieve",
+            "url": canonical_url,
+            "retrieval_source": retrieval_source,
+            "retriever": retriever,
+            "title": title,
+            "summary": summary,
+            "content": content,
+            "metadata": meta,
+            "truncated": truncated,
+            "freshness_hint": freshness_hint,
+        }
+
+    def _retrieve(self, url: str, retrieval_source: str = "") -> dict:
+        """Call Agent API /retrieve and return normalized result.
+
+        Never exposes the raw /retrieve endpoint URL in the return value.
+        """
+        if not self.searxng_base_url:
+            return {"ok": False, "action": "retrieve", "url": url,
+                    "error": "no_base_url",
+                    "error_detail": "No SearXNG base URL configured"}
+        canonical = _canonicalize_url(url)
+        if not canonical:
+            return {"ok": False, "action": "retrieve", "url": url,
+                    "error": "invalid_url",
+                    "error_detail": "URL must be http or https"}
+
+        cached = self._cache_get(self.retrieval_cache, canonical, WEB_SEARCH_RETRIEVE_CACHE_TTL)
+        if cached is not None:
+            return cached
+
+        params: dict = {"url": canonical}
+        if retrieval_source:
+            params["source"] = retrieval_source
+        retrieve_url = self.searxng_base_url.rstrip("/") + "/retrieve?" + urllib.parse.urlencode(params)
+        try:
+            raw_bytes, _ctype, _final = _http_fetch(retrieve_url, self.searxng_timeout, "application/json")
+            raw = json.loads(raw_bytes.decode("utf-8", errors="replace"))
+        except Exception as exc:
+            return {"ok": False, "action": "retrieve", "url": canonical,
+                    "error": "fetch_failed",
+                    "error_detail": f"{type(exc).__name__}: {exc}"}
+
+        result = self._normalize_retrieve_response(raw, canonical)
+        if result.get("ok"):
+            self._cache_put(self.retrieval_cache, canonical, result)
+        return result
 
     def execute_web_search_call(self, call_item: dict, counters: dict, seen_signatures: set, request_id: str = ""):
         args = self._parse_web_search_arguments(call_item.get("arguments") or "{}")
@@ -1135,6 +1261,53 @@ class WebSearchRuntime:
             else:
                 payload = self._find_in_page(query=query.strip(), url=url, page_id=page_id)
                 sources = [{"url": payload.get("url"), "title": payload.get("title")}]
+
+        elif action == "retrieve":
+            retrieve_url = args.get("url") or url
+            retrieval_source = args.get("retrieval_source") or ""
+            if not retrieve_url or not str(retrieve_url).strip():
+                error = "retrieve action requires a non-empty url."
+                self._emit("web_search_retrieve_failed", {
+                    "url": "",
+                    "retrieval_source": retrieval_source,
+                    "error_class": "invalid_url",
+                    "call_id": call_item.get("call_id") or call_item.get("id"),
+                })
+            elif counters.get("retrieve", 0) >= self.max_retrievals_per_turn:
+                error = f"Refusing retrieve: reached per-turn limit of {self.max_retrievals_per_turn} retrieve calls."
+                self._emit("web_search_retrieve_budget_exceeded", {
+                    "url": str(retrieve_url),
+                    "limit": self.max_retrievals_per_turn,
+                    "counter": counters.get("retrieve", 0),
+                    "call_id": call_item.get("call_id") or call_item.get("id"),
+                })
+            else:
+                self._emit("web_search_retrieve_started", {
+                    "url": str(retrieve_url),
+                    "retrieval_source": retrieval_source,
+                    "call_id": call_item.get("call_id") or call_item.get("id"),
+                })
+                _t0 = _now_float()
+                counters["retrieve"] = counters.get("retrieve", 0) + 1
+                payload = self._retrieve(str(retrieve_url).strip(), retrieval_source)
+                _dur = int((_now_float() - _t0) * 1000)
+                if payload.get("ok"):
+                    self._emit("web_search_retrieve_completed", {
+                        "url": payload.get("url"),
+                        "retrieval_source": payload.get("retrieval_source"),
+                        "retriever": payload.get("retriever"),
+                        "duration_ms": _dur,
+                        "truncated": payload.get("truncated"),
+                        "call_id": call_item.get("call_id") or call_item.get("id"),
+                    })
+                else:
+                    self._emit("web_search_retrieve_failed", {
+                        "url": payload.get("url"),
+                        "retrieval_source": retrieval_source,
+                        "error_class": payload.get("error"),
+                        "call_id": call_item.get("call_id") or call_item.get("id"),
+                    })
+                    error = f"Retrieval failed: {payload.get('error', 'unknown')}: {payload.get('error_detail', '')}"
 
         else:
             error = f"Unsupported web_search action: {action}"

@@ -1531,6 +1531,8 @@ class RequestRouter:
             "max_page_opens_per_turn": _routing.get("max_page_opens_per_turn"),
             "max_results_per_query": _routing.get("max_results") or _routing.get("max_results_per_query"),
             "low_result_fallback_threshold": _routing.get("low_result_fallback_threshold"),
+            "max_retrievals_per_turn": _routing.get("max_retrievals_per_turn"),
+            "max_retrieved_chars": _routing.get("max_retrieved_chars"),
         }
         selection = resolve_search_policy_selection(
             base_policy=self.handler.searxng_policy,
