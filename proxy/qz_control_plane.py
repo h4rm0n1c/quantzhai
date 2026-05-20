@@ -236,6 +236,15 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
         active_requests=ar_snapshot,
         recovery_jobs=jobs_snapshot,
     )
+    # Additive: backend manager lifecycle state (safe snapshot only).
+    try:
+        mgr = getattr(handler, "backend_manager", None)
+        if mgr is not None and callable(getattr(mgr, "snapshot", None)):
+            snap = mgr.snapshot()
+            if isinstance(snap, dict):
+                payload["backend_manager"] = snap
+    except Exception:
+        pass
     # Additive: proxy-owned VRAM snapshot (TTL-cached to avoid per-request nvidia-smi).
     try:
         payload["vram"] = get_cached_vram_snapshot(handler=handler)

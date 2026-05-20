@@ -9,9 +9,10 @@ This module is import-safe: no Docker or network calls at import time.
 
 from __future__ import annotations
 
+import threading
 import time
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable
 
 
 # ---------------------------------------------------------------------------
@@ -33,6 +34,15 @@ VALID_PHASES = frozenset({
     PHASE_DISABLED, PHASE_IDLE, PHASE_START_REQUESTED, PHASE_STARTING,
     PHASE_RUNNING, PHASE_HEALTHY, PHASE_FAILED, PHASE_STOPPING,
     PHASE_STOPPED, PHASE_UNKNOWN,
+})
+
+# Phases that mean "not running" — start() is allowed from these.
+_STARTABLE_PHASES = frozenset({
+    PHASE_IDLE, PHASE_FAILED, PHASE_STOPPED, PHASE_UNKNOWN,
+})
+# Phases that mean "already running" — start() should decline.
+_RUNNING_PHASES = frozenset({
+    PHASE_START_REQUESTED, PHASE_STARTING, PHASE_RUNNING, PHASE_HEALTHY,
 })
 
 
@@ -59,6 +69,33 @@ def _safe_str(value: Any, fallback: str = "") -> str:
         return fallback
     s = str(value).strip()
     return s if s else fallback
+
+
+def _default_runner(args: list[str], timeout: float | None = None) -> tuple[int, str, str]:
+    """Default subprocess runner. Returns (returncode, stdout, stderr)."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return result.returncode, result.stdout, result.stderr
+    except subprocess.TimeoutExpired:
+        return -1, "", "timeout"
+    except Exception as exc:
+        return -1, "", str(exc)
+
+
+def _default_health_checker(url: str, timeout: float = 3.0) -> bool:
+    """Check backend /health. Returns True when the URL returns HTTP 200."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -103,9 +140,8 @@ class BackendState:
 class BackendManager:
     """Owns Docker lifecycle for the llama.cpp backend.
 
-    Construction is side-effect-free.  Call start() / stop() / restart()
-    explicitly, or set autostart=True and call begin_autostart() from the
-    proxy main thread after the HTTP server is bound.
+    Construction is side-effect-free. Call begin_autostart() once after the
+    proxy HTTP server is bound, or call start() / stop() / restart() directly.
     """
 
     def __init__(
@@ -133,9 +169,12 @@ class BackendManager:
         reasoning_budget_message: str = "I have reasoned long enough. Let me now produce my final answer.",
         spec_default: bool = False,
         autostart: bool = True,
-        health_check_interval: float = 10.0,
+        health_check_interval: float = 5.0,
         health_check_timeout: float = 120.0,
+        autostart_delay: float = 0.5,
         operational_store: Any = None,
+        runner: Callable[..., tuple[int, str, str]] | None = None,
+        health_checker: Callable[[str, float], bool] | None = None,
     ) -> None:
         # Config — private; never exposed in snapshot or logs
         self._docker_cmd             = _safe_str(docker_cmd, "docker")
@@ -161,7 +200,14 @@ class BackendManager:
         self._spec_default           = bool(spec_default)
         self._health_check_interval  = float(health_check_interval)
         self._health_check_timeout   = float(health_check_timeout)
+        self._autostart_delay        = float(autostart_delay)
         self._operational_store      = operational_store
+        self._runner                 = runner or _default_runner
+        self._health_checker         = health_checker or _default_health_checker
+
+        # Threading
+        self._lock = threading.Lock()
+        self._busy = False           # True while a lifecycle operation is running
 
         # State
         initial_phase = PHASE_IDLE if autostart else PHASE_DISABLED
@@ -177,11 +223,108 @@ class BackendManager:
 
     def snapshot(self) -> dict:
         """Return a safe state snapshot — no secrets, paths, or Docker commands."""
-        return self._state.as_dict()
+        with self._lock:
+            return self._state.as_dict()
 
     @property
     def phase(self) -> str:
-        return self._state.phase
+        with self._lock:
+            return self._state.phase
+
+    # ------------------------------------------------------------------
+    # Public lifecycle API
+    # ------------------------------------------------------------------
+
+    def begin_autostart(self) -> None:
+        """Enqueue an autostart if enabled. Called once after proxy bind. Non-blocking."""
+        with self._lock:
+            if self._state.phase != PHASE_IDLE or not self._state.autostart:
+                return
+        threading.Thread(
+            target=self._autostart_with_delay,
+            daemon=True,
+            name="qz-backend-autostart",
+        ).start()
+
+    def start(self) -> dict:
+        """Request a backend start. Returns immediately with a status dict."""
+        with self._lock:
+            phase = self._state.phase
+            if phase == PHASE_DISABLED:
+                return {"ok": False, "action": "start",
+                        "error": "backend autostart is disabled",
+                        "backend_manager": self._state.as_dict()}
+            if phase in _RUNNING_PHASES or self._busy:
+                return {"ok": False, "action": "start",
+                        "error": f"backend is already {phase}",
+                        "backend_manager": self._state.as_dict()}
+            self._busy = True
+            self._state.phase = PHASE_START_REQUESTED
+            self._state.last_start_requested_at = _iso_now()
+            self._state.last_error = None
+        self._emit("backend_start_requested")
+        threading.Thread(
+            target=self._do_start,
+            daemon=True,
+            name="qz-backend-start",
+        ).start()
+        return {"ok": True, "action": "start",
+                "backend_manager": self.snapshot()}
+
+    def stop(self) -> dict:
+        """Request a backend stop. Returns immediately with a status dict."""
+        with self._lock:
+            phase = self._state.phase
+            if phase == PHASE_DISABLED:
+                return {"ok": False, "action": "stop",
+                        "error": "backend is disabled",
+                        "backend_manager": self._state.as_dict()}
+            if phase in (PHASE_STOPPING, PHASE_STOPPED, PHASE_IDLE):
+                return {"ok": False, "action": "stop",
+                        "error": f"backend is already {phase}",
+                        "backend_manager": self._state.as_dict()}
+            if self._busy and phase not in _RUNNING_PHASES:
+                return {"ok": False, "action": "stop",
+                        "error": "another operation is in progress",
+                        "backend_manager": self._state.as_dict()}
+            self._busy = True
+            self._state.phase = PHASE_STOPPING
+        self._emit("backend_stop_requested")
+        threading.Thread(
+            target=self._do_stop,
+            daemon=True,
+            name="qz-backend-stop",
+        ).start()
+        return {"ok": True, "action": "stop",
+                "backend_manager": self.snapshot()}
+
+    def restart(self) -> dict:
+        """Request a backend restart. Returns immediately with a status dict."""
+        with self._lock:
+            phase = self._state.phase
+            if phase == PHASE_DISABLED:
+                return {"ok": False, "action": "restart",
+                        "error": "backend is disabled",
+                        "backend_manager": self._state.as_dict()}
+            if self._busy:
+                return {"ok": False, "action": "restart",
+                        "error": f"another operation is in progress ({phase})",
+                        "backend_manager": self._state.as_dict()}
+            self._busy = True
+            self._state.phase = PHASE_STOPPING
+        self._emit("backend_restart_requested")
+        threading.Thread(
+            target=self._do_restart,
+            daemon=True,
+            name="qz-backend-restart",
+        ).start()
+        return {"ok": True, "action": "restart",
+                "backend_manager": self.snapshot()}
+
+    def status(self) -> dict:
+        """Return the current state snapshot."""
+        return {"ok": True, "action": "status",
+                "backend_manager": self.snapshot()}
 
     # ------------------------------------------------------------------
     # Docker command builders (pure — no subprocess calls)
@@ -226,9 +369,8 @@ class BackendManager:
         """Build the full `docker run` invocation.
 
         Exact port of scripts/qz-up qz_docker run call (lines 121-130).
-        Includes docker command + all container flags + image + backend args.
         """
-        cmd = self._docker_cmd.split()  # handle "sudo docker"
+        cmd = self._docker_cmd.split()
         container_flags = [
             "run", "-d",
             "--name", self._container_name,
@@ -241,6 +383,132 @@ class BackendManager:
             "--models-dir", "/models",
         ]
         return cmd + container_flags + self.build_backend_args()
+
+    def build_docker_rm_args(self, force: bool = True) -> list[str]:
+        """Build `docker rm [-f] <container>` args."""
+        cmd = self._docker_cmd.split()
+        flags = ["rm", "-f"] if force else ["rm"]
+        return cmd + flags + [self._container_name]
+
+    def build_docker_stop_args(self) -> list[str]:
+        """Build `docker stop <container>` args."""
+        return self._docker_cmd.split() + ["stop", self._container_name]
+
+    def build_docker_ps_args(self) -> list[str]:
+        """Build `docker ps --filter name=<container> --format {{.Names}}` args."""
+        return (
+            self._docker_cmd.split()
+            + ["ps", "--filter", f"name=^/{self._container_name}$",
+               "--format", "{{.Names}}"]
+        )
+
+    # ------------------------------------------------------------------
+    # Background lifecycle workers
+    # ------------------------------------------------------------------
+
+    def _autostart_with_delay(self) -> None:
+        """Called by begin_autostart() in a daemon thread."""
+        time.sleep(self._autostart_delay)
+        with self._lock:
+            # Re-check phase after delay — may have been stopped/disabled
+            if self._state.phase not in (PHASE_IDLE,) or self._busy:
+                return
+            self._busy = True
+            self._state.phase = PHASE_START_REQUESTED
+            self._state.last_start_requested_at = _iso_now()
+            self._state.last_error = None
+        self._emit("backend_start_requested")
+        self._do_start()
+
+    def _do_start(self) -> None:
+        """Background: rm -f, docker run, then health-check loop."""
+        try:
+            # Remove any existing container first (match qz-up semantics)
+            self._runner(self.build_docker_rm_args(force=True), timeout=30.0)
+
+            with self._lock:
+                self._state.phase = PHASE_STARTING
+            self._emit("backend_starting")
+
+            rc, _out, err = self._runner(self.build_docker_run_args(), timeout=60.0)
+            if rc != 0:
+                raise RuntimeError(f"docker run failed (rc={rc}): {err.strip()}")
+
+            with self._lock:
+                self._state.phase = PHASE_RUNNING
+                self._state.container_running = True
+                self._state.last_started_at = _iso_now()
+            self._emit("backend_started")
+
+            # Health-check loop
+            health_url = f"http://{self._server_host}:{self._server_port}/health"
+            deadline = time.monotonic() + self._health_check_timeout
+            while time.monotonic() < deadline:
+                # Check container still running
+                rc_ps, out_ps, _ = self._runner(self.build_docker_ps_args(), timeout=5.0)
+                if rc_ps != 0 or self._container_name not in out_ps:
+                    raise RuntimeError("container exited before becoming healthy")
+                if self._health_checker(health_url, timeout=3.0):
+                    with self._lock:
+                        self._state.phase = PHASE_HEALTHY
+                        self._state.backend_health_ok = True
+                        self._state.last_healthy_at = _iso_now()
+                    self._emit("backend_healthy")
+                    return
+                time.sleep(self._health_check_interval)
+
+            raise RuntimeError(
+                f"backend did not become healthy within {self._health_check_timeout:.0f}s"
+            )
+
+        except Exception as exc:
+            err_str = str(exc)
+            with self._lock:
+                self._state.phase = PHASE_FAILED
+                self._state.container_running = False
+                self._state.backend_health_ok = False
+                self._state.last_error = err_str
+            self._emit("backend_failed", {"error": err_str})
+        finally:
+            with self._lock:
+                self._busy = False
+
+    def _do_stop(self) -> None:
+        """Background: docker stop, docker rm."""
+        err_str: str | None = None
+        try:
+            self._runner(self.build_docker_stop_args(), timeout=30.0)
+            self._runner(self.build_docker_rm_args(force=False), timeout=30.0)
+        except Exception as exc:
+            err_str = str(exc)
+            # Force rm even on stop failure
+            try:
+                self._runner(self.build_docker_rm_args(force=True), timeout=15.0)
+            except Exception:
+                pass
+        finally:
+            with self._lock:
+                self._state.phase = PHASE_STOPPED
+                self._state.container_running = False
+                self._state.backend_health_ok = False
+                self._state.last_stopped_at = _iso_now()
+                if err_str:
+                    self._state.last_error = err_str
+                self._busy = False
+            self._emit("backend_stopped")
+
+    def _do_restart(self) -> None:
+        """Background: stop then start."""
+        self._do_stop()
+        with self._lock:
+            if self._state.phase != PHASE_STOPPED:
+                return
+            self._busy = True
+            self._state.phase = PHASE_START_REQUESTED
+            self._state.last_start_requested_at = _iso_now()
+            self._state.last_error = None
+        self._emit("backend_start_requested")
+        self._do_start()
 
     # ------------------------------------------------------------------
     # OperationalStore event helper

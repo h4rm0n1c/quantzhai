@@ -532,6 +532,16 @@ class RequestRouter:
             })
             return
 
+        if self.handler.path == "/qz/backend/status":
+            mgr = getattr(self.handler, "backend_manager", None)
+            if mgr is None:
+                self.handler._send_json(503, {
+                    "ok": False, "error": "backend_manager not initialised",
+                })
+                return
+            self.handler._send_json(200, mgr.status())
+            return
+
         if self.handler.path in ("/qz/control-plane", "/qz/control-plane/status"):
             # Proxy-owned client/control-plane summary. Safe when backend is down.
             # Answers: proxy ready? catalog ready? models? backend reachable? loaded?
@@ -1426,6 +1436,20 @@ class RequestRouter:
 
         if self.handler.path in ("/responses", "/v1/responses"):
             self.proxy_json_api("/v1/responses")
+            return
+
+        if self.handler.path in ("/qz/backend/start", "/qz/backend/stop",
+                                   "/qz/backend/restart"):
+            mgr = getattr(self.handler, "backend_manager", None)
+            if mgr is None:
+                self.handler._send_json(503, {
+                    "ok": False, "error": "backend_manager not initialised",
+                })
+                return
+            action = self.handler.path.split("/")[-1]
+            result = getattr(mgr, action)()
+            status_code = 200 if result.get("ok") else 409
+            self.handler._send_json(status_code, result)
             return
 
         if self.handler.path == "/qz/recovery/plan":

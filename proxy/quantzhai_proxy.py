@@ -57,6 +57,7 @@ try:
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import append_capture, read_json, runtime_log, write_capture
     from .qz_search_config import load_search_config as _load_search_config
+    from .qz_backend_manager import BackendManager, _parse_bool_env
 except ImportError:
     from qz_backend import BackendClient
     from qz_proxy_config import (
@@ -105,6 +106,7 @@ except ImportError:
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import append_capture, read_json, runtime_log, write_capture
     from qz_search_config import load_search_config as _load_search_config
+    from qz_backend_manager import BackendManager, _parse_bool_env
 
 class ProxyHandler(BaseHTTPRequestHandler):
     upstream = "http://127.0.0.1:18084"
@@ -117,6 +119,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
     recovery_jobs = RECOVERY_JOBS
     model_catalog = None
     model_catalog_path = None
+    backend_manager = None
     backend_client = None
     searxng_base_url = None
     searxng_timeout = 15.0
@@ -676,11 +679,44 @@ def main():
             ProxyHandler._set_initialization_state("failed", str(exc))
             print(f"QuantZhai proxy initialization failed: {exc}", flush=True)
 
+    # Instantiate BackendManager — no Docker calls yet.
+    _backend_autostart = _parse_bool_env(os.environ.get("QZ_BACKEND_AUTOSTART", "1"), default=True)
+    _backend_manager = BackendManager(
+        docker_cmd=os.environ.get("QZ_DOCKER_CMD", "docker"),
+        container_name=os.environ.get("QZ_CONTAINER", "qwen36turbo"),
+        image=os.environ.get("QZ_IMAGE", "thetom-llama-cpp-turboquant:cuda-server"),
+        model_dir=os.environ.get("QZ_MODEL_DIR", str(root / "var" / "models")),
+        server_host=os.environ.get("QZ_SERVER_HOST", "127.0.0.1"),
+        server_port=int(os.environ.get("QZ_SERVER_PORT", "18084")),
+        context=int(os.environ.get("QZ_CONTEXT", "262144")),
+        parallel=int(os.environ.get("QZ_PARALLEL", "1")),
+        batch=int(os.environ.get("QZ_BATCH", "4096")),
+        ubatch=int(os.environ.get("QZ_UBATCH", "512")),
+        threads=int(os.environ.get("QZ_THREADS", "12")),
+        thread_batch=int(os.environ.get("QZ_THREAD_BATCH", "12")),
+        tensor_split=os.environ.get("QZ_TENSOR_SPLIT", "9,17"),
+        main_gpu=int(os.environ.get("QZ_MAIN_GPU", "0")),
+        cache_ram=int(os.environ.get("QZ_CACHE_RAM", "8192")),
+        cache_reuse=int(os.environ.get("QZ_CACHE_REUSE", "256")),
+        kv_key=os.environ.get("QZ_KV_KEY", "q8_0"),
+        kv_value=os.environ.get("QZ_KV_VALUE", "turbo3"),
+        reasoning_budget=os.environ.get("QZ_REASONING_BUDGET", "-1"),
+        reasoning_budget_message=os.environ.get(
+            "QZ_REASONING_BUDGET_MESSAGE",
+            "I have reasoned long enough. Let me now produce my final answer.",
+        ),
+        spec_default=_parse_bool_env(os.environ.get("QZ_SPEC_DEFAULT", "0")),
+        autostart=_backend_autostart,
+    )
+    ProxyHandler.backend_manager = _backend_manager
+
     threading.Thread(target=_initialize_proxy_state, daemon=True).start()
     print(
         f"QuantZhai proxy listening on {args.listen}:{args.port} -> {ProxyHandler.upstream}, reasoning_stream_format={ProxyHandler.reasoning_stream_format}, initialization=background",
         flush=True,
     )
+    if _backend_autostart:
+        _backend_manager.begin_autostart()
     server.serve_forever()
 
 if __name__ == "__main__":

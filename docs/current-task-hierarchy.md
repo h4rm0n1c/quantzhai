@@ -952,7 +952,8 @@ Design doc: docs/backend-lifecycle-control-plane.md
 Slices:
   A-design  — ✅ COMPLETE. Full design in docs/backend-lifecycle-control-plane.md.
   B1-impl   — ✅ COMPLETE. BackendManager skeleton + Docker command builder; 49 tests; 2870 pass.
-  B2-impl   — proxy integration + lifecycle thread + endpoints + qz-up/qz-down + qz-backend
+  B2-impl   — ✅ COMPLETE. Lifecycle + proxy integration + endpoints + control-plane. 2892 pass.
+  B3-impl   — qz-up/qz-down redesign + qz-backend script
   B.1-audit — Docker command fidelity, state machine, compat
   C-doc     — README, operator guide
   D-smoke   — cold-start smoke (§12 of design doc)
