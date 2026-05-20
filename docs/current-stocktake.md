@@ -121,6 +121,10 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 | #57 | qz-codex-common thinning | **CLOSED** (Slices A–C2.1 complete; remote bootstrap endpoints delivered; superseded by #58) |
 | #58 | Always-HTTP qz-codex bootstrap | **CLOSED** (D2/D2.1/D3 complete; qz-codex always uses HTTP; #56 remains separate) |
 | #39 | Split search routing policy into search.json | **CLOSED** — search.json primary; legacy search-policy.json compat kept; all criteria PASS |
+| #59 | Tool coercion/advice policy audit | **OPEN** — prerequisite for #60–#62 |
+| #60 | web_search budgets, routing, source quality | **OPEN** — depends on #59 |
+| #61 | Advisory policy for native exec/tool use | **OPEN** — depends on #59 |
+| #62 | apply_patch coercion and advisory audit | **OPEN** — depends on #59 |
 | #52 | Backend-confirmed VRAM allocator metrics | **upstream-blocked** (TurboQuant side) |
 | #8 | RFC: NetTTS survival-weighted compaction | **research/later** |
 | #7 | What next: LimbiCore seam, memory_domain, SQLite | **CLOSED (not planned)** — superseded by #53/#54 and related completed work |
@@ -198,10 +202,14 @@ closed issues. Do not reopen; future work needs concrete scoped issues.
 #46  launcher trace removal                              CLOSED — OperationalStore live; JSON retired
 #51  recovery state persistence                          CLOSED not-planned; in-memory is sufficient
 #39  search config split                                 CLOSED — search.json primary; profile bundle wired
+#59  tool coercion/advice policy audit                   OPEN — active next chain
+#60  web_search quality improvements                     OPEN — depends on #59
+#61  native exec/tool advisory policy                   OPEN — depends on #59
+#62  apply_patch coercion audit                         OPEN — depends on #59
 #52  backend allocator metrics                           upstream-blocked
 #8   compaction RFC                                      research; no implementation dependency
 #7   LimbiCore/SQLite planning                           CLOSED not-planned; superseded by #53/#54
-Repeated-read v2                                         blocked on SQLite/session identity
+Repeated-read v2                                         blocked; needs scoped new issue
 ```
 
 ---
@@ -220,10 +228,15 @@ G. #3/#4/#43  Repeated-read v1 — CLOSED
 COMPLETED (all CLOSED):
   #58 #57 #56 #5 #37 #53 #54 #3/#4/#43 #46 #51 #39
 
-NEXT — no active engineering blocker; options:
-  A. #8 research RFC if a contained compaction experiment is wanted.
-  B. #52 waits on TurboQuant upstream; no QuantZhai action.
-  C. General polish or new feature work as direction warrants.
+NEXT — tool policy improvement chain (issues opened 2026-05-20):
+  #59 Tool coercion/advice policy audit (prerequisite for #60–#62)
+  #60 web_search budgets, routing, and source quality
+  #61 Advisory policy for native exec/tool use patterns
+  #62 apply_patch coercion and advisory path audit/polish
+
+  After tool policy chain:
+  #8  Research RFC (NetTTS/compaction) — later
+  #52 Waits on TurboQuant upstream — no QuantZhai action
 ```
 
 ---
