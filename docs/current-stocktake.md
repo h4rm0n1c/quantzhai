@@ -223,11 +223,10 @@ COMPLETED (all CLOSED):
   #58 #57 #56 #5 #37 #53 #54 #3/#4/#43 #46 #51 #39
 
 NEXT — no active engineering blocker; options in priority order:
-  A. Decide #2 fate: BrainCaseDB stable; consider close or refocus.
-  B. Decide #2 fate: BrainCaseDB is stable; #2 may be closed or refocused.
-  C. #8 research RFC if a contained compaction experiment is wanted.
-  D. #52 waits on TurboQuant upstream; no QuantZhai action.
-  E. General polish or new features as direction warrants.
+  A. Decide #2 fate: BrainCaseDB stable; #2 may be closed or refocused.
+  B. #8 research RFC if a contained compaction experiment is wanted.
+  C. #52 waits on TurboQuant upstream; no QuantZhai action.
+  D. General polish or new features as direction warrants.
 ```
 
 ---
@@ -236,7 +235,6 @@ NEXT — no active engineering blocker; options in priority order:
 
 | # | Blocked by | Action |
 |---|---|---|
-| #2 | No active consumer yet | Decide: close or refocus; BrainCaseDB stable |
 | #2 | No active consumer yet | Decide: close or refocus; BrainCaseDB stable |
 | #52 | TurboQuant | Wait; no QuantZhai action needed |
 | #8 | Research decision | Keep as RFC; contained experiment when ready |
