@@ -688,10 +688,20 @@ Key decisions:
 - #51: backoff/cooldown persistence rejected; #51 needs explicit reframing before any implementation
 - #46: primary Phase 1 consumer (runtime_events replaces JSON trace)
 
-Roadmap: B-impl → B.1 → C-impl → C.1 → close-out
-See `docs/operational-store-design.md` for full design.
+Slices B-impl → B.1 → C-impl → C.1 complete. Close-out next.
 
-Next: Slice B-impl — create `qz_operational_store.py` skeleton with schema_meta/runtime_events/runtime_facts.
+**Slice C.1 audit (this commit):** CLOSED. Audit clean.
+- JSON write always first: confirmed
+- OperationalStore gated + non-fatal: confirmed
+- No routing consumer of qz-runtime-state.json: confirmed
+- qz-doctor does NOT read the JSON: confirmed
+- /qz/control-plane is live authority: confirmed
+- var/model-state.json + var/backend-state.json untouched: confirmed
+
+Remaining close-out condition: wire /qz/config/effective to surface OperationalStore
+runtime events; then JSON file can be removed and #46 closed.
+
+Next: #46 close-out slice — /qz/config/effective integration + JSON removal.
 
 ## #37 next stream seam: proxy-local terminal suppression (Slice 2G)
 

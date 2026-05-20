@@ -105,7 +105,7 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 | #37 | Architectural seam extraction plan | **CLOSED** — Slices 1–2J complete; StreamHopState + StreamRunState + 6 pure helpers |
 | #56 | Generated artifact path migration design (var/generated/) | **CLOSED** — A1/A2/A3 under var/generated/; helpers clean; all acceptance criteria PASS |
 | #51 | Promote recovery/backoff runtime state to SQLite | **needs reframing** — backoff/cooldown persistence rejected; OperationalStore design narrowed |
-| #46 | Replace qz-write-runtime-state launcher trace | **Slice B+C next** — OperationalStore runtime_events replaces JSON trace |
+| #46 | Replace qz-write-runtime-state launcher trace | **Slices B–C.1 complete** — dual-write live; JSON stays until /qz/config/effective wired; close-out next |
 | #5 | Config/var/script ownership cleanup | **CLOSED** (#56, #57 opened for migration/thinning follow-ups) |
 | #57 | qz-codex-common thinning | **CLOSED** (Slices A–C2.1 complete; remote bootstrap endpoints delivered; superseded by #58) |
 | #58 | Always-HTTP qz-codex bootstrap | **CLOSED** (D2/D2.1/D3 complete; qz-codex always uses HTTP; #56 remains separate) |
@@ -156,9 +156,9 @@ is explicitly NOT wanted. #51 needs explicit reframing before any implementation
 In-memory `RecoveryState` in `qz_recovery_state.py` is sufficient. See
 `docs/operational-store-design.md §7`.
 
-**#46** — qz-write-runtime-state is a launcher trace only, not live-status truth.
-OperationalStore Phase 1 (schema_meta/runtime_events/runtime_facts) directly
-supports this. Dual-write in Slice C; JSON file stays compatible through C.1.
+**#46** — Slices B–C.1 complete. Dual-write live since Slice C. JSON file stays
+until `/qz/config/effective` is wired to show OperationalStore events (remaining
+close-out condition). qz-doctor confirmed not a consumer of the JSON.
 See `docs/operational-store-design.md §6`.
 
 **#5** — Config/var cleanup is ongoing and never fully done. Safe to do any time
@@ -209,20 +209,17 @@ F. #5   Config/var/script cleanup — CLOSED
 G. #3/#4/#43  Repeated-read v1 — CLOSED
 
 NEXT:
-  #51/#46 Slice B-impl — OperationalStore skeleton
+  #46 close-out — wire /qz/config/effective to show OperationalStore events, then remove JSON
 
-  Goal:
-    - Create proxy/qz_operational_store.py with schema creation
-    - Phase 1 tables only: schema_meta, runtime_events, runtime_facts
-    - Path/env handling (QZ_OPERATIONAL_DB_PATH, QZ_OPERATIONAL_DB_ENABLED)
+  Slices B–C.1 complete:
+    - qz_operational_store.py skeleton (runtime_events/runtime_facts)
+    - qz-write-runtime-state dual-write live
+    - C.1 audit confirmed: qz-doctor not a consumer; no routing consumers
 
-  Why this is next:
-    - #46 qz-write-runtime-state replacement is the concrete driver
-    - Slice C adds dual-write; JSON trace stays compatible
+  Remaining close-out condition:
+    /qz/config/effective must surface OperationalStore runtime events
 
-  After this:
-    C-impl  qz-write-runtime-state dual-write → C.1 compatibility audit
-    #46 close-out when JSON file removal confirmed
+  After #46:
     #51 reframing — backoff/cooldown NOT wanted; needs explicit new requirements
     #39  Search config split — when search work resumes
     #52  Backend allocator metrics — upstream-blocked
@@ -234,7 +231,7 @@ NEXT:
 
 | # | Blocked by | Action |
 |---|---|---|
-| #46 | OperationalStore Slice B | Create skeleton; Slice C adds dual-write |
+| #46 | OperationalStore close-out | Wire /qz/config/effective; then remove JSON |
 | #51 | Needs explicit reframing | Backoff/cooldown persistence rejected; define new requirements first |
 | #52 | TurboQuant | Wait; no QuantZhai action needed |
 | #8 | Research decision | Keep as RFC, no implementation |

@@ -294,9 +294,9 @@ process; disabled mode is a complete no-op (no file created).
 | **A-design** (Slice A + A.2) | Boundary, schema, non-goals, #46 replacement path | — |
 | **B-impl** | `qz_operational_store.py` skeleton: open/close, schema creation, path/env | — |
 | **B.1** | Audit/polish path, env, schema | — |
-| **C-impl** | Startup event writer; `qz-write-runtime-state` dual-write | — |
-| **C.1** | Launcher compatibility audit; JSON file stays | partial #46 |
-| **Close-out** | Confirm #46 criteria met when JSON removed; decide #51 fate | #46 |
+| ~~**C-impl**~~ | ~~Startup event writer; `qz-write-runtime-state` dual-write~~ | ~~—~~ |
+| ~~**C.1**~~ | ~~Launcher compatibility audit; JSON file stays~~ | ~~partial #46~~ |
+| **Close-out** | Wire `/qz/config/effective` to show OperationalStore events; remove JSON; decide #51 fate | #46 |
 
 ---
 
@@ -339,11 +339,15 @@ test_qz_write_runtime_state_dual_write_when_enabled
 ## 11. Migration / compatibility constraints
 
 ```text
-- var/run/qz-runtime-state.json:  stays until Slice C.1 confirms compatibility
+- var/run/qz-runtime-state.json:  stays until close-out condition is met:
+    /qz/config/effective must show runtime events from OperationalStore,
+    AND qz-doctor must not need the JSON for stale-context checks.
+    Slice C.1 audit confirmed: qz-doctor does NOT read the JSON file.
+    Remaining condition: /qz/config/effective OperationalStore integration.
 - var/model-state.json:           not touched by OperationalStore in Phase 1
 - var/backend-state.json:         not touched by OperationalStore in Phase 1
 - BrainCaseDB (QZ_STATE_DB_PATH): untouched; separate module/schema/lifecycle
-- qz-write-runtime-state script:  stays for compatibility through Slice C
+- qz-write-runtime-state script:  stays; dual-write live since Slice C
 ```
 
 ---
