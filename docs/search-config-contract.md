@@ -306,4 +306,230 @@ slice must add it. Verify during Slice B.
 - `config/default/search-policy.json` — existing legacy policy (active)
 - `proxy/qz_tool_web.py` — web_search tool implementation
 - `proxy/qz_config_report.py` — current effective config exposure
+- `docs/tool-policy-audit.md` — #59 audit of all tool coercion/advice paths
 - Issue #39 — search config split
+- Issue #60 — web_search budget/source quality improvements
+
+---
+
+## §60. web_search policy v2 design (#60 Slice A)
+
+Date: 2026-05-20. Design only. No runtime changes in this slice.
+
+---
+
+### 60.1 Current state (from #59 audit)
+
+The proxy enforces web_search budgets via hard-coded Python constants:
+
+```python
+WEB_SEARCH_MAX_SEARCHES = 4    # per-turn search call limit
+WEB_SEARCH_MAX_OPENS    = 3    # per-turn open_page limit
+WEB_SEARCH_MAX_RESULTS  = 8    # results per query
+```
+
+`config/default/search.json` already has `routing` fields that partially
+overlap but are NOT yet read by the proxy:
+
+```json
+"routing": {
+  "max_searches_per_turn": 3,
+  "max_page_opens_per_turn": 3,
+  "max_results": 8,
+  "low_result_fallback_threshold": 2
+}
+```
+
+**Inconsistency:** `search.json` says `max_searches_per_turn: 3` but the
+constant is `4`. The config value must win once wired; update the default JSON
+to `4` when wiring or document the change explicitly.
+
+Budget-exceeded refusals are hard errors visible to the model but produce no
+operator telemetry event (invisible in qz-thoughts / `/qz/telemetry/recent`).
+
+Source annotations are minimal: `{"url": "...", "title": "..."}` only.
+No domain type, freshness, or trust signal.
+
+---
+
+### 60.2 Budget config contract
+
+**Location:** `search.json routing.*` fields, read at `WebSearchRuntime`
+construction time. Hard-coded constants remain as fallbacks.
+
+**Fields to wire** (Slice B):
+
+| Field | search.json key | Current constant | Default |
+|---|---|---|---|
+| Max search calls per turn | `routing.max_searches_per_turn` | `WEB_SEARCH_MAX_SEARCHES = 4` | 4 |
+| Max page opens per turn | `routing.max_page_opens_per_turn` | `WEB_SEARCH_MAX_OPENS = 3` | 3 |
+| Max results per query | `routing.max_results` | `WEB_SEARCH_MAX_RESULTS = 8` | 8 |
+| Low-result fallback threshold | `routing.low_result_fallback_threshold` | read from legacy policy `routing.low_result_fallback_threshold` | 2 |
+| Dedup by canonical URL | `routing.dedup_by_canonical_url` | always enabled | true |
+
+**Fields NOT wired in Slice B** (deferred):
+
+- `max_continuation_hops` — controlled by `ToolLifecycleSpec.continuation_hops`; touching it requires proxy startup changes. Defer.
+
+**Compatibility rule:** If `search.json` routing field is absent or invalid, fall back to the existing constant. Never break web_search when search.json is misconfigured.
+
+**Search.json update:** Change `routing.max_searches_per_turn` from `3` to `4` to match the current constant. Document in a comment.
+
+---
+
+### 60.3 Telemetry additions (Slice C)
+
+Add operator-visible telemetry events when budget limits are hit.
+These are `FeedbackVisibility.OPERATOR` / `FeedbackChannel.TELEMETRY` — never
+injected into the model context.
+
+**New event: `web_search_budget_exceeded`**
+
+```json
+{
+  "action": "search" | "open_page" | "find_in_page",
+  "limit": 4,
+  "counter": 4,
+  "query": "...",
+  "profile": "...",
+  "url": "...",
+  "call_id": "..."
+}
+```
+
+`query` and `profile` included only for `action=search`.
+`url` included only for `action=open_page`.
+Call ID included always for correlation.
+
+The existing hard error to the model is preserved unchanged. The new event is
+additive.
+
+**Emit site:** In `execute_web_search_call()` in `qz_tool_web.py`, after the
+limit check, before returning the error.
+
+---
+
+### 60.4 Source quality annotations (Slice D)
+
+Extend the `sources` list items with optional quality hints. These are
+annotations derived from the result URL + metadata without external lookups.
+
+**Proposed extended source item:**
+
+```json
+{
+  "url": "https://docs.python.org/3/library/pathlib.html",
+  "title": "pathlib — Object-oriented filesystem paths",
+  "domain": "docs.python.org",
+  "source_kind": "official_docs",
+  "freshness_hint": "unknown",
+  "trust_hint": "high"
+}
+```
+
+**`source_kind` taxonomy:**
+
+| Value | Examples |
+|---|---|
+| `official_docs` | docs.python.org, developer.mozilla.org, learn.microsoft.com |
+| `source_repo` | github.com, gitlab.com, crates.io |
+| `q_and_a` | stackoverflow.com, superuser.com, askubuntu.com |
+| `forum` | reddit.com, hackernews.ycombinator.com, lobste.rs |
+| `blog` | medium.com, substack.com, personal sites |
+| `news` | reuters.com, bbc.co.uk, techcrunch.com |
+| `encyclopedia` | wikipedia.org, wikibooks.org |
+| `package_registry` | npmjs.com, pypi.org, hub.docker.com |
+| `academic` | arxiv.org, pubmed.ncbi.nlm.nih.gov, semantic scholar |
+| `unknown` | everything else |
+
+**`trust_hint` taxonomy:**
+
+| Value | Meaning |
+|---|---|
+| `high` | Official source, package registry, known-good domain |
+| `medium` | Community Q&A, curated forum, encyclopedias |
+| `low` | Aggregator, unknown blog, low-signal domain |
+| `unknown` | Not classified |
+
+**`freshness_hint` taxonomy:**
+
+| Value | Meaning |
+|---|---|
+| `recent` | URL path contains current year, news categories |
+| `dated` | URL path contains old year (> 2 years ago) |
+| `unknown` | No signal available |
+
+**Implementation approach:**
+- Derive `source_kind` from domain pattern matching (no external lookup)
+- Derive `trust_hint` from `source_kind` (official_docs/source_repo/academic → high; q_and_a/encyclopedia → medium; forum/blog → low; unknown → unknown)
+- Derive `freshness_hint` from URL path year extraction
+- Annotations added in `_unique_sources()` or a new `_annotate_sources()` helper
+- Backwards compatible: existing consumers that only read `url`/`title` are unaffected
+
+**What this does NOT include:**
+- No network requests to validate sources
+- No PageRank or engagement signals
+- No BrainCase integration
+
+---
+
+### 60.5 Slice roadmap
+
+| Slice | Content |
+|---|---|
+| ~~**A-design**~~ | ~~Budget contract, telemetry spec, source annotation spec~~ |
+| **B-impl** | Wire `search.json routing.*` fields into `WebSearchRuntime`; constants remain as fallbacks |
+| **B.1** | Audit/polish; confirm no regressions |
+| **C-impl** | Add `web_search_budget_exceeded` telemetry event |
+| **C.1** | Audit telemetry coverage |
+| **D-impl** | Add source quality annotations (`source_kind`, `trust_hint`, `freshness_hint`) |
+| **D.1** | Audit annotation accuracy and coverage |
+| **E-audit** | Live smoke with local SearXNG; confirm telemetry visible in qz-thoughts |
+| **Close-out** | Update #60 acceptance criteria; close issue |
+
+---
+
+### 60.6 Non-goals
+
+```text
+- No change to web_search Codex-facing tool schema
+- No new search backends
+- No SearXNG requirement changes
+- No BrainCase integration
+- No session/workspace identity
+- No profile-bundle routing rule changes
+- No removal of legacy search-policy.json
+```
+
+---
+
+### 60.7 Tests for Slice B
+
+```text
+test_web_search_runtime_reads_max_searches_from_search_config
+  search.json routing.max_searches_per_turn = 2 → runtime rejects on 3rd search
+
+test_web_search_runtime_reads_max_page_opens_from_search_config
+  search.json routing.max_page_opens_per_turn = 1 → runtime rejects on 2nd open
+
+test_web_search_runtime_falls_back_to_constant_when_config_absent
+  no routing fields in search.json → uses WEB_SEARCH_MAX_SEARCHES = 4
+
+test_web_search_runtime_falls_back_to_constant_on_invalid_value
+  routing.max_searches_per_turn = "not_a_number" → uses constant
+
+test_web_search_budget_exceeded_telemetry_emitted (Slice C)
+  budget hit → web_search_budget_exceeded event in telemetry
+
+test_source_annotation_source_kind_official_docs (Slice D)
+  docs.python.org URL → source_kind = "official_docs"
+
+test_source_annotation_trust_hint_high_for_official (Slice D)
+  official_docs source_kind → trust_hint = "high"
+
+test_source_annotation_freshness_hint_recent (Slice D)
+  URL contains current year → freshness_hint = "recent"
+
+test_source_annotations_backwards_compatible (Slice D)
+  existing consumers reading only url/title unaffected
+```
