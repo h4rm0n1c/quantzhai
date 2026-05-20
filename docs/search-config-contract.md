@@ -668,7 +668,7 @@ test_source_annotations_backwards_compatible (Slice D)
 ## §64. Research-grade web_search budget modes (#64 Slice A-design)
 
 Date: 2026-05-21
-Status: A-design COMPLETE. B-impl pending.
+Status: A-design COMPLETE. B-impl COMPLETE. B.1-audit next.
 
 ### 64.0 Problem statement
 
@@ -1050,7 +1050,7 @@ test_tool_schema_includes_budget_mode
 | Slice | Status | Content |
 |---|---|---|
 | **A-design** | ✅ complete | This section |
-| **B-impl** | pending | Wire budget_mode through parser/runtime; remove hard ceilings; update config/schema |
+| **B-impl** | ✅ complete | Budget mode wired; hard ceilings removed; 22 new tests; 2804 pass |
 | **B.1-audit** | pending | Compat, fallback precedence, ceiling removal confirmed, telemetry |
 | **C-doc** | pending | Tool prompt guidance; update this contract §64.8 |
 | **D-live-smoke** | pending | Deep mode >8 results; audit chars >12 000; telemetry includes mode |

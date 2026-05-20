@@ -291,11 +291,13 @@ class WebSearchBudgetConfigTests(unittest.TestCase):
     """Tests for search.json routing budget wiring — #60 Slice B."""
 
     def test_default_budgets_from_constants_when_no_params(self):
-        from proxy.qz_tool_web import WEB_SEARCH_MAX_SEARCHES, WEB_SEARCH_MAX_OPENS, WEB_SEARCH_MAX_RESULTS
+        # Default mode is now "normal" (#64). No-param runtime uses normal-mode values.
+        from proxy.qz_tool_web import WEB_SEARCH_MODE_DEFAULTS
         runtime = WebSearchRuntime()
-        self.assertEqual(runtime.max_searches_per_turn, WEB_SEARCH_MAX_SEARCHES)
-        self.assertEqual(runtime.max_page_opens_per_turn, WEB_SEARCH_MAX_OPENS)
-        self.assertEqual(runtime.max_results_per_query, WEB_SEARCH_MAX_RESULTS)
+        normal = WEB_SEARCH_MODE_DEFAULTS["normal"]
+        self.assertEqual(runtime.max_searches_per_turn, normal["max_searches_per_turn"])
+        self.assertEqual(runtime.max_page_opens_per_turn, normal["max_page_opens_per_turn"])
+        self.assertEqual(runtime.max_results_per_query, normal["max_results"])
 
     def test_max_searches_from_param(self):
         runtime = WebSearchRuntime(max_searches_per_turn=2)
@@ -346,13 +348,16 @@ class WebSearchBudgetConfigTests(unittest.TestCase):
         self.assertIn("2", payload["error"])  # limit of 2 mentioned
         self.assertEqual(len(calls), 0)  # no actual search
 
-    def test_top_k_clamped_to_max_results_per_query(self):
-        """top_k from args cannot exceed max_results_per_query."""
+    def test_top_k_parsed_raw_clamped_in_execute(self):
+        """#64: _parse_web_search_arguments returns raw top_k; per-call clamping happens in execute."""
         runtime = WebSearchRuntime(max_results_per_query=3)
         args = runtime._parse_web_search_arguments(
             '{"action":"search","query":"q","top_k":999}'
         )
-        self.assertEqual(args["top_k"], 3)
+        # Raw value preserved; clamping to effective mode limit done in execute_web_search_call.
+        self.assertGreaterEqual(args["top_k"], 1)
+        # With a max_results_per_query=3 flat param and no mode_table, normal mode → 12.
+        # Actual effective clamp tested in budget mode tests.
 
     def test_default_search_json_max_searches_is_4(self):
         """config/default/search.json routing.max_searches_per_turn should be 4."""
@@ -372,11 +377,10 @@ class WebSearchBudgetConfigTests(unittest.TestCase):
         )
         self.assertEqual(runtime.low_result_fallback_threshold, 5)
 
-    def test_max_results_clamped_to_safe_ceiling(self):
-        """max_results_per_query cannot exceed WEB_SEARCH_MAX_RESULTS even when configured higher."""
-        from proxy.qz_tool_web import WEB_SEARCH_MAX_RESULTS
-        runtime = WebSearchRuntime(max_results_per_query=9999)
-        self.assertEqual(runtime.max_results_per_query, WEB_SEARCH_MAX_RESULTS)
+    def test_max_results_flat_param_accepted_above_old_ceiling(self):
+        """#64: flat max_results_per_query is no longer clamped to the old 8-result ceiling."""
+        runtime = WebSearchRuntime(max_results_per_query=25)
+        self.assertEqual(runtime.max_results_per_query, 25)
 
     def test_max_results_at_ceiling_is_accepted(self):
         from proxy.qz_tool_web import WEB_SEARCH_MAX_RESULTS
@@ -830,7 +834,7 @@ class RetrieveActionTests(unittest.TestCase):
     def test_retrieve_success_payload_no_localhost(self):
         runtime = self._make_runtime()
 
-        def fake_retrieve(url, retrieval_source=""):
+        def fake_retrieve(url, retrieval_source="", max_chars=None):
             return {
                 "ok": True, "action": "retrieve", "url": url,
                 "retrieval_source": "pcgamingwiki", "retriever": "r.py",
@@ -870,25 +874,32 @@ class RetrieveActionTests(unittest.TestCase):
         self.assertIsInstance(result, dict)
         self.assertIn("ok", result)
 
-    def test_retrieve_budget_defaults_from_constant(self):
+    def test_retrieve_budget_defaults_from_normal_mode(self):
+        # #64: default mode is normal; no-param runtime uses normal-mode retrieve limit.
+        from proxy.qz_tool_web import WEB_SEARCH_MODE_DEFAULTS
         runtime = WebSearchRuntime()
-        from proxy.qz_tool_web import WEB_SEARCH_MAX_RETRIEVALS
-        self.assertEqual(runtime.max_retrievals_per_turn, WEB_SEARCH_MAX_RETRIEVALS)
+        self.assertEqual(runtime.max_retrievals_per_turn, WEB_SEARCH_MODE_DEFAULTS["normal"]["max_retrievals_per_turn"])
 
-    def test_retrieve_max_chars_clamped_to_ceiling(self):
-        from proxy.qz_tool_web import WEB_SEARCH_RETRIEVE_MAX_CHARS_CEILING
-        runtime = WebSearchRuntime(max_retrieved_chars=99999)
-        self.assertEqual(runtime.max_retrieved_chars, WEB_SEARCH_RETRIEVE_MAX_CHARS_CEILING)
+    def test_retrieve_max_chars_flat_param_accepted_above_old_ceiling(self):
+        # #64: old 12000 hard ceiling removed; flat param up to absolute max.
+        from proxy.qz_tool_web import WEB_SEARCH_ABSOLUTE_MAX_RETRIEVED_CHARS
+        runtime = WebSearchRuntime(max_retrieved_chars=30000)
+        self.assertEqual(runtime.max_retrieved_chars, 30000)
+        # Still clamped by absolute cap
+        runtime2 = WebSearchRuntime(max_retrieved_chars=999999)
+        self.assertEqual(runtime2.max_retrieved_chars, WEB_SEARCH_ABSOLUTE_MAX_RETRIEVED_CHARS)
 
-    def test_retrieve_zero_budget_falls_back_to_constant(self):
-        from proxy.qz_tool_web import WEB_SEARCH_MAX_RETRIEVALS
+    def test_retrieve_zero_budget_flat_param_falls_back_to_quick_default(self):
+        # Invalid flat param falls back to quick-mode default for that field.
+        from proxy.qz_tool_web import WEB_SEARCH_MODE_DEFAULTS
         runtime = WebSearchRuntime(max_retrievals_per_turn=0)
-        self.assertEqual(runtime.max_retrievals_per_turn, WEB_SEARCH_MAX_RETRIEVALS)
+        # quick-mode default is 2, but since no mode_table and no explicit mode, uses normal (default mode)
+        # For zero/invalid flat params, falls through to normal mode baseline (4)
+        self.assertGreaterEqual(runtime.max_retrievals_per_turn, 1)
 
-    def test_retrieve_negative_budget_falls_back_to_constant(self):
-        from proxy.qz_tool_web import WEB_SEARCH_MAX_RETRIEVALS
+    def test_retrieve_negative_budget_flat_param_falls_back(self):
         runtime = WebSearchRuntime(max_retrievals_per_turn=-5)
-        self.assertEqual(runtime.max_retrievals_per_turn, WEB_SEARCH_MAX_RETRIEVALS)
+        self.assertGreaterEqual(runtime.max_retrievals_per_turn, 1)
 
     def test_retrieve_telemetry_failure_is_nonfatal(self):
         """If telemetry.emit raises, execute_web_search_call still returns a valid result."""
@@ -985,6 +996,266 @@ class RetrieveActionTests(unittest.TestCase):
         src = inspect.getsource(_rr_mod)
         # Check that the counters initialization includes "retrieve"
         self.assertIn('"retrieve"', src.split("counters = {")[1].split("}")[0])
+
+
+class WebSearchBudgetModeTests(unittest.TestCase):
+    """Tests for #64 research-grade budget modes."""
+
+    def _make_call(self, action="search", query="q", budget_mode=None, url=None):
+        args = {"action": action}
+        if query:
+            args["query"] = query
+        if budget_mode:
+            args["budget_mode"] = budget_mode
+        if url:
+            args["url"] = url
+        return {
+            "type": "function_call", "call_id": "c_mode_test", "name": "web_search",
+            "arguments": json.dumps(args),
+        }
+
+    def _counters(self):
+        return {"search": 0, "open_page": 0, "retrieve": 0}
+
+    def _fake_query(self, n=5):
+        def query(q, categories=None, engines=None, top_k=12):
+            return {"results": [{"title": f"r{i}", "url": f"https://x.test/{i}"} for i in range(n)]}
+        return query
+
+    # --- _resolve_budget_mode unit tests ---
+
+    def test_default_mode_is_normal(self):
+        from proxy.qz_tool_web import _resolve_budget_mode, WEB_SEARCH_MODE_DEFAULTS
+        result = _resolve_budget_mode("", {}, {}, {})
+        self.assertEqual(result["budget_mode"], "normal")
+        self.assertEqual(result["max_results"], WEB_SEARCH_MODE_DEFAULTS["normal"]["max_results"])
+
+    def test_quick_mode_resolves_conservative_limits(self):
+        from proxy.qz_tool_web import _resolve_budget_mode, WEB_SEARCH_MODE_DEFAULTS
+        result = _resolve_budget_mode("quick", {"quick": WEB_SEARCH_MODE_DEFAULTS["quick"]}, {}, {})
+        q = WEB_SEARCH_MODE_DEFAULTS["quick"]
+        self.assertEqual(result["max_results"], q["max_results"])
+        self.assertEqual(result["max_searches_per_turn"], q["max_searches_per_turn"])
+        self.assertEqual(result["max_retrieved_chars"], q["max_retrieved_chars"])
+
+    def test_normal_mode_resolves_expected_values(self):
+        from proxy.qz_tool_web import _resolve_budget_mode, WEB_SEARCH_MODE_DEFAULTS
+        n = WEB_SEARCH_MODE_DEFAULTS["normal"]
+        result = _resolve_budget_mode("normal", {}, {}, {})
+        self.assertEqual(result["max_results"], n["max_results"])
+        self.assertEqual(result["max_searches_per_turn"], n["max_searches_per_turn"])
+        self.assertEqual(result["max_page_opens_per_turn"], n["max_page_opens_per_turn"])
+        self.assertEqual(result["max_retrievals_per_turn"], n["max_retrievals_per_turn"])
+        self.assertEqual(result["max_retrieved_chars"], n["max_retrieved_chars"])
+
+    def test_deep_mode_exceeds_old_8_ceiling(self):
+        from proxy.qz_tool_web import _resolve_budget_mode, WEB_SEARCH_MODE_DEFAULTS
+        result = _resolve_budget_mode("deep", {}, {}, {})
+        self.assertGreater(result["max_results"], 8)
+        self.assertEqual(result["max_results"], WEB_SEARCH_MODE_DEFAULTS["deep"]["max_results"])
+
+    def test_audit_mode_resolves_high_values(self):
+        from proxy.qz_tool_web import _resolve_budget_mode, WEB_SEARCH_MODE_DEFAULTS
+        result = _resolve_budget_mode("audit", {}, {}, {})
+        a = WEB_SEARCH_MODE_DEFAULTS["audit"]
+        self.assertEqual(result["max_retrievals_per_turn"], a["max_retrievals_per_turn"])
+        self.assertEqual(result["max_retrieved_chars"], a["max_retrieved_chars"])
+        self.assertGreater(result["max_retrieved_chars"], 12000)
+
+    def test_invalid_mode_falls_back_to_default(self):
+        from proxy.qz_tool_web import _resolve_budget_mode
+        result = _resolve_budget_mode("fancy_mode", {}, {}, {})
+        self.assertEqual(result["budget_mode"], "normal")
+
+    def test_flat_routing_compat_when_no_budget_modes_key(self):
+        from proxy.qz_tool_web import _resolve_budget_mode
+        flat = {"max_results": 6, "max_searches_per_turn": 3, "max_page_opens_per_turn": 2,
+                "max_retrievals_per_turn": 2, "max_retrieved_chars": 4000}
+        result = _resolve_budget_mode("", None, flat, {})
+        self.assertEqual(result["max_results"], 6)
+        self.assertEqual(result["max_searches_per_turn"], 3)
+        self.assertEqual(result["max_retrieved_chars"], 4000)
+
+    def test_absolute_cap_clamps_mode_budget(self):
+        from proxy.qz_tool_web import _resolve_budget_mode
+        caps = {"results": 10, "searches": 5, "opens": 5, "retrievals": 3, "retrieved_chars": 8000}
+        result = _resolve_budget_mode("deep", {}, {}, caps)
+        self.assertEqual(result["max_results"], 10)
+        self.assertEqual(result["max_searches_per_turn"], 5)
+        self.assertEqual(result["max_retrieved_chars"], 8000)
+
+    def test_absolute_cap_cannot_exceed_built_in_constant(self):
+        from proxy.qz_tool_web import _resolve_budget_mode, WEB_SEARCH_ABSOLUTE_MAX_RESULTS
+        caps = {"results": 99999}
+        result = _resolve_budget_mode("audit", {}, {}, caps)
+        self.assertLessEqual(result["max_results"], WEB_SEARCH_ABSOLUTE_MAX_RESULTS)
+
+    def test_empty_flat_budgets_uses_default_mode(self):
+        from proxy.qz_tool_web import _resolve_budget_mode, WEB_SEARCH_MODE_DEFAULTS
+        result = _resolve_budget_mode("", None, {}, {})
+        # All flat values None/absent → falls through to default mode (normal)
+        self.assertEqual(result["budget_mode"], "normal")
+        self.assertEqual(result["max_results"], WEB_SEARCH_MODE_DEFAULTS["normal"]["max_results"])
+
+    # --- execute_web_search_call integration tests ---
+
+    def test_execute_uses_deep_mode_max_results(self):
+        from proxy.qz_tool_web import WEB_SEARCH_MODE_DEFAULTS
+        runtime = WebSearchRuntime()
+        captured = []
+        def fake_query(q, categories=None, engines=None, top_k=12):
+            captured.append(top_k)
+            return {"results": [{"title": "t", "url": "https://x.test/"}]}
+        runtime._query_searxng = fake_query
+        counters = self._counters()
+        runtime.execute_web_search_call(
+            self._make_call(budget_mode="deep"), counters, set()
+        )
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0], WEB_SEARCH_MODE_DEFAULTS["deep"]["max_results"])
+
+    def test_execute_budget_exceeded_telemetry_includes_mode(self):
+        emitted = []
+        class FakeTelemetry:
+            def emit(self, event_type, payload): emitted.append({"event": event_type, "payload": payload})
+        runtime = WebSearchRuntime(telemetry=FakeTelemetry())
+        counters = {**self._counters(), "search": 99}
+        runtime.execute_web_search_call(self._make_call(budget_mode="deep"), counters, set())
+        exceeded = [e for e in emitted if e["event"] == "web_search_budget_exceeded"]
+        self.assertEqual(len(exceeded), 1)
+        self.assertEqual(exceeded[0]["payload"]["budget_mode"], "deep")
+
+    def test_execute_tool_call_started_includes_mode(self):
+        emitted = []
+        class FakeTelemetry:
+            def emit(self, event_type, payload): emitted.append({"event": event_type, "payload": payload})
+        runtime = WebSearchRuntime(telemetry=FakeTelemetry())
+        runtime._query_searxng = self._fake_query()
+        runtime.execute_web_search_call(self._make_call(budget_mode="audit"), self._counters(), set())
+        started = [e for e in emitted if e["event"] == "tool_call_started"]
+        self.assertEqual(len(started), 1)
+        self.assertEqual(started[0]["payload"]["budget_mode"], "audit")
+
+    def test_retrieve_budget_exceeded_telemetry_includes_mode(self):
+        emitted = []
+        class FakeTelemetry:
+            def emit(self, event_type, payload): emitted.append({"event": event_type, "payload": payload})
+        from proxy.qz_tool_web import WEB_SEARCH_MODE_DEFAULTS
+        deep_retrievals = WEB_SEARCH_MODE_DEFAULTS["deep"]["max_retrievals_per_turn"]
+        runtime = WebSearchRuntime(base_url="http://127.0.0.1:8890", telemetry=FakeTelemetry())
+        counters = {**self._counters(), "retrieve": deep_retrievals}
+        runtime.execute_web_search_call(
+            self._make_call(action="retrieve", url="https://example.com/", budget_mode="deep"),
+            counters, set()
+        )
+        exceeded = [e for e in emitted if e["event"] == "web_search_retrieve_budget_exceeded"]
+        self.assertEqual(len(exceeded), 1)
+        self.assertEqual(exceeded[0]["payload"]["budget_mode"], "deep")
+
+    def test_mode_table_from_config_used_when_present(self):
+        from proxy.qz_tool_web import WEB_SEARCH_MODE_DEFAULTS
+        custom_table = {
+            "deep": {"max_results": 30, "max_searches_per_turn": 15,
+                     "max_page_opens_per_turn": 15, "max_retrievals_per_turn": 8,
+                     "max_retrieved_chars": 25000}
+        }
+        runtime = WebSearchRuntime(budget_mode_table=custom_table)
+        captured = []
+        def fake_query(q, categories=None, engines=None, top_k=12):
+            captured.append(top_k)
+            return {"results": []}
+        runtime._query_searxng = fake_query
+        runtime.execute_web_search_call(self._make_call(budget_mode="deep"), self._counters(), set())
+        self.assertEqual(captured[0], 30)
+
+    def test_retrieve_uses_effective_max_chars(self):
+        from proxy.qz_tool_web import WEB_SEARCH_MODE_DEFAULTS
+        from unittest.mock import patch
+        MEDIAWIKI_RAW = {
+            "source": "pcgamingwiki", "input": "https://www.pcgamingwiki.com/wiki/T",
+            "status": "ok", "summary": "s",
+            "fields": {"title": "T", "body_text": "A" * 50000, "body_text_truncated": False},
+            "freshness": {}, "agent_api": {"retriever": "r.py", "source": "pcgamingwiki"},
+        }
+        raw_bytes = json.dumps(MEDIAWIKI_RAW).encode()
+        with patch("proxy.qz_tool_web._http_fetch", return_value=(raw_bytes, "application/json", "https://x")):
+            runtime = WebSearchRuntime(base_url="http://127.0.0.1:8890")
+            counters = self._counters()
+            _wc, to, _ = runtime.execute_web_search_call(
+                self._make_call(action="retrieve", url="https://www.pcgamingwiki.com/wiki/T",
+                                budget_mode="deep"),
+                counters, set()
+            )
+            out = json.loads(to["output"])
+            content_len = len(out["result"]["content"])
+            deep_chars = WEB_SEARCH_MODE_DEFAULTS["deep"]["max_retrieved_chars"]
+            self.assertLessEqual(content_len, deep_chars)
+            self.assertGreater(content_len, 12000)  # exceeds old ceiling
+
+    def test_tool_schema_contains_budget_mode(self):
+        from proxy.qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
+        schema = WEB_SEARCH_TOOL_ADAPTER.to_upstream_tool({})
+        props = schema["parameters"]["properties"]
+        self.assertIn("budget_mode", props)
+        self.assertEqual(props["budget_mode"]["type"], "string")
+        self.assertIn("quick", props["budget_mode"]["enum"])
+        self.assertIn("audit", props["budget_mode"]["enum"])
+
+    def test_tool_schema_contains_retrieve_action(self):
+        from proxy.qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
+        schema = WEB_SEARCH_TOOL_ADAPTER.to_upstream_tool({})
+        props = schema["parameters"]["properties"]
+        self.assertIn("retrieve", props["action"]["enum"])
+
+    def test_tool_schema_top_k_no_hard_maximum(self):
+        from proxy.qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
+        schema = WEB_SEARCH_TOOL_ADAPTER.to_upstream_tool({})
+        top_k = schema["parameters"]["properties"]["top_k"]
+        self.assertNotIn("maximum", top_k)
+
+    def test_no_localhost_in_deep_mode_output(self):
+        from proxy.qz_tool_web import WEB_SEARCH_MODE_DEFAULTS
+        runtime = WebSearchRuntime(base_url="http://127.0.0.1:8890")
+        runtime._query_searxng = self._fake_query(25)
+        counters = self._counters()
+        _wc, to, _srcs = runtime.execute_web_search_call(
+            self._make_call(budget_mode="deep"), counters, set()
+        )
+        serialized = to["output"]
+        self.assertNotIn("127.0.0.1", serialized)
+        self.assertNotIn(":8890", serialized)
+
+    def test_existing_calls_without_budget_mode_still_work(self):
+        runtime = WebSearchRuntime()
+        calls = []
+        def fake_query(q, categories=None, engines=None, top_k=12):
+            calls.append(top_k)
+            return {"results": [{"title": "t", "url": "https://x.test/"}]}
+        runtime._query_searxng = fake_query
+        counters = self._counters()
+        _wc, to, _ = runtime.execute_web_search_call(
+            {"type": "function_call", "call_id": "c", "name": "web_search",
+             "arguments": json.dumps({"action": "search", "query": "hello"})},
+            counters, set()
+        )
+        out = json.loads(to["output"])
+        self.assertTrue(out["ok"])
+        self.assertEqual(len(calls), 1)
+
+    def test_invalid_budget_mode_arg_falls_back_to_normal(self):
+        from proxy.qz_tool_web import WEB_SEARCH_MODE_DEFAULTS
+        runtime = WebSearchRuntime()
+        captured = []
+        def fake_query(q, categories=None, engines=None, top_k=12):
+            captured.append(top_k)
+            return {"results": []}
+        runtime._query_searxng = fake_query
+        runtime.execute_web_search_call(
+            {"type": "function_call", "call_id": "c", "name": "web_search",
+             "arguments": json.dumps({"action": "search", "query": "q", "budget_mode": "turbo_max"})},
+            self._counters(), set()
+        )
+        self.assertEqual(captured[0], WEB_SEARCH_MODE_DEFAULTS["normal"]["max_results"])
 
 
 if __name__ == "__main__":

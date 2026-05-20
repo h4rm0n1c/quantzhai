@@ -80,14 +80,14 @@ class WebSearchToolAdapter:
     def to_upstream_tool(self, tool: dict) -> dict:
         return function_tool(
             "web_search",
-            "Search the web, open a page, or find text in an opened page using the local web runtime.",
+            "Search the web, open a page, find text in an opened page, or retrieve full content for a result URL using the local web runtime.",
             {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["search", "open_page", "find_in_page"],
-                        "description": "The web action to perform.",
+                        "enum": ["search", "open_page", "find_in_page", "retrieve"],
+                        "description": "The web action to perform. retrieve: fetch full structured content for a result URL via the local Agent API.",
                     },
                     "query": {
                         "type": "string",
@@ -95,11 +95,20 @@ class WebSearchToolAdapter:
                     },
                     "profile": {
                         "type": "string",
-                        "description": "Search profile used to select SearXNG categories and engines. Common profiles: auto, broad, coding, research, news, ai_models, reference, sysadmin. Local policy may define more.",
+                        "description": "Search profile used to select SearXNG categories and engines. Common profiles: auto, broad, coding, research, news, ai_models, reference, sysadmin, character_cards, furry, gaming_wikis, archives. Local policy may define more.",
+                    },
+                    "budget_mode": {
+                        "type": "string",
+                        "enum": ["quick", "normal", "deep", "audit"],
+                        "description": "Research depth mode. quick: single fact check (conservative limits). normal: routine agent work (default). deep: multi-source research with more results and larger retrievals. audit: exhaustive citation/evidence scan.",
                     },
                     "url": {
                         "type": "string",
-                        "description": "Page URL for open_page or find_in_page.",
+                        "description": "Page URL for open_page, find_in_page, or retrieve.",
+                    },
+                    "retrieval_source": {
+                        "type": "string",
+                        "description": "Optional source hint for retrieve action (e.g. mediawiki, fse, character-card). Use the retrieval_source annotation from search results.",
                     },
                     "page_id": {
                         "type": "string",
@@ -118,8 +127,7 @@ class WebSearchToolAdapter:
                     "top_k": {
                         "type": "integer",
                         "minimum": 1,
-                        "maximum": 8,
-                        "description": "Optional maximum number of search results to return.",
+                        "description": "Optional maximum number of search results to return. Clamped to the effective budget_mode limit.",
                     },
                 },
                 "required": ["action"],
@@ -143,15 +151,33 @@ WEB_SEARCH_TOOL_ADAPTER = WebSearchToolAdapter()
 
 WEB_SEARCH_SEARCH_CACHE_TTL = 300
 WEB_SEARCH_PAGE_CACHE_TTL = 900
-WEB_SEARCH_MAX_RESULTS = 8
 WEB_SEARCH_MAX_HOPS = WEB_SEARCH_TOOL_ADAPTER.lifecycle.continuation_hops
+WEB_SEARCH_RETRIEVE_CACHE_TTL = 900
+WEB_SEARCH_USER_AGENT = "qwen36turbo-web-runtime/1.0"
+
+# Quick-mode built-in defaults — no longer hard ceilings; use as fallback constants only.
+WEB_SEARCH_MAX_RESULTS = 8
 WEB_SEARCH_MAX_SEARCHES = 4
 WEB_SEARCH_MAX_OPENS = 3
 WEB_SEARCH_MAX_RETRIEVALS = 3
 WEB_SEARCH_RETRIEVE_MAX_CHARS = 6000
-WEB_SEARCH_RETRIEVE_MAX_CHARS_CEILING = 12000
-WEB_SEARCH_RETRIEVE_CACHE_TTL = 900
-WEB_SEARCH_USER_AGENT = "qwen36turbo-web-runtime/1.0"
+
+# Built-in absolute caps — operator may lower via config; cannot raise above these.
+WEB_SEARCH_ABSOLUTE_MAX_RESULTS          = 100
+WEB_SEARCH_ABSOLUTE_MAX_SEARCHES         = 100
+WEB_SEARCH_ABSOLUTE_MAX_OPENS            = 100
+WEB_SEARCH_ABSOLUTE_MAX_RETRIEVALS       = 50
+WEB_SEARCH_ABSOLUTE_MAX_RETRIEVED_CHARS  = 120_000
+
+# Named budget modes: quick / normal / deep / audit
+WEB_SEARCH_DEFAULT_BUDGET_MODE = "normal"
+WEB_SEARCH_VALID_BUDGET_MODES = {"quick", "normal", "deep", "audit"}
+WEB_SEARCH_MODE_DEFAULTS: dict = {
+    "quick":  {"max_results": 8,  "max_searches_per_turn": 4,  "max_page_opens_per_turn": 3,  "max_retrievals_per_turn": 2,  "max_retrieved_chars": 6_000},
+    "normal": {"max_results": 12, "max_searches_per_turn": 8,  "max_page_opens_per_turn": 8,  "max_retrievals_per_turn": 4,  "max_retrieved_chars": 12_000},
+    "deep":   {"max_results": 25, "max_searches_per_turn": 20, "max_page_opens_per_turn": 20, "max_retrievals_per_turn": 10, "max_retrieved_chars": 30_000},
+    "audit":  {"max_results": 50, "max_searches_per_turn": 40, "max_page_opens_per_turn": 40, "max_retrievals_per_turn": 20, "max_retrieved_chars": 60_000},
+}
 VALID_WEB_SEARCH_PROFILES = {
     "auto",
     "broad",
@@ -469,6 +495,88 @@ def _resolve_budget_int(value, default: int, min_val: int = 1) -> int:
         return default
 
 
+def _resolve_budget_mode(
+    requested_mode: str,
+    mode_table: dict | None,
+    flat_budgets: dict | None,
+    absolute_caps: dict | None,
+    default_mode: str = WEB_SEARCH_DEFAULT_BUDGET_MODE,
+) -> dict:
+    """Resolve effective per-call budget from mode, config table, flat overrides, and absolute caps.
+
+    Precedence (highest → lowest):
+      1. Built-in ABSOLUTE_* constants (never exceeded)
+      2. absolute_caps from routing.absolute_max_* (operator may lower only)
+      3. Mode budget from mode_table[effective_mode]
+      4. flat_budgets (#60 compat — used when mode_table is falsy and mode is absent)
+      5. Built-in WEB_SEARCH_MODE_DEFAULTS[effective_mode]
+
+    Returns dict with: budget_mode, max_results, max_searches_per_turn,
+    max_page_opens_per_turn, max_retrievals_per_turn, max_retrieved_chars.
+    """
+    fb = flat_budgets or {}
+    mt = mode_table or {}
+    ac = absolute_caps or {}
+
+    # Resolve absolute caps (operator may only lower the built-in constant)
+    abs_results  = min(_resolve_budget_int(ac.get("results"),          WEB_SEARCH_ABSOLUTE_MAX_RESULTS,          1), WEB_SEARCH_ABSOLUTE_MAX_RESULTS)
+    abs_searches = min(_resolve_budget_int(ac.get("searches"),         WEB_SEARCH_ABSOLUTE_MAX_SEARCHES,         1), WEB_SEARCH_ABSOLUTE_MAX_SEARCHES)
+    abs_opens    = min(_resolve_budget_int(ac.get("opens"),            WEB_SEARCH_ABSOLUTE_MAX_OPENS,            1), WEB_SEARCH_ABSOLUTE_MAX_OPENS)
+    abs_retrievals = min(_resolve_budget_int(ac.get("retrievals"),     WEB_SEARCH_ABSOLUTE_MAX_RETRIEVALS,       1), WEB_SEARCH_ABSOLUTE_MAX_RETRIEVALS)
+    abs_chars    = min(_resolve_budget_int(ac.get("retrieved_chars"),  WEB_SEARCH_ABSOLUTE_MAX_RETRIEVED_CHARS,  1), WEB_SEARCH_ABSOLUTE_MAX_RETRIEVED_CHARS)
+
+    # Determine effective mode name
+    mode = requested_mode if requested_mode in WEB_SEARCH_VALID_BUDGET_MODES else ""
+    effective_mode = mode or (default_mode if default_mode in WEB_SEARCH_VALID_BUDGET_MODES else WEB_SEARCH_DEFAULT_BUDGET_MODE)
+
+    # Determine base budget values
+    if mt:
+        # Named mode table present: use it (with built-in default as fallback per field)
+        mode_base = WEB_SEARCH_MODE_DEFAULTS[effective_mode]
+        mt_entry = mt.get(effective_mode) or {}
+        results    = _resolve_budget_int(mt_entry.get("max_results"),           mode_base["max_results"],           1)
+        searches   = _resolve_budget_int(mt_entry.get("max_searches_per_turn"), mode_base["max_searches_per_turn"], 1)
+        opens      = _resolve_budget_int(mt_entry.get("max_page_opens_per_turn"), mode_base["max_page_opens_per_turn"], 1)
+        retrievals = _resolve_budget_int(mt_entry.get("max_retrievals_per_turn"), mode_base["max_retrievals_per_turn"], 1)
+        chars      = _resolve_budget_int(mt_entry.get("max_retrieved_chars"),   mode_base["max_retrieved_chars"],   1)
+    elif not mode and any(v is not None for v in fb.values()):
+        # No mode_table and no explicit budget_mode: use flat #60 compat fields
+        quick_base = WEB_SEARCH_MODE_DEFAULTS["quick"]
+        results    = _resolve_budget_int(fb.get("max_results"),           quick_base["max_results"],           1)
+        searches   = _resolve_budget_int(fb.get("max_searches_per_turn"), quick_base["max_searches_per_turn"], 1)
+        opens      = _resolve_budget_int(fb.get("max_page_opens_per_turn"), quick_base["max_page_opens_per_turn"], 1)
+        retrievals = _resolve_budget_int(fb.get("max_retrievals_per_turn"), quick_base["max_retrievals_per_turn"], 1)
+        chars      = _resolve_budget_int(fb.get("max_retrieved_chars"),   quick_base["max_retrieved_chars"],   1)
+        # When using flat compat and no explicit mode, honour the default mode upgrade
+        # only if flat budgets are all absent (i.e., fresh unconfigured install)
+        if all(fb.get(k) is None for k in ("max_results", "max_searches_per_turn",
+                                            "max_page_opens_per_turn", "max_retrievals_per_turn",
+                                            "max_retrieved_chars")):
+            mode_base = WEB_SEARCH_MODE_DEFAULTS[effective_mode]
+            results, searches, opens, retrievals, chars = (
+                mode_base["max_results"], mode_base["max_searches_per_turn"],
+                mode_base["max_page_opens_per_turn"], mode_base["max_retrievals_per_turn"],
+                mode_base["max_retrieved_chars"],
+            )
+    else:
+        # No mode_table, explicit mode requested: use built-in mode defaults
+        mode_base = WEB_SEARCH_MODE_DEFAULTS[effective_mode]
+        results    = mode_base["max_results"]
+        searches   = mode_base["max_searches_per_turn"]
+        opens      = mode_base["max_page_opens_per_turn"]
+        retrievals = mode_base["max_retrievals_per_turn"]
+        chars      = mode_base["max_retrieved_chars"]
+
+    return {
+        "budget_mode":              effective_mode,
+        "max_results":              min(results,    abs_results),
+        "max_searches_per_turn":    min(searches,   abs_searches),
+        "max_page_opens_per_turn":  min(opens,      abs_opens),
+        "max_retrievals_per_turn":  min(retrievals, abs_retrievals),
+        "max_retrieved_chars":      min(chars,      abs_chars),
+    }
+
+
 class WebSearchRuntime:
     def __init__(
         self,
@@ -483,12 +591,17 @@ class WebSearchRuntime:
         default_profile: str = "",
         policy_selection=None,
         search_config_profiles=None,
+        # Flat per-session budget params — #60 compat; used when budget_modes absent.
         max_searches_per_turn=None,
         max_page_opens_per_turn=None,
         max_results_per_query=None,
         low_result_fallback_threshold=None,
         max_retrievals_per_turn=None,
         max_retrieved_chars=None,
+        # Budget mode table and absolute caps from search.json routing.
+        budget_mode_table=None,
+        absolute_caps=None,
+        default_budget_mode=None,
     ):
         self.searxng_base_url = base_url
         self.searxng_timeout = timeout
@@ -501,18 +614,31 @@ class WebSearchRuntime:
         self.default_search_profile = str(default_profile or "").strip()
         self.search_policy_selection = policy_selection if isinstance(policy_selection, dict) else {}
         self.search_config_profiles = search_config_profiles if isinstance(search_config_profiles, dict) else {}
-        # Budget limits: prefer explicit params; fall back to module constants.
-        self.max_searches_per_turn = _resolve_budget_int(max_searches_per_turn, WEB_SEARCH_MAX_SEARCHES)
-        self.max_page_opens_per_turn = _resolve_budget_int(max_page_opens_per_turn, WEB_SEARCH_MAX_OPENS)
-        # Clamp to the safe ceiling: no config value can exceed WEB_SEARCH_MAX_RESULTS.
-        self.max_results_per_query = min(
-            _resolve_budget_int(max_results_per_query, WEB_SEARCH_MAX_RESULTS),
-            WEB_SEARCH_MAX_RESULTS,
+
+        # Store data for per-call _resolve_budget_mode.
+        self._budget_mode_table = budget_mode_table if isinstance(budget_mode_table, dict) else {}
+        self._absolute_caps = absolute_caps if isinstance(absolute_caps, dict) else {}
+        self._default_budget_mode = str(default_budget_mode or WEB_SEARCH_DEFAULT_BUDGET_MODE).strip()
+        # Flat #60 compat fields stored for fallback use in _resolve_budget_mode.
+        self._flat_budgets = {
+            "max_results":             max_results_per_query,
+            "max_searches_per_turn":   max_searches_per_turn,
+            "max_page_opens_per_turn": max_page_opens_per_turn,
+            "max_retrievals_per_turn": max_retrievals_per_turn,
+            "max_retrieved_chars":     max_retrieved_chars,
+        }
+
+        # Resolve the default budget (no mode argument) for backward-compat attributes.
+        _default_budget = _resolve_budget_mode(
+            "", self._budget_mode_table, self._flat_budgets,
+            self._absolute_caps, self._default_budget_mode,
         )
-        # low_result_fallback_threshold: try param, then legacy policy key, then default 2.
-        self.max_retrievals_per_turn = _resolve_budget_int(max_retrievals_per_turn, WEB_SEARCH_MAX_RETRIEVALS)
-        _raw_chars = _resolve_budget_int(max_retrieved_chars, WEB_SEARCH_RETRIEVE_MAX_CHARS)
-        self.max_retrieved_chars = min(_raw_chars, WEB_SEARCH_RETRIEVE_MAX_CHARS_CEILING)
+        self.max_searches_per_turn   = _default_budget["max_searches_per_turn"]
+        self.max_page_opens_per_turn = _default_budget["max_page_opens_per_turn"]
+        self.max_results_per_query   = _default_budget["max_results"]
+        self.max_retrievals_per_turn = _default_budget["max_retrievals_per_turn"]
+        self.max_retrieved_chars     = _default_budget["max_retrieved_chars"]
+
         self.retrieval_cache: dict = {}
         if low_result_fallback_threshold is not None:
             self.low_result_fallback_threshold = _resolve_budget_int(low_result_fallback_threshold, 2)
@@ -795,7 +921,7 @@ class WebSearchRuntime:
             }
             entry.update(_annotate_source(item_url, retrieval_meta, pub_date))
             results.append(entry)
-            if len(results) >= max(1, min(int(top_k or WEB_SEARCH_MAX_RESULTS), WEB_SEARCH_MAX_RESULTS)):
+            if len(results) >= max(1, int(top_k or self.max_results_per_query)):
                 break
 
         result = {
@@ -1026,17 +1152,22 @@ class WebSearchRuntime:
         page_id = data.get("page_id")
         categories = data.get("categories") if isinstance(data.get("categories"), list) else None
         engines = data.get("engines") if isinstance(data.get("engines"), list) else None
-        top_k = data.get("top_k")
+        # budget_mode: preserve raw value; resolution happens in execute_web_search_call.
+        raw_mode = str(data.get("budget_mode") or "").strip()
+        budget_mode = raw_mode if raw_mode in WEB_SEARCH_VALID_BUDGET_MODES else ""
+        # top_k: parse raw int if provided; keep None if absent so execute_web_search_call
+        # can substitute the per-call effective max_results.
+        _raw_top_k = data.get("top_k")
         try:
-            top_k = int(top_k) if top_k is not None else self.max_results_per_query
+            top_k = max(1, int(_raw_top_k)) if _raw_top_k is not None else None
         except Exception:
-            top_k = self.max_results_per_query
-        top_k = max(1, min(top_k, self.max_results_per_query))
+            top_k = None
         retrieval_source = str(data.get("retrieval_source") or "").strip()
         return {
             "action": action,
             "query": query,
             "profile": profile,
+            "budget_mode": budget_mode,
             "url": url,
             "page_id": page_id,
             "categories": categories,
@@ -1045,7 +1176,7 @@ class WebSearchRuntime:
             "retrieval_source": retrieval_source,
         }
 
-    def _normalize_retrieve_response(self, raw: dict, url: str) -> dict:
+    def _normalize_retrieve_response(self, raw: dict, url: str, max_chars: int | None = None) -> dict:
         """Normalize Agent API /retrieve response into unified output.
 
         Handles two upstream shapes:
@@ -1055,6 +1186,8 @@ class WebSearchRuntime:
         """
         if not isinstance(raw, dict):
             return {"ok": False, "error": "invalid_response"}
+
+        _max_chars = max_chars if (isinstance(max_chars, int) and max_chars > 0) else self.max_retrieved_chars
 
         agent_api = raw.get("agent_api") or {}
         retriever = str(agent_api.get("retriever") or "")
@@ -1076,8 +1209,8 @@ class WebSearchRuntime:
             title = str(fields.get("title") or fields.get("display_title") or canonical_url)
             summary = _truncate(_normalize_ws(str(raw.get("summary") or "")), 500)
             body = str(fields.get("body_text") or fields.get("body_visible") or summary)
-            truncated = bool(fields.get("body_text_truncated")) or (len(body) > self.max_retrieved_chars)
-            content = body[:self.max_retrieved_chars] if truncated else body
+            truncated = bool(fields.get("body_text_truncated")) or (len(body) > _max_chars)
+            content = body[:_max_chars] if truncated else body
             # Bounded metadata — never include body_text
             meta = {}
             for k in ("categories", "word_count", "length", "author", "rating",
@@ -1102,8 +1235,8 @@ class WebSearchRuntime:
             personality = str(raw.get("personality") or "")
             scenario = str(raw.get("scenario") or "")
             assembled = "\n\n".join(p for p in (desc, personality, scenario) if p.strip())
-            truncated = len(assembled) > self.max_retrieved_chars
-            content = assembled[:self.max_retrieved_chars] if truncated else assembled
+            truncated = len(assembled) > _max_chars
+            content = assembled[:_max_chars] if truncated else assembled
             summary = _truncate(_normalize_ws(desc), 500)
             tags = (raw.get("tags") or [])[:10] if isinstance(raw.get("tags"), list) else []
             topics = (raw.get("topics") or [])[:10] if isinstance(raw.get("topics"), list) else []
@@ -1129,10 +1262,11 @@ class WebSearchRuntime:
             "freshness_hint": freshness_hint,
         }
 
-    def _retrieve(self, url: str, retrieval_source: str = "") -> dict:
+    def _retrieve(self, url: str, retrieval_source: str = "", max_chars: int | None = None) -> dict:
         """Call Agent API /retrieve and return normalized result.
 
-        Never exposes the raw /retrieve endpoint URL in the return value.
+        max_chars overrides self.max_retrieved_chars for this call (used for per-call
+        budget mode resolution). Never exposes the raw /retrieve endpoint URL.
         """
         if not self.searxng_base_url:
             return {"ok": False, "action": "retrieve", "url": url,
@@ -1160,7 +1294,7 @@ class WebSearchRuntime:
                     "error": "fetch_failed",
                     "error_detail": f"{type(exc).__name__}: {exc}"}
 
-        result = self._normalize_retrieve_response(raw, canonical)
+        result = self._normalize_retrieve_response(raw, canonical, max_chars=max_chars)
         if result.get("ok"):
             self._cache_put(self.retrieval_cache, canonical, result)
         return result
@@ -1172,6 +1306,22 @@ class WebSearchRuntime:
         profile = args.get("profile") or "auto"
         url = args.get("url")
         page_id = args.get("page_id")
+
+        # Resolve per-call effective budget from budget_mode argument.
+        budget = _resolve_budget_mode(
+            args.get("budget_mode") or "",
+            self._budget_mode_table,
+            self._flat_budgets,
+            self._absolute_caps,
+            self._default_budget_mode,
+        )
+        effective_mode           = budget["budget_mode"]
+        eff_max_searches         = budget["max_searches_per_turn"]
+        eff_max_opens            = budget["max_page_opens_per_turn"]
+        eff_max_results          = budget["max_results"]
+        eff_max_retrievals       = budget["max_retrievals_per_turn"]
+        eff_max_retrieved_chars  = budget["max_retrieved_chars"]
+
         signature = (
             action,
             profile if action == "search" else "",
@@ -1191,6 +1341,7 @@ class WebSearchRuntime:
             "request_id": request_id or call_item.get("request_id") or "",
             "tool": "web_search",
             "action": action,
+            "budget_mode": effective_mode,
             "call_id": call_item.get("call_id") or call_item.get("id"),
             "query": query if isinstance(query, str) else None,
             "profile": profile if action == "search" else None,
@@ -1203,11 +1354,12 @@ class WebSearchRuntime:
         sources = []
 
         if action == "search":
-            if counters["search"] >= self.max_searches_per_turn:
-                error = f"Refusing search: reached per-turn limit of {self.max_searches_per_turn} search calls."
+            if counters["search"] >= eff_max_searches:
+                error = f"Refusing search: reached per-turn limit of {eff_max_searches} search calls."
                 self._emit("web_search_budget_exceeded", {
                     "action": "search",
-                    "limit": self.max_searches_per_turn,
+                    "budget_mode": effective_mode,
+                    "limit": eff_max_searches,
                     "counter": counters["search"],
                     "query": query if isinstance(query, str) else None,
                     "profile": profile,
@@ -1219,12 +1371,13 @@ class WebSearchRuntime:
                 error = "Missing query for search."
             else:
                 counters["search"] += 1
+                effective_top_k = min(max(1, args.get("top_k") or eff_max_results), eff_max_results)
                 payload = self._search_web(
                     query=query.strip(),
                     profile=profile,
                     categories=args.get("categories"),
                     engines=args.get("engines"),
-                    top_k=args.get("top_k") or self.max_results_per_query,
+                    top_k=effective_top_k,
                 )
                 # Build sources with safe annotation fields; never expose retrieval.endpoint.
                 sources = []
@@ -1239,11 +1392,12 @@ class WebSearchRuntime:
                     sources.append(src)
 
         elif action == "open_page":
-            if counters["open_page"] >= self.max_page_opens_per_turn:
-                error = f"Refusing open_page: reached per-turn limit of {self.max_page_opens_per_turn} page opens."
+            if counters["open_page"] >= eff_max_opens:
+                error = f"Refusing open_page: reached per-turn limit of {eff_max_opens} page opens."
                 self._emit("web_search_budget_exceeded", {
                     "action": "open_page",
-                    "limit": self.max_page_opens_per_turn,
+                    "budget_mode": effective_mode,
+                    "limit": eff_max_opens,
                     "counter": counters["open_page"],
                     "url": url if isinstance(url, str) else None,
                     "call_id": call_item.get("call_id") or call_item.get("id"),
@@ -1278,11 +1432,12 @@ class WebSearchRuntime:
                     "error_class": "invalid_url",
                     "call_id": call_item.get("call_id") or call_item.get("id"),
                 })
-            elif counters.get("retrieve", 0) >= self.max_retrievals_per_turn:
-                error = f"Refusing retrieve: reached per-turn limit of {self.max_retrievals_per_turn} retrieve calls."
+            elif counters.get("retrieve", 0) >= eff_max_retrievals:
+                error = f"Refusing retrieve: reached per-turn limit of {eff_max_retrievals} retrieve calls."
                 self._emit("web_search_retrieve_budget_exceeded", {
                     "url": str(url),
-                    "limit": self.max_retrievals_per_turn,
+                    "budget_mode": effective_mode,
+                    "limit": eff_max_retrievals,
                     "counter": counters.get("retrieve", 0),
                     "call_id": call_item.get("call_id") or call_item.get("id"),
                 })
@@ -1294,7 +1449,7 @@ class WebSearchRuntime:
                 })
                 _t0 = _now_float()
                 counters["retrieve"] = counters.get("retrieve", 0) + 1
-                payload = self._retrieve(str(url).strip(), retrieval_source)
+                payload = self._retrieve(str(url).strip(), retrieval_source, eff_max_retrieved_chars)
                 _dur = int((_now_float() - _t0) * 1000)
                 if payload.get("ok"):
                     self._emit("web_search_retrieve_completed", {
@@ -1367,6 +1522,7 @@ class WebSearchRuntime:
             "request_id": request_id or call_item.get("request_id") or "",
             "tool": "web_search",
             "action": action,
+            "budget_mode": effective_mode,
             "call_id": call_item.get("call_id") or call_item.get("id"),
             "status": "failed" if error else "completed",
             "error": error,

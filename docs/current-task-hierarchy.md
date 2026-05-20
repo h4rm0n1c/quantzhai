@@ -960,7 +960,7 @@ Default when no mode given: normal (document this decision in Slice A-design).
 
 Slices:
   A-design  — ✅ COMPLETE. docs/search-config-contract.md §64 written.
-  B-impl    — wire budget_mode through parser/runtime; remove hard ceiling at line 798
+  B-impl    — ✅ COMPLETE. budget_mode wired; hard ceilings removed; 2804 tests pass.
   B.1-audit — compat, fallback precedence, ceiling removal, telemetry fields
   C-doc     — search-config-contract.md §64.8; tool prompt guidance
   D-live-smoke — deep mode >8 results, >12000 chars; telemetry includes mode

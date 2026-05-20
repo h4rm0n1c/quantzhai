@@ -1524,8 +1524,19 @@ class RequestRouter:
             ((scr.config.get("defaults") or {}).get("profile") or "")
             if scr is not None else ""
         )
-        # Read budget overrides from search.json routing.*; None → runtime falls back to constants.
+        # Read budget config from search.json routing.*
         _routing = (scr.config.get("routing") or {}) if scr is not None else {}
+        # Named budget modes table and absolute caps (§64)
+        _budget_mode_table = _routing.get("budget_modes") or {}
+        _default_budget_mode = str(_routing.get("default_budget_mode") or "").strip()
+        _absolute_caps = {
+            "results":         _routing.get("absolute_max_results"),
+            "searches":        _routing.get("absolute_max_searches_per_turn"),
+            "opens":           _routing.get("absolute_max_page_opens_per_turn"),
+            "retrievals":      _routing.get("absolute_max_retrievals_per_turn"),
+            "retrieved_chars": _routing.get("absolute_max_retrieved_chars"),
+        }
+        # Flat per-session overrides — #60 compat; used when budget_modes absent.
         search_config_budgets = {
             "max_searches_per_turn": _routing.get("max_searches_per_turn"),
             "max_page_opens_per_turn": _routing.get("max_page_opens_per_turn"),
@@ -1533,6 +1544,9 @@ class RequestRouter:
             "low_result_fallback_threshold": _routing.get("low_result_fallback_threshold"),
             "max_retrievals_per_turn": _routing.get("max_retrievals_per_turn"),
             "max_retrieved_chars": _routing.get("max_retrieved_chars"),
+            "budget_mode_table": _budget_mode_table,
+            "absolute_caps": _absolute_caps,
+            "default_budget_mode": _default_budget_mode or None,
         }
         selection = resolve_search_policy_selection(
             base_policy=self.handler.searxng_policy,
