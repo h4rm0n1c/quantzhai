@@ -14,6 +14,7 @@ try:
     )
     from .qz_runtime_io import capture_policy
     from .qz_operational_store import OperationalStore as _OperationalStore
+    from .qz_search_config import load_search_config as _load_search_config
 except ImportError:
     from qz_paths import (
         codex_config_path as _codex_config_path,
@@ -26,6 +27,10 @@ except ImportError:
         from qz_operational_store import OperationalStore as _OperationalStore
     except ImportError:
         _OperationalStore = None  # type: ignore
+    try:
+        from qz_search_config import load_search_config as _load_search_config
+    except ImportError:
+        _load_search_config = None  # type: ignore
 
 
 EFFECTIVE_CONFIG_SCHEMA = "qz.config.effective.v1"
@@ -439,6 +444,35 @@ def _operational_store_report() -> Dict[str, Any]:
         }
 
 
+def _active_search_config_report(handler=None) -> Dict[str, Any]:
+    """Return the active_search_config section for /qz/config/effective.
+
+    Prefers the handler's cached search_config_result when available.
+    Falls back to calling load_search_config() directly.
+    Never exposes the actual SearXNG base URL.
+    Non-fatal: any error returns a minimal disabled/error section.
+    """
+    if _load_search_config is None:
+        return {"enabled": False, "last_error": "qz_search_config unavailable"}
+    try:
+        result = getattr(handler, "search_config_result", None)
+        if result is None:
+            result = _load_search_config()
+        return result.effective_summary()
+    except Exception as exc:
+        return {
+            "schema": "qz.search.effective.v1",
+            "source": "error",
+            "path": None,
+            "searxng_base_url_set": False,
+            "searxng_enabled": False,
+            "default_profile": "auto",
+            "profile_names": [],
+            "legacy_policy_path": None,
+            "warnings": [f"{type(exc).__name__}: {exc}"],
+        }
+
+
 def effective_config_payload(handler=None) -> Dict[str, Any]:
     root = _root_dir()
     var_dir = _var_dir(root)
@@ -671,4 +705,5 @@ def effective_config_payload(handler=None) -> Dict[str, Any]:
         "warnings": warnings,
         "proxy_initialization": proxy_initialization,
         "operational_store": _operational_store_report(),
+        "active_search_config": _active_search_config_report(handler),
     }

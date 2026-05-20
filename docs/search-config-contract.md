@@ -1,7 +1,7 @@
 # Search Config Contract
 
 Date: 2026-05-20
-Status: Slices A-design + B-impl complete. Loader live; not yet wired into proxy startup.
+Status: Slices A-design + B-impl + C-impl complete. Loader wired into proxy; /qz/config/effective exposes active_search_config.
 
 ---
 
@@ -237,8 +237,8 @@ In Slice B:
 |---|---|---|
 | ~~**A-design**~~ | ~~Contract, schema, precedence, compat, roadmap~~ | ~~—~~ |
 | ~~**B-impl**~~ | ~~Create `config/default/search.json` + `proxy/qz_search_config.py` loader + tests~~ | ~~No routing change yet~~ |
-| **B.1** | Audit/polish loader | — |
-| **C-impl** | Wire loader into proxy handler; expose in `/qz/config/effective` | Light routing impact |
+| ~~**B.1**~~ | ~~Audit/polish loader~~ | ~~—~~ |
+| ~~**C-impl**~~ | ~~Wire loader into proxy handler; expose in `/qz/config/effective`~~ | ~~done~~ |
 | **C.1** | Audit effective config exposure | — |
 | **D-impl** | Connect profile bundle `search.default_profile` field | Optional |
 | **Close-out** | Deprecate `search-policy.json` compat path once migration confirmed | Closes #39 |

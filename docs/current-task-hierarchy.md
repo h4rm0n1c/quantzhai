@@ -814,7 +814,16 @@ defines: config/default/search.json schema, precedence rules (QZ_SEARCH_CONFIG_P
 config/example/search.json, proxy/qz_search_config.py loader, 23 tests.
 Loader not yet wired into proxy startup. All validation PASS.
 
-Next: #39 Slice B.1 audit/polish, then Slice C (wire loader into proxy).
+**#39 Slice B.1:** CLOSED. Fixed QZ_SEARCH_CONFIG_PATH to not inherit tracked default profiles. 1 new test.
+
+**#39 Slice C-impl (this commit):** CLOSED. Wired into proxy startup and /qz/config/effective.
+- quantzhai_proxy.py: _initialize_proxy_state() calls load_search_config(); stores as ProxyHandler.search_config_result
+- qz_request_router.py: passes search_config_profiles to WebSearchRuntime
+- qz_tool_web.py: search_config_profiles param; _valid_profiles() + profile resolution use v1 profiles as fallback
+- qz_config_report.py: active_search_config section via effective_summary(); never exposes base URL
+- 7 new tests (ActiveSearchConfigReportTests). 2691 tests PASS.
+
+Next: #39 Slice C.1 audit/polish.
 
 ## Reference: BrainCase Slice completion history
 

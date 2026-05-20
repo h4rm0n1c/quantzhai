@@ -109,7 +109,7 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 | #5 | Config/var/script ownership cleanup | **CLOSED** (#56, #57 opened for migration/thinning follow-ups) |
 | #57 | qz-codex-common thinning | **CLOSED** (Slices A–C2.1 complete; remote bootstrap endpoints delivered; superseded by #58) |
 | #58 | Always-HTTP qz-codex bootstrap | **CLOSED** (D2/D2.1/D3 complete; qz-codex always uses HTTP; #56 remains separate) |
-| #39 | Split search routing policy into search.json | **Slices A+B complete** — loader live; Slice C wires into proxy |
+| #39 | Split search routing policy into search.json | **Slices A–C complete** — wired; /qz/config/effective shows active_search_config; C.1 audit next |
 | #52 | Backend-confirmed VRAM allocator metrics | **upstream-blocked** (TurboQuant side) |
 | #8 | RFC: NetTTS survival-weighted compaction | **research/later** |
 | #7 | What next: LimbiCore seam, memory_domain, SQLite | **deferred** — superseded by #53/#54; informational only |

@@ -56,6 +56,7 @@ try:
     from .qz_recovery_jobs import RECOVERY_JOBS
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import append_capture, read_json, runtime_log, write_capture
+    from .qz_search_config import load_search_config as _load_search_config
 except ImportError:
     from qz_backend import BackendClient
     from qz_proxy_config import (
@@ -103,6 +104,7 @@ except ImportError:
     from qz_recovery_jobs import RECOVERY_JOBS
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import append_capture, read_json, runtime_log, write_capture
+    from qz_search_config import load_search_config as _load_search_config
 
 class ProxyHandler(BaseHTTPRequestHandler):
     upstream = "http://127.0.0.1:18084"
@@ -122,6 +124,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
     searxng_capabilities_path = None
     searxng_policy = {}
     searxng_capabilities = {}
+    search_config_result = None
     web_search_cache = {}
     opened_page_cache = {}
     active_deprecation = None
@@ -659,6 +662,10 @@ def main():
             ProxyHandler.searxng_policy = policy
             ProxyHandler.searxng_capabilities = capabilities
             ProxyHandler.searxng_base_url = args.searxng_base_url or policy.get("searxng_base") or capabilities.get("base")
+            try:
+                ProxyHandler.search_config_result = _load_search_config(root=root)
+            except Exception:
+                ProxyHandler.search_config_result = None
             ProxyHandler._set_initialization_state("ready")
             threading.Thread(target=_preload_last_model, daemon=True).start()
             print(

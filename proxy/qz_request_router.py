@@ -1522,6 +1522,10 @@ class RequestRouter:
             selected_model=selected_model,
             root=getattr(self.handler, "root", Path(__file__).resolve().parents[1]),
         )
+        scr = getattr(self.handler, "search_config_result", None)
+        search_config_profiles = (
+            (scr.config.get("profiles") or {}) if scr is not None else {}
+        )
         return WebSearchRuntime(
             base_url=self.handler.searxng_base_url,
             timeout=self.handler.searxng_timeout,
@@ -1533,6 +1537,7 @@ class RequestRouter:
             policy_path=selection.policy_path,
             default_profile=selection.default_profile,
             policy_selection=selection.metadata(),
+            search_config_profiles=search_config_profiles,
         )
 
     def _proxy_tool_registry(self, web_runtime):

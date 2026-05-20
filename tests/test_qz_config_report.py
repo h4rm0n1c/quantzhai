@@ -1693,5 +1693,137 @@ class OperationalStoreConfigReportTests(unittest.TestCase):
             self._restore_env(saved)
 
 
+class ActiveSearchConfigReportTests(unittest.TestCase):
+    """Tests for active_search_config in /qz/config/effective — #39 Slice C."""
+
+    _ENV_KEYS = (
+        "QZ_ROOT", "QZ_VAR_DIR", "QZ_OPERATIONAL_DB_ENABLED",
+        "QZ_SEARCH_CONFIG_PATH", "SEARXNG_BASE_URL", "SEARXNG_POLICY",
+        "QZ_CAPTURE_MODE", "SEARXNG_POLICY", "SEARXNG_CAPABILITIES",
+    )
+
+    def _save_env(self):
+        return {k: os.environ.get(k) for k in self._ENV_KEYS}
+
+    def _restore_env(self, saved):
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def _minimal_root(self, tmp):
+        root = Path(tmp)
+        var_dir = root / "var"
+        (root / "config" / "default").mkdir(parents=True)
+        (root / "proxy").mkdir()
+        var_dir.mkdir(parents=True)
+        os.environ["QZ_ROOT"] = str(root)
+        os.environ["QZ_VAR_DIR"] = str(var_dir)
+        for k in ("QZ_CAPTURE_MODE", "SEARXNG_POLICY", "SEARXNG_CAPABILITIES",
+                  "QZ_OPERATIONAL_DB_ENABLED"):
+            os.environ.pop(k, None)
+        return root, var_dir
+
+    def test_active_search_config_key_present(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                self._minimal_root(tmp)
+                payload = effective_config_payload()
+                self.assertIn("active_search_config", payload)
+        finally:
+            self._restore_env(saved)
+
+    def test_active_search_config_has_expected_keys(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                self._minimal_root(tmp)
+                payload = effective_config_payload()
+                asc = payload["active_search_config"]
+                for key in ("source", "path", "searxng_base_url_set",
+                            "default_profile", "profile_names", "warnings"):
+                    self.assertIn(key, asc)
+        finally:
+            self._restore_env(saved)
+
+    def test_base_url_not_in_active_search_config(self):
+        """active_search_config must never contain the actual base URL."""
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                os.environ["SEARXNG_BASE_URL"] = "http://private-host:9999"
+                payload = effective_config_payload()
+                asc_str = json.dumps(payload["active_search_config"])
+                self.assertNotIn("private-host", asc_str)
+                self.assertNotIn("http://", asc_str)
+        finally:
+            self._restore_env(saved)
+
+    def test_base_url_set_true_when_env_configured(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                self._minimal_root(tmp)
+                os.environ["SEARXNG_BASE_URL"] = "http://configured:8080"
+                payload = effective_config_payload()
+                self.assertTrue(payload["active_search_config"]["searxng_base_url_set"])
+        finally:
+            self._restore_env(saved)
+
+    def test_existing_payload_shape_unchanged_after_search_config(self):
+        """Adding active_search_config must not remove any existing top-level keys."""
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                self._minimal_root(tmp)
+                payload = effective_config_payload()
+                for key in ("schema", "root", "var_dir", "paths", "settings",
+                            "capture", "prompt_files", "memory_domains", "warnings"):
+                    self.assertIn(key, payload, f"existing key missing: {key}")
+        finally:
+            self._restore_env(saved)
+
+    def test_active_search_config_with_default_search_json(self):
+        """Reports profiles from config/default/search.json when present."""
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                search_json = root / "config" / "default" / "search.json"
+                search_json.write_text(json.dumps({
+                    "schema": "qz.search.v1",
+                    "searxng": {"base_url": "", "enabled": True},
+                    "defaults": {"profile": "coding"},
+                    "profiles": {"coding": {}, "broad": {}},
+                }), encoding="utf-8")
+                payload = effective_config_payload()
+                asc = payload["active_search_config"]
+                self.assertEqual(asc["source"], "default")
+                self.assertIn("coding", asc["profile_names"])
+                self.assertEqual(asc["default_profile"], "coding")
+        finally:
+            self._restore_env(saved)
+
+    def test_legacy_policy_source_when_no_search_json(self):
+        saved = self._save_env()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root, var_dir = self._minimal_root(tmp)
+                # Create a legacy policy file
+                policy = root / "my-policy.json"
+                policy.write_text(json.dumps({"version": "profiled-web-search-v1"}),
+                                  encoding="utf-8")
+                os.environ["SEARXNG_POLICY"] = str(policy)
+                payload = effective_config_payload()
+                asc = payload["active_search_config"]
+                self.assertEqual(asc["source"], "legacy")
+                self.assertIsNotNone(asc["legacy_policy_path"])
+        finally:
+            self._restore_env(saved)
+
+
 if __name__ == "__main__":
     unittest.main()

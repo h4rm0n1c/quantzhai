@@ -309,6 +309,7 @@ class WebSearchRuntime:
         policy_path: str = "",
         default_profile: str = "",
         policy_selection=None,
+        search_config_profiles=None,
     ):
         self.searxng_base_url = base_url
         self.searxng_timeout = timeout
@@ -320,6 +321,7 @@ class WebSearchRuntime:
         self.searxng_policy_path = policy_path or ""
         self.default_search_profile = str(default_profile or "").strip()
         self.search_policy_selection = policy_selection if isinstance(policy_selection, dict) else {}
+        self.search_config_profiles = search_config_profiles if isinstance(search_config_profiles, dict) else {}
 
     def _emit(self, event_type: str, payload: dict | None = None):
         if not self.telemetry:
@@ -361,6 +363,11 @@ class WebSearchRuntime:
         if isinstance(policy_profiles, dict):
             profiles.update(
                 name for name in policy_profiles.keys()
+                if isinstance(name, str) and name.strip()
+            )
+        if isinstance(self.search_config_profiles, dict):
+            profiles.update(
+                name for name in self.search_config_profiles.keys()
                 if isinstance(name, str) and name.strip()
             )
         return profiles
@@ -436,6 +443,11 @@ class WebSearchRuntime:
         profiles = (self.searxng_policy or {}).get("web_search_profiles") or {}
         cfg = profiles.get(actual_profile) if isinstance(profiles, dict) else None
         cfg = cfg if isinstance(cfg, dict) else {}
+        # Fall back to qz.search.v1 profiles when legacy policy has no entry.
+        if not cfg and isinstance(self.search_config_profiles, dict):
+            v1_cfg = self.search_config_profiles.get(actual_profile)
+            if isinstance(v1_cfg, dict):
+                cfg = v1_cfg
 
         categories = _string_list(cfg.get("categories"))
         categories_from = cfg.get("categories_from")
