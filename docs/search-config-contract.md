@@ -1,7 +1,7 @@
 # Search Config Contract
 
 Date: 2026-05-20
-Status: CLOSED. Slices A–D + close-out complete. All acceptance criteria PASS.
+Status: #39 CLOSED. #60 CLOSED. All slices and close-outs complete.
 
 ---
 
@@ -488,7 +488,7 @@ annotations derived from the result URL + metadata without external lookups.
 | ~~**D2-impl**~~ | ~~Two-layer source annotations in `_query_searxng()` + `_unique_sources()`~~ |
 | ~~**D2.1**~~ | ~~Audit: add retrieval_retriever; confirm endpoint redaction; define retrieve action~~ |
 | ~~**E-audit**~~ | ~~Live smoke with `http://127.0.0.1:8890`; all profiles/annotations verified~~ |
-| **Close-out** | Wire 8890 as SEARXNG_BASE_URL example; update acceptance; close issue |
+| ~~**Close-out**~~ | ~~All criteria PASS; .env.example/config updated; #60 closed~~ |
 
 ---
 

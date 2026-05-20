@@ -122,7 +122,7 @@ Agent rules:             AGENTS.md includes telemetry and BrainCase doctrine
 | #58 | Always-HTTP qz-codex bootstrap | **CLOSED** (D2/D2.1/D3 complete; qz-codex always uses HTTP; #56 remains separate) |
 | #39 | Split search routing policy into search.json | **CLOSED** — search.json primary; legacy search-policy.json compat kept; all criteria PASS |
 | #59 | Tool coercion/advice policy audit | **Slice A-audit complete** — docs/tool-policy-audit.md; #60–#62 can start |
-| #60 | web_search budgets, routing, source quality | **E-audit complete** — live smoke PASS; close-out next |
+| #60 | web_search budgets, routing, source quality | **CLOSED** — budgets/telemetry/profiles/annotations delivered; retrieve action is a new issue |
 | #61 | Advisory policy for native exec/tool use | **OPEN** — depends on #59 |
 | #62 | apply_patch coercion and advisory audit | **OPEN** — depends on #59 |
 | #52 | Backend-confirmed VRAM allocator metrics | **upstream-blocked** (TurboQuant side) |
@@ -203,7 +203,7 @@ closed issues. Do not reopen; future work needs concrete scoped issues.
 #51  recovery state persistence                          CLOSED not-planned; in-memory is sufficient
 #39  search config split                                 CLOSED — search.json primary; profile bundle wired
 #59  tool coercion/advice policy audit                   Slice A-audit CLOSED; #60–#62 unblocked
-#60  web_search quality improvements                     OPEN — depends on #59
+#60  web_search quality improvements                     CLOSED — all slices delivered
 #61  native exec/tool advisory policy                   OPEN — depends on #59
 #62  apply_patch coercion audit                         OPEN — depends on #59
 #52  backend allocator metrics                           upstream-blocked
@@ -226,13 +226,12 @@ F. #5   Config/var/script cleanup — CLOSED
 G. #3/#4/#43  Repeated-read v1 — CLOSED
 
 COMPLETED (all CLOSED):
-  #58 #57 #56 #5 #37 #53 #54 #3/#4/#43 #46 #51 #39
+  #58 #57 #56 #5 #37 #53 #54 #3/#4/#43 #46 #51 #39 #60
 
-NEXT — tool policy improvement chain (issues opened 2026-05-20):
-  #59 Tool coercion/advice policy audit (prerequisite for #60–#62)
-  #60 web_search budgets, routing, and source quality
-  #61 Advisory policy for native exec/tool use patterns
-  #62 apply_patch coercion and advisory path audit/polish
+NEXT — remaining tool policy chain:
+  #59 Tool coercion/advice policy audit — Slice A-audit done; Slice B+ ongoing
+  #61 Advisory policy for native exec/tool use patterns — OPEN
+  #62 apply_patch coercion and advisory path audit/polish — OPEN
 
   After tool policy chain:
   #8  Research RFC (NetTTS/compaction) — later
