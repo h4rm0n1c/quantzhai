@@ -2,10 +2,13 @@
 """Load and merge QuantZhai search configuration (qz.search.v1).
 
 Precedence (highest to lowest):
-  1. QZ_SEARCH_CONFIG_PATH env var  — explicit path override
-  2. config/user/search.json        — local user overrides (never committed)
+  1. QZ_SEARCH_CONFIG_PATH env var  — explicit path, replaces user+default file
+                                      selection; merged only over built-in defaults
+  2. config/user/search.json        — local overrides (never committed); merged
+                                      over config/default/search.json
   3. config/default/search.json     — tracked default
-  4. SEARXNG_POLICY env var         — legacy fallback (search-policy.json format)
+  4. SEARXNG_POLICY env var         — legacy fallback (search-policy.json format);
+                                      activated only when no search.json was loaded
 
 Within the merged config:
   - SEARXNG_BASE_URL overrides searxng.base_url
@@ -154,28 +157,11 @@ def load_search_config(
     user_path = root / "config" / "user" / "search.json"
     default_path = root / "config" / "default" / "search.json"
 
-    # --- Load base: config/default/search.json --------------------------
-    if default_path.is_file():
-        data, err = _load_json_file(default_path)
-        if err:
-            warnings.append(f"config/default/search.json parse error: {err}")
-        elif data is not None:
-            merged = _deep_merge(merged, data)
-            source = "default"
-            winning_path = default_path
-
-    # --- Overlay: config/user/search.json (unless explicit override) -----
-    if explicit_path is None and user_path.is_file():
-        data, err = _load_json_file(user_path)
-        if err:
-            warnings.append(f"config/user/search.json parse error: {err}")
-        elif data is not None:
-            merged = _deep_merge(merged, data)
-            source = "user"
-            winning_path = user_path
-
-    # --- Override: QZ_SEARCH_CONFIG_PATH --------------------------------
     if explicit_path is not None:
+        # --- Explicit override: QZ_SEARCH_CONFIG_PATH -------------------
+        # Replaces both default and user file selection. Merges only over
+        # built-in _DEFAULT_CONFIG so the explicit file has full control
+        # of profiles, routing, and all other keys.
         if explicit_path.is_file():
             data, err = _load_json_file(explicit_path)
             if err:
@@ -186,6 +172,26 @@ def load_search_config(
                 winning_path = explicit_path
         else:
             warnings.append(f"QZ_SEARCH_CONFIG_PATH not found: {explicit_path}")
+    else:
+        # --- Load base: config/default/search.json ----------------------
+        if default_path.is_file():
+            data, err = _load_json_file(default_path)
+            if err:
+                warnings.append(f"config/default/search.json parse error: {err}")
+            elif data is not None:
+                merged = _deep_merge(merged, data)
+                source = "default"
+                winning_path = default_path
+
+        # --- Overlay: config/user/search.json ---------------------------
+        if user_path.is_file():
+            data, err = _load_json_file(user_path)
+            if err:
+                warnings.append(f"config/user/search.json parse error: {err}")
+            elif data is not None:
+                merged = _deep_merge(merged, data)
+                source = "user"
+                winning_path = user_path
 
     # --- Legacy fallback: SEARXNG_POLICY if no search.json loaded -------
     legacy_policy_path: Optional[Path] = None

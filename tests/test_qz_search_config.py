@@ -147,6 +147,41 @@ class ExplicitPathTests(unittest.TestCase):
             self.assertEqual(result.source, "explicit")
             self.assertEqual(result.config["searxng"]["base_url"], "http://explicit:9999")
 
+    def test_explicit_path_does_not_inherit_tracked_default_profiles(self):
+        """QZ_SEARCH_CONFIG_PATH must not inherit profiles from config/default/search.json.
+
+        The explicit file replaces the tracked-default file selection entirely.
+        It merges only over built-in _DEFAULT_CONFIG.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Default has coding profile with specific engines.
+            _make_search_json(tmp, "config/default", {
+                "schema": SEARCH_CONFIG_SCHEMA,
+                "profiles": {
+                    "coding": {"engines": ["stackoverflow", "github"]},
+                    "broad": {"categories": ["general"]},
+                },
+            })
+            # Explicit has only one profile — should NOT also get coding/broad.
+            explicit = Path(tmp) / "custom.json"
+            explicit.write_text(json.dumps({
+                "schema": SEARCH_CONFIG_SCHEMA,
+                "profiles": {"myprofile": {"categories": ["it"]}},
+                "searxng": {"base_url": "http://x:1234"},
+            }), encoding="utf-8")
+            result = load_search_config(
+                env={"QZ_SEARCH_CONFIG_PATH": str(explicit)},
+                root=root,
+            )
+            self.assertEqual(result.source, "explicit")
+            profiles = result.config.get("profiles", {})
+            self.assertIn("myprofile", profiles)
+            self.assertNotIn("coding", profiles,
+                "explicit file must not inherit tracked default profiles")
+            self.assertNotIn("broad", profiles,
+                "explicit file must not inherit tracked default profiles")
+
     def test_explicit_path_not_found_adds_warning(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = load_search_config(
