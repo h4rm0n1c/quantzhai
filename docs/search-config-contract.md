@@ -1,7 +1,7 @@
 # Search Config Contract
 
 Date: 2026-05-20
-Status: #39 CLOSED. #60 CLOSED. All slices and close-outs complete.
+Status: #39 CLOSED. #60 CLOSED. #63 CLOSED. #64 OPEN — §64 design below.
 
 ---
 
@@ -662,3 +662,395 @@ test_source_annotation_freshness_hint_recent (Slice D)
 test_source_annotations_backwards_compatible (Slice D)
   existing consumers reading only url/title unaffected
 ```
+
+---
+
+## §64. Research-grade web_search budget modes (#64 Slice A-design)
+
+Date: 2026-05-21
+Status: A-design COMPLETE. B-impl pending.
+
+### 64.0 Problem statement
+
+`WEB_SEARCH_MAX_RESULTS = 8` and `WEB_SEARCH_RETRIEVE_MAX_CHARS_CEILING = 12000` are
+enforced as hard global caps in `WebSearchRuntime.__init__` (lines 508–515):
+
+```python
+self.max_results_per_query = min(
+    _resolve_budget_int(max_results_per_query, WEB_SEARCH_MAX_RESULTS),
+    WEB_SEARCH_MAX_RESULTS,   # ← hard ceiling regardless of config
+)
+_raw_chars = _resolve_budget_int(max_retrieved_chars, WEB_SEARCH_RETRIEVE_MAX_CHARS)
+self.max_retrieved_chars = min(_raw_chars, WEB_SEARCH_RETRIEVE_MAX_CHARS_CEILING)  # ← hard ceiling
+```
+
+And in `_query_searxng` line 798:
+
+```python
+if len(results) >= max(1, min(int(top_k or WEB_SEARCH_MAX_RESULTS), WEB_SEARCH_MAX_RESULTS)):
+    break  # ← inner WEB_SEARCH_MAX_RESULTS prevents top_k > 8 even if caller passes more
+```
+
+These caps make it impossible for a deep-research or citation-audit task to retrieve
+more than 8 results or 12 000 chars regardless of operator config. That is a
+correctness problem.
+
+### 64.1 Design decision: default mode is `normal`
+
+When `budget_mode` is absent and no mode-specific override exists, the effective
+mode is **`normal`**.
+
+**Rationale:** QuantZhai is a locally operated research appliance, not a
+consumer API. The operator has explicitly provisioned the proxy and Agent API.
+`quick` is still available for cheap single-fact checks. `normal` provides a
+meaningful research baseline without requiring the model to explicitly request it.
+
+Calls using only flat `routing.max_*` overrides from #60 remain backward-compatible
+and are not affected by this change (see §64.3 precedence).
+
+### 64.2 Named budget modes
+
+Built-in defaults for each named mode (all five budget fields):
+
+| Mode | `max_results` | `max_searches` | `max_opens` | `max_retrievals` | `max_retrieved_chars` |
+|---|---|---|---|---|---|
+| `quick` | 8 | 4 | 3 | 2 | 6 000 |
+| `normal` | 12 | 8 | 8 | 4 | 12 000 |
+| `deep` | 25 | 20 | 20 | 10 | 30 000 |
+| `audit` | 50 | 40 | 40 | 20 | 60 000 |
+
+Operator guidance:
+- `quick` — single fact check, verify a known page, narrow retrieval
+- `normal` — routine multi-step research, standard agent work
+- `deep` — serious multi-source research, source comparison, multiple retrievals
+- `audit` — citation-heavy evidence scan, exhaustive source verification
+
+Large retrieved chunks should be summarized or extracted in the answer, not
+dumped raw into the final response.
+
+### 64.3 Config shape
+
+```jsonc
+// config/default/search.json  routing section
+"routing": {
+  "default_budget_mode": "normal",       // explicit default; controls absent budget_mode
+
+  // named mode table — all five fields required for each mode
+  "budget_modes": {
+    "quick":  { "max_results": 8,  "max_searches_per_turn": 4,  "max_page_opens_per_turn": 3,  "max_retrievals_per_turn": 2,  "max_retrieved_chars": 6000  },
+    "normal": { "max_results": 12, "max_searches_per_turn": 8,  "max_page_opens_per_turn": 8,  "max_retrievals_per_turn": 4,  "max_retrieved_chars": 12000 },
+    "deep":   { "max_results": 25, "max_searches_per_turn": 20, "max_page_opens_per_turn": 20, "max_retrievals_per_turn": 10, "max_retrieved_chars": 30000 },
+    "audit":  { "max_results": 50, "max_searches_per_turn": 40, "max_page_opens_per_turn": 40, "max_retrievals_per_turn": 20, "max_retrieved_chars": 60000 }
+  },
+
+  // operator safety rails — clamp everything; operator may lower, not raise
+  "absolute_max_results":               100,
+  "absolute_max_searches_per_turn":     100,
+  "absolute_max_page_opens_per_turn":   100,
+  "absolute_max_retrievals_per_turn":   50,
+  "absolute_max_retrieved_chars":       120000,
+
+  // flat per-session overrides — #60 compatibility layer; used when no budget_modes key
+  "max_results":               8,
+  "max_searches_per_turn":     4,
+  "max_page_opens_per_turn":   3,
+  "max_retrievals_per_turn":   3,
+  "max_retrieved_chars":       6000,
+  "low_result_fallback_threshold": 2,
+  "dedup_by_canonical_url": true
+}
+```
+
+### 64.4 Precedence rules (highest first)
+
+```
+1. Built-in absolute constant caps (ABSOLUTE_* in code)
+   ↓ applied last as a hard clamp; operator cannot raise above these
+2. routing.absolute_max_* in search.json
+   ↓ operator lowers the absolute cap; ignored if > built-in constant
+3. Resolved mode budget (from routing.budget_modes.<mode>)
+   ↓ selected by web_search budget_mode argument or routing.default_budget_mode
+4. Flat routing.max_* fields (#60 compat)
+   ↓ used only when routing.budget_modes is absent entirely
+5. Built-in module constants (WEB_SEARCH_MAX_RESULTS = 8, etc.)
+   ↓ final fallback when nothing else is configured
+```
+
+**Compatibility rule:** If `routing.budget_modes` is absent, the runtime falls
+back to flat `routing.max_*` fields exactly as in #60. Existing search.json
+files with only flat fields continue to work without change.
+
+**Absolute rail semantics:**
+- The built-in absolute constants (`ABSOLUTE_MAX_RESULTS = 100`, etc.) are the
+  highest values the system will ever use, regardless of config.
+- Operator may set `routing.absolute_max_*` to lower the cap for their instance.
+- Operator may NOT raise above the built-in constant (the min of the two applies).
+- Mode budget values that exceed the resolved absolute cap are silently clamped.
+
+### 64.5 New `web_search` argument: `budget_mode`
+
+```json
+{
+  "action": "search",
+  "query": "...",
+  "profile": "deep",
+  "budget_mode": "deep"
+}
+```
+
+- Valid values: `"quick"`, `"normal"`, `"deep"`, `"audit"`
+- Unknown or invalid value: falls back to `routing.default_budget_mode` (i.e.,
+  treated as absent). No error emitted to the model.
+- The argument applies per call. Multiple calls in the same turn may use
+  different modes (each call resolves its own mode budget independently).
+- `budget_mode` is not auto-selected from query content. The model chooses.
+
+**Tool schema change (Slice B):** add `budget_mode` to the `web_search` function
+schema with `enum: ["quick", "normal", "deep", "audit"]` and a short description.
+
+**`additionalProperties: false` note:** the current tool schema has
+`"additionalProperties": false`. Adding `budget_mode` to properties lifts this
+restriction for the new field. All existing arguments are unchanged.
+
+### 64.6 Runtime implementation targets (Slice B)
+
+#### New constants (replace old ceilings)
+
+```python
+# Built-in absolute caps — operator safety rails, not research limits
+WEB_SEARCH_ABSOLUTE_MAX_RESULTS          = 100
+WEB_SEARCH_ABSOLUTE_MAX_SEARCHES         = 100
+WEB_SEARCH_ABSOLUTE_MAX_OPENS            = 100
+WEB_SEARCH_ABSOLUTE_MAX_RETRIEVALS       = 50
+WEB_SEARCH_ABSOLUTE_MAX_RETRIEVED_CHARS  = 120_000
+
+# Built-in mode defaults (used when budget_modes absent from config)
+WEB_SEARCH_MODE_DEFAULTS = {
+    "quick":  {"max_results": 8,  "max_searches_per_turn": 4,  "max_page_opens_per_turn": 3,  "max_retrievals_per_turn": 2,  "max_retrieved_chars": 6_000},
+    "normal": {"max_results": 12, "max_searches_per_turn": 8,  "max_page_opens_per_turn": 8,  "max_retrievals_per_turn": 4,  "max_retrieved_chars": 12_000},
+    "deep":   {"max_results": 25, "max_searches_per_turn": 20, "max_page_opens_per_turn": 20, "max_retrievals_per_turn": 10, "max_retrieved_chars": 30_000},
+    "audit":  {"max_results": 50, "max_searches_per_turn": 40, "max_page_opens_per_turn": 40, "max_retrievals_per_turn": 20, "max_retrieved_chars": 60_000},
+}
+WEB_SEARCH_DEFAULT_MODE = "normal"
+```
+
+Remove: `WEB_SEARCH_RETRIEVE_MAX_CHARS_CEILING = 12000` (replaced by absolute cap).
+Rename: `WEB_SEARCH_MAX_RESULTS`, `WEB_SEARCH_MAX_SEARCHES`, etc. become the
+`quick`-mode built-in values; they remain as named constants but are no longer used
+as hard ceilings.
+
+#### New helper: `_resolve_budget_mode`
+
+```python
+def _resolve_budget_mode(
+    requested_mode: str,          # from web_search budget_mode arg (may be "")
+    mode_table: dict,             # routing.budget_modes (may be empty/None)
+    flat_budgets: dict,           # routing.max_* (#60 compat; may be all None)
+    absolute_caps: dict,          # routing.absolute_max_* (may be all None)
+    default_mode: str = "normal", # routing.default_budget_mode
+) -> dict:
+    """Return resolved {max_results, max_searches_per_turn, max_page_opens_per_turn,
+    max_retrievals_per_turn, max_retrieved_chars} clamped to absolute caps."""
+```
+
+Resolution logic (five steps):
+1. Pick mode name: `requested_mode` if valid, else `default_mode`.
+2. Look up mode budget: `mode_table.get(mode_name)` if table present, else
+   `WEB_SEARCH_MODE_DEFAULTS[mode_name]`.
+3. If `mode_table` is absent entirely and no `requested_mode`, use flat
+   `flat_budgets` (each field: value if valid int, else mode default).
+4. Resolve absolute caps: `min(routing.absolute_max_X, ABSOLUTE_MAX_X)` for
+   each field.
+5. Clamp resolved budget values to absolute caps.
+
+#### `WebSearchRuntime.__init__` changes
+
+Add parameters:
+```python
+budget_mode: str = "",                  # requested mode for this runtime instance
+budget_mode_table: dict | None = None,  # routing.budget_modes from search.json
+absolute_caps: dict | None = None,      # routing.absolute_max_* from search.json
+default_budget_mode: str = "",          # routing.default_budget_mode
+```
+
+On init, call `_resolve_budget_mode` and store the resolved values in the same
+`self.max_*` fields. Existing flat params (`max_searches_per_turn`, etc.) remain
+as a secondary input to `_resolve_budget_mode` for #60 compat — they are not
+removed.
+
+Store `self.budget_mode: str` (resolved mode name, e.g. `"normal"`) for telemetry.
+
+**Ceiling removal:**
+- Remove `min(..., WEB_SEARCH_MAX_RESULTS)` from `max_results_per_query` init.
+- Remove `min(_raw_chars, WEB_SEARCH_RETRIEVE_MAX_CHARS_CEILING)`.
+- The only active ceiling after Slice B is the resolved absolute cap.
+
+**`_query_searxng` line 798:**
+Change:
+```python
+if len(results) >= max(1, min(int(top_k or WEB_SEARCH_MAX_RESULTS), WEB_SEARCH_MAX_RESULTS)):
+```
+To:
+```python
+if len(results) >= max(1, int(top_k or self.max_results_per_query)):
+```
+
+This allows `top_k` values from deep/audit modes to actually fetch more than 8 results.
+
+#### `_parse_web_search_arguments` changes
+
+Parse `budget_mode` from the call arguments. Validate against known modes;
+unknown value → `""` (treated as absent).
+
+`top_k` clamping in `_parse_web_search_arguments` currently does:
+```python
+top_k = max(1, min(top_k, self.max_results_per_query))
+```
+This is correct — the runtime limit applies. No change needed here.
+
+#### `qz_request_router._web_runtime` changes
+
+Pass from `search.json routing`:
+- `budget_mode_table`: `_routing.get("budget_modes") or {}`
+- `absolute_caps`: extract `absolute_max_*` fields from `_routing`
+- `default_budget_mode`: `_routing.get("default_budget_mode") or "normal"`
+
+The `budget_mode` argument itself is NOT known at runtime-init time (it comes
+per-call from the model). Mode resolution therefore happens in
+`execute_web_search_call`, not in `__init__`. **Revised design (see §64.6a).**
+
+#### §64.6a Per-call mode resolution (revised)
+
+Because `budget_mode` is a per-call argument, the runtime cannot resolve it in
+`__init__`. The implementation must:
+
+1. Store `mode_table`, `absolute_caps`, `default_budget_mode`, and the flat
+   `max_*` values on the runtime instance (set in `__init__`).
+2. In `execute_web_search_call`, call `_resolve_budget_mode(budget_mode, ...)`
+   at the top, using the per-call argument and the stored instance data.
+3. Use the resolved budget dict for counter checks in that call: `resolved["max_searches_per_turn"]`,
+   etc. instead of `self.max_searches_per_turn`.
+4. Store `self.budget_mode` for use when `budget_mode_arg` is absent (the last
+   resolved mode, or the default). This avoids re-resolving on every counter check.
+
+**Trade-off:** This means budget limits can differ between calls in the same turn
+if the model passes different `budget_mode` values. That is intentional — the model
+controls the research depth per action.
+
+**Counters remain turn-scoped** — they are not reset per call. A `deep` call after
+two `quick` calls sees the same turn-level counters.
+
+### 64.7 Telemetry changes
+
+#### `web_search_budget_exceeded`
+
+Add `budget_mode` field:
+```json
+{
+  "action": "search",
+  "budget_mode": "deep",
+  "limit": 20,
+  "counter": 20,
+  "query": "...",
+  "call_id": "..."
+}
+```
+
+Same for `web_search_retrieve_budget_exceeded`:
+```json
+{
+  "url": "...",
+  "budget_mode": "deep",
+  "limit": 10,
+  "counter": 10,
+  "call_id": "..."
+}
+```
+
+#### `tool_call_started` / `tool_call_completed`
+
+Add `budget_mode` field (string, the resolved mode name). This is cheap —
+already a dict that touches every call. Provides observability without model noise.
+
+### 64.8 Tool schema changes (Slice B + C-doc)
+
+Add `budget_mode` to the `web_search` function schema:
+
+```json
+"budget_mode": {
+  "type": "string",
+  "enum": ["quick", "normal", "deep", "audit"],
+  "description": "Research depth mode. quick: single fact check. normal: routine agent work (default). deep: multi-source research with more results and larger retrievals. audit: exhaustive citation/evidence scan."
+}
+```
+
+Remove `"maximum": 8` from `top_k` schema — the model can now suggest a higher
+`top_k` for deep/audit mode (still clamped to the resolved `max_results_per_query`
+by the runtime).
+
+### 64.9 Non-goals
+
+- No BrainCase integration
+- No persistent crawling
+- No auto keyword routing (profile and budget_mode are explicit model arguments)
+- No bulk scrape loops
+- No localhost endpoint leakage
+- No changes to search profiles or SearXNG engine config
+- No streaming budget exhaustion signals (model sees error text on budget hit)
+
+### 64.10 Acceptance criteria for Slice B
+
+```text
+test_budget_mode_quick_uses_quick_defaults
+  no budget_mode → effective mode = normal (not quick)
+  budget_mode="quick" → effective limits are quick-mode values
+
+test_budget_mode_normal_defaults
+  absent budget_mode → uses routing.default_budget_mode or "normal"
+
+test_budget_mode_deep_exceeds_old_8_ceiling
+  budget_mode="deep" → max_results_per_query = 25 (not clamped to 8)
+
+test_budget_mode_audit_retrievals
+  budget_mode="audit" → max_retrievals_per_turn = 20, max_retrieved_chars = 60000
+
+test_absolute_cap_clamps_mode
+  routing.absolute_max_results = 10 → deep mode max_results clamped to 10
+
+test_absolute_cap_cannot_exceed_built_in_constant
+  routing.absolute_max_results = 9999 → clamped to WEB_SEARCH_ABSOLUTE_MAX_RESULTS = 100
+
+test_flat_routing_compat_without_budget_modes
+  search.json with only flat max_* fields (no budget_modes key) → works as before #64
+
+test_flat_routing_compat_with_budget_modes_absent
+  no search.json routing at all → uses normal mode defaults
+
+test_unknown_budget_mode_falls_back_to_default
+  budget_mode = "fancy_mode" → treated as absent → uses default mode
+
+test_query_searxng_top_k_not_capped_at_8
+  top_k = 25 → _query_searxng collects up to 25 results (not 8)
+
+test_budget_exceeded_telemetry_includes_budget_mode
+  deep-mode search exhausts counter → budget_exceeded event has budget_mode="deep"
+
+test_retrieve_budget_exceeded_telemetry_includes_budget_mode
+  deep-mode retrieve exhausts counter → event has budget_mode="deep"
+
+test_router_passes_budget_mode_table_to_runtime
+  search.json routing.budget_modes → passed to WebSearchRuntime
+
+test_tool_schema_includes_budget_mode
+  web_search function schema contains budget_mode with correct enum
+```
+
+### 64.11 Slice roadmap
+
+| Slice | Status | Content |
+|---|---|---|
+| **A-design** | ✅ complete | This section |
+| **B-impl** | pending | Wire budget_mode through parser/runtime; remove hard ceilings; update config/schema |
+| **B.1-audit** | pending | Compat, fallback precedence, ceiling removal confirmed, telemetry |
+| **C-doc** | pending | Tool prompt guidance; update this contract §64.8 |
+| **D-live-smoke** | pending | Deep mode >8 results; audit chars >12 000; telemetry includes mode |

@@ -959,10 +959,10 @@ Telemetry budget-exceeded events include budget_mode.
 Default when no mode given: normal (document this decision in Slice A-design).
 
 Slices:
-  A-design  — contract doc: config shape, precedence, absolute ceiling semantics
+  A-design  — ✅ COMPLETE. docs/search-config-contract.md §64 written.
   B-impl    — wire budget_mode through parser/runtime; remove hard ceiling at line 798
   B.1-audit — compat, fallback precedence, ceiling removal, telemetry fields
-  C-doc     — search-config-contract.md §64; tool prompt guidance
+  C-doc     — search-config-contract.md §64.8; tool prompt guidance
   D-live-smoke — deep mode >8 results, >12000 chars; telemetry includes mode
 
 Key code targets:

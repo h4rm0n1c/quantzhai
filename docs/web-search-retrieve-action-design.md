@@ -1,7 +1,11 @@
 # web_search retrieve action design
 
 Date: 2026-05-20
-Status: #63 Slice A-design — design only.
+Status: #63 CLOSED — all slices delivered, live smoke passed.
+#64 note: `max_retrieved_chars` is now a mode-controlled budget field.
+  See `docs/search-config-contract.md §64` for the research-grade budget
+  modes design. In `deep` mode the default is 30 000 chars; in `audit`
+  mode 60 000 chars. The old 12 000-char ceiling is removed in #64 Slice B.
 
 ---
 
