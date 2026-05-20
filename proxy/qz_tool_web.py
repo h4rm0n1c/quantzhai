@@ -338,7 +338,11 @@ class WebSearchRuntime:
         # Budget limits: prefer explicit params; fall back to module constants.
         self.max_searches_per_turn = _resolve_budget_int(max_searches_per_turn, WEB_SEARCH_MAX_SEARCHES)
         self.max_page_opens_per_turn = _resolve_budget_int(max_page_opens_per_turn, WEB_SEARCH_MAX_OPENS)
-        self.max_results_per_query = _resolve_budget_int(max_results_per_query, WEB_SEARCH_MAX_RESULTS)
+        # Clamp to the safe ceiling: no config value can exceed WEB_SEARCH_MAX_RESULTS.
+        self.max_results_per_query = min(
+            _resolve_budget_int(max_results_per_query, WEB_SEARCH_MAX_RESULTS),
+            WEB_SEARCH_MAX_RESULTS,
+        )
         # low_result_fallback_threshold: try param, then legacy policy key, then default 2.
         if low_result_fallback_threshold is not None:
             self.low_result_fallback_threshold = _resolve_budget_int(low_result_fallback_threshold, 2)

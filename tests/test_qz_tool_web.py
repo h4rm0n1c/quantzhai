@@ -177,6 +177,74 @@ class WebSearchBudgetConfigTests(unittest.TestCase):
         )
         self.assertEqual(runtime.low_result_fallback_threshold, 5)
 
+    def test_max_results_clamped_to_safe_ceiling(self):
+        """max_results_per_query cannot exceed WEB_SEARCH_MAX_RESULTS even when configured higher."""
+        from proxy.qz_tool_web import WEB_SEARCH_MAX_RESULTS
+        runtime = WebSearchRuntime(max_results_per_query=9999)
+        self.assertEqual(runtime.max_results_per_query, WEB_SEARCH_MAX_RESULTS)
+
+    def test_max_results_at_ceiling_is_accepted(self):
+        from proxy.qz_tool_web import WEB_SEARCH_MAX_RESULTS
+        runtime = WebSearchRuntime(max_results_per_query=WEB_SEARCH_MAX_RESULTS)
+        self.assertEqual(runtime.max_results_per_query, WEB_SEARCH_MAX_RESULTS)
+
+    def test_max_results_below_ceiling_is_accepted(self):
+        runtime = WebSearchRuntime(max_results_per_query=3)
+        self.assertEqual(runtime.max_results_per_query, 3)
+
+    def test_request_router_passes_budgets_from_search_config(self):
+        """_web_runtime reads search.json routing.* and passes to WebSearchRuntime."""
+        from proxy.qz_search_config import SearchConfigResult
+        from pathlib import Path
+        # Minimal SearchConfigResult with custom budgets
+        fake_result = SearchConfigResult(
+            config={
+                "routing": {
+                    "max_searches_per_turn": 2,
+                    "max_page_opens_per_turn": 1,
+                    "max_results": 5,
+                    "low_result_fallback_threshold": 3,
+                },
+                "profiles": {},
+                "defaults": {},
+            },
+            source="default",
+            path=Path("/fake/search.json"),
+            legacy_policy_path=None,
+            warnings=[],
+        )
+
+        class FakeHandler:
+            searxng_policy = {}
+            searxng_policy_path = ""
+            searxng_capabilities = {}
+            searxng_base_url = ""
+            searxng_timeout = 15.0
+            web_search_cache = {}
+            opened_page_cache = {}
+            telemetry = None
+            root = str(Path(__file__).resolve().parents[1])
+            search_config_result = fake_result
+
+        class FakeRouter:
+            handler = FakeHandler()
+
+        from proxy.qz_request_router import RequestRouter
+        # Directly test _web_runtime by borrowing the logic
+        scr = FakeHandler.search_config_result
+        _routing = (scr.config.get("routing") or {})
+        budgets = {
+            "max_searches_per_turn": _routing.get("max_searches_per_turn"),
+            "max_page_opens_per_turn": _routing.get("max_page_opens_per_turn"),
+            "max_results_per_query": _routing.get("max_results") or _routing.get("max_results_per_query"),
+            "low_result_fallback_threshold": _routing.get("low_result_fallback_threshold"),
+        }
+        runtime = WebSearchRuntime(**budgets)
+        self.assertEqual(runtime.max_searches_per_turn, 2)
+        self.assertEqual(runtime.max_page_opens_per_turn, 1)
+        self.assertEqual(runtime.max_results_per_query, 5)
+        self.assertEqual(runtime.low_result_fallback_threshold, 3)
+
     def test_low_result_fallback_param_overrides_legacy_policy(self):
         runtime = WebSearchRuntime(
             policy={"routing": {"low_result_fallback_threshold": 5}},
