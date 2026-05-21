@@ -620,22 +620,71 @@ def main():
 
     server = ThreadingHTTPServer((args.listen, args.port), ProxyHandler)
 
-    def _preload_last_model():
-        state = read_json(Path(ProxyHandler.model_state_path), default={})
-        if not isinstance(state, dict):
-            return
-        requested = state.get("selected_key") or state.get("selected_backend_id") or ""
+    def _resolve_launch_model_entry():
+        """Resolve the model that BackendManager should launch with.
+
+        Precedence (post-cleanup): persisted qz.model_state.v1 selection >
+        catalog.selected (which already honours QZ_MODEL_KEY seed > config
+        default).  Returns the catalog entry dict or None.
+        """
         catalog = getattr(ProxyHandler, "model_catalog", None)
-        if not isinstance(requested, str) or not requested.strip():
-            selected = getattr(catalog, "selected", None)
-            if isinstance(selected, dict):
-                requested = selected.get("backend_id") or selected.get("key") or ""
-        if isinstance(requested, str) and requested.strip() and isinstance(catalog, ModelCatalog):
-            selected, _ = catalog.resolve(query=requested)
-            if selected is None:
-                fallback = getattr(catalog, "selected", None)
-                if isinstance(fallback, dict):
-                    requested = fallback.get("key") or fallback.get("backend_id") or requested
+        if not isinstance(catalog, ModelCatalog):
+            return None
+        state = read_json(Path(ProxyHandler.model_state_path), default={})
+        requested = ""
+        if isinstance(state, dict):
+            requested = (state.get("selected_key") or state.get("selected_backend_id") or "").strip()
+        if requested:
+            entry, _reason = catalog.resolve(query=requested)
+            if entry is not None:
+                return entry
+        # No valid persisted selection — fall back to catalog default.
+        fallback = getattr(catalog, "selected", None)
+        return fallback if isinstance(fallback, dict) else None
+
+    def _preload_last_model():
+        catalog = getattr(ProxyHandler, "model_catalog", None)
+        entry = _resolve_launch_model_entry()
+        mode = getattr(_backend_manager, "backend_model_mode", "direct")
+
+        # Direct mode: parameterise the BackendManager launch with this
+        # model and rely on the autostart trigger to docker run with -m.
+        if mode == "direct":
+            if entry is None:
+                # No valid model found — leave BackendManager idle; direct
+                # mode requires a launch model and would otherwise fail
+                # the safety gate in _do_start.
+                print(
+                    "QuantZhai: no launch model resolved for direct mode; "
+                    "POST /qz/model/select-and-restart to choose one.",
+                    flush=True,
+                )
+                return
+            key = entry.get("key") or entry.get("slug") or entry.get("filename") or ""
+            backend_id = entry.get("backend_id") or key
+            filename = entry.get("filename") or entry.get("backend_target") or backend_id
+            if isinstance(filename, str) and filename and not filename.endswith(".gguf"):
+                filename = f"{filename}.gguf"
+            try:
+                _backend_manager.set_launch_model(
+                    key=key, backend_id=backend_id, path_basename=filename or "",
+                )
+            except Exception as exc:
+                print(f"QuantZhai: set_launch_model failed: {exc}", flush=True)
+                return
+            if _backend_autostart:
+                _backend_manager.begin_autostart()
+            return
+
+        # Router mode (opt-in via QZ_BACKEND_MODEL_MODE=router): preserve
+        # the legacy POST /qz/models/select preload sequence.
+        if _backend_autostart:
+            _backend_manager.begin_autostart()
+        if entry is None:
+            return
+        requested = (
+            entry.get("key") or entry.get("backend_id") or entry.get("slug") or ""
+        )
         if not isinstance(requested, str) or not requested.strip():
             return
         url = f"http://{args.listen}:{args.port}/qz/models/select"
@@ -688,6 +737,9 @@ def main():
             return default
 
     _backend_autostart = _parse_bool_env(os.environ.get("QZ_BACKEND_AUTOSTART", "1"), default=True)
+    _backend_model_mode = (os.environ.get("QZ_BACKEND_MODEL_MODE") or "direct").strip().lower()
+    if _backend_model_mode not in ("direct", "router"):
+        _backend_model_mode = "direct"
     try:
         _backend_manager = BackendManager(
             docker_cmd=os.environ.get("QZ_DOCKER_CMD", "docker"),
@@ -717,10 +769,11 @@ def main():
             autostart=_backend_autostart,
             require_gpu=_parse_bool_env(os.environ.get("QZ_REQUIRE_GPU", "1"), default=True),
             gpu_log_tail=_eint("QZ_GPU_LOG_TAIL", 1000),
+            backend_model_mode=_backend_model_mode,
         )
     except Exception as _bm_exc:
         print(f"BackendManager init failed (backend disabled): {_bm_exc}", flush=True)
-        _backend_manager = BackendManager(autostart=False)
+        _backend_manager = BackendManager(autostart=False, backend_model_mode=_backend_model_mode)
     ProxyHandler.backend_manager = _backend_manager
 
     threading.Thread(target=_initialize_proxy_state, daemon=True).start()
@@ -728,8 +781,10 @@ def main():
         f"QuantZhai proxy listening on {args.listen}:{args.port} -> {ProxyHandler.upstream}, reasoning_stream_format={ProxyHandler.reasoning_stream_format}, initialization=background",
         flush=True,
     )
-    if _backend_autostart:
-        _backend_manager.begin_autostart()
+    # NOTE: begin_autostart() is now deferred to _preload_last_model() so the
+    # launch model is resolved before docker run.  In direct mode the
+    # container is parameterised with -m /models/<basename>; starting before
+    # the model is known would fail the launch_model safety gate.
     server.serve_forever()
 
 if __name__ == "__main__":

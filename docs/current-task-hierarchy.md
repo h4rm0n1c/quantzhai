@@ -74,6 +74,26 @@ All slices (A-design, B-state, C-endpoints, D-qz-codex, E-load-failure,
 F-smoke) closed.  No new shell scripts added (`scripts/qz-model*`
 invariant intact).
 
+### Direct backend mode + runtime observability (2026-05-22)
+
+- `QZ_BACKEND_MODEL_MODE=direct` (default) launches the container with
+  `-m /models/<selected>.gguf`; `router` opts back to `--models-dir`.
+- `BackendManager.set_launch_model()` + `_do_start()` safety gate.
+- Direct-mode `/qz/model/{reload,select-and-restart}` restart the
+  container with the new model instead of using the legacy
+  router load/unload path.
+- `/qz/model/status` + `/qz/control-plane.models` surface
+  `backend_model_mode`, `launch_model_*`, `model_switch_state`,
+  `active_load_operation`, plus the existing `last_good_*` /
+  `failed_candidate_*` recovery fields.
+- qz-top: new `MODEL` and `RCVRY` rows in both static and TUI render
+  paths.  qz-thoughts already handles proxy reconnect via the
+  existing `monitor_connection` events; the new control-plane fields
+  flow through unchanged.
+- 12 new tests (direct-mode argv shape, set_launch_model snapshot,
+  safety gate, endpoint wiring, status/control-plane surface);
+  3115 total pass.
+
 ### Post-F polish (2026-05-22)
 
 - **Failed-model recovery**: qz.model_state.v1 gains last_good_* and

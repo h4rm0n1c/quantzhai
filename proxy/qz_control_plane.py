@@ -229,6 +229,29 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
         except Exception:
             pass
 
+    # Backend manager mode + derived model switch state.
+    bm_snap = {}
+    bm = getattr(handler, "backend_manager", None)
+    if bm is not None and callable(getattr(bm, "snapshot", None)):
+        try:
+            _snap = bm.snapshot()
+            if isinstance(_snap, dict):
+                bm_snap = _snap
+        except Exception:
+            pass
+    backend_model_mode = (bm_snap.get("backend_model_mode") or "direct").strip() or "direct"
+    bm_phase = bm_snap.get("phase") or ""
+    try:
+        from .qz_model_status import _derive_model_switch_state
+    except ImportError:
+        from qz_model_status import _derive_model_switch_state
+    model_switch_state, active_load_operation = _derive_model_switch_state(
+        backend_phase=bm_phase,
+        backend_model_mode=backend_model_mode,
+        state=selection_state,
+        selected_loaded_mismatch=selected_loaded_mismatch,
+    )
+
     payload: dict[str, Any] = {
         "schema": QZ_CONTROL_PLANE_SCHEMA,
         "ok": ok,
@@ -250,6 +273,17 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
             "model_visible":             state_model_visible,
             "profile_valid":             state_profile_valid,
             "restart_required":          restart_required,
+            # Post-cleanup polish — direct vs router mode + switch state.
+            "backend_model_mode":          backend_model_mode,
+            "launch_model_key":            bm_snap.get("launch_model_key", ""),
+            "launch_model_backend_id":     bm_snap.get("launch_model_backend_id", ""),
+            "launch_model_path_basename":  bm_snap.get("launch_model_path_basename", ""),
+            "model_switch_state":          model_switch_state,
+            "active_load_operation":       active_load_operation,
+            "last_good_key":               selection_state.last_good_key,
+            "last_good_backend_id":        selection_state.last_good_backend_id,
+            "failed_candidate_key":        selection_state.failed_candidate_key,
+            "failed_candidate_backend_id": selection_state.failed_candidate_backend_id,
         },
         "backend": {
             "reachable": backend_reachable,
@@ -271,7 +305,13 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
     }
     # Append model-selection-specific operator hints.
     payload["operator_hints"].extend(
-        model_selection_hints(selection_state, configured_env_model, loaded_model)
+        model_selection_hints(
+            selection_state,
+            configured_env_model,
+            loaded_model,
+            backend_model_mode=backend_model_mode,
+            model_switch_state=model_switch_state,
+        )
     )
     # Additive: canonical service/recovery status derived from this payload.
     # Does not change existing fields; safe when backend is down.

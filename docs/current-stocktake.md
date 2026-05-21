@@ -22,6 +22,14 @@ Cold-start smoke (Slice F) on real hardware (kuato good / 27B Q5_K_M too-large) 
 
 **No new shell scripts added.** `scripts/qz-model*` invariant intact — operator commands stay at the proxy.
 
+Direct backend mode + runtime observability (2026-05-22):
+
+- **`QZ_BACKEND_MODEL_MODE=direct`** is the new default; the BackendManager launches the container with `-m /models/<selected>.gguf` instead of `--models-dir`.  Model switching becomes `docker rm -f` + new `docker run -m`, which is faster and more robust under VRAM pressure than the post-launch router load/unload path.  `QZ_BACKEND_MODEL_MODE=router` opts back to the legacy `--models-dir` multi-model behaviour.
+- Direct-mode `/qz/model/{reload,select-and-restart}` call `BackendManager.set_launch_model()` + `restart()` and poll for healthy/failed.  Failure still routes through the existing log classifier and rolls back to `last_good_*`.
+- `/qz/model/status` and `/qz/control-plane.models` surface `backend_model_mode`, `launch_model_{key,backend_id,path_basename}`, `model_switch_state` (`idle/selecting/restarting/loading/loaded/failed/rolled_back`), `active_load_operation` (`none/backend_restart/router_load/rollback_restart`), and the existing `last_good_*` / `failed_candidate_*` recovery fields.  Operator hints fire on mode + switch transitions.
+- qz-top renders a compact `MODEL` panel (mode, switch state, op, gpu, mismatch) plus an `RCVRY` row when a failed candidate is present.  qz-thoughts continues to use the existing `monitor_connection` reconnect plumbing; the new control-plane fields are additive.
+- 12 new tests; **3115 total pass**.
+
 Post-F polish (2026-05-22):
 
 - **Failed-model recovery**: `qz.model_state.v1` gains `last_good_*` and `failed_candidate_*` observation fields; `mark_load_success` / `mark_load_failure` helpers; `POST /qz/model/select-and-restart` accepts `rollback_on_failure` (default true); failed loads roll `selected_*` back to `last_good_*` with `selected_source=last_good_source or "fallback"` and a canonical reason; `/qz/model/status` and `/qz/control-plane` surface `rollback_performed` / `recovery_available` / `recommended_recovery_action`; qz-codex auto-select prints the classified failure block on failure.

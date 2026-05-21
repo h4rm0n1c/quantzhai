@@ -96,20 +96,60 @@ def _backend_loaded_model(handler: Any) -> str:
     return ""
 
 
-def _backend_manager_state(handler: Any) -> tuple[str, str]:
-    """Return (phase, gpu_offload_state) from BackendManager snapshot, ("","") on miss."""
+def _backend_manager_snapshot(handler: Any) -> dict:
+    """Return the BackendManager snapshot or {} on miss."""
     mgr = getattr(handler, "backend_manager", None)
     if mgr is None or not callable(getattr(mgr, "snapshot", None)):
-        return "", ""
+        return {}
     try:
         snap = mgr.snapshot()
     except Exception:
-        return "", ""
-    if not isinstance(snap, dict):
-        return "", ""
+        return {}
+    return snap if isinstance(snap, dict) else {}
+
+
+def _backend_manager_state(handler: Any) -> tuple[str, str]:
+    """Return (phase, gpu_offload_state) from BackendManager snapshot, ("","") on miss."""
+    snap = _backend_manager_snapshot(handler)
     phase = snap.get("phase") or ""
     gpu = snap.get("gpu_offload_state") or ""
     return (phase if isinstance(phase, str) else ""), (gpu if isinstance(gpu, str) else "")
+
+
+def _derive_model_switch_state(
+    *,
+    backend_phase: str,
+    backend_model_mode: str,
+    state,
+    selected_loaded_mismatch: bool,
+) -> tuple[str, str]:
+    """Derive (model_switch_state, active_load_operation).
+
+    model_switch_state ∈ {idle, selecting, restarting, loading, loaded, failed, rolled_back}
+    active_load_operation ∈ {none, backend_restart, router_load, rollback_restart}
+    """
+    rolled_back = bool(
+        state.last_load_result == "failed"
+        and "rolled back from failed candidate" in (state.selected_reason or "")
+        and (state.last_good_key or state.last_good_backend_id)
+    )
+    if rolled_back and backend_phase in ("start_requested", "starting", "running"):
+        return "restarting", "rollback_restart"
+    if rolled_back:
+        return "rolled_back", "none"
+    if state.last_load_result == "failed":
+        return "failed", "none"
+    if backend_model_mode == "direct" and backend_phase in ("start_requested", "starting"):
+        return "restarting", "backend_restart"
+    if backend_phase == "running":
+        # Backend container is up but llama-server hasn't reported healthy
+        # yet — counts as "loading".
+        return "loading", "backend_restart" if backend_model_mode == "direct" else "router_load"
+    if backend_model_mode == "router" and selected_loaded_mismatch:
+        return "loading", "router_load"
+    if state.last_load_result == "loaded":
+        return "loaded", "none"
+    return "idle", "none"
 
 
 def _recommended_action(
@@ -211,6 +251,19 @@ def build_model_status(handler: Any) -> dict[str, Any]:
     )
 
     backend_phase, backend_gpu_state = _backend_manager_state(handler)
+    mgr_snap = _backend_manager_snapshot(handler)
+    backend_model_mode = (mgr_snap.get("backend_model_mode") or "direct").strip() or "direct"
+    launch_model_key = (mgr_snap.get("launch_model_key") or "").strip()
+    launch_model_backend_id = (mgr_snap.get("launch_model_backend_id") or "").strip()
+    launch_model_path_basename = (mgr_snap.get("launch_model_path_basename") or "").strip()
+    launch_model_error = mgr_snap.get("launch_model_error")
+
+    model_switch_state, active_load_operation = _derive_model_switch_state(
+        backend_phase=backend_phase,
+        backend_model_mode=backend_model_mode,
+        state=state,
+        selected_loaded_mismatch=selected_loaded_mismatch,
+    )
 
     recommended_action = _recommended_action(
         selected_identity=selected_identity,
@@ -256,6 +309,16 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         "recovery_available": recovery_available,
         "recommended_action": recommended_action,
         "recommended_recovery_action": recommended_recovery_action,
+        # Direct vs router backend mode + the model the backend was
+        # parameterised with (in direct mode this is what -m points at;
+        # in router mode it tracks intent but the router does the load).
+        "backend_model_mode": backend_model_mode,
+        "launch_model_key": launch_model_key,
+        "launch_model_backend_id": launch_model_backend_id,
+        "launch_model_path_basename": launch_model_path_basename,
+        "launch_model_error": launch_model_error,
+        "model_switch_state": model_switch_state,
+        "active_load_operation": active_load_operation,
     }
 
 
@@ -263,6 +326,9 @@ def model_selection_hints(
     state: ModelState,
     configured_env_model: str,
     backend_loaded_model: str,
+    *,
+    backend_model_mode: str = "direct",
+    model_switch_state: str = "idle",
 ) -> list[str]:
     """Return additive operator hints derived from selection state.
 
@@ -298,6 +364,18 @@ def model_selection_hints(
             "Selected model failed to fit VRAM/context. "
             "Pick a smaller model or reduce QZ_CONTEXT."
         )
+
+    # Backend mode + active switch status hints.
+    if model_switch_state == "restarting":
+        if backend_model_mode == "direct":
+            hints.append(
+                "Direct backend mode: model switch in progress — backend "
+                "container is restarting with the selected model."
+            )
+        else:
+            hints.append("Router backend mode: model switch in progress.")
+    elif model_switch_state == "loading":
+        hints.append("Model load in progress.")
 
     # Failure recovery hints: rollback occurred OR failed candidate without
     # any last-good to fall back to.

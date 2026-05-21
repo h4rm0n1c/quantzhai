@@ -1954,11 +1954,22 @@ class RequestRouter:
         return False, None, None, False
 
     def _invoke_selected_model_reload(self, requested: str):
-        """Call the existing resolve_model_selection path for the selected model.
+        """Invoke the model reload appropriate for the current backend mode.
 
-        Raises RuntimeError when resolution fails.  The existing path handles
-        llama-server unload/load and BackendManager context restarts.
+        Direct mode (default): set BackendManager launch model and restart
+        the container with ``-m /models/<basename>``.  Wait for the
+        container to reach phase=healthy or fail.
+
+        Router mode: legacy resolve_model_selection path (llama-server
+        unload/load + optional BackendManager context restart).
         """
+        mgr = getattr(self.handler, "backend_manager", None)
+        mode = getattr(mgr, "backend_model_mode", "router") if mgr is not None else "router"
+
+        if mode == "direct" and mgr is not None:
+            return self._direct_mode_reload(requested, mgr)
+
+        # Router mode — preserve the legacy resolve+load path.
         with self._request_gate("/qz/model/reload", requested, False):
             selected, reason = self.handler._resolve_model_selection(requested)
         if selected is None:
@@ -1968,6 +1979,56 @@ class RequestRouter:
                 msg = reason or "model selection resolution failed"
             raise RuntimeError(str(msg))
         return selected, reason
+
+    def _direct_mode_reload(self, requested: str, mgr) -> tuple[dict, str]:
+        """Restart the BackendManager container with the selected model.
+
+        ``requested`` is the user-facing identity (catalog key/alias).
+        Matches the catalog entry, sets the launch model on ``mgr``, calls
+        ``mgr.restart()``, and waits until the container reports healthy
+        or the lifecycle fails.
+        """
+        try:
+            from .qz_model_catalog import match_model
+        except ImportError:
+            from qz_model_catalog import match_model
+
+        catalog = self.handler._model_catalog()
+        entry = match_model(catalog.entries, requested)
+        if entry is None:
+            raise RuntimeError(f"model {requested!r} not found in catalog")
+        key = entry.get("key") or entry.get("slug") or entry.get("filename") or requested
+        backend_id = entry.get("backend_id") or key
+        filename = entry.get("filename") or entry.get("backend_target") or backend_id
+        if isinstance(filename, str) and filename and not filename.endswith(".gguf"):
+            filename = f"{filename}.gguf"
+        if not filename:
+            raise RuntimeError(f"could not resolve launch filename for {requested!r}")
+
+        mgr.set_launch_model(key=key, backend_id=backend_id, path_basename=filename)
+        with self._request_gate("/qz/model/reload", requested, False):
+            result = mgr.restart()
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error") or "backend restart rejected")
+
+        # Wait for the backend to settle: healthy = success, failed = error.
+        deadline = time.time() + float(getattr(self.handler.__class__, "model_load_timeout", 600.0))
+        last_phase = ""
+        while time.time() < deadline:
+            snap = mgr.snapshot()
+            phase = snap.get("phase") or ""
+            last_phase = phase
+            if phase == "healthy":
+                return entry, "direct backend restart"
+            if phase == "failed":
+                err = snap.get("last_error") or snap.get("launch_model_error") or "backend failed to launch"
+                raise RuntimeError(str(err))
+            if phase in ("disabled", "stopped"):
+                raise RuntimeError(f"backend phase={phase!r} after restart")
+            time.sleep(0.5)
+        raise RuntimeError(
+            f"backend did not become healthy within model_load_timeout (last phase={last_phase!r})"
+        )
 
     def _web_runtime(self, selected_model=None):
         scr = getattr(self.handler, "search_config_result", None)

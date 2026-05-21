@@ -467,13 +467,64 @@ class SelectAndRestartEndpointTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class _FakeBackendManager:
-    """Minimal stand-in returning canned recent container logs."""
+    """Minimal stand-in returning canned recent container logs.
 
-    def __init__(self, logs: str | None):
+    Defaults to router-mode behaviour so existing tests are unaffected.
+    Direct-mode tests instantiate with backend_model_mode='direct' and
+    track set_launch_model / restart calls.
+    """
+
+    def __init__(
+        self,
+        logs: str | None,
+        *,
+        backend_model_mode: str = "router",
+        restart_result: dict | None = None,
+        post_restart_phase: str = "healthy",
+        post_restart_error: str = "",
+    ):
         self._logs = logs
+        self.backend_model_mode = backend_model_mode
+        self._restart_result = restart_result if restart_result is not None else {"ok": True}
+        self._post_phase = post_restart_phase
+        self._post_error = post_restart_error
+        self.set_launch_model_calls: list[dict] = []
+        self.restart_calls: int = 0
+        self._snapshot: dict = {
+            "phase": "healthy",
+            "backend_model_mode": backend_model_mode,
+            "launch_model_key": "",
+            "launch_model_backend_id": "",
+            "launch_model_path_basename": "",
+            "launch_model_error": None,
+            "gpu_offload_state": "gpu",
+            "last_error": None,
+        }
 
     def fetch_recent_logs(self, tail=None):
         return self._logs
+
+    def set_launch_model(self, *, key, backend_id, path_basename):
+        self.set_launch_model_calls.append({
+            "key": key,
+            "backend_id": backend_id,
+            "path_basename": path_basename,
+        })
+        self._snapshot["launch_model_key"] = key
+        self._snapshot["launch_model_backend_id"] = backend_id
+        self._snapshot["launch_model_path_basename"] = path_basename
+
+    def restart(self):
+        self.restart_calls += 1
+        # Simulate the lifecycle landing on the post-restart phase
+        # immediately so the endpoint's wait-for-healthy loop sees it.
+        self._snapshot["phase"] = self._post_phase
+        if self._post_error:
+            self._snapshot["last_error"] = self._post_error
+        return self._restart_result
+
+    def snapshot(self):
+        return dict(self._snapshot)
 
 
 class LoadFailureClassificationTests(unittest.TestCase):
@@ -743,6 +794,133 @@ class LoadFailureClassificationTests(unittest.TestCase):
             status, body = handler.sent[0]
             self.assertEqual(status, 409)
             self.assertEqual(body["last_load_error_type"], "insufficient_vram")
+
+
+# ---------------------------------------------------------------------------
+# Direct-mode endpoint behaviour (post-cleanup polish)
+# ---------------------------------------------------------------------------
+
+class DirectModeEndpointTests(unittest.TestCase):
+    """In direct mode, /qz/model/{reload,select-and-restart} restart the
+    BackendManager container with -m /models/<basename> instead of going
+    through the legacy resolve+load path."""
+
+    def test_select_and_restart_in_direct_mode_calls_set_launch_model_and_restart(self):
+        with _tmp_state_dir() as tmp:
+            state_path = tmp / "model-state.json"
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[_entry("kuato.gguf", "kuato")],
+                body={"model": "kuato.gguf"},
+                loaded_id="kuato",
+            )
+            handler.backend_manager = _FakeBackendManager(
+                logs="update_slots: all slots are idle",
+                backend_model_mode="direct",
+                post_restart_phase="healthy",
+            )
+            RequestRouter(handler)._handle_model_select_endpoint(restart=True)
+            # set_launch_model was called with the resolved filename
+            calls = handler.backend_manager.set_launch_model_calls
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0]["path_basename"], "kuato.gguf")
+            self.assertEqual(calls[0]["backend_id"], "kuato")
+            # BackendManager.restart() was invoked exactly once
+            self.assertEqual(handler.backend_manager.restart_calls, 1)
+            # 200 OK with status payload
+            status, body = handler.sent[0]
+            self.assertEqual(status, 200)
+            self.assertTrue(body["ok"])
+            # Direct mode reflected in status
+            self.assertEqual(body["backend_model_mode"], "direct")
+            self.assertEqual(body["launch_model_path_basename"], "kuato.gguf")
+
+    def test_direct_mode_restart_failure_returns_409_with_classified_state(self):
+        with _tmp_state_dir() as tmp:
+            state_path = tmp / "model-state.json"
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[_entry("kuato.gguf", "kuato")],
+                body={"model": "kuato.gguf"},
+            )
+            handler.backend_manager = _FakeBackendManager(
+                logs="cudaMalloc failed: out of memory",
+                backend_model_mode="direct",
+                post_restart_phase="failed",
+                post_restart_error="backend failed to launch",
+            )
+            RequestRouter(handler)._handle_model_select_endpoint(restart=True)
+            status, body = handler.sent[0]
+            self.assertEqual(status, 409)
+            self.assertFalse(body["ok"])
+            self.assertEqual(body["last_load_error_type"], "insufficient_vram")
+            self.assertEqual(body["backend_model_mode"], "direct")
+
+    def test_router_mode_keeps_legacy_resolve_path(self):
+        """Router-mode FakeBackendManager — endpoint must call _resolve_model_selection."""
+        resolve_called = []
+
+        def _resolve(requested):
+            resolve_called.append(requested)
+            return {"key": requested, "backend_id": requested}, "router path"
+
+        with _tmp_state_dir() as tmp:
+            state_path = tmp / "model-state.json"
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[_entry("kuato.gguf", "kuato")],
+                body={"model": "kuato.gguf"},
+                loaded_id="kuato",
+            )
+            handler.backend_manager = _FakeBackendManager(
+                logs="update_slots: all slots are idle",
+                backend_model_mode="router",
+            )
+            handler._resolve_model_selection = _resolve
+            RequestRouter(handler)._handle_model_select_endpoint(restart=True)
+            # Legacy path took the load
+            self.assertEqual(resolve_called, ["kuato.gguf"])
+            # set_launch_model NOT called in router mode
+            self.assertEqual(handler.backend_manager.set_launch_model_calls, [])
+            self.assertEqual(handler.backend_manager.restart_calls, 0)
+
+    def test_status_surface_exposes_mode_and_switch_state(self):
+        """GET-shape status payload includes backend_model_mode, launch_model_*,
+        model_switch_state, active_load_operation."""
+        with _tmp_state_dir() as tmp:
+            state_path = tmp / "model-state.json"
+            write_model_state(
+                ModelState(
+                    selected_key="kuato.gguf",
+                    selected_backend_id="kuato",
+                    selected_source="operator",
+                    last_load_result="loaded",
+                    last_loaded_model="kuato",
+                    last_good_key="kuato.gguf",
+                    last_good_backend_id="kuato",
+                ),
+                state_path,
+            )
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[_entry("kuato.gguf", "kuato")],
+                body={"model": "kuato.gguf"},
+                loaded_id="kuato",
+            )
+            handler.backend_manager = _FakeBackendManager(
+                logs="update_slots: all slots are idle",
+                backend_model_mode="direct",
+            )
+            handler.backend_manager.set_launch_model(
+                key="kuato.gguf", backend_id="kuato", path_basename="kuato.gguf",
+            )
+            from proxy.qz_model_status import build_model_status
+            status = build_model_status(handler)
+            self.assertEqual(status["backend_model_mode"], "direct")
+            self.assertEqual(status["launch_model_key"], "kuato.gguf")
+            self.assertEqual(status["launch_model_path_basename"], "kuato.gguf")
+            self.assertIn(status["model_switch_state"], ("loaded", "idle"))
+            self.assertIn("active_load_operation", status)
 
 
 # ---------------------------------------------------------------------------

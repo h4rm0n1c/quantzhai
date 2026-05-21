@@ -545,6 +545,37 @@ class ModelSelectionFieldsTests(unittest.TestCase):
         self.assertTrue(any("no last-good" in hint for hint in p["operator_hints"]))
 
 
+    def test_backend_model_mode_and_launch_model_in_models_section(self):
+        """Post-cleanup polish: models block exposes backend_model_mode + launch_model_*."""
+        with self._with_state_file({
+            "schema": "qz.model_state.v1",
+            "selected_key": "kuato.gguf",
+            "selected_backend_id": "kuato",
+        }) as fix:
+            h = _make_handler(loaded_model="kuato")
+            h.model_state_path = fix.path
+            # Inject a fake backend manager snapshot via MagicMock attr
+            bm = MagicMock()
+            bm.snapshot.return_value = {
+                "phase": "healthy",
+                "backend_model_mode": "direct",
+                "launch_model_key": "kuato.gguf",
+                "launch_model_backend_id": "kuato",
+                "launch_model_path_basename": "kuato.gguf",
+            }
+            h.backend_manager = bm
+            p = build_control_plane_status(h)
+        m = p["models"]
+        self.assertEqual(m["backend_model_mode"], "direct")
+        self.assertEqual(m["launch_model_key"], "kuato.gguf")
+        self.assertEqual(m["launch_model_backend_id"], "kuato")
+        self.assertEqual(m["launch_model_path_basename"], "kuato.gguf")
+        self.assertIn("model_switch_state", m)
+        self.assertIn("active_load_operation", m)
+        self.assertIn("last_good_key", m)
+        self.assertIn("failed_candidate_key", m)
+
+
 class _StateFileFixture:
     """Context manager that creates a tempfile state file."""
 

@@ -130,6 +130,26 @@ class ModelStatus:
     loaded_count: int = 0
     load_state: str = ""
     error: str = ""
+    # Post-cleanup polish: direct vs router backend mode, current model
+    # switch lifecycle, last-known-good / failed-candidate, and any active
+    # backend_restart / router_load / rollback_restart operation.
+    backend_model_mode: str = ""
+    launch_model_key: str = ""
+    launch_model_backend_id: str = ""
+    launch_model_path_basename: str = ""
+    model_switch_state: str = ""
+    active_load_operation: str = ""
+    last_good_key: str = ""
+    last_good_backend_id: str = ""
+    failed_candidate_key: str = ""
+    failed_candidate_backend_id: str = ""
+    rollback_performed: bool = False
+    recovery_available: bool = False
+    recommended_recovery_action: str = ""
+    backend_gpu_state: str = ""
+    selected_loaded_mismatch: bool = False
+    last_load_error_type: str = ""
+    last_load_error: str = ""
 
 
 def run_cmd(args, timeout=2.0) -> str:
@@ -343,6 +363,7 @@ def model_status_from_control_plane(cp: Optional[dict]) -> "ModelStatus":
     # backend_reasoning_budget is not in control-plane; read from env as fallback.
     budget = str(os.environ.get("QZ_REASONING_BUDGET", ""))
 
+    bm = cp.get("backend_manager") or {}
     return ModelStatus(
         ready=bool(r.get("backend_ready")),
         profile=selected_key,
@@ -362,6 +383,21 @@ def model_status_from_control_plane(cp: Optional[dict]) -> "ModelStatus":
         loaded_count=loaded_count,
         load_state=load_state,
         error=error,
+        # Post-cleanup polish surface from models + backend_manager.
+        backend_model_mode=str(m.get("backend_model_mode") or ""),
+        launch_model_key=str(m.get("launch_model_key") or ""),
+        launch_model_backend_id=str(m.get("launch_model_backend_id") or ""),
+        launch_model_path_basename=str(m.get("launch_model_path_basename") or ""),
+        model_switch_state=str(m.get("model_switch_state") or ""),
+        active_load_operation=str(m.get("active_load_operation") or ""),
+        last_good_key=str(m.get("last_good_key") or ""),
+        last_good_backend_id=str(m.get("last_good_backend_id") or ""),
+        failed_candidate_key=str(m.get("failed_candidate_key") or ""),
+        failed_candidate_backend_id=str(m.get("failed_candidate_backend_id") or ""),
+        selected_loaded_mismatch=bool(m.get("selected_loaded_mismatch")),
+        last_load_error=str(b.get("load_error") or ""),
+        last_load_error_type=str(b.get("load_error_type") or ""),
+        backend_gpu_state=str(bm.get("gpu_offload_state") or ""),
     )
 
 
@@ -1254,6 +1290,37 @@ class UI:
         if model_status.error:
             state_text += f" error={model_status.error}"
         self.add(y + 8, x + 12, clip(state_text, w - 14), state_attr)
+        # Post-cleanup polish: one-line model lifecycle row when room.
+        if h >= 11:
+            mode_bits = []
+            if model_status.backend_model_mode:
+                mode_bits.append(f"mode={model_status.backend_model_mode}")
+            if model_status.model_switch_state:
+                mode_bits.append(f"switch={model_status.model_switch_state}")
+            if (model_status.active_load_operation
+                    and model_status.active_load_operation != "none"):
+                mode_bits.append(f"op={model_status.active_load_operation}")
+            if model_status.backend_gpu_state:
+                mode_bits.append(f"gpu={model_status.backend_gpu_state}")
+            if model_status.selected_loaded_mismatch:
+                mode_bits.append("mismatch")
+            if mode_bits:
+                row_attr = self.white
+                if model_status.last_load_error_type:
+                    row_attr = self.red | self.bold
+                elif model_status.model_switch_state in ("restarting", "loading"):
+                    row_attr = self.yellow | self.bold
+                self.add(y + 9, x + 2, "MODEL", self.dim | self.bold)
+                self.add(y + 9, x + 12, clip(" ".join(mode_bits), w - 14), row_attr)
+            if model_status.failed_candidate_key and h >= 12:
+                recovery_bits = [f"failed={model_status.failed_candidate_key}"]
+                if model_status.last_good_key:
+                    recovery_bits.append(f"last_good={model_status.last_good_key}")
+                if model_status.last_load_error_type:
+                    recovery_bits.append(model_status.last_load_error_type)
+                self.add(y + 10, x + 2, "RCVRY", self.dim | self.bold)
+                self.add(y + 10, x + 12, clip(" ".join(recovery_bits), w - 14),
+                         self.red | self.bold)
 
         # Service/recovery rows (rows 9 and 10 of the extended profile box)
         if srs is not None and h >= 12:
@@ -1608,6 +1675,33 @@ def once():
     print(f"  state    : {state}")
     if model_status.error:
         print(f"  error    : {model_status.error}")
+    # Post-cleanup polish: model selection/lifecycle/recovery panel.
+    if (model_status.backend_model_mode or model_status.model_switch_state
+            or model_status.failed_candidate_key or model_status.last_good_key):
+        print()
+        print("MODEL")
+        line_bits = []
+        if model_status.backend_model_mode:
+            line_bits.append(f"mode={model_status.backend_model_mode}")
+        if model_status.model_switch_state:
+            line_bits.append(f"switch={model_status.model_switch_state}")
+        if model_status.active_load_operation and model_status.active_load_operation != "none":
+            line_bits.append(f"op={model_status.active_load_operation}")
+        if model_status.backend_gpu_state:
+            line_bits.append(f"gpu={model_status.backend_gpu_state}")
+        if model_status.selected_loaded_mismatch:
+            line_bits.append("mismatch")
+        if line_bits:
+            print(f"  status   : {' '.join(line_bits)}")
+        if model_status.launch_model_path_basename:
+            print(f"  launch   : {model_status.launch_model_path_basename}")
+        if model_status.last_good_key:
+            print(f"  last_good: {model_status.last_good_key}")
+        if model_status.failed_candidate_key:
+            print(f"  failed   : {model_status.failed_candidate_key}")
+        if model_status.last_load_error_type:
+            err_brief = (model_status.last_load_error or "")[:80]
+            print(f"  load_err : {model_status.last_load_error_type}: {err_brief}")
     # Service/recovery state (from /qz/control-plane service_status + recovery)
     if srs.proxy_state or srs.backend_state or srs.model_state:
         svc_parts = []

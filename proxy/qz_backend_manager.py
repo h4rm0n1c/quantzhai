@@ -37,6 +37,11 @@ VALID_PHASES = frozenset({
     PHASE_STOPPED, PHASE_UNKNOWN,
 })
 
+# Backend launch modes — see docs/backend-lifecycle-control-plane.md.
+BACKEND_MODE_DIRECT = "direct"
+BACKEND_MODE_ROUTER = "router"
+VALID_BACKEND_MODES = frozenset({BACKEND_MODE_DIRECT, BACKEND_MODE_ROUTER})
+
 # Phases that mean "not running" — start() is allowed from these.
 _STARTABLE_PHASES = frozenset({
     PHASE_IDLE, PHASE_FAILED, PHASE_STOPPED, PHASE_UNKNOWN,
@@ -120,23 +125,37 @@ class BackendState:
     gpu_required: bool = True
     gpu_offload_state: str = "unknown"  # unknown | gpu | cpu_fallback | failed
     gpu_error: str | None = None
+    # Post-cleanup polish: direct vs router launch mode + the model the
+    # last/next launch is parameterised with.  ``launch_model_*`` are
+    # observation-only descriptors of the next docker run argv; the model
+    # selection authority remains in qz.model_state.v1.
+    backend_model_mode: str = BACKEND_MODE_DIRECT
+    launch_model_key: str = ""
+    launch_model_backend_id: str = ""
+    launch_model_path_basename: str = ""
+    launch_model_error: str | None = None
 
     def as_dict(self) -> dict:
         """Return a safe dict — no secrets, no paths, no Docker commands."""
         return {
-            "phase":                    self.phase,
-            "container_name":           self.container_name,
-            "container_running":        self.container_running,
-            "backend_health_ok":        self.backend_health_ok,
-            "last_start_requested_at":  self.last_start_requested_at,
-            "last_started_at":          self.last_started_at,
-            "last_healthy_at":          self.last_healthy_at,
-            "last_stopped_at":          self.last_stopped_at,
-            "last_error":               self.last_error,
-            "autostart":                self.autostart,
-            "gpu_required":             self.gpu_required,
-            "gpu_offload_state":        self.gpu_offload_state,
-            "gpu_error":                self.gpu_error,
+            "phase":                       self.phase,
+            "container_name":              self.container_name,
+            "container_running":           self.container_running,
+            "backend_health_ok":           self.backend_health_ok,
+            "last_start_requested_at":     self.last_start_requested_at,
+            "last_started_at":             self.last_started_at,
+            "last_healthy_at":             self.last_healthy_at,
+            "last_stopped_at":             self.last_stopped_at,
+            "last_error":                  self.last_error,
+            "autostart":                   self.autostart,
+            "gpu_required":                self.gpu_required,
+            "gpu_offload_state":           self.gpu_offload_state,
+            "gpu_error":                   self.gpu_error,
+            "backend_model_mode":          self.backend_model_mode,
+            "launch_model_key":            self.launch_model_key,
+            "launch_model_backend_id":     self.launch_model_backend_id,
+            "launch_model_path_basename":  self.launch_model_path_basename,
+            "launch_model_error":          self.launch_model_error,
         }
 
 
@@ -178,6 +197,10 @@ class BackendManager:
         autostart: bool = True,
         require_gpu: bool = True,
         gpu_log_tail: int = 1000,
+        backend_model_mode: str = BACKEND_MODE_DIRECT,
+        launch_model_key: str = "",
+        launch_model_backend_id: str = "",
+        launch_model_path_basename: str = "",
         health_check_interval: float = 5.0,
         health_check_timeout: float = 120.0,
         autostart_delay: float = 0.5,
@@ -209,6 +232,13 @@ class BackendManager:
         self._spec_default           = bool(spec_default)
         self._require_gpu            = bool(require_gpu)
         self._gpu_log_tail           = int(gpu_log_tail)
+        _mode = _safe_str(backend_model_mode, BACKEND_MODE_DIRECT).lower()
+        if _mode not in VALID_BACKEND_MODES:
+            _mode = BACKEND_MODE_DIRECT
+        self._backend_model_mode     = _mode
+        self._launch_model_key       = _safe_str(launch_model_key)
+        self._launch_model_backend_id = _safe_str(launch_model_backend_id)
+        self._launch_model_path_basename = _safe_str(launch_model_path_basename)
         self._health_check_interval  = float(health_check_interval)
         self._health_check_timeout   = float(health_check_timeout)
         self._autostart_delay        = float(autostart_delay)
@@ -227,6 +257,10 @@ class BackendManager:
             container_name=self._container_name,
             autostart=bool(autostart),
             gpu_required=self._require_gpu,
+            backend_model_mode=self._backend_model_mode,
+            launch_model_key=self._launch_model_key,
+            launch_model_backend_id=self._launch_model_backend_id,
+            launch_model_path_basename=self._launch_model_path_basename,
         )
 
     # ------------------------------------------------------------------
@@ -242,6 +276,32 @@ class BackendManager:
     def phase(self) -> str:
         with self._lock:
             return self._state.phase
+
+    @property
+    def backend_model_mode(self) -> str:
+        return self._backend_model_mode
+
+    def set_launch_model(
+        self,
+        *,
+        key: str,
+        backend_id: str,
+        path_basename: str,
+    ) -> None:
+        """Set the model the next backend launch will be parameterised with.
+
+        In direct mode the next ``docker run`` will pass ``-m /models/<basename>``.
+        In router mode this is informational only — the container starts with
+        ``--models-dir`` and the model is loaded through the proxy/router path.
+        """
+        with self._lock:
+            self._launch_model_key = _safe_str(key)
+            self._launch_model_backend_id = _safe_str(backend_id)
+            self._launch_model_path_basename = _safe_str(path_basename)
+            self._state.launch_model_key = self._launch_model_key
+            self._state.launch_model_backend_id = self._launch_model_backend_id
+            self._state.launch_model_path_basename = self._launch_model_path_basename
+            self._state.launch_model_error = None
 
     # ------------------------------------------------------------------
     # Public lifecycle API
@@ -345,9 +405,15 @@ class BackendManager:
     def build_backend_args(self) -> list[str]:
         """Build the llama.cpp backend argument list.
 
-        Exact port of scripts/qz-up backend_args array (lines 88-119).
+        In direct mode (default) the args include ``-m /models/<basename>``
+        and the llama.cpp server binds to the single specified model.
+        In router mode the args omit ``-m`` and the container loads/unloads
+        models via the proxy/router path against ``--models-dir /models``.
         """
-        args = [
+        args: list[str] = []
+        if self._backend_model_mode == BACKEND_MODE_DIRECT and self._launch_model_path_basename:
+            args.extend(["-m", f"/models/{self._launch_model_path_basename}"])
+        args += [
             "--host", "0.0.0.0",
             "--port", "8080",
             "-ngl", "999",
@@ -398,8 +464,12 @@ class BackendManager:
             "-p", f"{self._server_port}:8080",
             "--mount", f"type=bind,src={self._model_dir},dst=/models,readonly",
             self._image,
-            "--models-dir", "/models",
         ]
+        # In router mode the entrypoint expects --models-dir.  Direct mode
+        # passes -m via build_backend_args() and omits --models-dir to keep
+        # llama-server bound to the explicitly-specified model.
+        if self._backend_model_mode == BACKEND_MODE_ROUTER:
+            container_flags += ["--models-dir", "/models"]
         return cmd + container_flags + self.build_backend_args()
 
     def build_docker_rm_args(self, force: bool = True) -> list[str]:
@@ -529,12 +599,42 @@ class BackendManager:
     def _do_start(self) -> None:
         """Background: rm -f, docker run, then health-check loop."""
         try:
+            # Direct mode requires a launch model so the container can be
+            # parameterised with -m /models/<basename>.  Fail clearly here
+            # rather than letting docker run start a CPU-only / no-model
+            # backend that the proxy can't drive.
+            if (
+                self._backend_model_mode == BACKEND_MODE_DIRECT
+                and not self._launch_model_path_basename
+            ):
+                err = (
+                    "direct backend mode requires a launch model; "
+                    "POST /qz/model/select-and-restart with a valid model "
+                    "or set QZ_BACKEND_MODEL_MODE=router"
+                )
+                with self._lock:
+                    self._state.phase = PHASE_FAILED
+                    self._state.launch_model_error = err
+                    self._state.last_error = err
+                self._emit("backend_failed", {"error": err})
+                return
+
             # Remove any existing container first (match qz-up semantics)
             self._runner(self.build_docker_rm_args(force=True), timeout=30.0)
 
             with self._lock:
                 self._state.phase = PHASE_STARTING
-            self._emit("backend_starting")
+                # Refresh launch_model_* on the state snapshot so observers
+                # see what we're actually launching with.
+                self._state.backend_model_mode = self._backend_model_mode
+                self._state.launch_model_key = self._launch_model_key
+                self._state.launch_model_backend_id = self._launch_model_backend_id
+                self._state.launch_model_path_basename = self._launch_model_path_basename
+                self._state.launch_model_error = None
+            self._emit("backend_starting", {
+                "backend_model_mode": self._backend_model_mode,
+                "launch_model_backend_id": self._launch_model_backend_id,
+            })
 
             rc, _out, err = self._runner(self.build_docker_run_args(), timeout=60.0)
             if rc != 0:

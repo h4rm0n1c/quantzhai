@@ -257,6 +257,33 @@ and re-fetches client-config before downloading the catalog.  Setting
 
 No new shell scripts.  `scripts/qz-model*` invariant intact.
 
+### Direct backend mode + observability surface
+
+Post-cleanup polish adds `BackendManager` direct-mode launch
+(`QZ_BACKEND_MODEL_MODE=direct`, default): the container launches with
+`-m /models/<selected>.gguf` for a single bound model.  Model switches
+become `docker rm -f` + `docker run` with a new `-m`, which is fast and
+robust under VRAM pressure.  Router mode (`QZ_BACKEND_MODEL_MODE=router`)
+preserves the legacy `--models-dir` + post-launch load/unload path.
+
+`/qz/model/select-and-restart` in direct mode:
+1. Validates and persists the selection.
+2. Calls `BackendManager.set_launch_model(key, backend_id, path_basename)`.
+3. Calls `BackendManager.restart()` to launch a new container with `-m`.
+4. Polls `phase` until healthy/failed (bounded by `QZ_MODEL_LOAD_TIMEOUT`).
+5. Runs the existing log classifier + recovery (rollback to `last_good_*`).
+
+`/qz/model/status` and `/qz/control-plane.models` gain:
+`backend_model_mode`, `launch_model_*`, `model_switch_state`
+(`idle/selecting/restarting/loading/loaded/failed/rolled_back`),
+`active_load_operation` (`none/backend_restart/router_load/rollback_restart`),
+plus `last_good_*` / `failed_candidate_*` already added by the post-F
+polish.  qz-top renders a compact `MODEL` panel for mode/switch/op/gpu
+plus an `RCVRY` row for failed-candidate context.
+
+See `docs/backend-lifecycle-control-plane.md §15.9` for the full
+direct-vs-router contract.
+
 ## 5. `qz.model_state.v1` schema
 
 `var/model-state.json` (proxy-owned, selection authority only):
