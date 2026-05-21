@@ -234,6 +234,141 @@ qz_exec_model_from_args() {
   return 0
 }
 
+qz_codex_exec_preflight() {
+  # Args: REQUESTED
+  # Returns:
+  #   0 — requested matches active backend model; proceed
+  #   1 — mismatch and auto-select disabled (error printed)
+  #   2 — auto-select attempted but failed or returned mismatch
+  #   3 — proxy unreachable / /qz/model/status fetch failed
+  #
+  # When QZ_CODEX_AUTO_SELECT_MODEL=1 and there is a mismatch, POSTs
+  # /qz/model/select-and-restart with source=qz_codex and re-checks before
+  # returning.  No fallback to /v1/models visibility-only logic.
+  local requested="$1"
+  local autoselect="${QZ_CODEX_AUTO_SELECT_MODEL:-0}"
+  local timeout="${QZ_CODEX_READY_TIMEOUT:-300}"
+  REQUESTED="$requested" AUTOSELECT="$autoselect" READY_TIMEOUT="$timeout" \
+    python3 - "$QZ_PROXY_HOST" "$QZ_PROXY_PORT" <<'PY'
+import json, os, sys, urllib.request, urllib.error
+
+host = sys.argv[1]
+port = sys.argv[2]
+requested = (os.environ.get("REQUESTED") or "").strip()
+autoselect = (os.environ.get("AUTOSELECT") or "").strip().lower() in ("1", "true", "yes", "on")
+try:
+    timeout = float(os.environ.get("READY_TIMEOUT") or "300")
+except Exception:
+    timeout = 300.0
+
+
+def fetch_status():
+    url = "http://{}:{}/qz/model/status".format(host, port)
+    try:
+        with urllib.request.urlopen(url, timeout=3.0) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        print("qz-codex: GET /qz/model/status failed: {}".format(exc), file=sys.stderr)
+        return None
+
+
+def active_match(data, req):
+    if not isinstance(data, dict):
+        return False
+    loaded = (data.get("backend_loaded_model") or "").strip()
+    sk = (data.get("selected_key") or "").strip()
+    sbid = (data.get("selected_backend_id") or "").strip()
+    mismatch = bool(data.get("selected_loaded_mismatch", False))
+    candidates = set()
+    if loaded:
+        candidates.add(loaded.lower())
+    if not mismatch:
+        if sk:
+            candidates.add(sk.lower())
+        if sbid:
+            candidates.add(sbid.lower())
+    return req.lower() in candidates
+
+
+def print_mismatch(data, req):
+    selected = ""
+    loaded = ""
+    source = ""
+    if isinstance(data, dict):
+        selected = data.get("selected_key") or data.get("selected_backend_id") or ""
+        loaded = data.get("backend_loaded_model") or ""
+        source = data.get("selected_source") or ""
+    selected = selected or "<none>"
+    loaded = loaded or "<none>"
+    source = source or "<none>"
+    e = sys.stderr
+    print("qz-codex: requested model {} is not the active backend model.".format(req), file=e)
+    print("  Active selected model: {}".format(selected), file=e)
+    print("  Backend loaded model:  {}".format(loaded), file=e)
+    print("  Selected source:       {}".format(source), file=e)
+    print("", file=e)
+    print("Set QZ_CODEX_AUTO_SELECT_MODEL=1 to let qz-codex select/restart automatically,", file=e)
+    print("or call the proxy endpoint manually:", file=e)
+    print("  curl -sS -X POST -H 'Content-Type: application/json' \\", file=e)
+    body = json.dumps({"model": req}, separators=(",", ":"))
+    print("       -d '{}' \\".format(body), file=e)
+    print("       http://{}:{}/qz/model/select-and-restart".format(host, port), file=e)
+
+
+def post_select_and_restart(req):
+    url = "http://{}:{}/qz/model/select-and-restart".format(host, port)
+    payload = json.dumps({"model": req, "source": "qz_codex"}).encode("utf-8")
+    request_obj = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request_obj, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw), response.status, None
+    except urllib.error.HTTPError as exc:
+        try:
+            data = json.loads(exc.read().decode("utf-8"))
+        except Exception:
+            data = None
+        return data, exc.code, str(exc)
+    except Exception as exc:
+        return None, None, str(exc)
+
+
+data = fetch_status()
+if data is None:
+    sys.exit(3)
+
+if active_match(data, requested):
+    sys.exit(0)
+
+if not autoselect:
+    print_mismatch(data, requested)
+    sys.exit(1)
+
+print("qz-codex: QZ_CODEX_AUTO_SELECT_MODEL=1; posting /qz/model/select-and-restart for {}".format(requested), file=sys.stderr)
+new_data, status, err = post_select_and_restart(requested)
+if status is None or (isinstance(status, int) and status >= 400) or new_data is None:
+    msg = err or ((new_data or {}).get("error") if isinstance(new_data, dict) else None) or "unknown"
+    print("qz-codex: /qz/model/select-and-restart failed (HTTP {}): {}".format(status, msg), file=sys.stderr)
+    sys.exit(2)
+
+if not isinstance(new_data, dict):
+    print("qz-codex: /qz/model/select-and-restart returned unexpected response (HTTP {})".format(status), file=sys.stderr)
+    sys.exit(2)
+
+if active_match(new_data, requested):
+    sys.exit(0)
+
+print("qz-codex: /qz/model/select-and-restart returned but {} is still not the active model.".format(requested), file=sys.stderr)
+print_mismatch(new_data, requested)
+sys.exit(2)
+PY
+}
+
 qz_proxy_loaded_model() {
   # Primary truth source: /qz/control-plane (qz.control_plane.status.v1).
   # Prefers Codex-visible profile ID (models.selected) over backend identity.

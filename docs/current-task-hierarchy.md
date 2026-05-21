@@ -47,7 +47,12 @@ Slice C-endpoints — ✅ /qz/model/status, /qz/model/select,
   /qz/control-plane exposes configured_env_model, selected_source,
   selected_loaded_mismatch, load-failure surface, operator hints;
   44 new tests; 3032 total pass
-Slice D-qz-codex — replace visibility-only preflight; QZ_CODEX_AUTO_SELECT_MODEL
+Slice D-qz-codex — ✅ qz_codex_exec_preflight in scripts/qz-codex-common;
+  GET /qz/model/status, compare active model, mismatch error includes
+  literal curl /qz/model/select-and-restart; QZ_CODEX_AUTO_SELECT_MODEL=1
+  opts into select+restart with source=qz_codex; old visibility-only
+  qz-wait-ready preflight removed; 17 new tests; 3049 total pass.
+  Note: qz-codex no longer treats /v1/models visibility as active backend selection.
 Slice E-load-failure — classify VRAM/context-create failures from logs
 Slice F-smoke — manual cold-start acceptance
 
