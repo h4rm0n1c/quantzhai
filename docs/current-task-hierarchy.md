@@ -3,6 +3,32 @@
 Date: 2026-05-22
 Status: active control sheet — Slice B audit complete; Slice B2 fixes next.
 
+## Recently completed — Metadata propagation audit (Slice D)
+
+```text
+Status: COMPLETE
+
+Output: docs/metadata-propagation-audit.md
+
+Key findings:
+- P1: response.id mismatch in multi-hop streaming — synthesised _emit_completed uses
+  resp_local_{timestamp} instead of upstream response.id. Codex SDK may see two IDs
+  for one logical exchange.
+- P1: zero usage in synthesised fallback terminals — if _drain_stream_for_usage fails
+  (upstream sends no response.completed after tool break), Codex receives all-zeros usage.
+- P2: cached_tokens and reasoning_tokens not visible in qz-thoughts or qz-top.
+- qz_* metadata is forwarded to llama.cpp (harmless for local deployment, worth noting).
+- call_id matching is correct for normal upstream tool calls.
+- Usage normalisation is well-tested (handles OpenAI/llama.cpp field name variants).
+
+Fix pass order:
+1. B2 (coercion/schema telemetry — already planned)
+2. response.id threading through StreamRunState
+3. Document zero-usage in fallbacks + test
+4. C2 output_text artifact detection
+5. P2 token observability in qz-thoughts
+```
+
 ## Recently completed — Streaming event mapper audit (Slice C)
 
 ```text

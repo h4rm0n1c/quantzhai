@@ -9,6 +9,7 @@ Related:
 - `docs/tool-coercion-design.md` — coercion design spec; implementation complete.
 - `docs/tool-schema-coercion-audit.md` — Slice B: detailed tool schema replacement, coercion/advice, and failure matrix.
 - `docs/streaming-event-mapper-audit.md` — Slice C: mapper boundaries, leak-risk audit, reasoning channel, fixture plan.
+- `docs/metadata-propagation-audit.md` — Slice D: metadata flow table, rewrite/synthesis audit, usage/error audit, gap classification.
 - `docs/current-architecture-authority.md` — final conflict resolver.
 
 **Slice A correction**: The finding "qz-thoughts thought/answer panels are blank during

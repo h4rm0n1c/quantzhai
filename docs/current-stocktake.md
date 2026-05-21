@@ -7,6 +7,18 @@ This document is a rolling point-in-time snapshot. For the live execution order,
 read `docs/current-task-hierarchy.md`. For architecture authority, read
 `docs/current-architecture-authority.md`.
 
+## Metadata propagation audit (Slice D) — COMPLETE
+
+`docs/metadata-propagation-audit.md` maps all metadata sources, destinations, and
+transformations through the full pipeline.
+
+P1 findings: synthesised `response.id` doesn't match upstream ID in multi-hop streaming;
+zero usage emitted in fallback terminals when drain fails. P2: cached/reasoning token counts
+not visible in qz-thoughts/qz-top. call_id matching and usage normalisation are correct.
+
+**Fix pass order**: B2 → response.id threading → usage documentation → output_text artifact
+detection → P2 token observability.
+
 ## Streaming event mapper audit (Slice C) — COMPLETE
 
 `docs/streaming-event-mapper-audit.md` audits all SSE parsing, rewriting, suppression,
