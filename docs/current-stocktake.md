@@ -7,6 +7,17 @@ This document is a rolling point-in-time snapshot. For the live execution order,
 read `docs/current-task-hierarchy.md`. For architecture authority, read
 `docs/current-architecture-authority.md`.
 
+## Streaming event mapper audit (Slice C) — COMPLETE
+
+`docs/streaming-event-mapper-audit.md` audits all SSE parsing, rewriting, suppression,
+reasoning modes, tool continuation, and leak risks.
+
+Key corrections: Slice A blank-panel finding was incorrect — qz-thoughts IS updated in
+real time. Actual critical gap: model-output tool JSON in output_text is NOT detected
+(only reasoning channel has artifact detection). Fix targeted after B2.
+
+**Fix pass order**: B2 fixes → L4 output_text artifact detection → Slice D metadata audit.
+
 ## Tool schema/coercion/advice audit (Slice B) — COMPLETE
 
 `docs/tool-schema-coercion-audit.md` audits all tool schema replacement, coercion,

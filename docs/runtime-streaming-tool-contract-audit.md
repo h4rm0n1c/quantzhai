@@ -8,7 +8,13 @@ Related:
 - `docs/responses-stream-tool-state-contract.md` — earlier living contract; use this document for current shapes.
 - `docs/tool-coercion-design.md` — coercion design spec; implementation complete.
 - `docs/tool-schema-coercion-audit.md` — Slice B: detailed tool schema replacement, coercion/advice, and failure matrix.
+- `docs/streaming-event-mapper-audit.md` — Slice C: mapper boundaries, leak-risk audit, reasoning channel, fixture plan.
 - `docs/current-architecture-authority.md` — final conflict resolver.
+
+**Slice A correction**: The finding "qz-thoughts thought/answer panels are blank during
+Responses API streaming" was INCORRECT. `ResponsesStreamRuntime` does emit `sse_event`
+telemetry via chunk_writer → `_write_sse_chunk` → `_emit_sse_telemetry`. qz-thoughts
+receives reasoning and output text deltas in real time. See `docs/streaming-event-mapper-audit.md §7`.
 
 ---
 

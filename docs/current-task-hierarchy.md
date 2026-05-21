@@ -3,6 +3,33 @@
 Date: 2026-05-22
 Status: active control sheet — Slice B audit complete; Slice B2 fixes next.
 
+## Recently completed — Streaming event mapper audit (Slice C)
+
+```text
+Status: COMPLETE
+
+Output: docs/streaming-event-mapper-audit.md
+
+Key findings:
+- CORRECTION of Slice A: qz-thoughts IS updated in real time during Responses streaming.
+  ResponsesStreamRuntime calls _emit_sse_telemetry via chunk_writer → _write_sse_chunk.
+  The blank panel bug was a false positive — it does not exist.
+- Critical: model-output tool JSON in output_text is NOT detected (L4 gap).
+  _looks_like_reasoning_tool_artifact only runs for reasoning channel.
+  This is the actual tool-leak-as-assistant-text vector.
+- All function_call stream events correctly suppressed from Codex. No false positives.
+- Tool continuation flow is correct (buffer → lifecycle → next_input → completion).
+- Reasoning modes (raw/summary/hidden) are correct.
+- DeepSeek think-tag handling: none implemented (not needed for current Qwen).
+- 10 missing fixture tests identified precisely.
+
+Fix pass order:
+1. B2 fixes (already planned: ToolCoercionResult guard, non-streaming gap, telemetry).
+2. L4: add output_text tool artifact detection.
+3. Slice E: 4 streaming coercion fixture tests.
+4. Slice D audit: metadata propagation.
+```
+
 ## Recently completed — Tool schema/coercion/advice audit (Slice B)
 
 ```text
