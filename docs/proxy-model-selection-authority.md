@@ -460,8 +460,8 @@ scope** for this work; do not anticipate it by adding wrappers.
 | Slice | Content |
 |---|---|
 | **A-design** | ✅ this document; audit of current paths; final precedence; schema; endpoint shape; no-new-scripts invariant |
-| **B-state** | `qz.model_state.v1` reader/writer/migration; tests including stale-loaded_model-only state and invalid-selected fallback |
-| **C-endpoints** | `/qz/model/status`, `/qz/model/select`, `/qz/model/reload`, `/qz/model/select-and-restart`; control-plane field additions; tests |
+| **B-state** | ✅ `proxy/qz_model_state.py` with `qz.model_state.v1` reader/writer/migration; atomic writes; `state_from_selection` validates `SELECTED_SOURCES`; `update_load_observation` keeps authority fields untouched; `load_last_selected_model` no longer reads `loaded_model`; `_persist_model_state` routes through the new module and observation fields are preserved across selection writes; 32 new tests; 2988 total pass |
+| **C-endpoints** | `/qz/model/status`, `/qz/model/select`, `/qz/model/reload`, `/qz/model/select-and-restart`; control-plane field additions; rewire router callers from legacy source strings to canonical `SELECTED_SOURCES`; tests |
 | **D-qz-codex** | replace visibility-only preflight; `QZ_CODEX_AUTO_SELECT_MODEL`; mismatch message with literal curl; tests |
 | **E-load-failure** | log-pattern classification for VRAM/context-create failures; control-plane `model_load_failed` / `load_error_type` exposure; tests |
 | **F-smoke** | manual cold-start smoke (§14) |

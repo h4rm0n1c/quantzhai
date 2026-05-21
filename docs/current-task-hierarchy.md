@@ -35,7 +35,10 @@ backend observations.  No new shell scripts for model selection.
 Design: docs/proxy-model-selection-authority.md
 
 Slice A-design — ✅ audit + final design
-Slice B-state — qz.model_state.v1 loader/writer/migration
+Slice B-state — ✅ qz.model_state.v1 in proxy/qz_model_state.py;
+  load_last_selected_model no longer reads loaded_model;
+  _persist_model_state routed through new module; 32 new tests;
+  2988 total pass
 Slice C-endpoints — /qz/model/status/select/reload/select-and-restart
 Slice D-qz-codex — replace visibility-only preflight; QZ_CODEX_AUTO_SELECT_MODEL
 Slice E-load-failure — classify VRAM/context-create failures from logs

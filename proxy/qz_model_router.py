@@ -48,6 +48,11 @@ def backend_reasoning_budget() -> int | None:
         return None
 
 
+def _iso_state_now() -> str:
+    t = time.gmtime()
+    return f"{t.tm_year:04d}-{t.tm_mon:02d}-{t.tm_mday:02d}T{t.tm_hour:02d}:{t.tm_min:02d}:{t.tm_sec:02d}Z"
+
+
 def control_plane_backend_timeout() -> float:
     raw = os.environ.get("QZ_CONTROL_PLANE_BACKEND_TIMEOUT", "0.75")
     try:
@@ -218,18 +223,54 @@ class ModelRouter:
         return runtime_state_path("model-state.json")
 
     def _persist_model_state(self, selected: dict | None = None, reason: str = "", source: str = ""):
-        selected = selected if isinstance(selected, dict) else {}
-        payload = {
-            "selected_key": entry_identity(selected),
-            "selected_backend_id": selected.get("backend_id") or entry_identity(selected),
-            "selected_label": selected.get("label") or "",
-            "selected_path": selected.get("path") or "",
-            "selected_reason": reason or "",
-            "source": source or "",
-            "updated_at": time.time(),
-        }
+        """Write proxy-owned model selection state as qz.model_state.v1.
+
+        Source strings written here (status_snapshot, resolve_model_selection,
+        load_backend_model, ...) are legacy router values; Slice C of the
+        model-selection-authority cleanup migrates callers to the canonical
+        SELECTED_SOURCES vocabulary.
+        """
         try:
-            write_json(self.model_state_path(), payload)
+            from .qz_model_state import (
+                ModelState,
+                load_model_state,
+                write_model_state,
+            )
+        except ImportError:
+            from qz_model_state import (
+                ModelState,
+                load_model_state,
+                write_model_state,
+            )
+
+        selected = selected if isinstance(selected, dict) else {}
+        state_path = self.model_state_path()
+
+        # Preserve observation fields from any existing state file so writes
+        # of authority fields do not clobber last_load_* observations.
+        existing = load_model_state(state_path).state
+
+        key = entry_identity(selected)
+        backend_id = selected.get("backend_id") or key
+        label_raw = selected.get("label")
+        label = label_raw.strip() if isinstance(label_raw, str) else ""
+
+        new_state = ModelState(
+            selected_key=key,
+            selected_backend_id=backend_id,
+            selected_label=label,
+            selected_source=source or "",
+            selected_at=_iso_state_now(),
+            selected_reason=reason or "",
+            runtime_context_length=existing.runtime_context_length,
+            last_load_result=existing.last_load_result,
+            last_load_error=existing.last_load_error,
+            last_load_error_type=existing.last_load_error_type,
+            last_loaded_model=existing.last_loaded_model,
+        )
+
+        try:
+            write_model_state(new_state, state_path)
         except Exception as exc:
             self._emit("state_write_failed", {"file": "model-state.json", "error": str(exc)})
 
@@ -421,10 +462,11 @@ class ModelRouter:
         selected_key = entry_identity(selected)
         model_state = self.load_runtime_model_state()
         backend_state_file = self.load_backend_state()
+        # selected_path was dropped from qz.model_state.v1 — selection identity
+        # is selected_key / selected_backend_id only.
         model_drift = (
             model_state.get("selected_key") != selected_key
             or model_state.get("selected_backend_id") != selected_backend_id
-            or model_state.get("selected_path") != (selected.get("path") or "")
         )
         backend_drift = (
             backend_state_file.get("selected_key") != selected_key

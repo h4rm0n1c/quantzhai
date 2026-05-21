@@ -39,18 +39,18 @@ def load_json(path: Path) -> Dict[str, Any]:
 
 
 def load_last_selected_model(root: Path) -> str:
-    state_path = Path(os.environ.get("QZ_MODEL_STATE_PATH", str(root / "var" / "model-state.json"))).expanduser()
+    """Return the persisted selection identity (qz.model_state.v1).
+
+    Only ``selected_key`` / ``selected_backend_id`` are consulted.
+    ``last_loaded_model`` is observation-only and never authoritative.
+    """
     try:
-        state = load_json(state_path)
-    except Exception:
-        return ""
-    if not isinstance(state, dict):
-        return ""
-    for key in ("selected_key", "selected_backend_id", "loaded_model"):
-        value = state.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
+        from .qz_model_state import load_model_state, selected_identity_from_state
+    except ImportError:
+        from qz_model_state import load_model_state, selected_identity_from_state
+    state_path = Path(os.environ.get("QZ_MODEL_STATE_PATH", str(root / "var" / "model-state.json"))).expanduser()
+    result = load_model_state(state_path)
+    return selected_identity_from_state(result.state)
 
 
 def entry_identity(entry: Dict[str, Any]) -> str:
