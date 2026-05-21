@@ -7,6 +7,24 @@ This document is a rolling point-in-time snapshot. For the live execution order,
 read `docs/current-task-hierarchy.md`. For architecture authority, read
 `docs/current-architecture-authority.md`.
 
+## Streaming/tool/reasoning contract audit (Slice A) — COMPLETE
+
+`docs/runtime-streaming-tool-contract-audit.md` documents the full
+Codex ⇄ proxy ⇄ llama.cpp ⇄ tools ⇄ telemetry pipeline.
+
+Critical finding: `ResponsesStreamRuntime` does not emit `sse_event` telemetry for
+`response.reasoning_text.delta` or `response.output_text.delta`. The
+`_emit_sse_telemetry` call is only in the legacy chat/completions path. qz-thoughts
+thought/answer panels are blank during live Responses API streaming.
+
+Code fixes committed (ebdf87b): tool schema dedup + name-based replacement,
+`ToolRegistry.adapter_for_name()`, `VALID_WEB_SEARCH_PROFILES` expanded,
+`_PROFILE_DESCRIPTION_FALLBACKS` corrected, `furry_fse`/`furry_images` profiles added,
+`rewrite_sse_payload` hot-path fix, `WebSearchRuntime` cache pre-build.
+
+**Slice B next**: add sse_event telemetry from ResponsesStreamRuntime for reasoning/output
+text deltas, add coercion telemetry, guard ToolCoercionResult.
+
 ## web_search capabilities introspection — COMPLETE
 
 `web_search` now supports `action="capabilities"` and the read-only endpoint

@@ -1,7 +1,33 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-22
-Status: active control sheet — post-web_search capabilities introspection.
+Status: active control sheet — Slice A discovery complete; Slice B next.
+
+## Recently completed — Streaming/tool/reasoning/metadata contract discovery (Slice A)
+
+```text
+Status: COMPLETE
+
+Output: docs/runtime-streaming-tool-contract-audit.md
+
+Key findings:
+- Critical: qz-thoughts thought/answer panels blank during Responses streaming —
+  ResponsesStreamRuntime does not call _emit_sse_telemetry; sse_event telemetry only
+  emitted from legacy chat/completions path.
+- Tool leak is a model-output problem (model produces tool JSON as output_text);
+  proxy correctly suppresses all function_call stream events.
+- Tool schema dedup/replacement fixed (ebdf87b); telemetry observability still missing.
+- Zero coercion success/failure observability.
+- All function_call stream events suppressed from Codex correctly.
+- Reasoning routing correct; reasoning-only abort logic working.
+
+Slice B target:
+- Add sse_event telemetry to ResponsesStreamRuntime for reasoning/output text deltas.
+- Add coercion_success/coercion_failed/tool_schema_replaced telemetry.
+- Guard ToolCoercionResult neither-set case.
+```
+
+## Recently completed — Streaming tool contract code review + search profile fixes
 
 See `docs/current-stocktake.md` for the full point-in-time state summary.
 
