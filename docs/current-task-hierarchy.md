@@ -74,6 +74,23 @@ All slices (A-design, B-state, C-endpoints, D-qz-codex, E-load-failure,
 F-smoke) closed.  No new shell scripts added (`scripts/qz-model*`
 invariant intact).
 
+### Post-F polish (2026-05-22)
+
+- **Failed-model recovery**: qz.model_state.v1 gains last_good_* and
+  failed_candidate_* observation fields; mark_load_success /
+  mark_load_failure helpers; /qz/model/select-and-restart accepts
+  rollback_on_failure (default true); /qz/model/status surface adds
+  rollback_performed / recovery_available / recommended_recovery_action;
+  control-plane operator hints for rollback and no-last-good;
+  qz-codex auto-select failure prints classified failure block.
+- **Codex catalog freshness**: /qz/codex/client-config exposes
+  model_catalog.freshness {catalog_mtime_ms, source_mtime_ms,
+  catalog_age_seconds, stale, reason, remediation} plus refresh_url;
+  new POST /qz/codex/model-catalog/refresh (metadata only — no backend
+  mutation); qz-codex bootstrap auto-refreshes when stale via
+  QZ_CODEX_REFRESH_CATALOG=1 (default; set 0 to suppress).
+- 26 new tests; 3103 total pass.
+
 Key hard rules from A-design:
   - QZ_MODEL_KEY is a one-shot seed; never overrides persisted operator selection.
   - loaded_model is observation only, never selection authority.

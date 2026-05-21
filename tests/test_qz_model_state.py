@@ -14,6 +14,8 @@ from proxy.qz_model_state import (
     ModelState,
     ModelStateResult,
     load_model_state,
+    mark_load_failure,
+    mark_load_success,
     selected_identity_from_state,
     state_from_selection,
     update_load_observation,
@@ -412,6 +414,185 @@ class CatalogReaderRegressionTests(unittest.TestCase):
             with patch.dict(os.environ, {"QZ_MODEL_STATE_PATH": str(state_path)}, clear=False):
                 identity = load_last_selected_model(root)
         self.assertEqual(identity, "kuato")
+
+
+# ---------------------------------------------------------------------------
+# Post-Slice F: failed-model recovery helpers
+# ---------------------------------------------------------------------------
+
+class MarkLoadSuccessTests(unittest.TestCase):
+
+    def test_clears_previous_error_and_records_last_good(self):
+        before = ModelState(
+            selected_key="kuato.gguf",
+            selected_backend_id="kuato",
+            selected_label="Kuato",
+            selected_source="operator",
+            last_load_result="failed",
+            last_load_error="cudaMalloc",
+            last_load_error_type="insufficient_vram",
+            failed_candidate_key="old-too-large",
+        )
+        after = mark_load_success(before, loaded_model="kuato")
+        self.assertEqual(after.last_load_result, "loaded")
+        self.assertIsNone(after.last_load_error)
+        self.assertIsNone(after.last_load_error_type)
+        self.assertEqual(after.last_loaded_model, "kuato")
+        self.assertEqual(after.last_good_key, "kuato.gguf")
+        self.assertEqual(after.last_good_backend_id, "kuato")
+        self.assertEqual(after.last_good_label, "Kuato")
+        self.assertEqual(after.last_good_source, "operator")
+        self.assertRegex(after.last_good_loaded_at, r"^\d{4}-")
+        # failed_candidate_* cleared
+        self.assertEqual(after.failed_candidate_key, "")
+        self.assertEqual(after.failed_candidate_backend_id, "")
+
+    def test_no_selection_does_not_invent_last_good(self):
+        before = ModelState()
+        after = mark_load_success(before, loaded_model="x")
+        self.assertEqual(after.last_good_key, "")
+        self.assertEqual(after.last_good_backend_id, "")
+
+    def test_does_not_mutate_input(self):
+        before = ModelState(selected_key="a", selected_backend_id="a", last_load_result="failed")
+        _ = mark_load_success(before, loaded_model="a")
+        self.assertEqual(before.last_load_result, "failed")
+        self.assertEqual(before.last_good_key, "")
+
+
+class MarkLoadFailureTests(unittest.TestCase):
+
+    def test_records_failed_candidate(self):
+        before = ModelState(
+            selected_key="too-large.gguf",
+            selected_backend_id="too-large",
+            selected_label="Too Large",
+        )
+        after, rollback = mark_load_failure(
+            before,
+            error="cudaMalloc failed: out of memory",
+            error_type="insufficient_vram",
+            rollback_to_last_good=False,
+        )
+        self.assertFalse(rollback)
+        self.assertEqual(after.failed_candidate_key, "too-large.gguf")
+        self.assertEqual(after.failed_candidate_backend_id, "too-large")
+        self.assertEqual(after.failed_candidate_label, "Too Large")
+        self.assertRegex(after.failed_candidate_at, r"^\d{4}-")
+        self.assertEqual(after.last_load_result, "failed")
+        self.assertEqual(after.last_load_error, "cudaMalloc failed: out of memory")
+        self.assertEqual(after.last_load_error_type, "insufficient_vram")
+        # No rollback → selected_* unchanged
+        self.assertEqual(after.selected_key, "too-large.gguf")
+        self.assertEqual(after.selected_backend_id, "too-large")
+
+    def test_rollback_to_last_good_when_available(self):
+        before = ModelState(
+            selected_key="too-large.gguf",
+            selected_backend_id="too-large",
+            selected_label="Too Large",
+            selected_source="operator",
+            last_good_key="kuato.gguf",
+            last_good_backend_id="kuato",
+            last_good_label="Kuato",
+            last_good_source="operator",
+        )
+        after, rollback = mark_load_failure(
+            before,
+            error="cudaMalloc failed",
+            error_type="insufficient_vram",
+            rollback_to_last_good=True,
+        )
+        self.assertTrue(rollback)
+        self.assertEqual(after.selected_key, "kuato.gguf")
+        self.assertEqual(after.selected_backend_id, "kuato")
+        self.assertEqual(after.selected_label, "Kuato")
+        self.assertEqual(after.selected_source, "operator")
+        self.assertIn("rolled back from failed candidate too-large.gguf", after.selected_reason)
+        # failed_candidate captures the model that failed
+        self.assertEqual(after.failed_candidate_key, "too-large.gguf")
+        # last_good_* preserved
+        self.assertEqual(after.last_good_key, "kuato.gguf")
+
+    def test_rollback_uses_fallback_source_when_last_good_source_unknown(self):
+        before = ModelState(
+            selected_key="too-large.gguf",
+            selected_backend_id="too-large",
+            last_good_key="kuato.gguf",
+            last_good_backend_id="kuato",
+            last_good_source="",  # unknown
+        )
+        after, rollback = mark_load_failure(
+            before,
+            error="boom",
+            error_type="unknown",
+            rollback_to_last_good=True,
+        )
+        self.assertTrue(rollback)
+        self.assertEqual(after.selected_source, "fallback")
+        self.assertIn(after.selected_source, SELECTED_SOURCES)
+
+    def test_no_last_good_means_no_rollback_even_when_requested(self):
+        before = ModelState(
+            selected_key="too-large.gguf",
+            selected_backend_id="too-large",
+        )
+        after, rollback = mark_load_failure(
+            before,
+            error="boom",
+            error_type="unknown",
+            rollback_to_last_good=True,
+        )
+        self.assertFalse(rollback)
+        self.assertEqual(after.selected_key, "too-large.gguf")
+        self.assertEqual(after.failed_candidate_key, "too-large.gguf")
+
+    def test_observation_only_when_rollback_disabled(self):
+        before = ModelState(
+            selected_key="too-large.gguf",
+            selected_backend_id="too-large",
+            last_good_key="kuato.gguf",
+            last_good_backend_id="kuato",
+        )
+        after, rollback = mark_load_failure(
+            before,
+            error="boom",
+            error_type="unknown",
+            rollback_to_last_good=False,
+        )
+        self.assertFalse(rollback)
+        self.assertEqual(after.selected_key, "too-large.gguf")  # not rolled back
+
+    def test_does_not_mutate_input(self):
+        before = ModelState(selected_key="too-large.gguf", selected_backend_id="tl")
+        _ = mark_load_failure(before, error="x", error_type="unknown")
+        self.assertEqual(before.failed_candidate_key, "")
+        self.assertEqual(before.last_load_result, "")
+
+
+class ModelStateV1RecoveryRoundTripTests(unittest.TestCase):
+
+    def test_recovery_fields_round_trip(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "model-state.json"
+            original = ModelState(
+                selected_key="kuato.gguf",
+                selected_backend_id="kuato",
+                selected_source="operator",
+                last_good_key="kuato.gguf",
+                last_good_backend_id="kuato",
+                last_good_label="Kuato",
+                last_good_source="operator",
+                last_good_loaded_at="2026-05-22T01:00:00Z",
+                failed_candidate_key="too-large.gguf",
+                failed_candidate_backend_id="too-large",
+                failed_candidate_at="2026-05-22T02:00:00Z",
+            )
+            write_model_state(original, path)
+            result = load_model_state(path)
+        self.assertEqual(result.state, original)
 
 
 if __name__ == "__main__":

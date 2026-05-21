@@ -20,13 +20,20 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 try:
-    from .qz_paths import codex_model_catalog_path as _codex_model_catalog_path
+    from .qz_paths import (
+        codex_model_catalog_path as _codex_model_catalog_path,
+        model_inventory_path as _model_inventory_path,
+    )
 except ImportError:
-    from qz_paths import codex_model_catalog_path as _codex_model_catalog_path
+    from qz_paths import (
+        codex_model_catalog_path as _codex_model_catalog_path,
+        model_inventory_path as _model_inventory_path,
+    )
 
 CODEX_CLIENT_CONFIG_SCHEMA = "qz.codex.client_config.v1"
 CODEX_MODEL_CATALOG_FILENAME = "qwenzhai-models.json"
@@ -87,6 +94,43 @@ def _catalog_file_meta(path: Path) -> Dict[str, Any]:
         return {}
 
 
+def _file_mtime_ms(path: Path) -> Optional[int]:
+    try:
+        return int(path.stat().st_mtime * 1000)
+    except Exception:
+        return None
+
+
+def _catalog_freshness(
+    catalog_mtime_ms: Optional[int],
+    source_mtime_ms: Optional[int],
+) -> Dict[str, Any]:
+    """Compute catalog freshness vs. the model inventory cache.
+
+    The codex catalog is generated from the model inventory.  If inventory
+    is newer than the catalog (or the catalog is missing), the catalog is
+    stale and the client should request a refresh.
+    """
+    now_ms = int(time.time() * 1000)
+    freshness: Dict[str, Any] = {
+        "catalog_mtime_ms": catalog_mtime_ms,
+        "source_mtime_ms": source_mtime_ms,
+        "catalog_age_seconds": None,
+        "stale": False,
+    }
+    if catalog_mtime_ms is None:
+        freshness["stale"] = True
+        freshness["reason"] = "catalog_missing"
+        freshness["remediation"] = "POST /qz/codex/model-catalog/refresh"
+        return freshness
+    freshness["catalog_age_seconds"] = max(0, (now_ms - catalog_mtime_ms) // 1000)
+    if source_mtime_ms is not None and source_mtime_ms > catalog_mtime_ms:
+        freshness["stale"] = True
+        freshness["reason"] = "source_newer_than_catalog"
+        freshness["remediation"] = "POST /qz/codex/model-catalog/refresh"
+    return freshness
+
+
 def codex_client_config_payload() -> Dict[str, Any]:
     """Return bounded bootstrap metadata for remote qz-codex clients.
 
@@ -96,27 +140,41 @@ def codex_client_config_payload() -> Dict[str, Any]:
     base_url = _proxy_base_url("/v1")
     catalog_url = _proxy_base_url("/qz/codex/model-catalog")
     catalog_path = _catalog_path()
+    inventory_path = _model_inventory_path()
 
     warnings = []
     model_catalog: Dict[str, Any] = {
         "mode": "download",
         "url": catalog_url,
         "local_filename": CODEX_MODEL_CATALOG_FILENAME,
+        "refresh_url": _proxy_base_url("/qz/codex/model-catalog/refresh"),
     }
 
     meta = _catalog_file_meta(catalog_path)
+    catalog_mtime_ms: Optional[int] = None
     if meta:
         if "sha256_12" in meta:
             model_catalog["sha256_12"] = meta["sha256_12"]
         if "mtime_ms" in meta:
             model_catalog["mtime_ms"] = meta["mtime_ms"]
+            catalog_mtime_ms = meta["mtime_ms"]
         if "hash_skipped" in meta:
             model_catalog["hash_skipped"] = meta["hash_skipped"]
     else:
         warnings.append({
             "warning": "missing_codex_catalog",
             "path": str(catalog_path),
-            "remediation": "POST /qz/models/refresh",
+            "remediation": "POST /qz/codex/model-catalog/refresh",
+        })
+
+    source_mtime_ms = _file_mtime_ms(inventory_path)
+    freshness = _catalog_freshness(catalog_mtime_ms, source_mtime_ms)
+    model_catalog["freshness"] = freshness
+    if freshness.get("stale"):
+        warnings.append({
+            "warning": "stale_codex_catalog",
+            "reason": freshness.get("reason") or "stale",
+            "remediation": freshness.get("remediation"),
         })
 
     return {

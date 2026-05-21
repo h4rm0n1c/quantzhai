@@ -31,7 +31,9 @@ _qz_http_bootstrap() {
     return 1
   fi
 
-  # 2. Parse and validate; extract fields as tab-separated values
+  # 2. Parse and validate; extract fields as tab-separated values.
+  #    The last field is a "stale" flag (1/0) used to decide if we should
+  #    POST /qz/codex/model-catalog/refresh before downloading.
   local _fields
   _fields=$(printf '%s' "$_cfg_body" | python3 -c "
 import json, sys
@@ -43,6 +45,9 @@ try:
         print('ERROR: unexpected schema', file=sys.stderr); sys.exit(1)
     p = d.get('provider', {})
     mc = d.get('model_catalog', {})
+    freshness = mc.get('freshness') or {}
+    stale_flag = '1' if freshness.get('stale') else '0'
+    refresh_url = mc.get('refresh_url', '')
     vals = [
         d.get('model_provider', ''),
         p.get('name', ''),
@@ -51,6 +56,8 @@ try:
         p.get('env_key', ''),
         mc.get('url', ''),
         mc.get('local_filename', 'qwenzhai-models.json'),
+        stale_flag,
+        refresh_url,
     ]
     if not all([vals[0], vals[2], vals[5]]):
         print('ERROR: missing required fields', file=sys.stderr); sys.exit(1)
@@ -66,9 +73,26 @@ except json.JSONDecodeError:
     return 1
   fi
 
-  local _model_provider _provider_name _base_url _wire_api _env_key _catalog_url _catalog_filename
-  IFS=$'\t' read -r _model_provider _provider_name _base_url _wire_api _env_key _catalog_url _catalog_filename \
+  local _model_provider _provider_name _base_url _wire_api _env_key _catalog_url _catalog_filename _stale_flag _refresh_url
+  IFS=$'\t' read -r _model_provider _provider_name _base_url _wire_api _env_key _catalog_url _catalog_filename _stale_flag _refresh_url \
     <<< "$_fields"
+
+  # 2a. If the server-side generated catalog is stale and auto-refresh is
+  # enabled, POST the explicit refresh endpoint and re-fetch client-config.
+  # QZ_CODEX_REFRESH_CATALOG defaults to 1; set 0 to suppress.  Catalog
+  # refresh is metadata-only — it does not call backend select/restart.
+  local _auto_refresh="${QZ_CODEX_REFRESH_CATALOG:-1}"
+  if [[ "$_stale_flag" == "1" && "$_auto_refresh" == "1" ]]; then
+    if [[ -n "$_refresh_url" ]]; then
+      if ! curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' "$_refresh_url" -o /dev/null 2>/dev/null; then
+        printf 'qz-codex: warning: catalog refresh POST failed; continuing with stale catalog.\n' >&2
+        printf '  Tried: %s\n' "$_refresh_url" >&2
+      else
+        # Re-fetch client-config so the catalog mtime/sha update propagate.
+        _cfg_body=$(curl -fsS "$proxy_url/qz/codex/client-config" 2>/dev/null) || true
+      fi
+    fi
+  fi
 
   # 3. Resolve CODEX_HOME — client-local state, never server var/codex-home
   if [[ -z "${CODEX_HOME:-}" ]]; then
@@ -315,6 +339,40 @@ def print_mismatch(data, req):
     print("       http://{}:{}/qz/model/select-and-restart".format(host, port), file=e)
 
 
+def print_failure_detail(data, req):
+    """Print classified failure context + rollback info to stderr."""
+    if not isinstance(data, dict):
+        return
+    e = sys.stderr
+    last_result = data.get("last_load_result") or ""
+    last_error = data.get("last_load_error") or ""
+    last_error_type = data.get("last_load_error_type") or ""
+    failed_candidate = (
+        data.get("failed_candidate_key")
+        or data.get("failed_candidate_backend_id")
+        or ""
+    )
+    last_good = data.get("last_good_key") or data.get("last_good_backend_id") or ""
+    rollback = bool(data.get("rollback_performed"))
+    if last_result == "failed":
+        print("qz-codex: requested model failed to load.", file=e)
+        if last_error_type:
+            print("  last_load_error_type: {}".format(last_error_type), file=e)
+        if failed_candidate:
+            print("  failed_candidate:     {}".format(failed_candidate), file=e)
+        if last_error:
+            print("  last_load_error:      {}".format(last_error), file=e)
+        if rollback and last_good:
+            print("  rolled back to last_good: {}".format(last_good), file=e)
+        elif last_good:
+            print("  last_good (available): {}".format(last_good), file=e)
+        else:
+            print("  last_good:            <none — pick a smaller model and retry>", file=e)
+        rec = data.get("recommended_recovery_action")
+        if rec:
+            print("  recommended_recovery_action: {}".format(rec), file=e)
+
+
 def post_select_and_restart(req):
     url = "http://{}:{}/qz/model/select-and-restart".format(host, port)
     payload = json.dumps({"model": req, "source": "qz_codex"}).encode("utf-8")
@@ -354,6 +412,8 @@ new_data, status, err = post_select_and_restart(requested)
 if status is None or (isinstance(status, int) and status >= 400) or new_data is None:
     msg = err or ((new_data or {}).get("error") if isinstance(new_data, dict) else None) or "unknown"
     print("qz-codex: /qz/model/select-and-restart failed (HTTP {}): {}".format(status, msg), file=sys.stderr)
+    if isinstance(new_data, dict):
+        print_failure_detail(new_data, requested)
     sys.exit(2)
 
 if not isinstance(new_data, dict):
@@ -364,6 +424,7 @@ if active_match(new_data, requested):
     sys.exit(0)
 
 print("qz-codex: /qz/model/select-and-restart returned but {} is still not the active model.".format(requested), file=sys.stderr)
+print_failure_detail(new_data, requested)
 print_mismatch(new_data, requested)
 sys.exit(2)
 PY

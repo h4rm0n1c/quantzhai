@@ -508,6 +508,43 @@ class ModelSelectionFieldsTests(unittest.TestCase):
         self.assertEqual(p["models"]["selected_source"], "")
 
 
+    def test_rollback_operator_hint_emitted_on_failure(self):
+        """Post-Slice F: hint mentions rollback when last_good exists + failure recorded."""
+        with self._with_state_file({
+            "schema": "qz.model_state.v1",
+            "selected_key": "kuato.gguf",
+            "selected_backend_id": "kuato",
+            "selected_reason": "rolled back from failed candidate too-large.gguf",
+            "last_good_key": "kuato.gguf",
+            "last_good_backend_id": "kuato",
+            "failed_candidate_key": "too-large.gguf",
+            "failed_candidate_backend_id": "too-large",
+            "last_load_result": "failed",
+            "last_load_error": "cudaMalloc failed",
+            "last_load_error_type": "insufficient_vram",
+        }) as fix:
+            h = _make_handler(loaded_model="kuato")
+            h.model_state_path = fix.path
+            p = build_control_plane_status(h)
+        self.assertTrue(any("rolled back to last-good" in hint for hint in p["operator_hints"]))
+
+    def test_no_last_good_hint_when_failure_without_history(self):
+        """No last_good + failed candidate → hint asks for a different model."""
+        with self._with_state_file({
+            "schema": "qz.model_state.v1",
+            "selected_key": "too-large.gguf",
+            "selected_backend_id": "too-large",
+            "failed_candidate_key": "too-large.gguf",
+            "failed_candidate_backend_id": "too-large",
+            "last_load_result": "failed",
+            "last_load_error_type": "unknown",
+        }) as fix:
+            h = _make_handler(loaded_model="")
+            h.model_state_path = fix.path
+            p = build_control_plane_status(h)
+        self.assertTrue(any("no last-good" in hint for hint in p["operator_hints"]))
+
+
 class _StateFileFixture:
     """Context manager that creates a tempfile state file."""
 

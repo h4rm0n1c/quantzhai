@@ -83,22 +83,47 @@ class ModelState:
     last_load_error: str | None = None
     last_load_error_type: str | None = None
     last_loaded_model: str = ""
+    # Failure-recovery fields (post-Slice F).  ``last_good_*`` records the
+    # most recently confirmed-loaded selection.  ``failed_candidate_*``
+    # records the most recent failed attempt.  Both are observation only;
+    # selection authority remains ``selected_key`` / ``selected_backend_id``.
+    last_good_key: str = ""
+    last_good_backend_id: str = ""
+    last_good_label: str = ""
+    last_good_source: str = ""
+    last_good_loaded_at: str = ""
+    failed_candidate_key: str = ""
+    failed_candidate_backend_id: str = ""
+    failed_candidate_label: str = ""
+    failed_candidate_at: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "schema":                  self.schema,
-            "selected_key":            self.selected_key,
-            "selected_backend_id":     self.selected_backend_id,
-            "selected_label":          self.selected_label,
-            "selected_source":         self.selected_source,
-            "selected_at":             self.selected_at,
-            "selected_reason":         self.selected_reason,
-            "runtime_context_length":  self.runtime_context_length,
-            "last_load_result":        self.last_load_result,
-            "last_load_error":         self.last_load_error,
-            "last_load_error_type":    self.last_load_error_type,
-            "last_loaded_model":       self.last_loaded_model,
+            "schema":                       self.schema,
+            "selected_key":                 self.selected_key,
+            "selected_backend_id":          self.selected_backend_id,
+            "selected_label":               self.selected_label,
+            "selected_source":              self.selected_source,
+            "selected_at":                  self.selected_at,
+            "selected_reason":              self.selected_reason,
+            "runtime_context_length":       self.runtime_context_length,
+            "last_load_result":             self.last_load_result,
+            "last_load_error":              self.last_load_error,
+            "last_load_error_type":         self.last_load_error_type,
+            "last_loaded_model":            self.last_loaded_model,
+            "last_good_key":                self.last_good_key,
+            "last_good_backend_id":         self.last_good_backend_id,
+            "last_good_label":              self.last_good_label,
+            "last_good_source":             self.last_good_source,
+            "last_good_loaded_at":          self.last_good_loaded_at,
+            "failed_candidate_key":         self.failed_candidate_key,
+            "failed_candidate_backend_id":  self.failed_candidate_backend_id,
+            "failed_candidate_label":       self.failed_candidate_label,
+            "failed_candidate_at":          self.failed_candidate_at,
         }
+
+    def has_last_good(self) -> bool:
+        return bool(self.last_good_key.strip() or self.last_good_backend_id.strip())
 
     def has_selection(self) -> bool:
         return bool(self.selected_key.strip() or self.selected_backend_id.strip())
@@ -259,6 +284,15 @@ def _state_from_v1_dict(raw: dict[str, Any]) -> ModelState:
         last_load_error=_optional_str(raw.get("last_load_error")),
         last_load_error_type=_optional_str(raw.get("last_load_error_type")),
         last_loaded_model=_str(raw.get("last_loaded_model")),
+        last_good_key=_str(raw.get("last_good_key")),
+        last_good_backend_id=_str(raw.get("last_good_backend_id")),
+        last_good_label=_str(raw.get("last_good_label")),
+        last_good_source=_str(raw.get("last_good_source")),
+        last_good_loaded_at=_str(raw.get("last_good_loaded_at")),
+        failed_candidate_key=_str(raw.get("failed_candidate_key")),
+        failed_candidate_backend_id=_str(raw.get("failed_candidate_backend_id")),
+        failed_candidate_label=_str(raw.get("failed_candidate_label")),
+        failed_candidate_at=_str(raw.get("failed_candidate_at")),
     )
 
 
@@ -361,6 +395,82 @@ def state_from_selection(
         last_load_error_type=None,
         last_loaded_model="",
     )
+
+
+def mark_load_success(state: ModelState, *, loaded_model: str = "") -> ModelState:
+    """Record a confirmed successful load.
+
+    Effects:
+      * ``last_load_result`` → 'loaded'
+      * ``last_load_error`` / ``last_load_error_type`` → None
+      * ``last_loaded_model`` → ``loaded_model``
+      * ``last_good_*`` updated from current ``selected_*`` (since the
+        backend has now confirmed this selection works)
+      * ``failed_candidate_*`` cleared (any prior failure is recovered)
+    """
+    new_state = replace(state)
+    new_state.last_load_result = "loaded"
+    new_state.last_load_error = None
+    new_state.last_load_error_type = None
+    new_state.last_loaded_model = _str(loaded_model)
+    if new_state.selected_key or new_state.selected_backend_id:
+        new_state.last_good_key = new_state.selected_key
+        new_state.last_good_backend_id = new_state.selected_backend_id
+        new_state.last_good_label = new_state.selected_label
+        new_state.last_good_source = new_state.selected_source
+        new_state.last_good_loaded_at = _iso_now()
+    new_state.failed_candidate_key = ""
+    new_state.failed_candidate_backend_id = ""
+    new_state.failed_candidate_label = ""
+    new_state.failed_candidate_at = ""
+    return new_state
+
+
+def mark_load_failure(
+    state: ModelState,
+    *,
+    error: str | None,
+    error_type: str | None,
+    rollback_to_last_good: bool = True,
+) -> tuple[ModelState, bool]:
+    """Record a failed load attempt.
+
+    Effects:
+      * ``failed_candidate_*`` ← current ``selected_*``
+      * ``last_load_result`` → 'failed'
+      * ``last_load_error`` / ``last_load_error_type`` recorded
+      * If ``rollback_to_last_good`` and ``last_good_*`` exists, ``selected_*``
+        is rolled back to the last successfully-loaded selection.
+
+    Returns ``(new_state, rollback_performed)``.
+    """
+    new_state = replace(state)
+    new_state.failed_candidate_key = new_state.selected_key
+    new_state.failed_candidate_backend_id = new_state.selected_backend_id
+    new_state.failed_candidate_label = new_state.selected_label
+    new_state.failed_candidate_at = _iso_now()
+    new_state.last_load_result = "failed"
+    new_state.last_load_error = _optional_str(error)
+    new_state.last_load_error_type = _optional_str(error_type)
+
+    rollback_performed = False
+    if rollback_to_last_good and (new_state.last_good_key or new_state.last_good_backend_id):
+        candidate_id = (
+            new_state.failed_candidate_key
+            or new_state.failed_candidate_backend_id
+            or "<unknown>"
+        )
+        new_state.selected_key = new_state.last_good_key
+        new_state.selected_backend_id = new_state.last_good_backend_id
+        new_state.selected_label = new_state.last_good_label
+        # Preserve the canonical source from the last successful load when
+        # available; fall back to "fallback" (canonical SELECTED_SOURCES tag).
+        new_state.selected_source = new_state.last_good_source or "fallback"
+        new_state.selected_at = _iso_now()
+        new_state.selected_reason = f"rolled back from failed candidate {candidate_id}"
+        rollback_performed = True
+
+    return new_state, rollback_performed
 
 
 def update_load_observation(

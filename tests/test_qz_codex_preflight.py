@@ -84,6 +84,14 @@ class StructuralTests(unittest.TestCase):
             "qz-codex should use `qz_codex_exec_preflight ... || exit $?`",
         )
 
+    def test_bootstrap_references_qz_codex_refresh_catalog(self):
+        """Post-Slice F: bootstrap reads QZ_CODEX_REFRESH_CATALOG (default 1)
+        and posts /qz/codex/model-catalog/refresh when the server reports stale."""
+        self.assertIn("QZ_CODEX_REFRESH_CATALOG", self.qz_codex_common)
+        # The bootstrap parses freshness.stale and refresh_url from client-config.
+        self.assertIn("freshness", self.qz_codex_common)
+        self.assertIn("refresh_url", self.qz_codex_common)
+
     def test_no_new_model_selection_scripts(self):
         for relpath in (
             "scripts/qz-model",
@@ -281,6 +289,43 @@ class PreflightBehaviouralTests(unittest.TestCase):
             result = _run_preflight(proxy.port, "kuato.gguf", autoselect=True)
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn("select-and-restart failed", result.stderr)
+
+    def test_autoselect_failure_prints_classified_detail(self):
+        """Post-Slice F: failure-detail surface includes last_load_error_type,
+        failed_candidate, and rollback info when the endpoint returns them."""
+        initial = _status(selected_key="kuato.gguf", selected_backend_id="kuato",
+                          backend_loaded_model="kuato")
+        # 409 response with full Slice E + post-F recovery surface
+        select_resp = dict(initial)
+        select_resp.update({
+            "ok": False,
+            "last_load_result": "failed",
+            "last_load_error": "cudaMalloc failed: out of memory",
+            "last_load_error_type": "insufficient_vram",
+            "failed_candidate_key": "too-large.gguf",
+            "failed_candidate_backend_id": "too-large",
+            "last_good_key": "kuato.gguf",
+            "last_good_backend_id": "kuato",
+            "rollback_performed": True,
+            "recovery_available": True,
+            "recommended_recovery_action": (
+                "Active selection rolled back to last_good model kuato.gguf. "
+                "To retry the failed candidate (too-large.gguf) explicitly, "
+                "POST /qz/model/select-and-restart again."
+            ),
+        })
+        with _MockProxy(
+            status_response=initial,
+            select_response=select_resp,
+            select_status=409,
+        ) as proxy:
+            result = _run_preflight(proxy.port, "too-large.gguf", autoselect=True)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        # qz-codex prints the classified failure block
+        self.assertIn("requested model failed to load", result.stderr)
+        self.assertIn("insufficient_vram", result.stderr)
+        self.assertIn("too-large.gguf", result.stderr)
+        self.assertIn("rolled back to last_good", result.stderr)
 
     def test_autoselect_still_mismatch_after_post_exits_2(self):
         initial = _status(selected_key="other.gguf", selected_backend_id="other",

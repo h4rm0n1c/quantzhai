@@ -140,6 +140,52 @@ def _recommended_action(
     return None
 
 
+def _recommended_recovery_action(state) -> str | None:
+    """Hint for failure recovery — independent of the active-model hint."""
+    if state.last_load_result != "failed":
+        return None
+    failed_id = state.failed_candidate_key or state.failed_candidate_backend_id or "<unknown>"
+    last_good = state.last_good_key or state.last_good_backend_id
+    rolled_back = bool(last_good and "rolled back from failed candidate" in (state.selected_reason or ""))
+
+    if rolled_back:
+        suffix = ""
+        if state.last_load_error_type == "insufficient_vram":
+            suffix = (
+                " The candidate did not fit VRAM/context — pick a smaller "
+                "model or reduce QZ_CONTEXT before retrying."
+            )
+        return (
+            f"Active selection rolled back to last_good model {last_good}. "
+            f"To retry the failed candidate ({failed_id}) explicitly, "
+            "POST /qz/model/select-and-restart again."
+            + suffix
+        )
+    if not last_good:
+        if state.last_load_error_type == "insufficient_vram":
+            return (
+                f"Failed candidate {failed_id} did not fit VRAM/context and "
+                "no last-good model is available. Pick a smaller model or "
+                "reduce QZ_CONTEXT, then POST /qz/model/select-and-restart."
+            )
+        return (
+            f"Failed candidate {failed_id} did not load and no last-good "
+            "model is available. POST /qz/model/select-and-restart with a "
+            "different model."
+        )
+    if state.last_load_error_type == "insufficient_vram":
+        return (
+            f"Failed candidate {failed_id} did not fit VRAM/context. "
+            "Pick a smaller model or reduce QZ_CONTEXT, then "
+            "POST /qz/model/select-and-restart."
+        )
+    return (
+        f"Failed candidate {failed_id} did not load. Last-good available: "
+        f"{last_good}. POST /qz/model/select-and-restart again to retry or "
+        "with a different model."
+    )
+
+
 def build_model_status(handler: Any) -> dict[str, Any]:
     """Build the qz.model_status.v1 payload from the handler's runtime state."""
     state = load_handler_model_state(handler)
@@ -173,6 +219,17 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         last_load_error_type=state.last_load_error_type,
     )
 
+    # Recovery surface: last-known-good vs. failed candidate, and a rollback
+    # indicator derived from selected_reason (mark_load_failure writes a
+    # canonical "rolled back from failed candidate <id>" reason).
+    rollback_performed = bool(
+        state.failed_candidate_key
+        and state.selected_reason
+        and "rolled back from failed candidate" in state.selected_reason
+    )
+    recovery_available = bool(state.last_good_key or state.last_good_backend_id)
+    recommended_recovery_action = _recommended_recovery_action(state)
+
     return {
         "ok": True,
         "schema": QZ_MODEL_STATUS_SCHEMA,
@@ -191,7 +248,14 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         "last_load_result": state.last_load_result,
         "last_load_error": state.last_load_error,
         "last_load_error_type": state.last_load_error_type,
+        "last_good_key": state.last_good_key,
+        "last_good_backend_id": state.last_good_backend_id,
+        "failed_candidate_key": state.failed_candidate_key,
+        "failed_candidate_backend_id": state.failed_candidate_backend_id,
+        "rollback_performed": rollback_performed,
+        "recovery_available": recovery_available,
         "recommended_action": recommended_action,
+        "recommended_recovery_action": recommended_recovery_action,
     }
 
 
@@ -234,5 +298,24 @@ def model_selection_hints(
             "Selected model failed to fit VRAM/context. "
             "Pick a smaller model or reduce QZ_CONTEXT."
         )
+
+    # Failure recovery hints: rollback occurred OR failed candidate without
+    # any last-good to fall back to.
+    if state.last_load_result == "failed":
+        failed_id = (
+            state.failed_candidate_key or state.failed_candidate_backend_id or "<unknown>"
+        )
+        last_good = state.last_good_key or state.last_good_backend_id
+        if last_good and "rolled back from failed candidate" in (state.selected_reason or ""):
+            hints.append(
+                f"Failed candidate {failed_id} did not load; active selection "
+                f"rolled back to last-good {last_good}."
+            )
+        elif not last_good:
+            hints.append(
+                f"Failed candidate {failed_id} did not load and no last-good "
+                "model is available. POST /qz/model/select-and-restart with a "
+                "different model."
+            )
 
     return hints

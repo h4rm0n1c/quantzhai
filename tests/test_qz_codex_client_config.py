@@ -133,7 +133,10 @@ class CodexClientConfigPayloadTests(unittest.TestCase):
             for w in payload["warnings"]:
                 if w.get("warning") == "missing_codex_catalog":
                     self.assertIn("remediation", w)
-                    self.assertEqual(w["remediation"], "POST /qz/models/refresh")
+                    # Post-Slice F: catalog-specific refresh endpoint
+                    # (the explicit /qz/models/refresh path also still works
+                    # but the catalog-only refresh is the preferred path).
+                    self.assertEqual(w["remediation"], "POST /qz/codex/model-catalog/refresh")
                     break
 
     def test_missing_catalog_model_catalog_has_mode_url_filename(self):
@@ -451,6 +454,96 @@ class CodexClientConfigC11AuditTests(unittest.TestCase):
             result, error = codex_model_catalog_content()
             self.assertIsNone(result)
             self.assertEqual(error, "invalid_codex_catalog")
+
+
+# ---------------------------------------------------------------------------
+# Post-Slice F: catalog freshness metadata
+# ---------------------------------------------------------------------------
+
+class CatalogFreshnessTests(unittest.TestCase):
+    """Tests for the freshness block added to model_catalog payload."""
+
+    def setUp(self):
+        self._saved = _save_env()
+
+    def tearDown(self):
+        _restore_env(self._saved)
+
+    def _set_env(self, tmp):
+        root = Path(tmp)
+        var_dir = root / "var"
+        var_dir.mkdir(parents=True)
+        os.environ["QZ_ROOT"] = str(root)
+        os.environ["QZ_VAR_DIR"] = str(var_dir)
+        os.environ.pop("CODEX_HOME", None)
+        return root, var_dir
+
+    def _write_inventory(self, var_dir, content="{}"):
+        path = var_dir / "generated" / "model-inventory.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def _write_catalog(self, var_dir, content="{}"):
+        path = var_dir / "generated" / "codex" / CODEX_MODEL_CATALOG_FILENAME
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def test_missing_catalog_marked_stale(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._set_env(tmp)
+            payload = codex_client_config_payload()
+            freshness = payload["model_catalog"]["freshness"]
+            self.assertTrue(freshness["stale"])
+            self.assertEqual(freshness["reason"], "catalog_missing")
+            self.assertIn("model-catalog/refresh", freshness["remediation"])
+
+    def test_inventory_newer_than_catalog_marked_stale(self):
+        import time as _time
+        with tempfile.TemporaryDirectory() as tmp:
+            _, var_dir = self._set_env(tmp)
+            catalog_path = self._write_catalog(var_dir)
+            # Make inventory newer than catalog by bumping its mtime forward
+            inv_path = self._write_inventory(var_dir)
+            future = _time.time() + 60
+            os.utime(inv_path, (future, future))
+            payload = codex_client_config_payload()
+            freshness = payload["model_catalog"]["freshness"]
+            self.assertTrue(freshness["stale"])
+            self.assertEqual(freshness["reason"], "source_newer_than_catalog")
+
+    def test_catalog_newer_than_inventory_not_stale(self):
+        import time as _time
+        with tempfile.TemporaryDirectory() as tmp:
+            _, var_dir = self._set_env(tmp)
+            inv_path = self._write_inventory(var_dir)
+            catalog_path = self._write_catalog(var_dir)
+            # Catalog newer than inventory
+            future = _time.time() + 60
+            os.utime(catalog_path, (future, future))
+            payload = codex_client_config_payload()
+            freshness = payload["model_catalog"]["freshness"]
+            self.assertFalse(freshness["stale"])
+            self.assertIsNotNone(freshness["catalog_age_seconds"])
+
+    def test_refresh_url_in_model_catalog_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._set_env(tmp)
+            payload = codex_client_config_payload()
+            self.assertIn("refresh_url", payload["model_catalog"])
+            self.assertIn("/qz/codex/model-catalog/refresh", payload["model_catalog"]["refresh_url"])
+
+    def test_stale_catalog_warning_emitted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._set_env(tmp)
+            # Missing catalog → stale
+            payload = codex_client_config_payload()
+            codes = [w.get("warning") for w in payload["warnings"]]
+            self.assertTrue(
+                "stale_codex_catalog" in codes or "missing_codex_catalog" in codes,
+                f"expected stale/missing warning; got {codes}",
+            )
 
 
 if __name__ == "__main__":

@@ -72,11 +72,18 @@ class _MockHandler(http.server.BaseHTTPRequestHandler):
         srv.requests.append(("GET", self.path))
 
     def do_POST(self):
-        """Record POST requests so tests can verify no /qz/models/refresh is called."""
+        """Record POST requests so tests can verify catalog refresh behaviour."""
         srv = self.server
         srv.requests.append(("POST", self.path))
-        body = json.dumps({"ok": False, "error": "unexpected_post"}).encode()
-        self.send_response(400)
+        # Post-Slice F: /qz/codex/model-catalog/refresh is an explicit
+        # catalog refresh path.  Mock returns 200 OK with empty body to
+        # let qz-codex bootstrap proceed.
+        if self.path == "/qz/codex/model-catalog/refresh":
+            body = json.dumps({"ok": True, "catalog_updated": True}).encode()
+            self.send_response(200)
+        else:
+            body = json.dumps({"ok": False, "error": "unexpected_post"}).encode()
+            self.send_response(400)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -264,6 +271,72 @@ class HttpBootstrapTests(unittest.TestCase):
             # Should suggest /qz/models/refresh but not call it automatically
             post_requests = [r for r in srv.requests if r[0] == "POST"]
             self.assertEqual(post_requests, [], "should not auto-call /qz/models/refresh")
+
+    def test_stale_catalog_triggers_auto_refresh(self):
+        """Post-Slice F: stale freshness + QZ_CODEX_REFRESH_CATALOG=1 (default)
+        triggers POST /qz/codex/model-catalog/refresh during bootstrap."""
+        with _MockServer() as srv, tempfile.TemporaryDirectory() as tmp:
+            # Inject stale freshness + refresh URL into the cached config response
+            srv.server.client_config_response["model_catalog"]["freshness"] = {
+                "stale": True,
+                "reason": "source_newer_than_catalog",
+                "remediation": "POST /qz/codex/model-catalog/refresh",
+            }
+            srv.server.client_config_response["model_catalog"]["refresh_url"] = (
+                f"http://127.0.0.1:{srv.port}/qz/codex/model-catalog/refresh"
+            )
+            codex_home = Path(tmp) / "codex-home"
+            result = _run_http_bootstrap(srv.port, codex_home)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            refresh_posts = [
+                r for r in srv.requests
+                if r == ("POST", "/qz/codex/model-catalog/refresh")
+            ]
+            self.assertEqual(
+                len(refresh_posts), 1,
+                f"expected exactly one refresh POST, got requests: {srv.requests}",
+            )
+            # Catalog still written to client CODEX_HOME after refresh
+            catalog_file = codex_home / "model-catalogs" / "qwenzhai-models.json"
+            self.assertTrue(catalog_file.exists())
+
+    def test_stale_catalog_refresh_disabled_skips_post(self):
+        """Post-Slice F: QZ_CODEX_REFRESH_CATALOG=0 suppresses auto-refresh."""
+        with _MockServer() as srv, tempfile.TemporaryDirectory() as tmp:
+            srv.server.client_config_response["model_catalog"]["freshness"] = {
+                "stale": True,
+                "reason": "source_newer_than_catalog",
+            }
+            srv.server.client_config_response["model_catalog"]["refresh_url"] = (
+                f"http://127.0.0.1:{srv.port}/qz/codex/model-catalog/refresh"
+            )
+            codex_home = Path(tmp) / "codex-home"
+            result = _run_http_bootstrap(
+                srv.port, codex_home,
+                extra_env={"QZ_CODEX_REFRESH_CATALOG": "0"},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            post_requests = [r for r in srv.requests if r[0] == "POST"]
+            self.assertEqual(
+                post_requests, [],
+                f"QZ_CODEX_REFRESH_CATALOG=0 must suppress refresh POST: {post_requests}",
+            )
+
+    def test_fresh_catalog_no_post(self):
+        """Catalog not stale → no refresh POST regardless of QZ_CODEX_REFRESH_CATALOG."""
+        with _MockServer() as srv, tempfile.TemporaryDirectory() as tmp:
+            srv.server.client_config_response["model_catalog"]["freshness"] = {
+                "stale": False,
+                "catalog_age_seconds": 30,
+            }
+            srv.server.client_config_response["model_catalog"]["refresh_url"] = (
+                f"http://127.0.0.1:{srv.port}/qz/codex/model-catalog/refresh"
+            )
+            codex_home = Path(tmp) / "codex-home"
+            result = _run_http_bootstrap(srv.port, codex_home)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            post_requests = [r for r in srv.requests if r[0] == "POST"]
+            self.assertEqual(post_requests, [], f"fresh catalog must not trigger POST: {post_requests}")
 
     def test_no_qz_up_invocation(self):
         """qz-codex-common does not invoke qz-up in any non-comment line."""

@@ -180,6 +180,83 @@ that way.
 `QZ_MODEL_KEY` is a one-shot seed for first run / unset state. It is **not**
 operator authority and must not override persisted proxy selection.
 
+## 5a. Post-Slice F polish — failed-model recovery and catalog freshness
+
+This section captures the post-cleanup polish committed on 2026-05-22.
+
+### Failed-model recovery (qz.model_state.v1 extension)
+
+The schema gains two field groups for explicit failure recovery:
+
+- `last_good_*` — the most recently confirmed-loaded selection
+  (`last_good_key`, `last_good_backend_id`, `last_good_label`,
+  `last_good_source`, `last_good_loaded_at`)
+- `failed_candidate_*` — the most recent failed attempt
+  (`failed_candidate_key`, `failed_candidate_backend_id`,
+  `failed_candidate_label`, `failed_candidate_at`)
+
+Both are observation-only.  Selection authority remains `selected_*`.
+
+Behaviour:
+
+- **Successful load** → `mark_load_success` clears `last_load_error*`,
+  updates `last_good_*` from current selection, and clears
+  `failed_candidate_*`.
+- **Failed load** → `mark_load_failure` records `failed_candidate_*`,
+  sets `last_load_result=failed`, and (when
+  `rollback_to_last_good=True` and `last_good_*` exists) rolls
+  `selected_*` back to `last_good_*` with
+  `selected_source=last_good_source or "fallback"` and a canonical
+  `selected_reason="rolled back from failed candidate <id>"`.
+
+`/qz/model/select-and-restart` accepts `{"model": ..., "rollback_on_failure": true|false}`
+(default `true`).  Failed-candidate responses include the recovery surface:
+
+```json
+{
+  "rollback_performed": true,
+  "recovery_available": true,
+  "last_good_key": "kuato.gguf",
+  "last_good_backend_id": "kuato",
+  "failed_candidate_key": "too-large.gguf",
+  "failed_candidate_backend_id": "too-large",
+  "recommended_recovery_action": "Active selection rolled back to last_good model kuato.gguf. ..."
+}
+```
+
+`/qz/control-plane` `operator_hints` gain "rolled back to last-good …" or
+"no last-good model is available" when the failed-candidate context applies.
+
+qz-codex auto-select (`QZ_CODEX_AUTO_SELECT_MODEL=1`) prints the classified
+failure block on failure: `last_load_error_type`, `failed_candidate`,
+`last_good` (or `<none>`), and `recommended_recovery_action`.
+
+### Codex catalog freshness
+
+`/qz/codex/client-config` `model_catalog` block gains:
+
+- `mtime_ms` — catalog file mtime (already present)
+- `freshness.catalog_mtime_ms`
+- `freshness.source_mtime_ms` (model inventory)
+- `freshness.catalog_age_seconds`
+- `freshness.stale` (boolean)
+- `freshness.reason` — `catalog_missing` or `source_newer_than_catalog`
+- `freshness.remediation` — `POST /qz/codex/model-catalog/refresh`
+- `refresh_url` — absolute URL to the catalog-only refresh endpoint
+
+New endpoint: `POST /qz/codex/model-catalog/refresh` runs
+`ModelCatalog.refresh()` + the existing Codex catalog generator and
+returns the new client-config in the response body.  It is
+metadata-only — does not touch backend selection or trigger loads.
+
+qz-codex bootstrap (`_qz_http_bootstrap`) checks `freshness.stale` from
+the initial `/qz/codex/client-config` GET.  When stale and
+`QZ_CODEX_REFRESH_CATALOG=1` (default), it POSTs the refresh URL once
+and re-fetches client-config before downloading the catalog.  Setting
+`QZ_CODEX_REFRESH_CATALOG=0` suppresses the auto-refresh.
+
+No new shell scripts.  `scripts/qz-model*` invariant intact.
+
 ## 5. `qz.model_state.v1` schema
 
 `var/model-state.json` (proxy-owned, selection authority only):

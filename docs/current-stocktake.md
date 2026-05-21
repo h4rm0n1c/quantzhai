@@ -22,6 +22,12 @@ Cold-start smoke (Slice F) on real hardware (kuato good / 27B Q5_K_M too-large) 
 
 **No new shell scripts added.** `scripts/qz-model*` invariant intact — operator commands stay at the proxy.
 
+Post-F polish (2026-05-22):
+
+- **Failed-model recovery**: `qz.model_state.v1` gains `last_good_*` and `failed_candidate_*` observation fields; `mark_load_success` / `mark_load_failure` helpers; `POST /qz/model/select-and-restart` accepts `rollback_on_failure` (default true); failed loads roll `selected_*` back to `last_good_*` with `selected_source=last_good_source or "fallback"` and a canonical reason; `/qz/model/status` and `/qz/control-plane` surface `rollback_performed` / `recovery_available` / `recommended_recovery_action`; qz-codex auto-select prints the classified failure block on failure.
+- **Codex catalog freshness**: `/qz/codex/client-config` `model_catalog` block now exposes `freshness.{catalog_mtime_ms, source_mtime_ms, catalog_age_seconds, stale, reason, remediation}` plus a `refresh_url`. New `POST /qz/codex/model-catalog/refresh` regenerates the server-side Codex catalog (metadata only — no backend mutation). `qz-codex` bootstrap auto-refreshes when stale via `QZ_CODEX_REFRESH_CATALOG=1` (default; set `0` to suppress).
+- 26 new tests; **3103 total pass**.
+
 Full design + results: `docs/proxy-model-selection-authority.md`.
 
 ---

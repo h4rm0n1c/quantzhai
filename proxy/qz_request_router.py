@@ -1476,6 +1476,40 @@ class RequestRouter:
             self._handle_recovery_trigger()
             return
 
+        if self.handler.path == "/qz/codex/model-catalog/refresh":
+            # Slice F follow-up: explicit catalog-only refresh.  Does NOT
+            # touch backend selection or trigger any model load.  qz-codex
+            # bootstrap calls this when /qz/codex/client-config reports the
+            # generated catalog is stale relative to the model inventory.
+            if not self._proxy_startup_ready():
+                self.handler._send_json(503, self._proxy_initializing_error_payload())
+                return
+            try:
+                from .qz_codex_client_config import codex_client_config_payload
+            except ImportError:
+                from qz_codex_client_config import codex_client_config_payload
+            catalog = self.handler._model_catalog()
+            # ModelCatalog.refresh() rescans var/models and rewrites the
+            # model-inventory cache used as the source of truth for the
+            # Codex catalog.  _refresh_codex_catalog then regenerates the
+            # Codex-side artifact from that inventory.
+            try:
+                catalog.refresh()
+            except Exception as exc:
+                self.handler._send_json(500, {
+                    "ok": False,
+                    "error": f"catalog refresh failed: {exc}",
+                })
+                return
+            written = self._refresh_codex_catalog(catalog)
+            self.handler._send_json(200, {
+                "ok": True,
+                "schema": "qz.codex.catalog.refresh.v1",
+                "catalog_updated": written,
+                "client_config": codex_client_config_payload(),
+            })
+            return
+
         if self.handler.path == "/qz/models/refresh":
             initialization = self.handler._initialization_payload()
             if not self._proxy_startup_ready():
@@ -1557,9 +1591,12 @@ class RequestRouter:
             # Slice E: keep qz.model_state.v1 last_load_* observation fresh
             # whenever the legacy load/select path runs (this is how the
             # proxy preload posts the persisted selection at startup).
+            # Default rollback_on_failure=True so preload retries fall back
+            # cleanly when the persisted selection no longer fits.
             self._record_load_observation(
                 resolve_succeeded=selected is not None,
                 resolve_error=resolve_error,
+                rollback_on_failure=True,
             )
             if selected is None:
                 if isinstance(reason, dict):
@@ -1678,6 +1715,18 @@ class RequestRouter:
                 error=existing.last_load_error,
                 error_type=existing.last_load_error_type,
             )
+            # Preserve recovery memory across a selection write — last_good_*
+            # is the recently-confirmed-loaded selection, and any in-flight
+            # failed_candidate_* should survive until cleared by a success.
+            new_state.last_good_key = existing.last_good_key
+            new_state.last_good_backend_id = existing.last_good_backend_id
+            new_state.last_good_label = existing.last_good_label
+            new_state.last_good_source = existing.last_good_source
+            new_state.last_good_loaded_at = existing.last_good_loaded_at
+            new_state.failed_candidate_key = existing.failed_candidate_key
+            new_state.failed_candidate_backend_id = existing.failed_candidate_backend_id
+            new_state.failed_candidate_label = existing.failed_candidate_label
+            new_state.failed_candidate_at = existing.failed_candidate_at
         try:
             write_model_state(new_state, state_path)
         except Exception as exc:
@@ -1704,15 +1753,25 @@ class RequestRouter:
 
         # select-and-restart: invoke the existing resolve+load path which handles
         # llama-server unload/load and (when needed) BackendManager context restart.
+        # rollback_on_failure (body field, default True) controls whether
+        # selected_* rolls back to last_good_* when the candidate fails.
+        rollback_on_failure = True
+        if "rollback_on_failure" in body:
+            raw = body.get("rollback_on_failure")
+            if isinstance(raw, bool):
+                rollback_on_failure = raw
+            elif isinstance(raw, str):
+                rollback_on_failure = raw.strip().lower() not in ("0", "false", "no", "off")
         resolve_error: str | None = None
         try:
             self._invoke_selected_model_reload(requested.strip())
         except Exception as exc:
             resolve_error = str(exc)
 
-        failed, _err, _err_type = self._record_load_observation(
+        failed, _err, _err_type, _rollback = self._record_load_observation(
             resolve_succeeded=resolve_error is None,
             resolve_error=resolve_error,
+            rollback_on_failure=rollback_on_failure,
         )
 
         payload = build_model_status(self.handler)
@@ -1761,15 +1820,18 @@ class RequestRouter:
             })
             return
 
+        # POST /qz/model/reload has no body; rollback is the safe default
+        # (matches /qz/model/select-and-restart with rollback_on_failure=true).
         resolve_error: str | None = None
         try:
             self._invoke_selected_model_reload(identity)
         except Exception as exc:
             resolve_error = str(exc)
 
-        failed, _err, _err_type = self._record_load_observation(
+        failed, _err, _err_type, _rollback = self._record_load_observation(
             resolve_succeeded=resolve_error is None,
             resolve_error=resolve_error,
+            rollback_on_failure=True,
         )
 
         payload = build_model_status(self.handler)
@@ -1787,14 +1849,19 @@ class RequestRouter:
         *,
         resolve_succeeded: bool,
         resolve_error: str | None,
-    ) -> tuple[bool, str | None, str | None]:
+        rollback_on_failure: bool = True,
+    ) -> tuple[bool, str | None, str | None, bool]:
         """Inspect recent backend logs after a reload attempt and update state.
 
-        Returns ``(failed, error, error_type)``:
-          * ``failed`` — True when the selected model did not become loadable
-          * ``error`` — concise one-line error message (None on success)
-          * ``error_type`` — 'insufficient_vram' / 'context_creation_failed' /
-            'unknown' (None on success)
+        Returns ``(failed, error, error_type, rollback_performed)``.
+
+        On success: routes through ``mark_load_success`` which clears
+        ``last_load_error*`` and refreshes ``last_good_*`` from the current
+        selection.
+
+        On failure: routes through ``mark_load_failure`` which records
+        ``failed_candidate_*`` and (when ``rollback_on_failure`` is True and
+        a ``last_good_*`` exists) rolls back ``selected_*``.
 
         Always writes the updated qz.model_state.v1 file so /qz/model/status
         and /qz/control-plane reflect the most recent observation.
@@ -1802,21 +1869,28 @@ class RequestRouter:
         try:
             from .qz_model_state import (
                 load_model_state,
-                update_load_observation,
+                mark_load_failure,
+                mark_load_success,
                 write_model_state,
             )
             from .qz_model_load_failure import classify_model_load_failure
         except ImportError:
             from qz_model_state import (
                 load_model_state,
-                update_load_observation,
+                mark_load_failure,
+                mark_load_success,
                 write_model_state,
             )
             from qz_model_load_failure import classify_model_load_failure
 
         state_path = self._model_state_path_for_endpoint()
         if state_path is None:
-            return (not resolve_succeeded), resolve_error, ("unknown" if resolve_error else None)
+            return (
+                not resolve_succeeded,
+                resolve_error,
+                ("unknown" if resolve_error else None),
+                False,
+            )
 
         existing = load_model_state(state_path).state
 
@@ -1843,48 +1917,41 @@ class RequestRouter:
             pass
 
         if failure is not None:
-            new_state = update_load_observation(
+            new_state, rollback = mark_load_failure(
                 existing,
-                loaded_model=backend_loaded,
-                result="failed",
                 error=failure.error,
                 error_type=failure.error_type,
+                rollback_to_last_good=rollback_on_failure,
             )
             try:
                 write_model_state(new_state, state_path)
             except Exception:
                 pass
-            return True, failure.error, failure.error_type
+            return True, failure.error, failure.error_type, rollback
 
         if not resolve_succeeded:
             # Resolution path raised, no log evidence — treat as unknown failure.
-            error_text = (resolve_error or "model load failed").strip()
-            new_state = update_load_observation(
+            error_text = (resolve_error or "model load failed").strip()[:200]
+            new_state, rollback = mark_load_failure(
                 existing,
-                loaded_model=backend_loaded,
-                result="failed",
-                error=error_text[:200],
+                error=error_text,
                 error_type="unknown",
+                rollback_to_last_good=rollback_on_failure,
             )
             try:
                 write_model_state(new_state, state_path)
             except Exception:
                 pass
-            return True, error_text, "unknown"
+            return True, error_text, "unknown", rollback
 
-        # Success: clear previous load_error / load_error_type.
-        new_state = update_load_observation(
-            existing,
-            loaded_model=backend_loaded,
-            result="loaded",
-            error="",
-            error_type="",
-        )
+        # Success: clear previous load_error / load_error_type and update
+        # last_good_* from the current confirmed selection.
+        new_state = mark_load_success(existing, loaded_model=backend_loaded)
         try:
             write_model_state(new_state, state_path)
         except Exception:
             pass
-        return False, None, None
+        return False, None, None, False
 
     def _invoke_selected_model_reload(self, requested: str):
         """Call the existing resolve_model_selection path for the selected model.

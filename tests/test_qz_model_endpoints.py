@@ -582,6 +582,146 @@ class LoadFailureClassificationTests(unittest.TestCase):
             self.assertIsNone(payload["last_load_error_type"])
             self.assertEqual(payload["last_loaded_model"], "kuato")
 
+    def test_select_and_restart_rolls_back_to_last_good_on_failure(self):
+        """Default rollback_on_failure=True: failure rolls selected_* back to last_good_*."""
+        with _tmp_state_dir() as tmp:
+            state_path = tmp / "model-state.json"
+            # Seed state with a previously-confirmed last_good (kuato)
+            write_model_state(
+                ModelState(
+                    selected_key="kuato.gguf",
+                    selected_backend_id="kuato",
+                    selected_label="Kuato",
+                    selected_source="operator",
+                    last_good_key="kuato.gguf",
+                    last_good_backend_id="kuato",
+                    last_good_label="Kuato",
+                    last_good_source="operator",
+                    last_load_result="loaded",
+                    last_loaded_model="kuato",
+                ),
+                state_path,
+            )
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[
+                    _entry("kuato.gguf", "kuato"),
+                    _entry("too-large.gguf", "too-large"),
+                ],
+                body={"model": "too-large.gguf"},
+                resolve_outcome=({"key": "too-large.gguf", "backend_id": "too-large"}, "test"),
+            )
+            handler.backend_manager = _FakeBackendManager("cudaMalloc failed: out of memory")
+            RequestRouter(handler)._handle_model_select_endpoint(restart=True)
+            status, body = handler.sent[0]
+            self.assertEqual(status, 409)
+            self.assertFalse(body["ok"])
+            self.assertTrue(body["rollback_performed"])
+            # selected_* rolled back
+            self.assertEqual(body["selected_key"], "kuato.gguf")
+            self.assertEqual(body["selected_backend_id"], "kuato")
+            # failed_candidate_* records what failed
+            self.assertEqual(body["failed_candidate_key"], "too-large.gguf")
+            self.assertEqual(body["failed_candidate_backend_id"], "too-large")
+            # last_good_* preserved
+            self.assertEqual(body["last_good_key"], "kuato.gguf")
+            self.assertTrue(body["recovery_available"])
+            self.assertIn("rolled back", body["recommended_recovery_action"])
+            # State on disk reflects same
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["selected_key"], "kuato.gguf")
+            self.assertEqual(payload["failed_candidate_key"], "too-large.gguf")
+
+    def test_select_and_restart_no_rollback_when_explicitly_disabled(self):
+        """rollback_on_failure=false in body keeps the failed candidate selected."""
+        with _tmp_state_dir() as tmp:
+            state_path = tmp / "model-state.json"
+            write_model_state(
+                ModelState(
+                    selected_key="kuato.gguf",
+                    selected_backend_id="kuato",
+                    last_good_key="kuato.gguf",
+                    last_good_backend_id="kuato",
+                ),
+                state_path,
+            )
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[
+                    _entry("kuato.gguf", "kuato"),
+                    _entry("too-large.gguf", "too-large"),
+                ],
+                body={"model": "too-large.gguf", "rollback_on_failure": False},
+                resolve_outcome=({"key": "too-large.gguf", "backend_id": "too-large"}, "test"),
+            )
+            handler.backend_manager = _FakeBackendManager("cudaMalloc failed")
+            RequestRouter(handler)._handle_model_select_endpoint(restart=True)
+            status, body = handler.sent[0]
+            self.assertEqual(status, 409)
+            self.assertFalse(body["rollback_performed"])
+            # selected_* still the failed candidate
+            self.assertEqual(body["selected_key"], "too-large.gguf")
+            self.assertEqual(body["selected_backend_id"], "too-large")
+            self.assertEqual(body["failed_candidate_key"], "too-large.gguf")
+
+    def test_failure_with_no_last_good_keeps_candidate_selected(self):
+        """When no last_good exists, rollback can't happen — candidate stays selected."""
+        with _tmp_state_dir() as tmp:
+            state_path = tmp / "model-state.json"
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[_entry("too-large.gguf", "too-large")],
+                body={"model": "too-large.gguf"},
+                resolve_outcome=({"key": "too-large.gguf", "backend_id": "too-large"}, "test"),
+            )
+            handler.backend_manager = _FakeBackendManager("cudaMalloc failed")
+            RequestRouter(handler)._handle_model_select_endpoint(restart=True)
+            status, body = handler.sent[0]
+            self.assertEqual(status, 409)
+            self.assertFalse(body["rollback_performed"])
+            self.assertFalse(body["recovery_available"])
+            self.assertEqual(body["selected_key"], "too-large.gguf")
+            self.assertIn("no last-good", body["recommended_recovery_action"].lower())
+
+    def test_successful_load_records_last_good(self):
+        """A confirmed-loaded selection records last_good_* and clears failed_candidate_*."""
+        with _tmp_state_dir() as tmp:
+            state_path = tmp / "model-state.json"
+            # Seed with prior failure
+            write_model_state(
+                ModelState(
+                    selected_key="too-large.gguf",
+                    selected_backend_id="too-large",
+                    failed_candidate_key="too-large.gguf",
+                    failed_candidate_backend_id="too-large",
+                    last_load_result="failed",
+                    last_load_error="cudaMalloc",
+                    last_load_error_type="insufficient_vram",
+                ),
+                state_path,
+            )
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[_entry("kuato.gguf", "kuato")],
+                body={"model": "kuato.gguf"},
+                loaded_id="kuato",
+                resolve_outcome=({"key": "kuato.gguf", "backend_id": "kuato"}, "test"),
+            )
+            # Clean logs → no failure
+            handler.backend_manager = _FakeBackendManager(
+                "common_init_from_params: warming up the model\nupdate_slots: all slots are idle"
+            )
+            RequestRouter(handler)._handle_model_select_endpoint(restart=True)
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["last_load_result"], "loaded")
+            self.assertIsNone(payload["last_load_error"])
+            self.assertEqual(payload["last_good_key"], "kuato.gguf")
+            self.assertEqual(payload["last_good_backend_id"], "kuato")
+            self.assertEqual(payload["last_good_source"], "operator")
+            # Failed candidate cleared after recovery
+            self.assertEqual(payload["failed_candidate_key"], "")
+            self.assertEqual(payload["failed_candidate_backend_id"], "")
+
     def test_reload_endpoint_classifies_failures(self):
         """POST /qz/model/reload also runs the classifier."""
         with _tmp_state_dir() as tmp:
