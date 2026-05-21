@@ -420,12 +420,31 @@ class BackendManager:
                "--format", "{{.Names}}"]
         )
 
-    def build_docker_logs_args(self) -> list[str]:
-        """Build `docker logs --tail <gpu_log_tail> <container>` args."""
+    def build_docker_logs_args(self, tail: int | None = None) -> list[str]:
+        """Build `docker logs --tail <N> <container>` args.
+
+        Defaults to ``gpu_log_tail``; callers (e.g. the model-load classifier)
+        may pass an explicit ``tail`` to read more lines.
+        """
+        actual = int(tail) if tail is not None else self._gpu_log_tail
         return (
             self._docker_cmd.split()
-            + ["logs", "--tail", str(self._gpu_log_tail), self._container_name]
+            + ["logs", "--tail", str(actual), self._container_name]
         )
+
+    def fetch_recent_logs(self, tail: int | None = None) -> str | None:
+        """Return recent container logs as text, or None when unavailable.
+
+        Safe to call even when the container has gone away — failures of the
+        underlying docker call return None instead of raising.
+        """
+        try:
+            rc, out, _ = self._runner(self.build_docker_logs_args(tail=tail), timeout=15.0)
+        except Exception:
+            return None
+        if rc != 0:
+            return None
+        return out if isinstance(out, str) else None
 
     # ------------------------------------------------------------------
     # GPU offload verification

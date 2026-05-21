@@ -375,7 +375,13 @@ class SelectAndRestartEndpointTests(unittest.TestCase):
             status, body = handler.sent[0]
             self.assertEqual(status, 200)
 
-    def test_reload_failure_returns_500_with_status_payload(self):
+    def test_reload_failure_returns_409_with_classified_state(self):
+        """Slice E: reload failure returns 409 Conflict and updates state.
+
+        The request was valid (model exists in catalog) but the selected
+        model cannot become the active backend model, so the response is
+        409 Conflict with last_load_* observation fields populated.
+        """
         with _tmp_state_dir() as tmp:
             state_path = tmp / "model-state.json"
             handler = _FakeHandler(
@@ -386,11 +392,160 @@ class SelectAndRestartEndpointTests(unittest.TestCase):
             )
             RequestRouter(handler)._handle_model_select_endpoint(restart=True)
             status, body = handler.sent[0]
-            self.assertEqual(status, 500)
+            self.assertEqual(status, 409)
             self.assertFalse(body["ok"])
             self.assertIn("OOM", body["error"])
+            # State preserved + observation updated (no backend_manager attached
+            # so no log classification — falls through to "unknown" type).
             payload = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["selected_key"], "kuato.gguf")
+            self.assertEqual(payload["selected_backend_id"], "kuato")
+            self.assertEqual(payload["last_load_result"], "failed")
+            self.assertIn("OOM", payload["last_load_error"])
+            self.assertEqual(payload["last_load_error_type"], "unknown")
+
+
+# ---------------------------------------------------------------------------
+# Slice E — load-failure classification integrated with endpoints
+# ---------------------------------------------------------------------------
+
+class _FakeBackendManager:
+    """Minimal stand-in returning canned recent container logs."""
+
+    def __init__(self, logs: str | None):
+        self._logs = logs
+
+    def fetch_recent_logs(self, tail=None):
+        return self._logs
+
+
+class LoadFailureClassificationTests(unittest.TestCase):
+
+    def test_insufficient_vram_logs_classify_select_and_restart(self):
+        """Logs with cudaMalloc → 409 with last_load_error_type=insufficient_vram."""
+        with _tmp_state_dir() as tmp:
+            state_path = tmp / "model-state.json"
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[_entry("kuato.gguf", "kuato")],
+                body={"model": "kuato.gguf"},
+                loaded_id="",  # backend never finished loading
+                # resolve "succeeds" but logs show VRAM failure
+                resolve_outcome=({"key": "kuato.gguf", "backend_id": "kuato"}, "test"),
+            )
+            handler.backend_manager = _FakeBackendManager(
+                "\n".join([
+                    "load_tensors: offloaded 49/49 layers to GPU",
+                    "cudaMalloc failed: out of memory",
+                    "llama_init_from_model: failed to initialize the context",
+                ])
+            )
+            RequestRouter(handler)._handle_model_select_endpoint(restart=True)
+            status, body = handler.sent[0]
+            self.assertEqual(status, 409)
+            self.assertFalse(body["ok"])
+            self.assertEqual(body["last_load_result"], "failed")
+            self.assertEqual(body["last_load_error_type"], "insufficient_vram")
+            self.assertIn("cudaMalloc", body["last_load_error"])
+            # recommended_action mentions smaller model / reduce QZ_CONTEXT
+            self.assertIn("VRAM", body["recommended_action"])
+            # selection_key/selection_backend_id preserved
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["selected_key"], "kuato.gguf")
+            self.assertEqual(payload["selected_backend_id"], "kuato")
+            self.assertEqual(payload["last_load_error_type"], "insufficient_vram")
+
+    def test_context_creation_failed_classification(self):
+        with _tmp_state_dir() as tmp:
+            state_path = tmp / "model-state.json"
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[_entry("kuato.gguf", "kuato")],
+                body={"model": "kuato.gguf"},
+                loaded_id="",
+                resolve_outcome=({"key": "kuato.gguf", "backend_id": "kuato"}, "test"),
+            )
+            handler.backend_manager = _FakeBackendManager(
+                "common_init_from_params: failed to create context with model"
+            )
+            RequestRouter(handler)._handle_model_select_endpoint(restart=True)
+            status, body = handler.sent[0]
+            self.assertEqual(status, 409)
+            self.assertEqual(body["last_load_error_type"], "context_creation_failed")
+
+    def test_reload_failure_preserves_selection_authority(self):
+        """A failed reload must not clear selected_key/selected_backend_id."""
+        with _tmp_state_dir() as tmp:
+            state_path = tmp / "model-state.json"
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[_entry("kuato.gguf", "kuato")],
+                body={"model": "kuato.gguf"},
+                resolve_outcome=({"key": "kuato.gguf", "backend_id": "kuato"}, "test"),
+            )
+            handler.backend_manager = _FakeBackendManager("cudaMalloc failed: OOM")
+            RequestRouter(handler)._handle_model_select_endpoint(restart=True)
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["selected_key"], "kuato.gguf")
+            self.assertEqual(payload["selected_backend_id"], "kuato")
+            self.assertEqual(payload["selected_source"], "operator")
+
+    def test_successful_reload_clears_previous_load_error(self):
+        """After a successful reload, last_load_* observation fields are cleared."""
+        with _tmp_state_dir() as tmp:
+            state_path = tmp / "model-state.json"
+            # Seed with a prior failure observation
+            write_model_state(
+                ModelState(
+                    selected_key="kuato.gguf",
+                    selected_backend_id="kuato",
+                    last_load_result="failed",
+                    last_load_error="cudaMalloc failed",
+                    last_load_error_type="insufficient_vram",
+                ),
+                state_path,
+            )
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[_entry("kuato.gguf", "kuato")],
+                body={"model": "kuato.gguf"},
+                loaded_id="kuato",
+                resolve_outcome=({"key": "kuato.gguf", "backend_id": "kuato"}, "test"),
+            )
+            # Logs are clean — no failure patterns
+            handler.backend_manager = _FakeBackendManager(
+                "INFO: server listening on 0.0.0.0:8080"
+            )
+            RequestRouter(handler)._handle_model_select_endpoint(restart=True)
+            status, body = handler.sent[0]
+            self.assertEqual(status, 200)
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["last_load_result"], "loaded")
+            self.assertIsNone(payload["last_load_error"])
+            self.assertIsNone(payload["last_load_error_type"])
+            self.assertEqual(payload["last_loaded_model"], "kuato")
+
+    def test_reload_endpoint_classifies_failures(self):
+        """POST /qz/model/reload also runs the classifier."""
+        with _tmp_state_dir() as tmp:
+            state_path = tmp / "model-state.json"
+            write_model_state(
+                ModelState(selected_key="kuato.gguf", selected_backend_id="kuato"),
+                state_path,
+            )
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[_entry("kuato.gguf", "kuato")],
+                loaded_id="",
+                resolve_outcome=({"key": "kuato.gguf", "backend_id": "kuato"}, "test"),
+            )
+            handler.backend_manager = _FakeBackendManager(
+                "failed to allocate buffer for kv cache"
+            )
+            RequestRouter(handler)._handle_model_reload_endpoint()
+            status, body = handler.sent[0]
+            self.assertEqual(status, 409)
+            self.assertEqual(body["last_load_error_type"], "insufficient_vram")
 
 
 # ---------------------------------------------------------------------------

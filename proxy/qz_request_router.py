@@ -1694,16 +1694,27 @@ class RequestRouter:
 
         # select-and-restart: invoke the existing resolve+load path which handles
         # llama-server unload/load and (when needed) BackendManager context restart.
+        resolve_error: str | None = None
         try:
             self._invoke_selected_model_reload(requested.strip())
         except Exception as exc:
-            payload = build_model_status(self.handler)
-            payload["ok"] = False
-            payload["error"] = str(exc)
-            self.handler._send_json(500, payload)
-            return
+            resolve_error = str(exc)
+
+        failed, _err, _err_type = self._record_load_observation(
+            resolve_succeeded=resolve_error is None,
+            resolve_error=resolve_error,
+        )
 
         payload = build_model_status(self.handler)
+        if failed:
+            payload["ok"] = False
+            if resolve_error:
+                payload["error"] = resolve_error
+            # 409 Conflict: the request was valid, but the selected model
+            # cannot become the active backend model.
+            self.handler._send_json(409, payload)
+            return
+
         self.handler._send_json(200, payload)
 
     def _handle_model_reload_endpoint(self) -> None:
@@ -1740,17 +1751,130 @@ class RequestRouter:
             })
             return
 
+        resolve_error: str | None = None
         try:
             self._invoke_selected_model_reload(identity)
         except Exception as exc:
-            payload = build_model_status(self.handler)
-            payload["ok"] = False
-            payload["error"] = str(exc)
-            self.handler._send_json(500, payload)
-            return
+            resolve_error = str(exc)
+
+        failed, _err, _err_type = self._record_load_observation(
+            resolve_succeeded=resolve_error is None,
+            resolve_error=resolve_error,
+        )
 
         payload = build_model_status(self.handler)
+        if failed:
+            payload["ok"] = False
+            if resolve_error:
+                payload["error"] = resolve_error
+            self.handler._send_json(409, payload)
+            return
+
         self.handler._send_json(200, payload)
+
+    def _record_load_observation(
+        self,
+        *,
+        resolve_succeeded: bool,
+        resolve_error: str | None,
+    ) -> tuple[bool, str | None, str | None]:
+        """Inspect recent backend logs after a reload attempt and update state.
+
+        Returns ``(failed, error, error_type)``:
+          * ``failed`` — True when the selected model did not become loadable
+          * ``error`` — concise one-line error message (None on success)
+          * ``error_type`` — 'insufficient_vram' / 'context_creation_failed' /
+            'unknown' (None on success)
+
+        Always writes the updated qz.model_state.v1 file so /qz/model/status
+        and /qz/control-plane reflect the most recent observation.
+        """
+        try:
+            from .qz_model_state import (
+                load_model_state,
+                update_load_observation,
+                write_model_state,
+            )
+            from .qz_model_load_failure import classify_model_load_failure
+        except ImportError:
+            from qz_model_state import (
+                load_model_state,
+                update_load_observation,
+                write_model_state,
+            )
+            from qz_model_load_failure import classify_model_load_failure
+
+        state_path = self._model_state_path_for_endpoint()
+        if state_path is None:
+            return (not resolve_succeeded), resolve_error, ("unknown" if resolve_error else None)
+
+        existing = load_model_state(state_path).state
+
+        # Classify failure from recent container logs when BackendManager is wired.
+        failure = None
+        mgr = getattr(self.handler, "backend_manager", None)
+        if mgr is not None and callable(getattr(mgr, "fetch_recent_logs", None)):
+            try:
+                logs = mgr.fetch_recent_logs()
+            except Exception:
+                logs = None
+            if logs:
+                failure = classify_model_load_failure(logs)
+
+        # Pull current backend_loaded_model for the observation.
+        backend_loaded = ""
+        try:
+            router = self.handler._model_router()
+            backend_models = router.backend_models()
+            loaded = router.loaded_backend_models(backend_models)
+            if loaded and isinstance(loaded[0], dict):
+                backend_loaded = (loaded[0].get("id") or "").strip()
+        except Exception:
+            pass
+
+        if failure is not None:
+            new_state = update_load_observation(
+                existing,
+                loaded_model=backend_loaded,
+                result="failed",
+                error=failure.error,
+                error_type=failure.error_type,
+            )
+            try:
+                write_model_state(new_state, state_path)
+            except Exception:
+                pass
+            return True, failure.error, failure.error_type
+
+        if not resolve_succeeded:
+            # Resolution path raised, no log evidence — treat as unknown failure.
+            error_text = (resolve_error or "model load failed").strip()
+            new_state = update_load_observation(
+                existing,
+                loaded_model=backend_loaded,
+                result="failed",
+                error=error_text[:200],
+                error_type="unknown",
+            )
+            try:
+                write_model_state(new_state, state_path)
+            except Exception:
+                pass
+            return True, error_text, "unknown"
+
+        # Success: clear previous load_error / load_error_type.
+        new_state = update_load_observation(
+            existing,
+            loaded_model=backend_loaded,
+            result="loaded",
+            error="",
+            error_type="",
+        )
+        try:
+            write_model_state(new_state, state_path)
+        except Exception:
+            pass
+        return False, None, None
 
     def _invoke_selected_model_reload(self, requested: str):
         """Call the existing resolve_model_selection path for the selected model.

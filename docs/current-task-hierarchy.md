@@ -53,7 +53,13 @@ Slice D-qz-codex — ✅ qz_codex_exec_preflight in scripts/qz-codex-common;
   opts into select+restart with source=qz_codex; old visibility-only
   qz-wait-ready preflight removed; 17 new tests; 3049 total pass.
   Note: qz-codex no longer treats /v1/models visibility as active backend selection.
-Slice E-load-failure — classify VRAM/context-create failures from logs
+Slice E-load-failure — ✅ proxy/qz_model_load_failure.py classifier;
+  BackendManager.fetch_recent_logs(); /qz/model/reload and
+  /qz/model/select-and-restart run classifier post-load and update
+  qz.model_state.v1 last_load_* fields; failed loads return HTTP 409
+  with classified payload (insufficient_vram / context_creation_failed
+  / unknown); selection authority preserved on failure; successful
+  reload clears previous error; 22 new tests; 3071 total pass
 Slice F-smoke — manual cold-start acceptance
 
 Key hard rules from A-design:

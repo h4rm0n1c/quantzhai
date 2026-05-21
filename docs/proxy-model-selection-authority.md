@@ -397,7 +397,12 @@ Add to `operator_hints`:
 
 ## 10. Load/fit failure classification
 
-Backend container log patterns to classify:
+`proxy/qz_model_load_failure.py` scans recent container logs and classifies
+the latest relevant failure.  `BackendManager.fetch_recent_logs()` returns the
+log buffer (or `None` when the container is gone) so endpoints don't need to
+shell out themselves.
+
+Substring patterns:
 
 | Pattern | `load_error_type` |
 |---|---|
@@ -405,9 +410,15 @@ Backend container log patterns to classify:
 | `failed to allocate CUDA buffer` | `insufficient_vram` |
 | `failed to allocate buffer for kv cache` | `insufficient_vram` |
 | `failed to fit params to free device memory` | `insufficient_vram` |
+| `alloc_tensor_range: failed to allocate` | `insufficient_vram` |
 | `common_init_from_params: failed to create context` | `context_creation_failed` |
 | `common_init_result: failed to create context` | `context_creation_failed` |
 | `failed to create context with model` | `context_creation_failed` |
+| `failed to initialize the context` (standalone) | `context_creation_failed` |
+
+**Promotion rule:** when a VRAM pattern matches at or before a context-creation
+pattern in the same log buffer, the failure is reported as `insufficient_vram`
+— the context error is the downstream effect of the VRAM allocation failure.
 
 On detection:
 - `last_load_result = "failed"`
@@ -463,7 +474,7 @@ scope** for this work; do not anticipate it by adding wrappers.
 | **B-state** | ✅ `proxy/qz_model_state.py` with `qz.model_state.v1` reader/writer/migration; atomic writes; `state_from_selection` validates `SELECTED_SOURCES`; `update_load_observation` keeps authority fields untouched; `load_last_selected_model` no longer reads `loaded_model`; `_persist_model_state` routes through the new module and observation fields are preserved across selection writes; 32 new tests; 2988 total pass |
 | **C-endpoints** | ✅ `proxy/qz_model_status.py` builds `qz.model_status.v1`; new endpoints `GET /qz/model/status`, `POST /qz/model/select`, `POST /qz/model/reload`, `POST /qz/model/select-and-restart`; `ModelCatalog.refresh()` now implements the canonical precedence (persisted selection beats `QZ_MODEL_KEY`); `/qz/control-plane` exposes `configured_env_model`, `selected_source`, `selected_at`, `backend_loaded_model`, `selected_loaded_mismatch`, `selection_reason`, `model_visible`, `profile_valid`, `restart_required`, and backend load-failure surface; operator hints emit QZ_MODEL_KEY-seed warning + mismatch + insufficient-VRAM; 44 new tests; 3032 total pass |
 | **D-qz-codex** | ✅ `qz_codex_exec_preflight` helper in `scripts/qz-codex-common` GETs `/qz/model/status`, compares against selected_key / selected_backend_id / backend_loaded_model with `selected_loaded_mismatch` honoured; mismatch + no `QZ_CODEX_AUTO_SELECT_MODEL` → exit 1 with literal `curl -sS -X POST … /qz/model/select-and-restart`; mismatch + `QZ_CODEX_AUTO_SELECT_MODEL=1` → POST `/qz/model/select-and-restart` with `source=qz_codex`; old `qz-wait-ready --catalog --model` preflight removed; 17 new tests (structural + behavioural with mock proxy); 3049 total pass |
-| **E-load-failure** | log-pattern classification for VRAM/context-create failures; control-plane `model_load_failed` / `load_error_type` exposure; tests |
+| **E-load-failure** | ✅ `proxy/qz_model_load_failure.py` classifies recent container logs into `insufficient_vram` / `context_creation_failed` (VRAM-before-context promotion rule); `BackendManager.fetch_recent_logs()` exposes the log buffer; `/qz/model/reload` and `/qz/model/select-and-restart` run the classifier after the resolve+load path and update `last_load_*` observation fields; failure responses are **HTTP 409** with the classified `last_load_*` payload (selection authority preserved); successful reload clears previous load_error; 22 new tests; 3071 total pass |
 | **F-smoke** | manual cold-start smoke (§14) |
 
 ## 14. F-smoke acceptance
