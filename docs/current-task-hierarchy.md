@@ -25,6 +25,31 @@ they are not automatic operational logs.
 No automatic ingestion. No clever memory. No cross-domain sharing.
 ```
 
+## Active — model-selection authority cleanup (post #65)
+
+```text
+Goal: make the proxy the single authority for active model selection;
+remove split authority across env / state files / qz-codex / catalog /
+backend observations.  No new shell scripts for model selection.
+
+Design: docs/proxy-model-selection-authority.md
+
+Slice A-design — ✅ audit + final design
+Slice B-state — qz.model_state.v1 loader/writer/migration
+Slice C-endpoints — /qz/model/status/select/reload/select-and-restart
+Slice D-qz-codex — replace visibility-only preflight; QZ_CODEX_AUTO_SELECT_MODEL
+Slice E-load-failure — classify VRAM/context-create failures from logs
+Slice F-smoke — manual cold-start acceptance
+
+Key hard rules from A-design:
+  - QZ_MODEL_KEY is a one-shot seed; never overrides persisted operator selection.
+  - loaded_model is observation only, never selection authority.
+  - qz-codex visibility-only preflight is not enough; must check
+    selected/loaded mismatch via /qz/model/status.
+  - Backend HTTP /health is not enough; classify model load/fit failures.
+  - No scripts/qz-model, qz-select-model, qz-model-status, qz-load-model.
+```
+
 ## Recently completed (2026-05-21 run — #65 D.1 GPU regression fix)
 
 ```text
