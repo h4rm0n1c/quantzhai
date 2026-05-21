@@ -169,5 +169,71 @@ class RequestRouterProxyLocalToolTests(unittest.TestCase):
         self.assertTrue(router.request_bodies[0]["metadata"]["qz_prompt_policy"]["disable_system_prompt"])
 
 
+class WebSearchCapabilitiesEndpointTests(unittest.TestCase):
+    def test_get_web_search_capabilities_returns_same_schema(self):
+        from proxy.qz_tool_web import WebSearchRuntime, build_web_search_capabilities
+
+        runtime = WebSearchRuntime(
+            search_config_profiles={"docs_live": {"categories": ["it"], "engines": ["mdn"]}},
+            budget_mode_table={"normal": {"max_results": 5}},
+        )
+        expected_schema = build_web_search_capabilities(runtime)["schema"]
+
+        class Handler:
+            path = "/qz/web-search/capabilities"
+            sent = None
+
+            def _send_json(self, status, payload):
+                self.sent = (status, payload)
+
+            def _handle_ollama_get(self):
+                return False
+
+            def _handle_ready_get(self):
+                return False
+
+        class Router(RequestRouter):
+            def _log_request_path(self, method):
+                pass
+
+            def _web_runtime(self, selected_model=None):
+                return runtime
+
+        handler = Handler()
+        Router(handler).handle_get()
+        status, payload = handler.sent
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["schema"], expected_schema)
+        self.assertIn("docs_live", payload["profiles"])
+
+    def test_get_web_search_capabilities_failure_is_read_only_json(self):
+        class Handler:
+            path = "/qz/web-search/capabilities"
+            sent = None
+
+            def _send_json(self, status, payload):
+                self.sent = (status, payload)
+
+            def _handle_ollama_get(self):
+                return False
+
+            def _handle_ready_get(self):
+                return False
+
+        class Router(RequestRouter):
+            def _log_request_path(self, method):
+                pass
+
+            def _web_runtime(self, selected_model=None):
+                raise RuntimeError("agent api probe failed")
+
+        handler = Handler()
+        Router(handler).handle_get()
+        status, payload = handler.sent
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["schema"], "qz.web_search.capabilities.v1")
+        self.assertFalse(payload["ok"])
+
+
 if __name__ == "__main__":
     unittest.main()

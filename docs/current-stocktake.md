@@ -7,6 +7,30 @@ This document is a rolling point-in-time snapshot. For the live execution order,
 read `docs/current-task-hierarchy.md`. For architecture authority, read
 `docs/current-architecture-authority.md`.
 
+## web_search capabilities introspection — COMPLETE
+
+`web_search` now supports `action="capabilities"` and the read-only endpoint
+`GET /qz/web-search/capabilities`.
+
+The payload schema is `qz.web_search.capabilities.v1` and exposes bounded live
+runtime metadata: supported actions, configured profiles, effective budget
+modes, absolute caps, retrieval support, safe source annotations, Agent API
+redaction status, config source/counts/warnings, and short usage notes.
+
+Contract reminders:
+
+- live config is the source of truth for profiles and budget modes
+- no automatic keyword routing
+- capabilities calls do not consume search/open/retrieve budgets
+- capabilities calls do not call SearXNG search or Agent API retrieve
+- `retrieval_endpoint` and localhost URLs remain hidden from model-visible output
+
+Recommended agent pattern:
+
+```text
+capabilities → search → retrieve/open_page → answer
+```
+
 ## Model-selection authority cleanup (post-#65) — COMPLETE
 
 The proxy is now the single authority for active model selection.

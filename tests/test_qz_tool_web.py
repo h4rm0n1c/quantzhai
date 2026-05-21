@@ -93,6 +93,140 @@ class WebSearchRuntimeTests(unittest.TestCase):
         self.assertIn("repeated search", payload["error"])
 
 
+class WebSearchCapabilitiesTests(unittest.TestCase):
+    def _call(self):
+        return {
+            "type": "function_call",
+            "call_id": "c_caps",
+            "name": "web_search",
+            "arguments": json.dumps({"action": "capabilities"}),
+        }
+
+    def test_tool_schema_contains_capabilities_action_and_short_guidance(self):
+        from proxy.qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
+        schema = WEB_SEARCH_TOOL_ADAPTER.to_upstream_tool({})
+        props = schema["parameters"]["properties"]
+        self.assertIn("capabilities", props["action"]["enum"])
+        desc = schema["description"]
+        self.assertIn('action="capabilities"', desc)
+        self.assertIn("when unsure", desc)
+        self.assertIn("Do not rely on hardcoded profile names", desc)
+        self.assertNotIn("character_cards, furry, gaming_wikis, archives", props["profile"]["description"])
+        self.assertNotIn("enum", props["budget_mode"])
+
+    def test_capabilities_action_returns_schema_without_consuming_budgets(self):
+        runtime = WebSearchRuntime(
+            base_url="http://127.0.0.1:8890",
+            search_config_profiles={
+                "custom_live": {
+                    "description": "Custom profile from live config with secret=hidden.",
+                    "categories": ["general"],
+                    "engines": ["example-engine"],
+                }
+            },
+            budget_mode_table={
+                "normal": {"max_results": 14, "max_searches_per_turn": 6,
+                           "max_page_opens_per_turn": 5, "max_retrievals_per_turn": 3,
+                           "max_retrieved_chars": 10000},
+                "audit": {"max_results": 200, "max_searches_per_turn": 200,
+                          "max_page_opens_per_turn": 200, "max_retrievals_per_turn": 200,
+                          "max_retrieved_chars": 999999},
+            },
+            absolute_caps={"results": 50, "searches": 20, "opens": 20,
+                           "retrievals": 10, "retrieved_chars": 60000},
+            config_source="default",
+            config_path="/home/user/repo/config/default/search.json",
+        )
+        counters = {"search": 2, "open_page": 1, "retrieve": 1}
+        seen = {("existing",)}
+        public_item, tool_output, sources = runtime.execute_web_search_call(
+            self._call(), counters, seen
+        )
+        payload = json.loads(tool_output["output"])
+        caps = payload["result"]
+
+        self.assertEqual(public_item["status"], "completed")
+        self.assertTrue(payload["ok"])
+        self.assertEqual(caps["schema"], "qz.web_search.capabilities.v1")
+        self.assertIn("capabilities", caps["supported_actions"])
+        self.assertIn("custom_live", caps["profiles"])
+        self.assertEqual(caps["budget_modes"]["normal"]["max_results"], 14)
+        self.assertEqual(caps["budget_modes"]["audit"]["max_results"], 50)
+        self.assertEqual(caps["absolute_caps"]["max_retrievals_per_turn"], 10)
+        self.assertTrue(caps["retrieval"]["available"])
+        self.assertTrue(caps["agent_api"]["endpoint_hidden_from_model"])
+        self.assertEqual(caps["config"]["config_path"], "config/default/search.json")
+        self.assertEqual(counters, {"search": 2, "open_page": 1, "retrieve": 1})
+        self.assertEqual(seen, {("existing",)})
+        self.assertEqual(sources, [])
+        serialized = json.dumps(caps).lower()
+        self.assertNotIn("127.0.0.1:8890/retrieve", serialized)
+        self.assertNotIn("localhost", serialized)
+        self.assertNotIn("secret=hidden", serialized)
+
+    def test_capabilities_does_not_call_search_or_retrieve(self):
+        runtime = WebSearchRuntime(base_url="http://127.0.0.1:8890")
+        runtime._query_searxng = lambda *a, **kw: self.fail("capabilities must not search")
+        runtime._retrieve = lambda *a, **kw: self.fail("capabilities must not retrieve")
+        runtime.execute_web_search_call(self._call(), {"search": 0, "open_page": 0, "retrieve": 0}, set())
+
+    def test_custom_profile_appears_and_disabled_profile_is_hidden(self):
+        runtime = WebSearchRuntime(
+            search_config_profiles={
+                "live_profile": {"categories": ["it"], "engines": ["docs"], "description": "Live docs."},
+                "disabled_profile": {"enabled": False, "categories": ["general"]},
+            },
+        )
+        from proxy.qz_tool_web import build_web_search_capabilities
+        caps = build_web_search_capabilities(runtime)
+        self.assertIn("live_profile", caps["profiles"])
+        self.assertNotIn("disabled_profile", caps["profiles"])
+        self.assertEqual(caps["profiles"]["live_profile"]["categories"], ["it"])
+        self.assertEqual(caps["profiles"]["live_profile"]["engine_count"], 1)
+
+    def test_config_budget_modes_override_builtins_and_custom_mode_resolves(self):
+        runtime = WebSearchRuntime(
+            budget_mode_table={
+                "normal": {"max_results": 7, "max_searches_per_turn": 3,
+                           "max_page_opens_per_turn": 2, "max_retrievals_per_turn": 1,
+                           "max_retrieved_chars": 900},
+                "local_audit": {"max_results": 9, "max_searches_per_turn": 4,
+                                "max_page_opens_per_turn": 4, "max_retrievals_per_turn": 2,
+                                "max_retrieved_chars": 1800},
+            },
+            default_budget_mode="local_audit",
+            absolute_caps={"results": 8, "retrieved_chars": 1200},
+        )
+        from proxy.qz_tool_web import build_web_search_capabilities
+        caps = build_web_search_capabilities(runtime)
+        self.assertEqual(caps["default_budget_mode"], "local_audit")
+        self.assertEqual(caps["budget_modes"]["normal"]["max_results"], 7)
+        self.assertEqual(caps["budget_modes"]["local_audit"]["max_results"], 8)
+        self.assertEqual(caps["budget_modes"]["local_audit"]["max_retrieved_chars"], 1200)
+
+    def test_capabilities_telemetry_requested_completed_and_failure_nonfatal(self):
+        emitted = []
+
+        class FakeTelemetry:
+            def emit(self, event_type, payload):
+                emitted.append(event_type)
+
+        runtime = WebSearchRuntime(telemetry=FakeTelemetry())
+        runtime.execute_web_search_call(self._call(), {"search": 0, "open_page": 0, "retrieve": 0}, set())
+        self.assertIn("web_search_capabilities_requested", emitted)
+        self.assertIn("web_search_capabilities_completed", emitted)
+
+        class BrokenTelemetry:
+            def emit(self, event_type, payload):
+                raise RuntimeError("down")
+
+        runtime = WebSearchRuntime(telemetry=BrokenTelemetry())
+        _public, tool_output, _sources = runtime.execute_web_search_call(
+            self._call(), {"search": 0, "open_page": 0, "retrieve": 0}, set()
+        )
+        self.assertTrue(json.loads(tool_output["output"])["ok"])
+
+
 class SourceAnnotationTests(unittest.TestCase):
     """Tests for two-layer web_search source annotations — #60 Slice D2."""
 
@@ -1198,8 +1332,8 @@ class WebSearchBudgetModeTests(unittest.TestCase):
         props = schema["parameters"]["properties"]
         self.assertIn("budget_mode", props)
         self.assertEqual(props["budget_mode"]["type"], "string")
-        self.assertIn("quick", props["budget_mode"]["enum"])
-        self.assertIn("audit", props["budget_mode"]["enum"])
+        self.assertNotIn("enum", props["budget_mode"])
+        self.assertIn("capabilities", props["budget_mode"]["description"])
 
     def test_tool_schema_contains_retrieve_action(self):
         from proxy.qz_tool_web import WEB_SEARCH_TOOL_ADAPTER

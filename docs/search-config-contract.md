@@ -976,10 +976,11 @@ already a dict that touches every call. Provides observability without model noi
 
 **Schema — delivered in Slice B, confirmed in C-doc:**
 
-- `budget_mode` enum `["quick", "normal", "deep", "audit"]` present with description.
+- `action` enum includes `search`, `open_page`, `find_in_page`, `retrieve`, and `capabilities`.
+- `budget_mode` is a string; use `action="capabilities"` for the live effective modes.
 - `retrieve` in `action` enum; `retrieval_source` documented as property.
 - `maximum: 8` removed from `top_k`; description says "clamped to effective budget_mode limit".
-- Tool-level description updated (Slice C-doc) to include explicit usage guidance.
+- Tool-level description updated to prefer live capabilities over static profile or budget guidance.
 
 **Tool-level description (Slice C-doc):**
 
@@ -987,16 +988,14 @@ already a dict that touches every call. Provides observability without model noi
 Search the web, open a page, find text in an opened page, or retrieve full
 structured content for a result URL using the local web runtime.
 
-Choose budget_mode explicitly based on the task:
-  quick  — single fact check, narrow lookup, verify one thing. Conservative limits.
-  normal — default for routine agent work: multi-step research, tool-use loops. Moderate limits.
-  deep   — serious research: source comparison, multi-source retrieval, longer content. High limits.
-  audit  — citation-heavy or evidence-heavy scans: exhaustive source review, cross-checking. Maximum limits.
+Use action="capabilities" when unsure which profiles, budget modes, retrieval
+sources, or search modes are available. Do not rely on hardcoded profile names if
+capabilities are available.
 
 Profile and budget_mode are explicit choices — there is no automatic keyword routing.
 When retrieving content: extract or summarize relevant sections rather than dumping raw
 content into the final answer. Large retrieved chunks should inform the answer, not fill it.
-Typical research pattern: search → retrieve or open_page → extract key facts → continue or answer.
+Typical research pattern: capabilities → search → retrieve or open_page → answer.
 ```
 
 **Context discipline (C-doc):**
@@ -1083,7 +1082,8 @@ test_router_passes_budget_mode_table_to_runtime
   search.json routing.budget_modes → passed to WebSearchRuntime
 
 test_tool_schema_includes_budget_mode
-  web_search function schema contains budget_mode with correct enum
+  web_search function schema contains budget_mode and points agents at
+  action="capabilities" for the live supported modes
 ```
 
 ### 64.11 Slice roadmap
@@ -1142,3 +1142,75 @@ The old 12 000-char hard ceiling is gone. `deep`/`audit` pass content up to thei
 
 - No `127.0.0.1` or `:8890` in any model-visible output ✓
 - No localhost in any telemetry payload ✓
+
+## §65. web_search capabilities introspection
+
+`web_search` now has a first-class introspection action:
+
+```json
+{"action": "capabilities"}
+```
+
+The response schema is `qz.web_search.capabilities.v1`. It is a bounded,
+model-readable view of the live runtime, not a raw config dump.
+
+It includes:
+
+- supported actions: `search`, `open_page`, `find_in_page`, `retrieve`, `capabilities`
+- live profiles loaded from `search.json`/runtime policy
+- effective budget modes after config, compatibility fallback, and absolute caps
+- retrieval availability and supported `retrieval_source` values
+- source annotation field names and allowed hint values
+- Agent API feature/status summary without exposing endpoint URLs
+- config source/count/warning metadata
+- usage notes for agent planning
+
+The static tool schema is intentionally short. The capabilities response is the
+source of truth for profile names, budget modes, retrieval support, and local
+runtime search modes. Agents should not assume hardcoded profile names.
+
+Recommended agent pattern:
+
+```text
+capabilities → search → retrieve/open_page → answer
+```
+
+Use `capabilities` before unfamiliar research tasks, then choose `profile` and
+`budget_mode` explicitly. There is still no automatic keyword routing. The
+`retrieval_endpoint` remains hidden from all model-visible outputs; agents only
+receive safe annotations such as `retrieval_available`, `retrieval_source`, and
+`retrieval_retriever`.
+
+Examples:
+
+```json
+{"action":"capabilities"}
+{"action":"search","query":"current llama.cpp flash attention Vulkan status","profile":"broad","budget_mode":"normal"}
+{"action":"search","query":"python pathlib official docs glob case_sensitive","profile":"coding","budget_mode":"normal"}
+{"action":"search","query":"Half-Life 2 PCGamingWiki controller support","profile":"gaming_wikis","budget_mode":"deep"}
+{"action":"search","query":"Lyra tavern character card","profile":"character_cards","budget_mode":"quick"}
+{"action":"search","query":"site:fse.anthro.fr black wizard","profile":"furry","budget_mode":"deep"}
+{"action":"search","query":"old shareware archive iso","profile":"archives","budget_mode":"audit"}
+{"action":"retrieve","url":"https://www.pcgamingwiki.com/wiki/Half-Life_2","retrieval_source":"mediawiki","budget_mode":"deep"}
+```
+
+Capabilities telemetry:
+
+```text
+web_search_capabilities_requested
+web_search_capabilities_completed
+web_search_capabilities_failed
+```
+
+Capabilities calls do not consume search/open/retrieve budgets, do not call the
+SearXNG search endpoint, do not call the Agent API retrieve endpoint, and do not
+mutate per-turn repeated-call state.
+
+Optional operator endpoint:
+
+```text
+GET /qz/web-search/capabilities
+```
+
+The endpoint returns the same schema for debugging by operators or future
+monitoring surfaces. It is read-only and has no script wrapper.

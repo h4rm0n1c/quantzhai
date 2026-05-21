@@ -54,7 +54,7 @@ try:
     from .qz_recovery_jobs import RECOVERY_JOBS
     from .qz_vram_snapshot import get_cached_vram_snapshot
     from .qz_search_policy import resolve_search_policy_selection
-    from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
+    from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, build_web_search_capabilities, _safe_json_file, _unique_sources
     from .qz_runtime_io import (
         append_capture,
         append_request_capture,
@@ -108,7 +108,7 @@ except ImportError:
     from qz_recovery_jobs import RECOVERY_JOBS
     from qz_vram_snapshot import get_cached_vram_snapshot
     from qz_search_policy import resolve_search_policy_selection
-    from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
+    from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, build_web_search_capabilities, _safe_json_file, _unique_sources
     from qz_runtime_io import (
         append_capture,
         append_request_capture,
@@ -499,6 +499,18 @@ class RequestRouter:
 
         if self.handler.path in ("/qz/config/effective", "/qz/config/paths"):
             self.handler._send_json(200, effective_config_payload(self.handler))
+            return
+
+        if self.handler.path == "/qz/web-search/capabilities":
+            try:
+                payload = build_web_search_capabilities(self._web_runtime())
+            except Exception as exc:
+                payload = {
+                    "ok": False,
+                    "schema": "qz.web_search.capabilities.v1",
+                    "error": str(exc),
+                }
+            self.handler._send_json(200, payload)
             return
 
         if self.handler.path == "/qz/codex/client-config":
@@ -2062,6 +2074,9 @@ class RequestRouter:
             "budget_mode_table": _budget_mode_table,
             "absolute_caps": _absolute_caps,
             "default_budget_mode": _default_budget_mode or None,
+            "config_source": getattr(scr, "source", "") if scr is not None else "",
+            "config_path": str(getattr(scr, "path", "") or "") if scr is not None else "",
+            "config_warnings": list(getattr(scr, "warnings", []) or []) if scr is not None else [],
         }
         selection = resolve_search_policy_selection(
             base_policy=self.handler.searxng_policy,

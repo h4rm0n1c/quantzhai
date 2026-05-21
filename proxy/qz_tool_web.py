@@ -81,31 +81,26 @@ class WebSearchToolAdapter:
         return function_tool(
             "web_search",
             (
-                "Search the web, open a page, find text in an opened page, or retrieve full structured content "
-                "for a result URL using the local web runtime.\n\n"
-                "Choose budget_mode explicitly based on the task:\n"
-                "  quick  — single fact check, narrow lookup, verify one thing. Conservative limits.\n"
-                "  normal — default for routine agent work: multi-step research, tool-use loops. Moderate limits.\n"
-                "  deep   — serious research: source comparison, multi-source retrieval, longer content. High limits.\n"
-                "  audit  — citation-heavy or evidence-heavy scans: exhaustive source review, cross-checking. Maximum limits.\n\n"
-                "Profile and budget_mode are explicit choices — there is no automatic keyword routing.\n"
-                "When retrieving content: extract or summarize relevant sections rather than dumping raw content "
-                "into the final answer. Large retrieved chunks should inform the answer, not fill it.\n"
-                "Typical research pattern: search → retrieve or open_page → extract key facts → continue or answer."
+                "Search the web, open a page, find text in an opened page, retrieve structured content for a "
+                "result URL, or inspect the live web_search runtime capabilities.\n\n"
+                "Use action=\"capabilities\" when unsure what profiles, budgets, retrieval sources, or search "
+                "modes are available. Do not rely on hardcoded profile names if capabilities are available.\n"
+                "Use action=\"search\" after selecting a profile and budget_mode from capabilities. Use "
+                "action=\"retrieve\" when a search result says retrieval_available=true.\n"
+                "Profile and budget_mode are explicit choices; there is no automatic keyword routing. Retrieved "
+                "content should inform the answer, not be dumped wholesale into it."
             ),
             {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["search", "open_page", "find_in_page", "retrieve"],
+                        "enum": ["search", "open_page", "find_in_page", "retrieve", "capabilities"],
                         "description": (
-                            "search: query the web and get annotated results. "
-                            "open_page: fetch and read a full page by URL. "
-                            "find_in_page: search for a text needle within a previously opened page. "
-                            "retrieve: fetch full structured content (title, summary, content, metadata) "
-                            "for a result URL via the local Agent API; use retrieval_available/retrieval_source "
-                            "annotations from search results to know which URLs support this."
+                            "capabilities: return live runtime profiles, budgets, retrieval support, and usage notes. "
+                            "search: query the web and get annotated results. open_page: fetch a page by URL. "
+                            "find_in_page: search for text within an opened page. retrieve: fetch structured content "
+                            "for a result URL when search results report retrieval_available=true."
                         ),
                     },
                     "query": {
@@ -115,23 +110,15 @@ class WebSearchToolAdapter:
                     "profile": {
                         "type": "string",
                         "description": (
-                            "Search profile controlling which SearXNG engines and categories are used. "
-                            "Choose based on the kind of source you want, not the query topic. "
-                            "Common profiles: auto, broad, coding, research, news, ai_models, reference, sysadmin, "
-                            "character_cards, furry, gaming_wikis, archives. Local policy may define more. "
-                            "Profile is an explicit choice; it is not inferred automatically from the query."
+                            "Search profile controlling engines and categories. Use action=\"capabilities\" to inspect "
+                            "the live profile list before unfamiliar research tasks."
                         ),
                     },
                     "budget_mode": {
                         "type": "string",
-                        "enum": ["quick", "normal", "deep", "audit"],
                         "description": (
-                            "Research depth. Controls per-turn limits on searches, page opens, retrievals, "
-                            "and retrieved content size. Default when omitted: normal. "
-                            "quick: single fact, narrow lookup. "
-                            "normal: routine agent work. "
-                            "deep: multi-source research, larger retrievals. "
-                            "audit: exhaustive citation/evidence scan, maximum limits."
+                            "Research depth. Controls per-turn limits on searches, page opens, retrievals, and "
+                            "retrieved content size. Use action=\"capabilities\" for the live supported modes."
                         ),
                     },
                     "url": {
@@ -487,6 +474,76 @@ def _annotate_source(url: str, retrieval: dict | None = None,
     return ann
 
 
+def _safe_capability_text(value, limit: int = 220) -> str:
+    text = _normalize_ws(str(value or ""))
+    text = re.sub(r"https?://(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?\S*", "[local-endpoint-hidden]", text)
+    text = re.sub(r"(?i)(api[_-]?key|password|secret|token)\s*[:=]\s*\S+", r"\1=[hidden]", text)
+    return _truncate(text, limit)
+
+
+def _safe_capability_list(value, limit: int = 24, item_limit: int = 80) -> list:
+    out = []
+    seen = set()
+    for item in _string_list(value):
+        safe = _safe_capability_text(item, item_limit)
+        if not safe or safe in seen:
+            continue
+        seen.add(safe)
+        out.append(safe)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _budget_mode_names(mode_table: dict | None) -> list:
+    names = set(WEB_SEARCH_VALID_BUDGET_MODES)
+    if isinstance(mode_table, dict):
+        names.update(
+            str(name).strip()
+            for name in mode_table.keys()
+            if isinstance(name, str) and name.strip()
+        )
+    return sorted(names)
+
+
+def _effective_absolute_caps(absolute_caps: dict | None) -> dict:
+    ac = absolute_caps or {}
+    return {
+        "max_results": min(
+            _resolve_budget_int(ac.get("results"), WEB_SEARCH_ABSOLUTE_MAX_RESULTS, 1),
+            WEB_SEARCH_ABSOLUTE_MAX_RESULTS,
+        ),
+        "max_searches_per_turn": min(
+            _resolve_budget_int(ac.get("searches"), WEB_SEARCH_ABSOLUTE_MAX_SEARCHES, 1),
+            WEB_SEARCH_ABSOLUTE_MAX_SEARCHES,
+        ),
+        "max_page_opens_per_turn": min(
+            _resolve_budget_int(ac.get("opens"), WEB_SEARCH_ABSOLUTE_MAX_OPENS, 1),
+            WEB_SEARCH_ABSOLUTE_MAX_OPENS,
+        ),
+        "max_retrievals_per_turn": min(
+            _resolve_budget_int(ac.get("retrievals"), WEB_SEARCH_ABSOLUTE_MAX_RETRIEVALS, 1),
+            WEB_SEARCH_ABSOLUTE_MAX_RETRIEVALS,
+        ),
+        "max_retrieved_chars": min(
+            _resolve_budget_int(ac.get("retrieved_chars"), WEB_SEARCH_ABSOLUTE_MAX_RETRIEVED_CHARS, 1),
+            WEB_SEARCH_ABSOLUTE_MAX_RETRIEVED_CHARS,
+        ),
+    }
+
+
+def _safe_config_path(path: str) -> str | None:
+    raw = str(path or "").strip()
+    if not raw:
+        return None
+    normalized = raw.replace("\\", "/")
+    for marker in ("config/default/search.json", "config/user/search.json"):
+        if normalized.endswith(marker):
+            return marker
+    name = Path(normalized).name
+    return name if name == "search.json" else None
+
+
 def _now_float():
     import time
     return time.time()
@@ -565,14 +622,23 @@ def _resolve_budget_mode(
     abs_retrievals = min(_resolve_budget_int(ac.get("retrievals"),     WEB_SEARCH_ABSOLUTE_MAX_RETRIEVALS,       1), WEB_SEARCH_ABSOLUTE_MAX_RETRIEVALS)
     abs_chars    = min(_resolve_budget_int(ac.get("retrieved_chars"),  WEB_SEARCH_ABSOLUTE_MAX_RETRIEVED_CHARS,  1), WEB_SEARCH_ABSOLUTE_MAX_RETRIEVED_CHARS)
 
-    # Determine effective mode name
-    mode = requested_mode if requested_mode in WEB_SEARCH_VALID_BUDGET_MODES else ""
-    effective_mode = mode or (default_mode if default_mode in WEB_SEARCH_VALID_BUDGET_MODES else WEB_SEARCH_DEFAULT_BUDGET_MODE)
+    # Determine effective mode name. Built-in modes remain valid fallbacks, and
+    # search.json may add local modes without requiring a code/schema change.
+    valid_modes = set(WEB_SEARCH_VALID_BUDGET_MODES)
+    if isinstance(mt, dict):
+        valid_modes.update(
+            str(name).strip()
+            for name in mt.keys()
+            if isinstance(name, str) and name.strip()
+        )
+    mode = requested_mode if requested_mode in valid_modes else ""
+    fallback_mode = default_mode if default_mode in valid_modes else WEB_SEARCH_DEFAULT_BUDGET_MODE
+    effective_mode = mode or fallback_mode
 
     # Determine base budget values
     if mt:
         # Named mode table present: use it (with built-in default as fallback per field)
-        mode_base = WEB_SEARCH_MODE_DEFAULTS[effective_mode]
+        mode_base = WEB_SEARCH_MODE_DEFAULTS.get(effective_mode) or WEB_SEARCH_MODE_DEFAULTS[WEB_SEARCH_DEFAULT_BUDGET_MODE]
         mt_entry = mt.get(effective_mode) or {}
         results    = _resolve_budget_int(mt_entry.get("max_results"),           mode_base["max_results"],           1)
         searches   = _resolve_budget_int(mt_entry.get("max_searches_per_turn"), mode_base["max_searches_per_turn"], 1)
@@ -591,7 +657,7 @@ def _resolve_budget_mode(
         chars      = _resolve_budget_int(fb.get("max_retrieved_chars"),     quick_base["max_retrieved_chars"],     1)
     else:
         # No mode_table, explicit mode requested: use built-in mode defaults
-        mode_base = WEB_SEARCH_MODE_DEFAULTS[effective_mode]
+        mode_base = WEB_SEARCH_MODE_DEFAULTS.get(effective_mode) or WEB_SEARCH_MODE_DEFAULTS[WEB_SEARCH_DEFAULT_BUDGET_MODE]
         results    = mode_base["max_results"]
         searches   = mode_base["max_searches_per_turn"]
         opens      = mode_base["max_page_opens_per_turn"]
@@ -605,6 +671,251 @@ def _resolve_budget_mode(
         "max_page_opens_per_turn":  min(opens,      abs_opens),
         "max_retrievals_per_turn":  min(retrievals, abs_retrievals),
         "max_retrieved_chars":      min(chars,      abs_chars),
+    }
+
+
+_PROFILE_DESCRIPTION_FALLBACKS = {
+    "broad": "General web search.",
+    "coding": "Code, documentation, package, repository, and technical Q&A search.",
+    "research": "Higher quality general and academic research search.",
+    "news": "Current news and recent event search.",
+    "character_cards": "Character card search.",
+    "furry": "Furry story, image, and community corpus search.",
+    "gaming_wikis": "Gaming and MediaWiki source search.",
+    "archives": "Archive, torrent, and old-web style source search.",
+    "auto": "Runtime-selected profile; inspect selected_profile in search output.",
+}
+
+
+def _profile_source_kinds(name: str, cfg: dict) -> list:
+    text = " ".join([
+        name or "",
+        " ".join(_string_list(cfg.get("engines"))),
+        " ".join(_string_list(cfg.get("categories"))),
+        str(cfg.get("description") or ""),
+    ]).lower()
+    kinds = []
+    checks = [
+        ("coding", ["official_docs", "source_repo", "package_registry", "q_and_a"]),
+        ("sysadmin", ["official_docs", "q_and_a", "package_registry"]),
+        ("research", ["academic"]),
+        ("news", ["news"]),
+        ("reference", ["encyclopedia"]),
+        ("character", ["character_card"]),
+        ("furry", ["prose_archive", "furry_community"]),
+        ("fse", ["prose_archive"]),
+        ("furbooru", ["furry_community"]),
+        ("e926", ["furry_community"]),
+        ("gaming", ["gaming_wiki"]),
+        ("wiki", ["wiki"]),
+        ("archive", ["local_index", "unknown"]),
+        ("torrent", ["local_index"]),
+        ("bitmagnet", ["local_index"]),
+    ]
+    for needle, values in checks:
+        if needle in text:
+            kinds.extend(values)
+    if not kinds:
+        kinds.append("unknown")
+    out = []
+    for item in kinds:
+        if item not in out:
+            out.append(item)
+    return out[:8]
+
+
+def _profile_retrieval_expected(cfg: dict) -> bool:
+    if not isinstance(cfg, dict):
+        return False
+    for key in ("retrieval_expected", "retrieval_available", "retrieve", "agent_api_retrieval"):
+        if key in cfg:
+            return bool(cfg.get(key))
+    text = " ".join([
+        str(cfg.get("description") or ""),
+        " ".join(_string_list(cfg.get("engines"))),
+    ]).lower()
+    return any(term in text for term in (
+        "retrieval available", "agent api", "taverncard", "aicharactercards",
+        "fse", "furbooru", "pcgamingwiki", "alliedmodders", "bitmagnet",
+    ))
+
+
+def _collect_retrieval_sources(runtime) -> list:
+    sources = set(_RETRIEVAL_SOURCE_KIND.keys())
+    sources.add("mediawiki")
+    caches = [
+        getattr(runtime, "web_search_cache", None),
+        getattr(runtime, "opened_page_cache", None),
+    ]
+    for cache in caches:
+        if not isinstance(cache, dict):
+            continue
+        for item in cache.values():
+            value = item.get("value") if isinstance(item, dict) else item
+            results = value.get("results") if isinstance(value, dict) else None
+            for result in results or []:
+                if isinstance(result, dict) and result.get("retrieval_source"):
+                    sources.add(str(result.get("retrieval_source")))
+    for cfg in (getattr(runtime, "search_config_profiles", None) or {}).values():
+        if not isinstance(cfg, dict):
+            continue
+        for key in ("retrieval_source", "retrieval_sources", "supported_retrieval_sources"):
+            value = cfg.get(key)
+            if isinstance(value, str) and value.strip():
+                sources.add(value.strip())
+            elif isinstance(value, list):
+                sources.update(_string_list(value))
+    return sorted(s for s in sources if s)
+
+
+def build_web_search_capabilities(runtime) -> dict:
+    """Return a bounded model-readable summary of the live web_search runtime."""
+    warnings = []
+    profiles = {}
+    config_profiles = getattr(runtime, "search_config_profiles", None) or {}
+    if not isinstance(config_profiles, dict):
+        config_profiles = {}
+    legacy_profiles = ((getattr(runtime, "searxng_policy", None) or {}).get("web_search_profiles") or {})
+    if not isinstance(legacy_profiles, dict):
+        legacy_profiles = {}
+
+    profile_names = []
+    for source in (config_profiles, legacy_profiles):
+        for name, cfg in source.items():
+            if not isinstance(name, str) or not name.strip():
+                continue
+            if isinstance(cfg, dict) and cfg.get("enabled") is False:
+                continue
+            if name not in profile_names:
+                profile_names.append(name)
+
+    for name in sorted(profile_names):
+        cfg = config_profiles.get(name)
+        if not isinstance(cfg, dict):
+            cfg = legacy_profiles.get(name) if isinstance(legacy_profiles.get(name), dict) else {}
+        categories = _safe_capability_list(cfg.get("categories"), limit=16)
+        engines = _safe_capability_list(cfg.get("engines"), limit=24)
+        raw_engines = _string_list(cfg.get("engines"))
+        description = _safe_capability_text(
+            cfg.get("description") or cfg.get("purpose") or _PROFILE_DESCRIPTION_FALLBACKS.get(name, ""),
+            220,
+        )
+        profiles[name] = {
+            "description": description,
+            "categories": categories,
+            "engines": engines,
+            "engine_count": len(raw_engines),
+            "retrieval_expected": _profile_retrieval_expected(cfg),
+            "intended_use": _safe_capability_text(cfg.get("intended_use") or description, 180),
+            "source_kinds_expected": _profile_source_kinds(name, cfg),
+        }
+
+    budget_modes = {}
+    for mode in _budget_mode_names(getattr(runtime, "_budget_mode_table", None)):
+        budget = _resolve_budget_mode(
+            mode,
+            getattr(runtime, "_budget_mode_table", {}),
+            getattr(runtime, "_flat_budgets", {}),
+            getattr(runtime, "_absolute_caps", {}),
+            getattr(runtime, "_default_budget_mode", WEB_SEARCH_DEFAULT_BUDGET_MODE),
+        )
+        budget_modes[mode] = {
+            "max_results": budget["max_results"],
+            "max_searches_per_turn": budget["max_searches_per_turn"],
+            "max_page_opens_per_turn": budget["max_page_opens_per_turn"],
+            "max_retrievals_per_turn": budget["max_retrievals_per_turn"],
+            "max_retrieved_chars": budget["max_retrieved_chars"],
+        }
+
+    absolute_caps = _effective_absolute_caps(getattr(runtime, "_absolute_caps", {}))
+    supported_sources = _collect_retrieval_sources(runtime)
+    config_warnings = [
+        _safe_capability_text(w, 220)
+        for w in getattr(runtime, "search_config_warnings", [])
+        if _safe_capability_text(w, 220)
+    ]
+    warnings.extend(config_warnings[:8])
+
+    default_budget = _resolve_budget_mode(
+        "",
+        getattr(runtime, "_budget_mode_table", {}),
+        getattr(runtime, "_flat_budgets", {}),
+        getattr(runtime, "_absolute_caps", {}),
+        getattr(runtime, "_default_budget_mode", WEB_SEARCH_DEFAULT_BUDGET_MODE),
+    )
+    base_url_configured = bool(str(getattr(runtime, "searxng_base_url", "") or "").strip())
+    config_source = _safe_capability_text(getattr(runtime, "search_config_source", "") or "runtime", 80)
+    config_path = _safe_config_path(getattr(runtime, "search_config_path", ""))
+
+    return {
+        "ok": True,
+        "schema": "qz.web_search.capabilities.v1",
+        "generated_at": _now_ts(),
+        "default_profile": getattr(runtime, "default_search_profile", "") or "auto",
+        "default_budget_mode": default_budget["budget_mode"],
+        "supported_actions": ["search", "open_page", "find_in_page", "retrieve", "capabilities"],
+        "profiles": profiles,
+        "budget_modes": budget_modes,
+        "absolute_caps": absolute_caps,
+        "retrieval": {
+            "available": base_url_configured,
+            "action": "retrieve",
+            "max_retrievals_by_budget_mode": {
+                mode: data["max_retrievals_per_turn"] for mode, data in budget_modes.items()
+            },
+            "max_chars_by_budget_mode": {
+                mode: data["max_retrieved_chars"] for mode, data in budget_modes.items()
+            },
+            "supported_sources": supported_sources,
+            "notes": [
+                "Use retrieve only for selected results that advertise retrieval_available=true.",
+                "The raw retrieval endpoint is hidden from model-visible output.",
+            ],
+        },
+        "annotations": {
+            "source_kind_values": sorted(
+                {kind for kind, _trust in _DOMAIN_SOURCE_KIND.values()}
+                | {kind for kind, _trust in _RETRIEVAL_SOURCE_KIND.values()}
+                | {"wiki", "news", "unknown"}
+            ),
+            "trust_hint_values": ["high", "medium", "low", "unknown"],
+            "freshness_hint_values": ["recent", "dated", "unknown"],
+            "fields_added_to_search_results": [
+                "source_kind",
+                "trust_hint",
+                "freshness_hint",
+                "retrieval_available",
+                "retrieval_source",
+                "retrieval_retriever",
+            ],
+        },
+        "agent_api": {
+            "base_url_configured": base_url_configured,
+            "status": "configured_not_probed" if base_url_configured else "not_configured",
+            "retrieval_metadata_supported": True,
+            "endpoint_hidden_from_model": True,
+        },
+        "config": {
+            "config_source": config_source,
+            "config_path": config_path,
+            "loaded_profiles_count": len(profiles),
+            "loaded_budget_modes_count": len(budget_modes),
+            "default_budget_mode": default_budget["budget_mode"],
+            "stale_or_missing": {
+                "missing_config": config_source in ("", "empty"),
+                "warnings_present": bool(config_warnings),
+            },
+            "warnings": config_warnings[:8],
+        },
+        "usage_notes": [
+            "Choose profile explicitly.",
+            "Choose budget_mode explicitly.",
+            "Use capabilities before unfamiliar research tasks.",
+            "There is no automatic keyword routing.",
+            "retrieval_endpoint is never exposed.",
+            "Retrieve content selectively; do not dump large retrieved text.",
+        ],
+        "warnings": warnings[:8],
     }
 
 
@@ -633,6 +944,9 @@ class WebSearchRuntime:
         budget_mode_table=None,
         absolute_caps=None,
         default_budget_mode=None,
+        config_source: str = "",
+        config_path: str = "",
+        config_warnings=None,
     ):
         self.searxng_base_url = base_url
         self.searxng_timeout = timeout
@@ -650,6 +964,9 @@ class WebSearchRuntime:
         self._budget_mode_table = budget_mode_table if isinstance(budget_mode_table, dict) else {}
         self._absolute_caps = absolute_caps if isinstance(absolute_caps, dict) else {}
         self._default_budget_mode = str(default_budget_mode or WEB_SEARCH_DEFAULT_BUDGET_MODE).strip()
+        self.search_config_source = str(config_source or "").strip()
+        self.search_config_path = str(config_path or "").strip()
+        self.search_config_warnings = list(config_warnings or []) if isinstance(config_warnings, list) else []
         # Flat #60 compat fields stored for fallback use in _resolve_budget_mode.
         self._flat_budgets = {
             "max_results":             max_results_per_query,
@@ -1183,9 +1500,10 @@ class WebSearchRuntime:
         page_id = data.get("page_id")
         categories = data.get("categories") if isinstance(data.get("categories"), list) else None
         engines = data.get("engines") if isinstance(data.get("engines"), list) else None
-        # budget_mode: preserve raw value; resolution happens in execute_web_search_call.
+        # budget_mode: preserve supported built-in or config-defined names; resolution
+        # happens in execute_web_search_call.
         raw_mode = str(data.get("budget_mode") or "").strip()
-        budget_mode = raw_mode if raw_mode in WEB_SEARCH_VALID_BUDGET_MODES else ""
+        budget_mode = raw_mode if raw_mode in set(_budget_mode_names(self._budget_mode_table)) else ""
         # top_k: parse raw int if provided; keep None if absent so execute_web_search_call
         # can substitute the per-call effective max_results.
         _raw_top_k = data.get("top_k")
@@ -1338,6 +1656,51 @@ class WebSearchRuntime:
         profile = args.get("profile") or "auto"
         url = args.get("url")
         page_id = args.get("page_id")
+
+        if action == "capabilities":
+            self._emit("web_search_capabilities_requested", {
+                "request_id": request_id or call_item.get("request_id") or "",
+                "call_id": call_item.get("call_id") or call_item.get("id"),
+            })
+            try:
+                payload = build_web_search_capabilities(self)
+                self._emit("web_search_capabilities_completed", {
+                    "request_id": request_id or call_item.get("request_id") or "",
+                    "call_id": call_item.get("call_id") or call_item.get("id"),
+                    "profiles": len(payload.get("profiles") or {}),
+                    "budget_modes": len(payload.get("budget_modes") or {}),
+                })
+                error = None
+            except Exception as exc:
+                payload = {}
+                error = f"Capabilities failed: {type(exc).__name__}: {exc}"
+                self._emit("web_search_capabilities_failed", {
+                    "request_id": request_id or call_item.get("request_id") or "",
+                    "call_id": call_item.get("call_id") or call_item.get("id"),
+                    "error": error,
+                })
+
+            result_payload = {
+                "ok": error is None,
+                "action": action,
+                "result": payload if error is None else {},
+                "error": error,
+            }
+            web_call_item = {
+                "id": call_item.get("id") or call_item.get("call_id") or f"wsc_local_{_now_ts()}",
+                "type": "web_search_call",
+                "status": "completed" if error is None else "failed",
+                "call_id": call_item.get("call_id"),
+                "action": {"type": action},
+            }
+            if error:
+                web_call_item["error"] = error
+            tool_output_item = {
+                "type": "function_call_output",
+                "call_id": call_item.get("call_id") or call_item.get("id") or f"fc_local_{_now_ts()}",
+                "output": json.dumps(result_payload, ensure_ascii=False),
+            }
+            return web_call_item, tool_output_item, []
 
         # Resolve per-call effective budget from budget_mode argument.
         budget = _resolve_budget_mode(

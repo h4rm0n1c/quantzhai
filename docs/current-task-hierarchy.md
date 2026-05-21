@@ -1,9 +1,33 @@
 # QuantZhai Current Task Hierarchy
 
-Date: 2026-05-15
-Status: active control sheet — post-VRAM/recovery/stream-watchdog stabilisation.
+Date: 2026-05-22
+Status: active control sheet — post-web_search capabilities introspection.
 
 See `docs/current-stocktake.md` for the full point-in-time state summary.
+
+## Recently completed — web_search capabilities introspection
+
+```text
+Status: COMPLETE
+
+Code:
+- proxy/qz_tool_web.py adds action="capabilities" and
+  build_web_search_capabilities(runtime)
+- proxy/qz_request_router.py adds GET /qz/web-search/capabilities
+
+Contract:
+- capabilities returns qz.web_search.capabilities.v1
+- live config/runtime metadata is the source of truth for profiles and budgets
+- no automatic keyword routing
+- no SearXNG search or Agent API retrieve call during introspection
+- no search/open/retrieve budget consumption
+- no retrieval endpoint or localhost leak
+
+Tests:
+- tests/test_qz_tool_web.py covers schema, action handling, safe profile/budget
+  exposure, retrieval metadata, telemetry, and no endpoint leaks
+- tests/test_qz_request_router.py covers the read-only endpoint
+```
 
 This document turns the current planning docs into an execution order. It does
 not replace the architecture contracts. If this file conflicts with
