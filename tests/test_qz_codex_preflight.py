@@ -65,6 +65,25 @@ class StructuralTests(unittest.TestCase):
         # The POST body must include source=qz_codex so SELECTED_SOURCES validates.
         self.assertIn("\"source\": \"qz_codex\"", self.qz_codex_common)
 
+    def test_qz_codex_propagates_preflight_exit_code(self):
+        """Slice F regression: ``! cmd; then exit $?`` swallows the exit code.
+
+        scripts/qz-codex must propagate qz_codex_exec_preflight's non-zero
+        exit so that an exec-with-mismatch actually halts before launching
+        Codex.  Use ``|| exit $?`` (or equivalent) — never ``! cmd; then exit $?``.
+        """
+        self.assertNotRegex(
+            self.qz_codex,
+            r"if\s*!\s*qz_codex_exec_preflight[^\n]*\n\s*exit\s+\$\?",
+            "qz-codex must not use `! qz_codex_exec_preflight; then exit $?` — "
+            "the `!` inverts the exit code so $? is always 0 inside the then-branch",
+        )
+        self.assertRegex(
+            self.qz_codex,
+            r"qz_codex_exec_preflight[^\n]*\|\|\s*exit\s+\$\?",
+            "qz-codex should use `qz_codex_exec_preflight ... || exit $?`",
+        )
+
     def test_no_new_model_selection_scripts(self):
         for relpath in (
             "scripts/qz-model",

@@ -60,7 +60,19 @@ Slice E-load-failure — ✅ proxy/qz_model_load_failure.py classifier;
   with classified payload (insufficient_vram / context_creation_failed
   / unknown); selection authority preserved on failure; successful
   reload clears previous error; 22 new tests; 3071 total pass
-Slice F-smoke — manual cold-start acceptance
+Slice F-smoke — ✅ Cold-start smoke on real hardware (kuato good /
+  27B Q5_K_M too-large) exercised every endpoint and surface; uncovered
+  4 bugs (classifier false-positives on benign retry/user-override
+  lines, stale last_load_* across restart, selected_source downgrade
+  by legacy _persist_model_state, qz-codex exit-code propagation);
+  all fixed with regression tests; 3081 total pass; results recorded
+  in docs/proxy-model-selection-authority.md §16.
+
+## Model-selection authority cleanup — COMPLETE
+
+All slices (A-design, B-state, C-endpoints, D-qz-codex, E-load-failure,
+F-smoke) closed.  No new shell scripts added (`scripts/qz-model*`
+invariant intact).
 
 Key hard rules from A-design:
   - QZ_MODEL_KEY is a one-shot seed; never overrides persisted operator selection.

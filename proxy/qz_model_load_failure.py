@@ -50,6 +50,29 @@ _CONTEXT_PATTERNS: tuple[tuple[str, str], ...] = (
     ("failed to initialize the context",                  "context_creation_failed"),
 )
 
+# Substrings that confirm the load actually succeeded.  If any of these appear
+# AFTER the latest failure-like line in the same log buffer, the failure is
+# treated as recovered (llama.cpp routinely emits transient allocation /
+# fit-params messages that it then retries past).
+_SUCCESS_PATTERNS: tuple[str, ...] = (
+    "common_init_from_params: warming up the model",   # context allocated, model warming
+    "update_slots: all slots are idle",                # server is idle / ready
+    "srv  log_server_r: done request",                 # actively serving probes
+    "srv    load_model: cache_reuse",                  # post-init configuration step
+    "server listening on",                             # HTTP server bound
+    "POST /v1/responses",                              # serving real requests
+    "POST /v1/chat",
+    "POST /v1/completions",
+    "srv  proxy_reques: proxying request",             # parent router forwarded a request
+)
+
+# Substrings that mark a failure line as *informational* — the fit/alloc step
+# was a user-override or auto-retry rather than a fatal failure.
+_INFORMATIONAL_QUALIFIERS: tuple[str, ...] = (
+    "n_gpu_layers already set by user",                # llama.cpp common_fit_params override
+    "retrying without pipeline parallelism",           # auto-retry on the same line
+)
+
 
 def classify_model_load_failure(log_text: str) -> "ModelLoadFailure | None":
     """Return the latest classified failure, or None when no signal present.
@@ -68,8 +91,14 @@ def classify_model_load_failure(log_text: str) -> "ModelLoadFailure | None":
 
     latest_vram: tuple[int, str, str] | None = None  # (idx, line, pattern)
     latest_ctx: tuple[int, str, str] | None = None
+    latest_success: int = -1
 
     for idx, line in enumerate(log_text.splitlines()):
+        # Informational qualifiers (e.g. "n_gpu_layers already set by user",
+        # "retrying without pipeline parallelism") mark the line as
+        # non-fatal — skip pattern matching against it.
+        if any(qual in line for qual in _INFORMATIONAL_QUALIFIERS):
+            continue
         for pattern, _et in _VRAM_PATTERNS:
             if pattern in line:
                 latest_vram = (idx, line, pattern)
@@ -78,6 +107,18 @@ def classify_model_load_failure(log_text: str) -> "ModelLoadFailure | None":
             if pattern in line:
                 latest_ctx = (idx, line, pattern)
                 break
+        for spat in _SUCCESS_PATTERNS:
+            if spat in line:
+                latest_success = idx
+                break
+
+    # If a success line follows the latest failure, treat as recovered.
+    latest_fail_idx = max(
+        (latest_vram or (-1, "", ""))[0],
+        (latest_ctx or (-1, "", ""))[0],
+    )
+    if latest_success >= 0 and latest_success >= latest_fail_idx:
+        return None
 
     if latest_vram is None and latest_ctx is None:
         return None

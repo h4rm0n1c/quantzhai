@@ -1549,8 +1549,18 @@ class RequestRouter:
                 return
             requested = body.get("model") or body.get("key") or body.get("name")
             catalog = self.handler._model_catalog()
+            resolve_error: str | None = None
             with self._request_gate(self.handler.path, requested or "", False):
                 selected, reason = self.handler._resolve_model_selection(requested)
+            if selected is None:
+                resolve_error = reason if isinstance(reason, str) else "model selection resolution failed"
+            # Slice E: keep qz.model_state.v1 last_load_* observation fresh
+            # whenever the legacy load/select path runs (this is how the
+            # proxy preload posts the persisted selection at startup).
+            self._record_load_observation(
+                resolve_succeeded=selected is not None,
+                resolve_error=resolve_error,
+            )
             if selected is None:
                 if isinstance(reason, dict):
                     self.handler._send_json(503, reason)

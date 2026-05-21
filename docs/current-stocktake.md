@@ -1,11 +1,28 @@
 # QuantZhai Post-Stabilisation Stocktake
 
-Date: 2026-05-20 (updated — post-#46/#51/#39 close-out stocktake)
-Status: post-OperationalStore/search-config/stream-seam close-out stocktake.
+Date: 2026-05-22 (updated — post-#65 model-selection authority cleanup)
+Status: model-selection authority is proxy-owned; cold-start smoke acceptance passed.
 
 This document is a rolling point-in-time snapshot. For the live execution order,
 read `docs/current-task-hierarchy.md`. For architecture authority, read
 `docs/current-architecture-authority.md`.
+
+## Model-selection authority cleanup (post-#65) — COMPLETE
+
+The proxy is now the single authority for active model selection.
+
+- `qz.model_state.v1` (`proxy/qz_model_state.py`) — selection + observation fields, atomic writes, migration that drops `loaded_model`-only state.
+- New endpoints: `GET /qz/model/status`, `POST /qz/model/{select,reload,select-and-restart}`.
+- Canonical precedence in `ModelCatalog.refresh()`: explicit query > persisted selection > `QZ_MODEL_KEY` seed > catalog default. `QZ_MODEL_KEY` no longer overrides operator selection on restart.
+- `/qz/control-plane` exposes `models.{configured_env_model, selected_source, selected_at, backend_loaded_model, selected_loaded_mismatch, selection_reason, model_visible, profile_valid, restart_required}` and `backend.{model_load_failed, load_error, load_error_type, insufficient_vram, selected_model_failed}`. Operator hints on `QZ_MODEL_KEY` drift, selected/loaded mismatch, and insufficient_vram.
+- `qz-codex exec -m MODEL` uses `/qz/model/status` to check active backend model. On mismatch, prints active selected/loaded/source and a literal `curl` for `/qz/model/select-and-restart`. `QZ_CODEX_AUTO_SELECT_MODEL=1` opts into POSTing with `source=qz_codex`. Visibility in `/v1/models` is no longer treated as active backend selection.
+- Backend-log classifier (`proxy/qz_model_load_failure.py`) routes container-log failures into `insufficient_vram` / `context_creation_failed` / `unknown` with informational-qualifier suppression and latest-success-wins ordering. Failed loads return HTTP 409 with classified payload; selection authority preserved on failure.
+
+Cold-start smoke (Slice F) on real hardware (kuato good / 27B Q5_K_M too-large) exercised every endpoint and surface. Bugs found and fixed inline: classifier false-positives on benign retry/user-override lines, stale `last_load_*` across restart via legacy `/qz/models/select`, `selected_source` downgrade by legacy `_persist_model_state`, qz-codex exit-code propagation.
+
+**No new shell scripts added.** `scripts/qz-model*` invariant intact — operator commands stay at the proxy.
+
+Full design + results: `docs/proxy-model-selection-authority.md`.
 
 ---
 

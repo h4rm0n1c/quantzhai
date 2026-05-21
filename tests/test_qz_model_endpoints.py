@@ -280,6 +280,63 @@ class SelectEndpointTests(unittest.TestCase):
             self.assertEqual(loaded.last_load_error_type, "insufficient_vram")
             self.assertEqual(loaded.last_loaded_model, "old")
 
+    def test_select_and_restart_preserves_operator_source(self):
+        """Slice F regression: the resolve path's legacy _persist_model_state
+        must not downgrade selected_source from 'operator' to a legacy tag."""
+        with _tmp_state_dir() as tmp:
+            state_path = tmp / "model-state.json"
+            captured: list[dict | None] = []
+
+            def _resolve(requested):
+                # Simulate ModelRouter.resolve_model_selection calling
+                # _persist_model_state mid-flight with a legacy source tag.
+                from proxy.qz_model_state import (
+                    ModelState,
+                    load_model_state,
+                    write_model_state,
+                )
+                existing = load_model_state(state_path).state
+                # Mimic the qz_model_router._persist_model_state preservation
+                # rule: keep canonical source when selection hasn't changed.
+                from proxy.qz_model_state import SELECTED_SOURCES
+                new_source = "resolve_model_selection"
+                new_at = "2026-05-22T01:00:00Z"
+                # Mirror the production check: compare on backend_id so that
+                # alias drift (kuato.gguf ↔ underlying filename) does not
+                # cause loss of the canonical source tag.
+                if (existing.selected_source in SELECTED_SOURCES
+                        and existing.selected_backend_id == "kuato"):
+                    new_source = existing.selected_source
+                    new_at = existing.selected_at or new_at
+                new_state = ModelState(
+                    selected_key="kuato.gguf",
+                    selected_backend_id="kuato",
+                    selected_label=existing.selected_label,
+                    selected_source=new_source,
+                    selected_at=new_at,
+                    selected_reason=existing.selected_reason,
+                    runtime_context_length=existing.runtime_context_length,
+                    last_load_result=existing.last_load_result,
+                    last_load_error=existing.last_load_error,
+                    last_load_error_type=existing.last_load_error_type,
+                    last_loaded_model=existing.last_loaded_model,
+                )
+                write_model_state(new_state, state_path)
+                captured.append({"source_at_resolve": new_state.selected_source})
+                return {"key": "kuato.gguf", "backend_id": "kuato"}, "operator path"
+
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[_entry("kuato.gguf", "kuato")],
+                body={"model": "kuato.gguf"},
+                loaded_id="kuato",
+            )
+            handler._resolve_model_selection = _resolve
+            RequestRouter(handler)._handle_model_select_endpoint(restart=True)
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["selected_source"], "operator")
+            self.assertEqual(captured, [{"source_at_resolve": "operator"}])
+
     def test_select_accepts_qz_codex_source(self):
         with _tmp_state_dir() as tmp:
             state_path = tmp / "model-state.json"

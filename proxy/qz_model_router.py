@@ -232,12 +232,14 @@ class ModelRouter:
         """
         try:
             from .qz_model_state import (
+                SELECTED_SOURCES,
                 ModelState,
                 load_model_state,
                 write_model_state,
             )
         except ImportError:
             from qz_model_state import (
+                SELECTED_SOURCES,
                 ModelState,
                 load_model_state,
                 write_model_state,
@@ -255,13 +257,31 @@ class ModelRouter:
         label_raw = selected.get("label")
         label = label_raw.strip() if isinstance(label_raw, str) else ""
 
+        # Preserve an existing canonical SELECTED_SOURCES tag (operator,
+        # qz_codex, env_seed, etc.) when the underlying *backend selection*
+        # has not changed.  Compare by backend_id rather than selected_key
+        # because resolve() may legitimately remap the user-facing alias
+        # (e.g. "OpenYourMind…Q4_K_S.gguf" → its "kuato.gguf" symlink alias)
+        # while routing to the same backend target.
+        new_source = source or ""
+        new_at = _iso_state_now()
+        new_reason = reason or ""
+        if (
+            existing.selected_source in SELECTED_SOURCES
+            and existing.selected_backend_id
+            and existing.selected_backend_id == backend_id
+        ):
+            new_source = existing.selected_source
+            new_at = existing.selected_at or new_at
+            new_reason = existing.selected_reason or new_reason
+
         new_state = ModelState(
             selected_key=key,
             selected_backend_id=backend_id,
             selected_label=label,
-            selected_source=source or "",
-            selected_at=_iso_state_now(),
-            selected_reason=reason or "",
+            selected_source=new_source,
+            selected_at=new_at,
+            selected_reason=new_reason,
             runtime_context_length=existing.runtime_context_length,
             last_load_result=existing.last_load_result,
             last_load_error=existing.last_load_error,

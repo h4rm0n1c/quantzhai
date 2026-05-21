@@ -77,9 +77,7 @@ if [[ "${QZ_CODEX_ARGS[0]:-}" == "exec" ]]; then
     _preflight_model="$QZ_CODEX_EXEC_DEFAULT_MODEL"
   fi
   if [[ -n "$_preflight_model" ]]; then
-    if ! qz_codex_exec_preflight "$_preflight_model"; then
-      exit $?
-    fi
+    qz_codex_exec_preflight "$_preflight_model" || exit $?
   fi
 fi
 

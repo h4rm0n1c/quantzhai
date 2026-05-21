@@ -475,7 +475,40 @@ scope** for this work; do not anticipate it by adding wrappers.
 | **C-endpoints** | ✅ `proxy/qz_model_status.py` builds `qz.model_status.v1`; new endpoints `GET /qz/model/status`, `POST /qz/model/select`, `POST /qz/model/reload`, `POST /qz/model/select-and-restart`; `ModelCatalog.refresh()` now implements the canonical precedence (persisted selection beats `QZ_MODEL_KEY`); `/qz/control-plane` exposes `configured_env_model`, `selected_source`, `selected_at`, `backend_loaded_model`, `selected_loaded_mismatch`, `selection_reason`, `model_visible`, `profile_valid`, `restart_required`, and backend load-failure surface; operator hints emit QZ_MODEL_KEY-seed warning + mismatch + insufficient-VRAM; 44 new tests; 3032 total pass |
 | **D-qz-codex** | ✅ `qz_codex_exec_preflight` helper in `scripts/qz-codex-common` GETs `/qz/model/status`, compares against selected_key / selected_backend_id / backend_loaded_model with `selected_loaded_mismatch` honoured; mismatch + no `QZ_CODEX_AUTO_SELECT_MODEL` → exit 1 with literal `curl -sS -X POST … /qz/model/select-and-restart`; mismatch + `QZ_CODEX_AUTO_SELECT_MODEL=1` → POST `/qz/model/select-and-restart` with `source=qz_codex`; old `qz-wait-ready --catalog --model` preflight removed; 17 new tests (structural + behavioural with mock proxy); 3049 total pass |
 | **E-load-failure** | ✅ `proxy/qz_model_load_failure.py` classifies recent container logs into `insufficient_vram` / `context_creation_failed` (VRAM-before-context promotion rule); `BackendManager.fetch_recent_logs()` exposes the log buffer; `/qz/model/reload` and `/qz/model/select-and-restart` run the classifier after the resolve+load path and update `last_load_*` observation fields; failure responses are **HTTP 409** with the classified `last_load_*` payload (selection authority preserved); successful reload clears previous load_error; 22 new tests; 3071 total pass |
-| **F-smoke** | manual cold-start smoke (§14) |
+| **F-smoke** | ✅ Full cold-start smoke on real hardware (kuato.gguf good / 27B Q5_K_M too-large) exercised every endpoint and surface; uncovered and fixed 4 bugs: classifier false-positives (`common_fit_params … n_gpu_layers already set by user`, `cudaMalloc … retrying without pipeline parallelism`), stale `last_load_*` across proxy restart (legacy `/qz/models/select` now runs `_record_load_observation`), `selected_source` downgrade by legacy `_persist_model_state` (now preserves canonical sources when `selected_backend_id` matches), and qz-codex exit-code propagation (`! cmd; then exit $?` always exited 0 — fixed to `|| exit $?`); 5 new regression tests; 3081 total pass. Results recorded in §16. |
+
+## 16. Slice F smoke results (2026-05-22)
+
+Hardware: 2× GPU — RTX 3080 (10 GiB) + V100 (16 GiB); QZ_DOCKER_CMD via
+`sudo -n /usr/local/sbin/qz-docker-quantzhai` allowlist.
+
+Models exercised:
+- **known-good**: `kuato.gguf` → OpenYourMind-Qwen3.6-35B-A3B-Kuato Q4_K_S (~20 GiB)
+- **known-too-large** on this hardware: `Qwen3.6-27B-NEO-CODE-HERE-2T-OT-Q5_K_M.gguf`
+
+| Smoke | Result |
+|---|---|
+| A — cold start | ✅ Proxy + backend autostart + `/qz/model/status` + control-plane fields. Migration from pre-v1 state file worked (`selected_source=migration`). |
+| B — POST select-and-restart kuato | ✅ HTTP 200, ok=true, `last_load_result=loaded`. (Initial run exposed the classifier false-positive — fixed.) |
+| C — `qz-codex exec -m kuato.gguf` | ✅ Codex returned `codex-ok` from the active model. |
+| D — qz-codex mismatch without auto-select | ✅ Exit 1 (after fixing `! cmd; exit $?` bug), stderr includes literal `curl -sS -X POST … /qz/model/select-and-restart`. |
+| E — `QZ_CODEX_AUTO_SELECT_MODEL=1` | ✅ qz-codex POSTed select-and-restart with `source=qz_codex`; the chosen second model was too large on this hardware so the endpoint returned 409 (same code path as Smoke F). |
+| F — too-large model | ✅ HTTP 409, `last_load_result=failed`, `last_load_error_type=insufficient_vram`, `recommended_action` mentions VRAM/QZ_CONTEXT, control-plane `backend.{model_load_failed, insufficient_vram, selected_model_failed}=true`, operator hint emitted, selection authority preserved. |
+| G — recover to kuato | ✅ HTTP 200, `last_load_*` cleared, `selected_loaded_mismatch=false`. |
+| H — QZ_MODEL_KEY seed-only | ✅ `QZ_MODEL_KEY=Qwen3.6-27B-…Q5_K_M.gguf` in `.env`; persisted kuato wins across restart; `configured_env_model` distinct from `selected_key`; operator hint "QZ_MODEL_KEY is only a seed" emitted; **`selected_source=operator` survived two restart cycles**. |
+| I — shutdown + restart | ✅ `scripts/qz-down` graceful path stopped proxy + removed container; `scripts/qz-up` restored kuato with `selected_source=operator` intact. |
+
+Bugs found and fixed during the smoke:
+
+1. **Classifier false-positives.** `common_fit_params: failed to fit params to free device memory: n_gpu_layers already set by user to 999, abort` is informational under user-override of `-ngl`; `cudaMalloc failed: out of memory` followed by `sched_reserve: compute buffer allocation failed, retrying without pipeline parallelism` is recovered by llama.cpp. The classifier now ignores lines containing known informational qualifiers and applies a latest-success-wins rule (same shape as the GPU offload check in `BackendManager`).
+2. **Stale `last_load_*` across proxy restart.** `_preload_last_model` posts the persisted selection to the legacy `/qz/models/select` endpoint at startup; that handler did not run `_record_load_observation`, so stale failure observations from previous runs survived a restart. The legacy handler now invokes the observation helper on every load/select.
+3. **`selected_source` downgrade.** `qz_model_router._persist_model_state` historically wrote legacy source strings (`resolve_model_selection`, `status_snapshot`, `load_backend_model`) that overwrote canonical `operator` / `qz_codex` / `migration` tags. The writer now preserves an existing canonical source when `selected_backend_id` is unchanged.
+4. **qz-codex exit-code propagation.** `if ! qz_codex_exec_preflight; then exit $?; fi` — the `!` inverts the function's exit code, so `$?` inside the `then` branch is always 0 and the script ran Codex anyway. Replaced with `qz_codex_exec_preflight … || exit $?` so a mismatch actually halts the command.
+
+Audit findings (not blocking; logged for follow-up):
+
+- **Preload and status-reconcile paths still write legacy source strings.** Once an operator selection has set a canonical source, subsequent legacy writes preserve it. But before any explicit operator/qz_codex selection, the state file shows `selected_source=resolve_model_selection` or `status_snapshot`. Cosmetic only — control-plane and `/qz/model/status` work correctly.
+- **27B Q5_K_M took >120s to evict kuato during auto-select.** When the current model occupies most of VRAM, llama-router's unload-then-load sequence can exceed `QZ_MODEL_LOAD_TIMEOUT=120`. The endpoint correctly returned a load failure; the smoke worked around it by force-restarting between models. Not a model-selection bug — a llama-router/timeout tradeoff.
 
 ## 14. F-smoke acceptance
 

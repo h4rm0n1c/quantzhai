@@ -172,5 +172,71 @@ class SafetyTests(unittest.TestCase):
         self.assertNotIn("\n", result.error)
 
 
+# ---------------------------------------------------------------------------
+# Smoke-derived regressions — false positives found during Slice F smoke
+# ---------------------------------------------------------------------------
+
+class SmokeFalsePositiveTests(unittest.TestCase):
+    """Real log fragments from a healthy kuato load.
+
+    These previously tripped insufficient_vram even though the model loaded
+    fine.  The fixes are:
+      * informational qualifiers on the failure line (e.g. user-override on
+        common_fit_params) make it not count as a fatal failure;
+      * a success signal after the latest failure line marks it as recovered.
+    """
+
+    FIT_PARAMS_USER_OVERRIDE = "\n".join([
+        "common_params_fit_impl: projected to use 24553 MiB of device memory vs. 25415 MiB of free device memory",
+        "common_params_fit_impl: cannot meet free memory targets on all devices, need to use 1185 MiB less in total",
+        "common_fit_params: failed to fit params to free device memory: n_gpu_layers already set by user to 999, abort",
+        "common_fit_params: fitting params to free memory took 1.37 seconds",
+        "llama_model_load_from_file_impl: using device CUDA0 (NVIDIA GeForce RTX 3080) - 9644 MiB free",
+        "common_init_from_params: warming up the model with an empty run",
+        "update_slots: all slots are idle",
+    ])
+
+    CUDA_MALLOC_RETRY_RECOVERS = "\n".join([
+        "ggml_backend_cuda_buffer_type_alloc_buffer: allocating 2396.06 MiB on device 0: cudaMalloc failed: out of memory",
+        "ggml_gallocr_reserve_n_impl: failed to allocate CUDA0 buffer of size 2512454144",
+        "graph_reserve: failed to allocate compute buffers",
+        "sched_reserve: compute buffer allocation failed, retrying without pipeline parallelism",
+        "sched_reserve:      CUDA0 compute buffer size =   804.02 MiB",
+        "common_init_from_params: warming up the model with an empty run",
+        "srv    load_model: cache_reuse is not supported by this context, it will be disabled",
+        "update_slots: all slots are idle",
+    ])
+
+    def test_fit_params_with_user_override_is_not_failure(self):
+        """`failed to fit params … n_gpu_layers already set by user … abort` is informational."""
+        self.assertIsNone(classify_model_load_failure(self.FIT_PARAMS_USER_OVERRIDE))
+
+    def test_cudaMalloc_followed_by_retry_and_success_is_not_failure(self):
+        """`cudaMalloc failed … retrying without pipeline parallelism` then idle/warmup is recovered."""
+        self.assertIsNone(classify_model_load_failure(self.CUDA_MALLOC_RETRY_RECOVERS))
+
+    def test_real_failure_still_classifies_when_no_success_follows(self):
+        """A genuine OOM with no subsequent success signal must still report failure."""
+        log = "\n".join([
+            "ggml_backend_cuda_buffer_type_alloc_buffer: allocating 22 GiB: cudaMalloc failed: out of memory",
+            "llama_init_from_model: failed to initialize the context",
+            "common_init_from_params: failed to create context with model",
+        ])
+        result = classify_model_load_failure(log)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.error_type, "insufficient_vram")
+
+    def test_real_failure_followed_by_unrelated_noise_still_fails(self):
+        """Non-success log noise between failure and end of buffer must not absolve it."""
+        log = "\n".join([
+            "cudaMalloc failed: out of memory",
+            "llama_init_from_model: failed to initialize the context",
+            "INFO: shutdown initiated",
+        ])
+        result = classify_model_load_failure(log)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.error_type, "insufficient_vram")
+
+
 if __name__ == "__main__":
     unittest.main()
