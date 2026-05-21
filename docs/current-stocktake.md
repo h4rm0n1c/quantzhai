@@ -7,6 +7,13 @@ This document is a rolling point-in-time snapshot. For the live execution order,
 read `docs/current-task-hierarchy.md`. For architecture authority, read
 `docs/current-architecture-authority.md`.
 
+## End-to-end smoke plan (Slice G) — COMPLETE. Audit series A–G complete.
+
+`docs/end-to-end-smoke-plan.md` contains 37 smoke tests, command blocks, expected
+outputs, failure classification, fix-pass ordering (H–M), and a fill-in result template.
+
+**Code freeze audit phase is complete.** Fix pass H is next.
+
 ## Search profile granularity audit (Slice F) — COMPLETE
 
 `docs/search-profile-granularity-audit.md` audits all profiles, engines, suppression

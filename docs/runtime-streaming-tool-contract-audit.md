@@ -11,6 +11,7 @@ Related:
 - `docs/streaming-event-mapper-audit.md` — Slice C: mapper boundaries, leak-risk audit, reasoning channel, fixture plan.
 - `docs/metadata-propagation-audit.md` — Slice D: metadata flow table, rewrite/synthesis audit, usage/error audit, gap classification.
 - `docs/observability-ui-audit.md` — Slice E: qz-thoughts/qz-top visibility tables, reconnect audit, misleading-state audit, token/usage observability.
+- `docs/end-to-end-smoke-plan.md` — Slice G: 37-test smoke matrix, command blocks, failure classification, fix-pass ordering H–M.
 - `docs/current-architecture-authority.md` — final conflict resolver.
 
 **Slice A correction**: The finding "qz-thoughts thought/answer panels are blank during

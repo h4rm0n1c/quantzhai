@@ -3,6 +3,33 @@
 Date: 2026-05-22
 Status: active control sheet — Slice B audit complete; Slice B2 fixes next.
 
+## Recently completed — End-to-end smoke plan (Slice G — final audit slice)
+
+```text
+Status: COMPLETE. Audit series A–G complete. Code freeze audit phase complete.
+
+Output: docs/end-to-end-smoke-plan.md
+
+37 smoke IDs across 7 groups:
+  Group 1: backend/model startup (7 tests)
+  Group 2: basic Codex flows (5 tests)
+  Group 3: web_search including FSE/furry_images/retrieval (8 tests)
+  Group 4: tool schema/coercion (8 tests)
+  Group 5: leak vectors (4 tests)
+  Group 6: metadata propagation (7 tests)
+  Group 7: failure/reconnect (6 tests)
+
+Fix passes ordered:
+  H (B2): ToolCoercionResult guard, non-streaming dropped-tool, coercion/schema telemetry
+  I: response.id threading, zero-usage documentation
+  J: output_text tool artifact detection
+  K: qz-top proxy-offline label, cached/reasoning token display, control-plane fields
+  L: furry_images retrieval_expected fix, capabilities probe warnings
+  M: final live smoke rerun
+
+Code freeze complete. Begin fix pass H.
+```
+
 ## Recently completed — Search profile granularity audit (Slice F)
 
 ```text
