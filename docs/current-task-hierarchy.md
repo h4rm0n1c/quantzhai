@@ -3,6 +3,37 @@
 Date: 2026-05-22
 Status: active control sheet — Slice B audit complete; Slice B2 fixes next.
 
+## Recently completed — qz-thoughts/qz-top observability audit (Slice E)
+
+```text
+Status: COMPLETE
+
+Output: docs/observability-ui-audit.md
+
+Key findings:
+- P0: none (UI tools are read-only, cannot corrupt protocol state).
+- P1: proxy offline looks identical to "no model loaded" in qz-top (ModelStatus()
+  from None control-plane).
+- P1: qz-thoughts cannot distinguish "request rejected: model not ready" from
+  "upstream failed" — both render as request_failed error row.
+- P2: no usage/token display in qz-thoughts at all; cached/reasoning tokens not
+  in qz-top rates; prompt_files/reasoning/context missing from qz-top when
+  control-plane is the active source (fields not in control-plane payload).
+- P2: coercion/schema telemetry missing (B2 gap — no telemetry events yet);
+  active tool call state not live in qz-top.
+- Reconnect behaviour: correct (confirmed by tests). qz-thoughts SSE reconnect
+  resets last_seq on full reconnect, preserves on idle reconnect.
+- DEATH label: correctly shown in qz-top for backend_died_after_healthy.
+
+Fix pass order:
+1. B2 (coercion/schema telemetry — existing plan)
+2. P2a: add usage row to qz-thoughts (in/out tokens from request_completed)
+3. P2b: add cached/reasoning tokens to qz-top rates panel
+4. P2c: add missing fields to /qz/control-plane (prompt_files, reasoning_level, etc.)
+5. P1a from Slice D: response.id threading through StreamRunState
+6. E1: distinguish proxy-offline from no-model in qz-top
+```
+
 ## Recently completed — Metadata propagation audit (Slice D)
 
 ```text

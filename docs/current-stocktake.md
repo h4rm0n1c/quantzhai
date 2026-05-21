@@ -7,6 +7,19 @@ This document is a rolling point-in-time snapshot. For the live execution order,
 read `docs/current-task-hierarchy.md`. For architecture authority, read
 `docs/current-architecture-authority.md`.
 
+## qz-thoughts/qz-top observability audit (Slice E) — COMPLETE
+
+`docs/observability-ui-audit.md` maps all data sources, rendering, reconnect behaviour,
+misleading states, and test gaps for both observability tools.
+
+No P0 findings. P1: proxy offline looks like no-model in qz-top. P1: qz-thoughts can't
+distinguish model-not-ready from upstream-failed. P2: no usage display in qz-thoughts;
+missing cached/reasoning tokens in qz-top; prompt_files/reasoning missing from qz-top
+when control-plane active. DEATH label and reconnect are correct.
+
+**Next**: Slice F — fix-pass B2 (coercion/schema telemetry + ToolCoercionResult guard +
+non-streaming dropped-tool fix).
+
 ## Metadata propagation audit (Slice D) — COMPLETE
 
 `docs/metadata-propagation-audit.md` maps all metadata sources, destinations, and

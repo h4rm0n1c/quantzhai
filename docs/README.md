@@ -44,6 +44,7 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 8b. [Tool schema coercion audit](tool-schema-coercion-audit.md) — Slice B: schema replacement, coercion/advice paths, failure matrix, test coverage, and B2 fix plan.
 8c. [Streaming event mapper audit](streaming-event-mapper-audit.md) — Slice C: mapper inventory, event boundaries, leak-risk audit, reasoning channel, tool continuation, fixture plan.
 8d. [Metadata propagation audit](metadata-propagation-audit.md) — Slice D: metadata inventory, flow table, rewrite/synthesis audit, usage accounting, error shapes, gap classification.
+8e. [Observability UI audit](observability-ui-audit.md) — Slice E: qz-thoughts/qz-top data sources, visibility tables, reconnect audit, misleading-state audit, token observability.
 9. [Master stabilisation plan](master-stabilisation-plan.md) — broader stabilisation map; current authority and task hierarchy win for state/memory terms.
 10. [Progress snapshot](progress-snapshot.md) — short overall percentage/status view.
 11. [Codex/QuantZhai bidirectional signal map](codex-quantzhai-bidirectional-signal-map.md) — complete source-grounded map of signals in all directions, safety matrix, gaps, and next targets.
