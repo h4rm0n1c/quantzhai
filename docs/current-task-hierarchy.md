@@ -3,6 +3,32 @@
 Date: 2026-05-22
 Status: active control sheet — Slice B audit complete; Slice B2 fixes next.
 
+## Recently completed — Search profile granularity audit (Slice F)
+
+```text
+Status: COMPLETE — final audit slice. Audit series A–F complete.
+
+Output: docs/search-profile-granularity-audit.md
+
+Key findings:
+- FSE-only search: YES. profile="furry_fse" works; FSE not blocked by any policy.
+- SoFurry: ABSENT from all config. Cannot be searched. Needs live SearXNG probe to confirm.
+- furry_images: likely works if e926/furbooru are in local SearXNG; not policy-blocked.
+- P1: furry_images.retrieval_expected=True is misleading — image metadata, not prose.
+- P1: capabilities shows configured engines but not probe-availability — zero results
+  with no warning when engines not in local SearXNG.
+- non_text suppression: does NOT block e926, furbooru, or fse (correct — they are
+  specialized local engines, not mainstream image search engines).
+- All profiles in VALID_WEB_SEARCH_PROFILES, all in capabilities. ✓
+
+Fix-pass order:
+1. B2 (coercion/schema telemetry — existing plan)
+2. Fix furry_images.retrieval_expected misleading value
+3. Add probe-availability warning to capabilities
+4. Add 5 missing engine suppression/profile tests
+5. Live-probe local SearXNG for SoFurry (future separate slice)
+```
+
 ## Recently completed — qz-thoughts/qz-top observability audit (Slice E)
 
 ```text

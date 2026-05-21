@@ -299,6 +299,12 @@ slice must add it. Verify during Slice B.
 
 ---
 
+## §66. Search profile granularity audit
+
+See `docs/search-profile-granularity-audit.md` for the full profile/engine/capabilities
+audit (Slice F). Key findings: FSE works via furry_fse; SoFurry absent; furry_images
+not policy-blocked but probe-dependent; furry_images.retrieval_expected misleads agents.
+
 ## Related documents
 
 - `docs/search-roadmap.md` — Phase 1/2/3 search quality roadmap

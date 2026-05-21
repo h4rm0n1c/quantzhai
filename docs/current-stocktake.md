@@ -7,6 +7,21 @@ This document is a rolling point-in-time snapshot. For the live execution order,
 read `docs/current-task-hierarchy.md`. For architecture authority, read
 `docs/current-architecture-authority.md`.
 
+## Search profile granularity audit (Slice F) — COMPLETE
+
+`docs/search-profile-granularity-audit.md` audits all profiles, engines, suppression
+policy, capabilities output, and retrieval availability.
+
+**Audit series A–F complete.** Begin fix pass B2.
+
+FSE: YES — profile="furry_fse" works, not blocked. SoFurry: ABSENT from all config.
+furry_images: depends on local SearXNG; not policy-blocked. P1: furry_images claims
+retrieval_expected=True but is image metadata not prose. non_text suppression correctly
+does NOT block e926/furbooru/fse.
+
+**Next: Fix-pass B2** (ToolCoercionResult guard, non-streaming dropped-tool fix,
+coercion/schema telemetry, output_text artifact detection, missing tests).
+
 ## qz-thoughts/qz-top observability audit (Slice E) — COMPLETE
 
 `docs/observability-ui-audit.md` maps all data sources, rendering, reconnect behaviour,
