@@ -41,6 +41,7 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 7. [Model state signal contract](model-state-signal-contract.md) — LimbiCore state/signal/memory envelope; store scoped records, render narrowly later.
 8. [Responses stream and tool state contract](responses-stream-tool-state-contract.md) — runtime contract for streamed Responses events, tool-call state, telemetry, and captures.
 8a. [Runtime streaming tool contract audit](runtime-streaming-tool-contract-audit.md) — Slice A contract map: pipeline, event shapes, metadata flow, coercion map, test plan, and findings.
+8b. [Tool schema coercion audit](tool-schema-coercion-audit.md) — Slice B: schema replacement, coercion/advice paths, failure matrix, test coverage, and B2 fix plan.
 9. [Master stabilisation plan](master-stabilisation-plan.md) — broader stabilisation map; current authority and task hierarchy win for state/memory terms.
 10. [Progress snapshot](progress-snapshot.md) — short overall percentage/status view.
 11. [Codex/QuantZhai bidirectional signal map](codex-quantzhai-bidirectional-signal-map.md) — complete source-grounded map of signals in all directions, safety matrix, gaps, and next targets.

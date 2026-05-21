@@ -1,7 +1,33 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-22
-Status: active control sheet — Slice A discovery complete; Slice B next.
+Status: active control sheet — Slice B audit complete; Slice B2 fixes next.
+
+## Recently completed — Tool schema/coercion/advice audit (Slice B)
+
+```text
+Status: COMPLETE
+
+Output: docs/tool-schema-coercion-audit.md
+
+Key findings:
+- Tool schema replacement: CORRECT (ebdf87b). function-typed web_search replaced.
+  Dedup deterministic. Stale Codex schema cannot reach upstream.
+- Coercion paths: all implemented. web_search, apply_patch, dropped, unknown all correct.
+- ToolCoercionResult neither-set case: constructible, produces empty error string. Fix needed.
+- Non-streaming path gap: dropped/unknown errors not applied for non-proxy-local items
+  when web_search is also present in the same response.
+- Telemetry: no tool_schema_replaced, no coercion_success, no coercion_failed events.
+  qz-thoughts has zero visibility into coercion or schema replacement.
+- 5 missing streaming fixture tests for coercion error paths.
+
+Slice B2 target (fixes):
+1. Guard ToolCoercionResult neither-set case (__post_init__ assertion).
+2. Apply dropped/unknown errors in non-streaming hop loop for non-proxy-local items.
+3. Emit tool_schema_replaced telemetry from proxy_json_api after normalisation.
+4. Emit coercion_succeeded/coercion_failed telemetry at decision point.
+5. Add 8 missing tests (adapter_for_name, streaming coerce fixture, neither-set, etc.)
+```
 
 ## Recently completed — Streaming/tool/reasoning/metadata contract discovery (Slice A)
 

@@ -7,6 +7,7 @@ This document supersedes stale planning notes on streaming and tool event shapes
 Related:
 - `docs/responses-stream-tool-state-contract.md` — earlier living contract; use this document for current shapes.
 - `docs/tool-coercion-design.md` — coercion design spec; implementation complete.
+- `docs/tool-schema-coercion-audit.md` — Slice B: detailed tool schema replacement, coercion/advice, and failure matrix.
 - `docs/current-architecture-authority.md` — final conflict resolver.
 
 ---

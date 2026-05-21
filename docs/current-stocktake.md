@@ -7,6 +7,19 @@ This document is a rolling point-in-time snapshot. For the live execution order,
 read `docs/current-task-hierarchy.md`. For architecture authority, read
 `docs/current-architecture-authority.md`.
 
+## Tool schema/coercion/advice audit (Slice B) — COMPLETE
+
+`docs/tool-schema-coercion-audit.md` audits all tool schema replacement, coercion,
+and feedback paths.
+
+Key findings: coercion paths are implemented and correct for streaming. ToolCoercionResult
+neither-set case is constructible. Non-streaming path has a narrow gap (dropped/unknown
+errors not applied for non-proxy-local items when web_search present). Zero telemetry for
+coercion events or schema replacement.
+
+**Slice B2 next**: guard ToolCoercionResult, fix non-streaming gap, add telemetry events,
+add 8 missing tests.
+
 ## Streaming/tool/reasoning contract audit (Slice A) — COMPLETE
 
 `docs/runtime-streaming-tool-contract-audit.md` documents the full
