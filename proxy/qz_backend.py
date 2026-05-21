@@ -171,6 +171,18 @@ class BackendClient:
         kv_key = os.environ.get("QZ_KV_KEY", "q8_0")
         kv_value = os.environ.get("QZ_KV_VALUE", "turbo3")
         reasoning_budget = os.environ.get("QZ_REASONING_BUDGET", "-1")
+        launch_model = (
+            os.environ.get("QZ_LAUNCH_MODEL_BASENAME")
+            or os.environ.get("QZ_MODEL_KEY")
+            or ""
+        ).strip()
+        if launch_model and not launch_model.endswith(".gguf"):
+            launch_model = f"{launch_model}.gguf"
+        if not launch_model:
+            raise RuntimeError(
+                "direct backend launch requires QZ_LAUNCH_MODEL_BASENAME; "
+                "prefer BackendManager for proxy-owned launches"
+            )
 
         return [
             "run",
@@ -188,8 +200,8 @@ class BackendClient:
             "--mount",
             f"type=bind,src={model_dir},dst=/models,readonly",
             image,
-            "--models-dir",
-            "/models",
+            "-m",
+            f"/models/{launch_model}",
             "--host",
             "0.0.0.0",
             "--port",

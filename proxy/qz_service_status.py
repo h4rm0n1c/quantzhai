@@ -59,6 +59,13 @@ def _model_state(cp: dict[str, Any]) -> str:
     b = cp.get("backend") or {}
     m = cp.get("models") or {}
 
+    if m.get("selected_model_ready") is True:
+        return "loaded"
+    if m.get("request_admission_state") in ("starting", "loading"):
+        return "loading"
+    if m.get("request_admission_state") == "failed":
+        return "failed"
+
     # Context or identity mismatch requiring restart
     if b.get("restart_required"):
         return "mismatch"
@@ -76,7 +83,7 @@ def _model_state(cp: dict[str, Any]) -> str:
         return "failed"
 
     # Model confirmed loaded
-    if r.get("backend_ready") and b.get("loaded_model"):
+    if r.get("backend_ready") and (b.get("loaded_model") or m.get("backend_loaded_model")):
         return "loaded"
 
     # Backend reachable but no model loaded

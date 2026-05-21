@@ -77,22 +77,14 @@ def _resolve_catalog_entry(handler: Any, identity: str) -> dict | None:
 
 
 def _backend_loaded_model(handler: Any) -> str:
-    """Probe the backend for the currently loaded model id; "" on any failure."""
-    try:
-        router = handler._model_router()
-    except Exception:
+    """Return the direct-launched model id when BackendManager is healthy."""
+    snap = _backend_manager_snapshot(handler)
+    if snap.get("phase") != "healthy" or snap.get("backend_health_ok") is not True:
         return ""
-    try:
-        backend_models = router.backend_models()
-        loaded = router.loaded_backend_models(backend_models)
-        if loaded:
-            first = loaded[0]
-            if isinstance(first, dict):
-                model_id = first.get("id")
-                if isinstance(model_id, str):
-                    return model_id.strip()
-    except Exception:
-        return ""
+    for key in ("launch_model_backend_id", "launch_model_key", "launch_model_path_basename"):
+        value = snap.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
     return ""
 
 
@@ -119,14 +111,13 @@ def _backend_manager_state(handler: Any) -> tuple[str, str]:
 def _derive_model_switch_state(
     *,
     backend_phase: str,
-    backend_model_mode: str,
     state,
     selected_loaded_mismatch: bool,
 ) -> tuple[str, str]:
     """Derive (model_switch_state, active_load_operation).
 
     model_switch_state ∈ {idle, selecting, restarting, loading, loaded, failed, rolled_back}
-    active_load_operation ∈ {none, backend_restart, router_load, rollback_restart}
+    active_load_operation ∈ {none, backend_restart, rollback_restart}
     """
     rolled_back = bool(
         state.last_load_result == "failed"
@@ -139,17 +130,61 @@ def _derive_model_switch_state(
         return "rolled_back", "none"
     if state.last_load_result == "failed":
         return "failed", "none"
-    if backend_model_mode == "direct" and backend_phase in ("start_requested", "starting"):
+    if backend_phase in ("start_requested", "starting"):
         return "restarting", "backend_restart"
     if backend_phase == "running":
         # Backend container is up but llama-server hasn't reported healthy
         # yet — counts as "loading".
-        return "loading", "backend_restart" if backend_model_mode == "direct" else "router_load"
-    if backend_model_mode == "router" and selected_loaded_mismatch:
-        return "loading", "router_load"
+        return "loading", "backend_restart"
     if state.last_load_result == "loaded":
         return "loaded", "none"
     return "idle", "none"
+
+
+def _selected_launch_matches(
+    *,
+    selected_key: str,
+    selected_backend_id: str,
+    launch_model_key: str,
+    launch_model_backend_id: str,
+    launch_model_path_basename: str,
+) -> bool:
+    selected = {x.strip() for x in (selected_key, selected_backend_id) if isinstance(x, str) and x.strip()}
+    launch = {
+        x.strip()
+        for x in (launch_model_key, launch_model_backend_id, launch_model_path_basename)
+        if isinstance(x, str) and x.strip()
+    }
+    stems = {x[:-5] for x in launch if x.endswith(".gguf")}
+    return bool(selected and (selected & (launch | stems)))
+
+
+def _request_admission_state(
+    *,
+    selected_identity: str,
+    backend_phase: str,
+    backend_health_ok: bool | None,
+    selected_model_ready: bool,
+    last_load_result: str,
+    launch_model_error: Any,
+) -> str:
+    if selected_model_ready:
+        return "ready"
+    if not selected_identity:
+        return "unavailable"
+    if last_load_result == "failed" or launch_model_error:
+        return "failed"
+    if backend_phase in ("start_requested", "starting"):
+        return "starting"
+    if backend_phase in ("running",):
+        return "loading"
+    if backend_phase in ("failed",):
+        return "failed"
+    if backend_phase in ("idle", "stopped", "disabled", "unknown", ""):
+        return "unavailable"
+    if backend_health_ok is False:
+        return "failed"
+    return "unavailable"
 
 
 def _recommended_action(
@@ -252,17 +287,41 @@ def build_model_status(handler: Any) -> dict[str, Any]:
 
     backend_phase, backend_gpu_state = _backend_manager_state(handler)
     mgr_snap = _backend_manager_snapshot(handler)
-    backend_model_mode = (mgr_snap.get("backend_model_mode") or "direct").strip() or "direct"
+    backend_model_mode = "direct"
     launch_model_key = (mgr_snap.get("launch_model_key") or "").strip()
     launch_model_backend_id = (mgr_snap.get("launch_model_backend_id") or "").strip()
     launch_model_path_basename = (mgr_snap.get("launch_model_path_basename") or "").strip()
     launch_model_error = mgr_snap.get("launch_model_error")
+    backend_health_ok = mgr_snap.get("backend_health_ok")
+
+    launch_matches_selected = _selected_launch_matches(
+        selected_key=selected_key,
+        selected_backend_id=selected_backend_id,
+        launch_model_key=launch_model_key,
+        launch_model_backend_id=launch_model_backend_id,
+        launch_model_path_basename=launch_model_path_basename,
+    )
+    selected_model_ready = bool(
+        backend_phase == "healthy"
+        and backend_health_ok is True
+        and selected_identity
+        and launch_matches_selected
+        and state.last_load_result != "failed"
+        and not launch_model_error
+    )
 
     model_switch_state, active_load_operation = _derive_model_switch_state(
         backend_phase=backend_phase,
-        backend_model_mode=backend_model_mode,
         state=state,
         selected_loaded_mismatch=selected_loaded_mismatch,
+    )
+    request_admission_state = _request_admission_state(
+        selected_identity=selected_identity,
+        backend_phase=backend_phase,
+        backend_health_ok=backend_health_ok if isinstance(backend_health_ok, bool) else None,
+        selected_model_ready=selected_model_ready,
+        last_load_result=state.last_load_result,
+        launch_model_error=launch_model_error,
     )
 
     recommended_action = _recommended_action(
@@ -297,7 +356,10 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         "model_visible": model_visible,
         "profile_valid": profile_valid,
         "backend_phase": backend_phase,
+        "backend_health_ok": backend_health_ok,
         "backend_gpu_state": backend_gpu_state,
+        "selected_model_ready": selected_model_ready,
+        "request_admission_state": request_admission_state,
         "last_load_result": state.last_load_result,
         "last_load_error": state.last_load_error,
         "last_load_error_type": state.last_load_error_type,
@@ -309,9 +371,8 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         "recovery_available": recovery_available,
         "recommended_action": recommended_action,
         "recommended_recovery_action": recommended_recovery_action,
-        # Direct vs router backend mode + the model the backend was
-        # parameterised with (in direct mode this is what -m points at;
-        # in router mode it tracks intent but the router does the load).
+        # Direct backend launch metadata. backend_model_mode is kept as a
+        # compatibility field but is always "direct".
         "backend_model_mode": backend_model_mode,
         "launch_model_key": launch_model_key,
         "launch_model_backend_id": launch_model_backend_id,
@@ -319,6 +380,11 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         "launch_model_error": launch_model_error,
         "model_switch_state": model_switch_state,
         "active_load_operation": active_load_operation,
+        "runtime_failure_result": mgr_snap.get("runtime_failure_result", ""),
+        "runtime_failure_error": mgr_snap.get("runtime_failure_error", ""),
+        "runtime_failure_error_type": mgr_snap.get("runtime_failure_error_type", ""),
+        "runtime_failure_at": mgr_snap.get("runtime_failure_at"),
+        "backend_died_after_healthy": bool(mgr_snap.get("backend_died_after_healthy", False)),
     }
 
 
@@ -327,7 +393,6 @@ def model_selection_hints(
     configured_env_model: str,
     backend_loaded_model: str,
     *,
-    backend_model_mode: str = "direct",
     model_switch_state: str = "idle",
 ) -> list[str]:
     """Return additive operator hints derived from selection state.
@@ -367,13 +432,10 @@ def model_selection_hints(
 
     # Backend mode + active switch status hints.
     if model_switch_state == "restarting":
-        if backend_model_mode == "direct":
-            hints.append(
-                "Direct backend mode: model switch in progress — backend "
-                "container is restarting with the selected model."
-            )
-        else:
-            hints.append("Router backend mode: model switch in progress.")
+        hints.append(
+            "Model switch in progress; backend container is restarting with "
+            "the selected model."
+        )
     elif model_switch_state == "loading":
         hints.append("Model load in progress.")
 

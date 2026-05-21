@@ -130,9 +130,10 @@ class ModelStatus:
     loaded_count: int = 0
     load_state: str = ""
     error: str = ""
-    # Post-cleanup polish: direct vs router backend mode, current model
-    # switch lifecycle, last-known-good / failed-candidate, and any active
-    # backend_restart / router_load / rollback_restart operation.
+    # Direct backend launch lifecycle, last-known-good / failed-candidate,
+    # and any active backend_restart / rollback_restart operation.
+    selected_model_ready: bool = False
+    request_admission_state: str = ""
     backend_model_mode: str = ""
     launch_model_key: str = ""
     launch_model_backend_id: str = ""
@@ -150,6 +151,11 @@ class ModelStatus:
     selected_loaded_mismatch: bool = False
     last_load_error_type: str = ""
     last_load_error: str = ""
+    runtime_failure_result: str = ""
+    runtime_failure_error: str = ""
+    runtime_failure_error_type: str = ""
+    runtime_failure_at: str = ""
+    backend_died_after_healthy: bool = False
 
 
 def run_cmd(args, timeout=2.0) -> str:
@@ -365,7 +371,7 @@ def model_status_from_control_plane(cp: Optional[dict]) -> "ModelStatus":
 
     bm = cp.get("backend_manager") or {}
     return ModelStatus(
-        ready=bool(r.get("backend_ready")),
+        ready=bool(m.get("selected_model_ready") or r.get("backend_ready")),
         profile=selected_key,
         selected=str(selected_backend_id or selected_key),
         selected_key=selected_key,
@@ -384,6 +390,8 @@ def model_status_from_control_plane(cp: Optional[dict]) -> "ModelStatus":
         load_state=load_state,
         error=error,
         # Post-cleanup polish surface from models + backend_manager.
+        selected_model_ready=bool(m.get("selected_model_ready")),
+        request_admission_state=str(m.get("request_admission_state") or ""),
         backend_model_mode=str(m.get("backend_model_mode") or ""),
         launch_model_key=str(m.get("launch_model_key") or ""),
         launch_model_backend_id=str(m.get("launch_model_backend_id") or ""),
@@ -398,6 +406,11 @@ def model_status_from_control_plane(cp: Optional[dict]) -> "ModelStatus":
         last_load_error=str(b.get("load_error") or ""),
         last_load_error_type=str(b.get("load_error_type") or ""),
         backend_gpu_state=str(bm.get("gpu_offload_state") or ""),
+        runtime_failure_result=str(m.get("runtime_failure_result") or b.get("runtime_failure_result") or ""),
+        runtime_failure_error=str(m.get("runtime_failure_error") or b.get("runtime_failure_error") or ""),
+        runtime_failure_error_type=str(m.get("runtime_failure_error_type") or b.get("runtime_failure_error_type") or ""),
+        runtime_failure_at=str(m.get("runtime_failure_at") or b.get("runtime_failure_at") or ""),
+        backend_died_after_healthy=bool(m.get("backend_died_after_healthy") or b.get("backend_died_after_healthy")),
     )
 
 
@@ -1293,8 +1306,9 @@ class UI:
         # Post-cleanup polish: one-line model lifecycle row when room.
         if h >= 11:
             mode_bits = []
-            if model_status.backend_model_mode:
-                mode_bits.append(f"mode={model_status.backend_model_mode}")
+            mode_bits.append(f"ready={str(model_status.selected_model_ready).lower()}")
+            if model_status.request_admission_state:
+                mode_bits.append(f"admission={model_status.request_admission_state}")
             if model_status.model_switch_state:
                 mode_bits.append(f"switch={model_status.model_switch_state}")
             if (model_status.active_load_operation
@@ -1312,6 +1326,13 @@ class UI:
                     row_attr = self.yellow | self.bold
                 self.add(y + 9, x + 2, "MODEL", self.dim | self.bold)
                 self.add(y + 9, x + 12, clip(" ".join(mode_bits), w - 14), row_attr)
+            if model_status.runtime_failure_error_type and h >= 12:
+                runtime_bits = [f"runtime={model_status.runtime_failure_error_type}"]
+                if model_status.backend_died_after_healthy:
+                    runtime_bits.append("died_after_healthy")
+                self.add(y + 11, x + 2, "DEATH", self.dim | self.bold)
+                self.add(y + 11, x + 12, clip(" ".join(runtime_bits), w - 14),
+                         self.red | self.bold)
             if model_status.failed_candidate_key and h >= 12:
                 recovery_bits = [f"failed={model_status.failed_candidate_key}"]
                 if model_status.last_good_key:
@@ -1676,13 +1697,14 @@ def once():
     if model_status.error:
         print(f"  error    : {model_status.error}")
     # Post-cleanup polish: model selection/lifecycle/recovery panel.
-    if (model_status.backend_model_mode or model_status.model_switch_state
+    if (model_status.request_admission_state or model_status.model_switch_state
             or model_status.failed_candidate_key or model_status.last_good_key):
         print()
         print("MODEL")
         line_bits = []
-        if model_status.backend_model_mode:
-            line_bits.append(f"mode={model_status.backend_model_mode}")
+        line_bits.append(f"ready={str(model_status.selected_model_ready).lower()}")
+        if model_status.request_admission_state:
+            line_bits.append(f"admission={model_status.request_admission_state}")
         if model_status.model_switch_state:
             line_bits.append(f"switch={model_status.model_switch_state}")
         if model_status.active_load_operation and model_status.active_load_operation != "none":
@@ -1702,6 +1724,9 @@ def once():
         if model_status.last_load_error_type:
             err_brief = (model_status.last_load_error or "")[:80]
             print(f"  load_err : {model_status.last_load_error_type}: {err_brief}")
+        if model_status.runtime_failure_error_type:
+            err_brief = (model_status.runtime_failure_error or "")[:80]
+            print(f"  runtime  : {model_status.runtime_failure_error_type}: {err_brief}")
     # Service/recovery state (from /qz/control-plane service_status + recovery)
     if srs.proxy_state or srs.backend_state or srs.model_state:
         svc_parts = []

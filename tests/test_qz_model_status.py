@@ -44,8 +44,22 @@ class _FakeBackendModels:
 
 
 class _FakeBackendManager:
-    def __init__(self, phase: str = "healthy", gpu_state: str = "gpu"):
-        self._snap = {"phase": phase, "gpu_offload_state": gpu_state}
+    def __init__(
+        self,
+        phase: str = "healthy",
+        gpu_state: str = "gpu",
+        loaded_id: str = "",
+        backend_health_ok: bool = True,
+    ):
+        self._snap = {
+            "phase": phase,
+            "backend_health_ok": backend_health_ok,
+            "gpu_offload_state": gpu_state,
+            "launch_model_key": f"{loaded_id}.gguf" if loaded_id and not loaded_id.endswith(".gguf") else loaded_id,
+            "launch_model_backend_id": loaded_id.replace(".gguf", "") if loaded_id else "",
+            "launch_model_path_basename": f"{loaded_id}.gguf" if loaded_id and not loaded_id.endswith(".gguf") else loaded_id,
+            "launch_model_error": None,
+        }
 
     def snapshot(self):
         return self._snap
@@ -63,7 +77,7 @@ class _FakeHandler:
         self.model_state_path = str(state_path)
         self._catalog = _FakeCatalog(entries or [])
         self._backend = _FakeBackendModels(loaded_id)
-        self.backend_manager = manager
+        self.backend_manager = manager or _FakeBackendManager(loaded_id=loaded_id)
 
     def _model_catalog(self):
         return self._catalog
@@ -136,6 +150,8 @@ class BuildModelStatusTests(unittest.TestCase):
         self.assertEqual(payload["selected_backend_id"], "kuato")
         self.assertEqual(payload["backend_loaded_model"], "kuato")
         self.assertFalse(payload["selected_loaded_mismatch"])
+        self.assertTrue(payload["selected_model_ready"])
+        self.assertEqual(payload["request_admission_state"], "ready")
         self.assertTrue(payload["model_visible"])
         self.assertTrue(payload["profile_valid"])
         self.assertIsNone(payload["recommended_action"])
@@ -159,6 +175,8 @@ class BuildModelStatusTests(unittest.TestCase):
             with patch.dict(os.environ, {"QZ_MODEL_KEY": ""}, clear=False):
                 payload = build_model_status(handler)
         self.assertTrue(payload["selected_loaded_mismatch"])
+        self.assertFalse(payload["selected_model_ready"])
+        self.assertEqual(payload["request_admission_state"], "unavailable")
         self.assertIn("differs", payload["recommended_action"])
         self.assertIn("/qz/model/reload", payload["recommended_action"])
 
@@ -235,6 +253,7 @@ class BuildModelStatusTests(unittest.TestCase):
                 payload = build_model_status(handler)
         self.assertEqual(payload["backend_phase"], "healthy")
         self.assertEqual(payload["backend_gpu_state"], "gpu")
+        self.assertFalse(payload["selected_model_ready"])
 
 
 # ---------------------------------------------------------------------------

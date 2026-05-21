@@ -645,64 +645,36 @@ def main():
     def _preload_last_model():
         catalog = getattr(ProxyHandler, "model_catalog", None)
         entry = _resolve_launch_model_entry()
-        mode = getattr(_backend_manager, "backend_model_mode", "direct")
 
-        # Direct mode: parameterise the BackendManager launch with this
-        # model and rely on the autostart trigger to docker run with -m.
-        if mode == "direct":
-            if entry is None:
-                # No valid model found — leave BackendManager idle; direct
-                # mode requires a launch model and would otherwise fail
-                # the safety gate in _do_start.
-                print(
-                    "QuantZhai: no launch model resolved for direct mode; "
-                    "POST /qz/model/select-and-restart to choose one.",
-                    flush=True,
-                )
-                return
-            key = entry.get("key") or entry.get("slug") or entry.get("filename") or ""
-            backend_id = entry.get("backend_id") or key
-            filename = entry.get("filename") or entry.get("backend_target") or backend_id
-            if isinstance(filename, str) and filename and not filename.endswith(".gguf"):
-                filename = f"{filename}.gguf"
-            try:
-                _backend_manager.set_launch_model(
-                    key=key, backend_id=backend_id, path_basename=filename or "",
-                )
-            except Exception as exc:
-                print(f"QuantZhai: set_launch_model failed: {exc}", flush=True)
-                return
-            if _backend_autostart:
-                _backend_manager.begin_autostart()
+        if entry is None:
+            print(
+                "QuantZhai: no launch model resolved; "
+                "POST /qz/model/select-and-restart to choose one.",
+                flush=True,
+            )
             return
 
-        # Router mode (opt-in via QZ_BACKEND_MODEL_MODE=router): preserve
-        # the legacy POST /qz/models/select preload sequence.
+        key = entry.get("key") or entry.get("slug") or entry.get("filename") or ""
+        backend_id = entry.get("backend_id") or key
+        filename = entry.get("filename") or entry.get("backend_target") or backend_id
+        if isinstance(filename, str) and filename and not filename.endswith(".gguf"):
+            filename = f"{filename}.gguf"
+        if not filename:
+            print(
+                "QuantZhai: resolved launch model has no filename; "
+                "POST /qz/model/select-and-restart to choose one.",
+                flush=True,
+            )
+            return
+        try:
+            _backend_manager.set_launch_model(
+                key=key, backend_id=backend_id, path_basename=filename,
+            )
+        except Exception as exc:
+            print(f"QuantZhai: set_launch_model failed: {exc}", flush=True)
+            return
         if _backend_autostart:
             _backend_manager.begin_autostart()
-        if entry is None:
-            return
-        requested = (
-            entry.get("key") or entry.get("backend_id") or entry.get("slug") or ""
-        )
-        if not isinstance(requested, str) or not requested.strip():
-            return
-        url = f"http://{args.listen}:{args.port}/qz/models/select"
-        body = json.dumps({"model": requested}).encode("utf-8")
-        deadline = time.time() + max(5.0, float(args.model_load_timeout))
-        while time.time() < deadline:
-            try:
-                req = urllib.request.Request(
-                    url,
-                    data=body,
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=max(5.0, float(args.model_load_timeout))) as response:
-                    response.read()
-                break
-            except Exception:
-                time.sleep(0.5)
 
     def _initialize_proxy_state():
         try:
@@ -737,9 +709,6 @@ def main():
             return default
 
     _backend_autostart = _parse_bool_env(os.environ.get("QZ_BACKEND_AUTOSTART", "1"), default=True)
-    _backend_model_mode = (os.environ.get("QZ_BACKEND_MODEL_MODE") or "direct").strip().lower()
-    if _backend_model_mode not in ("direct", "router"):
-        _backend_model_mode = "direct"
     try:
         _backend_manager = BackendManager(
             docker_cmd=os.environ.get("QZ_DOCKER_CMD", "docker"),
@@ -769,11 +738,10 @@ def main():
             autostart=_backend_autostart,
             require_gpu=_parse_bool_env(os.environ.get("QZ_REQUIRE_GPU", "1"), default=True),
             gpu_log_tail=_eint("QZ_GPU_LOG_TAIL", 1000),
-            backend_model_mode=_backend_model_mode,
         )
     except Exception as _bm_exc:
         print(f"BackendManager init failed (backend disabled): {_bm_exc}", flush=True)
-        _backend_manager = BackendManager(autostart=False, backend_model_mode=_backend_model_mode)
+        _backend_manager = BackendManager(autostart=False)
     ProxyHandler.backend_manager = _backend_manager
 
     threading.Thread(target=_initialize_proxy_state, daemon=True).start()

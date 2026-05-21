@@ -37,11 +37,6 @@ VALID_PHASES = frozenset({
     PHASE_STOPPED, PHASE_UNKNOWN,
 })
 
-# Backend launch modes — see docs/backend-lifecycle-control-plane.md.
-BACKEND_MODE_DIRECT = "direct"
-BACKEND_MODE_ROUTER = "router"
-VALID_BACKEND_MODES = frozenset({BACKEND_MODE_DIRECT, BACKEND_MODE_ROUTER})
-
 # Phases that mean "not running" — start() is allowed from these.
 _STARTABLE_PHASES = frozenset({
     PHASE_IDLE, PHASE_FAILED, PHASE_STOPPED, PHASE_UNKNOWN,
@@ -125,15 +120,19 @@ class BackendState:
     gpu_required: bool = True
     gpu_offload_state: str = "unknown"  # unknown | gpu | cpu_fallback | failed
     gpu_error: str | None = None
-    # Post-cleanup polish: direct vs router launch mode + the model the
-    # last/next launch is parameterised with.  ``launch_model_*`` are
-    # observation-only descriptors of the next docker run argv; the model
-    # selection authority remains in qz.model_state.v1.
-    backend_model_mode: str = BACKEND_MODE_DIRECT
+    # Direct launch metadata.  ``launch_model_*`` are observation-only
+    # descriptors of the next docker run argv; the model selection authority
+    # remains in qz.model_state.v1.
+    backend_model_mode: str = "direct"
     launch_model_key: str = ""
     launch_model_backend_id: str = ""
     launch_model_path_basename: str = ""
     launch_model_error: str | None = None
+    runtime_failure_result: str = ""
+    runtime_failure_error: str = ""
+    runtime_failure_error_type: str = ""
+    runtime_failure_at: str | None = None
+    backend_died_after_healthy: bool = False
 
     def as_dict(self) -> dict:
         """Return a safe dict — no secrets, no paths, no Docker commands."""
@@ -156,6 +155,11 @@ class BackendState:
             "launch_model_backend_id":     self.launch_model_backend_id,
             "launch_model_path_basename":  self.launch_model_path_basename,
             "launch_model_error":          self.launch_model_error,
+            "runtime_failure_result":      self.runtime_failure_result,
+            "runtime_failure_error":       self.runtime_failure_error,
+            "runtime_failure_error_type":  self.runtime_failure_error_type,
+            "runtime_failure_at":          self.runtime_failure_at,
+            "backend_died_after_healthy":  self.backend_died_after_healthy,
         }
 
 
@@ -197,7 +201,6 @@ class BackendManager:
         autostart: bool = True,
         require_gpu: bool = True,
         gpu_log_tail: int = 1000,
-        backend_model_mode: str = BACKEND_MODE_DIRECT,
         launch_model_key: str = "",
         launch_model_backend_id: str = "",
         launch_model_path_basename: str = "",
@@ -232,10 +235,6 @@ class BackendManager:
         self._spec_default           = bool(spec_default)
         self._require_gpu            = bool(require_gpu)
         self._gpu_log_tail           = int(gpu_log_tail)
-        _mode = _safe_str(backend_model_mode, BACKEND_MODE_DIRECT).lower()
-        if _mode not in VALID_BACKEND_MODES:
-            _mode = BACKEND_MODE_DIRECT
-        self._backend_model_mode     = _mode
         self._launch_model_key       = _safe_str(launch_model_key)
         self._launch_model_backend_id = _safe_str(launch_model_backend_id)
         self._launch_model_path_basename = _safe_str(launch_model_path_basename)
@@ -257,7 +256,7 @@ class BackendManager:
             container_name=self._container_name,
             autostart=bool(autostart),
             gpu_required=self._require_gpu,
-            backend_model_mode=self._backend_model_mode,
+            backend_model_mode="direct",
             launch_model_key=self._launch_model_key,
             launch_model_backend_id=self._launch_model_backend_id,
             launch_model_path_basename=self._launch_model_path_basename,
@@ -279,7 +278,7 @@ class BackendManager:
 
     @property
     def backend_model_mode(self) -> str:
-        return self._backend_model_mode
+        return "direct"
 
     def set_launch_model(
         self,
@@ -290,9 +289,7 @@ class BackendManager:
     ) -> None:
         """Set the model the next backend launch will be parameterised with.
 
-        In direct mode the next ``docker run`` will pass ``-m /models/<basename>``.
-        In router mode this is informational only — the container starts with
-        ``--models-dir`` and the model is loaded through the proxy/router path.
+        The next ``docker run`` will pass ``-m /models/<basename>``.
         """
         with self._lock:
             self._launch_model_key = _safe_str(key)
@@ -302,6 +299,20 @@ class BackendManager:
             self._state.launch_model_backend_id = self._launch_model_backend_id
             self._state.launch_model_path_basename = self._launch_model_path_basename
             self._state.launch_model_error = None
+
+    def record_runtime_failure(self, *, error: str, error_type: str = "runtime_failure") -> None:
+        """Record that a healthy direct-launched backend died during use."""
+        with self._lock:
+            had_been_healthy = bool(self._state.last_healthy_at)
+            self._state.runtime_failure_result = "failed"
+            self._state.runtime_failure_error = _safe_str(error)[:500]
+            self._state.runtime_failure_error_type = _safe_str(error_type, "runtime_failure")
+            self._state.runtime_failure_at = _iso_now()
+            self._state.backend_died_after_healthy = had_been_healthy
+            self._state.phase = PHASE_FAILED
+            self._state.backend_health_ok = False
+            self._state.container_running = False
+            self._state.last_error = self._state.runtime_failure_error
 
     # ------------------------------------------------------------------
     # Public lifecycle API
@@ -405,14 +416,12 @@ class BackendManager:
     def build_backend_args(self) -> list[str]:
         """Build the llama.cpp backend argument list.
 
-        In direct mode (default) the args include ``-m /models/<basename>``
-        and the llama.cpp server binds to the single specified model.
-        In router mode the args omit ``-m`` and the container loads/unloads
-        models via the proxy/router path against ``--models-dir /models``.
+        The args always include ``-m /models/<basename>`` and the llama.cpp
+        server binds to the single specified model.
         """
-        args: list[str] = []
-        if self._backend_model_mode == BACKEND_MODE_DIRECT and self._launch_model_path_basename:
-            args.extend(["-m", f"/models/{self._launch_model_path_basename}"])
+        if not self._launch_model_path_basename:
+            raise ValueError("direct backend launch requires launch_model_path_basename")
+        args: list[str] = ["-m", f"/models/{self._launch_model_path_basename}"]
         args += [
             "--host", "0.0.0.0",
             "--port", "8080",
@@ -465,11 +474,6 @@ class BackendManager:
             "--mount", f"type=bind,src={self._model_dir},dst=/models,readonly",
             self._image,
         ]
-        # In router mode the entrypoint expects --models-dir.  Direct mode
-        # passes -m via build_backend_args() and omits --models-dir to keep
-        # llama-server bound to the explicitly-specified model.
-        if self._backend_model_mode == BACKEND_MODE_ROUTER:
-            container_flags += ["--models-dir", "/models"]
         return cmd + container_flags + self.build_backend_args()
 
     def build_docker_rm_args(self, force: bool = True) -> list[str]:
@@ -599,18 +603,10 @@ class BackendManager:
     def _do_start(self) -> None:
         """Background: rm -f, docker run, then health-check loop."""
         try:
-            # Direct mode requires a launch model so the container can be
-            # parameterised with -m /models/<basename>.  Fail clearly here
-            # rather than letting docker run start a CPU-only / no-model
-            # backend that the proxy can't drive.
-            if (
-                self._backend_model_mode == BACKEND_MODE_DIRECT
-                and not self._launch_model_path_basename
-            ):
+            if not self._launch_model_path_basename:
                 err = (
-                    "direct backend mode requires a launch model; "
-                    "POST /qz/model/select-and-restart with a valid model "
-                    "or set QZ_BACKEND_MODEL_MODE=router"
+                    "direct backend launch requires a launch model; "
+                    "POST /qz/model/select-and-restart with a valid model"
                 )
                 with self._lock:
                     self._state.phase = PHASE_FAILED
@@ -626,13 +622,13 @@ class BackendManager:
                 self._state.phase = PHASE_STARTING
                 # Refresh launch_model_* on the state snapshot so observers
                 # see what we're actually launching with.
-                self._state.backend_model_mode = self._backend_model_mode
+                self._state.backend_model_mode = "direct"
                 self._state.launch_model_key = self._launch_model_key
                 self._state.launch_model_backend_id = self._launch_model_backend_id
                 self._state.launch_model_path_basename = self._launch_model_path_basename
                 self._state.launch_model_error = None
             self._emit("backend_starting", {
-                "backend_model_mode": self._backend_model_mode,
+                "backend_model_mode": "direct",
                 "launch_model_backend_id": self._launch_model_backend_id,
             })
 

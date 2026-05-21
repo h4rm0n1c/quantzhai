@@ -91,6 +91,10 @@ class _FakeHandler:
         self.sent: list[tuple[int, dict]] = []
         self._proxy_ready = proxy_ready
         self._catalog_ready = catalog_ready
+        class _Telemetry:
+            def emit(self, *_args, **_kwargs):
+                return None
+        self.telemetry = _Telemetry()
 
     # --- proxy contract ---
 
@@ -115,6 +119,12 @@ class _FakeHandler:
             "ready": self._proxy_ready,
             "catalog_ready": self._catalog_ready,
         }
+
+    def _handle_ollama_post(self):
+        return False
+
+    def _mark_deprecated_endpoint(self, path):
+        return None
 
 
 class _FakeHeaders:
@@ -281,48 +291,13 @@ class SelectEndpointTests(unittest.TestCase):
             self.assertEqual(loaded.last_loaded_model, "old")
 
     def test_select_and_restart_preserves_operator_source(self):
-        """Slice F regression: the resolve path's legacy _persist_model_state
-        must not downgrade selected_source from 'operator' to a legacy tag."""
+        """Select-and-restart must not downgrade selected_source."""
         with _tmp_state_dir() as tmp:
             state_path = tmp / "model-state.json"
-            captured: list[dict | None] = []
+            resolve_called: list[str] = []
 
             def _resolve(requested):
-                # Simulate ModelRouter.resolve_model_selection calling
-                # _persist_model_state mid-flight with a legacy source tag.
-                from proxy.qz_model_state import (
-                    ModelState,
-                    load_model_state,
-                    write_model_state,
-                )
-                existing = load_model_state(state_path).state
-                # Mimic the qz_model_router._persist_model_state preservation
-                # rule: keep canonical source when selection hasn't changed.
-                from proxy.qz_model_state import SELECTED_SOURCES
-                new_source = "resolve_model_selection"
-                new_at = "2026-05-22T01:00:00Z"
-                # Mirror the production check: compare on backend_id so that
-                # alias drift (kuato.gguf ↔ underlying filename) does not
-                # cause loss of the canonical source tag.
-                if (existing.selected_source in SELECTED_SOURCES
-                        and existing.selected_backend_id == "kuato"):
-                    new_source = existing.selected_source
-                    new_at = existing.selected_at or new_at
-                new_state = ModelState(
-                    selected_key="kuato.gguf",
-                    selected_backend_id="kuato",
-                    selected_label=existing.selected_label,
-                    selected_source=new_source,
-                    selected_at=new_at,
-                    selected_reason=existing.selected_reason,
-                    runtime_context_length=existing.runtime_context_length,
-                    last_load_result=existing.last_load_result,
-                    last_load_error=existing.last_load_error,
-                    last_load_error_type=existing.last_load_error_type,
-                    last_loaded_model=existing.last_loaded_model,
-                )
-                write_model_state(new_state, state_path)
-                captured.append({"source_at_resolve": new_state.selected_source})
+                resolve_called.append(requested)
                 return {"key": "kuato.gguf", "backend_id": "kuato"}, "operator path"
 
             handler = _FakeHandler(
@@ -332,10 +307,11 @@ class SelectEndpointTests(unittest.TestCase):
                 loaded_id="kuato",
             )
             handler._resolve_model_selection = _resolve
+            handler.backend_manager = _FakeBackendManager("update_slots: all slots are idle")
             RequestRouter(handler)._handle_model_select_endpoint(restart=True)
             payload = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["selected_source"], "operator")
-            self.assertEqual(captured, [{"source_at_resolve": "operator"}])
+            self.assertEqual(resolve_called, [])
 
     def test_select_accepts_qz_codex_source(self):
         with _tmp_state_dir() as tmp:
@@ -376,7 +352,7 @@ class ReloadEndpointTests(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertIn("not found", body["error"])
 
-    def test_invokes_resolve_with_selected_identity(self):
+    def test_restarts_manager_with_selected_identity(self):
         called = []
         with _tmp_state_dir() as tmp:
             state_path = tmp / "model-state.json"
@@ -395,8 +371,11 @@ class ReloadEndpointTests(unittest.TestCase):
                 return {"key": requested, "backend_id": requested}, "test reload"
 
             handler._resolve_model_selection = _resolve
+            handler.backend_manager = _FakeBackendManager("update_slots: all slots are idle")
             RequestRouter(handler)._handle_model_reload_endpoint()
-        self.assertEqual(called, ["kuato.gguf"])
+        self.assertEqual(called, [])
+        self.assertEqual(handler.backend_manager.restart_calls, 1)
+        self.assertEqual(handler.backend_manager.set_launch_model_calls[0]["path_basename"], "kuato.gguf")
         status, body = handler.sent[0]
         self.assertEqual(status, 200)
         self.assertEqual(body["schema"], QZ_MODEL_STATUS_SCHEMA)
@@ -408,7 +387,7 @@ class ReloadEndpointTests(unittest.TestCase):
 
 class SelectAndRestartEndpointTests(unittest.TestCase):
 
-    def test_validates_then_invokes_resolve(self):
+    def test_validates_then_restarts_manager(self):
         called = []
         with _tmp_state_dir() as tmp:
             state_path = tmp / "model-state.json"
@@ -425,8 +404,11 @@ class SelectAndRestartEndpointTests(unittest.TestCase):
                 return {"key": requested, "backend_id": requested}, "select-and-restart"
 
             handler._resolve_model_selection = _resolve
+            handler.backend_manager = _FakeBackendManager("update_slots: all slots are idle")
             RequestRouter(handler)._handle_model_select_endpoint(restart=True)
-            self.assertEqual(called, ["kuato.gguf"])
+            self.assertEqual(called, [])
+            self.assertEqual(handler.backend_manager.restart_calls, 1)
+            self.assertEqual(handler.backend_manager.set_launch_model_calls[0]["backend_id"], "kuato")
             payload = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["selected_key"], "kuato.gguf")
             status, body = handler.sent[0]
@@ -445,7 +427,11 @@ class SelectAndRestartEndpointTests(unittest.TestCase):
                 state_path=state_path,
                 entries=[_entry("kuato.gguf", "kuato")],
                 body={"model": "kuato.gguf"},
-                resolve_outcome=(None, "OOM during context allocation"),
+            )
+            handler.backend_manager = _FakeBackendManager(
+                "OOM during context allocation",
+                post_restart_phase="failed",
+                post_restart_error="OOM during context allocation",
             )
             RequestRouter(handler)._handle_model_select_endpoint(restart=True)
             status, body = handler.sent[0]
@@ -467,18 +453,13 @@ class SelectAndRestartEndpointTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class _FakeBackendManager:
-    """Minimal stand-in returning canned recent container logs.
-
-    Defaults to router-mode behaviour so existing tests are unaffected.
-    Direct-mode tests instantiate with backend_model_mode='direct' and
-    track set_launch_model / restart calls.
-    """
+    """Minimal direct-mode stand-in returning canned recent container logs."""
 
     def __init__(
         self,
         logs: str | None,
         *,
-        backend_model_mode: str = "router",
+        backend_model_mode: str = "direct",
         restart_result: dict | None = None,
         post_restart_phase: str = "healthy",
         post_restart_error: str = "",
@@ -492,6 +473,7 @@ class _FakeBackendManager:
         self.restart_calls: int = 0
         self._snapshot: dict = {
             "phase": "healthy",
+            "backend_health_ok": True,
             "backend_model_mode": backend_model_mode,
             "launch_model_key": "",
             "launch_model_backend_id": "",
@@ -797,7 +779,7 @@ class LoadFailureClassificationTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Direct-mode endpoint behaviour (post-cleanup polish)
+# Direct-mode endpoint behaviour
 # ---------------------------------------------------------------------------
 
 class DirectModeEndpointTests(unittest.TestCase):
@@ -856,33 +838,20 @@ class DirectModeEndpointTests(unittest.TestCase):
             self.assertEqual(body["last_load_error_type"], "insufficient_vram")
             self.assertEqual(body["backend_model_mode"], "direct")
 
-    def test_router_mode_keeps_legacy_resolve_path(self):
-        """Router-mode FakeBackendManager — endpoint must call _resolve_model_selection."""
-        resolve_called = []
-
-        def _resolve(requested):
-            resolve_called.append(requested)
-            return {"key": requested, "backend_id": requested}, "router path"
-
+    def test_legacy_models_select_returns_410(self):
         with _tmp_state_dir() as tmp:
             state_path = tmp / "model-state.json"
             handler = _FakeHandler(
                 state_path=state_path,
                 entries=[_entry("kuato.gguf", "kuato")],
                 body={"model": "kuato.gguf"},
-                loaded_id="kuato",
+                path="/qz/models/select",
             )
-            handler.backend_manager = _FakeBackendManager(
-                logs="update_slots: all slots are idle",
-                backend_model_mode="router",
-            )
-            handler._resolve_model_selection = _resolve
-            RequestRouter(handler)._handle_model_select_endpoint(restart=True)
-            # Legacy path took the load
-            self.assertEqual(resolve_called, ["kuato.gguf"])
-            # set_launch_model NOT called in router mode
-            self.assertEqual(handler.backend_manager.set_launch_model_calls, [])
-            self.assertEqual(handler.backend_manager.restart_calls, 0)
+            RequestRouter(handler).handle_post()
+            status, body = handler.sent[0]
+            self.assertEqual(status, 410)
+            self.assertFalse(body["ok"])
+            self.assertIn("/qz/model/select-and-restart", body["message"])
 
     def test_status_surface_exposes_mode_and_switch_state(self):
         """GET-shape status payload includes backend_model_mode, launch_model_*,

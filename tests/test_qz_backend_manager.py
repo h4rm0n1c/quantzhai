@@ -134,6 +134,9 @@ class BackendManagerInitTests(unittest.TestCase):
             reasoning_budget="-1",
             reasoning_budget_message="Done.",
             spec_default=False,
+            launch_model_path_basename="kuato.gguf",
+            launch_model_key="kuato.gguf",
+            launch_model_backend_id="kuato",
         )
         defaults.update(kwargs)
         return BackendManager(**defaults)
@@ -219,8 +222,20 @@ class BuildBackendArgsTests(unittest.TestCase):
             model_dir="/home/harri/turboquant/quantzhai/var/models",
             server_host="127.0.0.1",
             server_port=18084,
+            launch_model_path_basename="kuato.gguf",
+            launch_model_key="kuato.gguf",
+            launch_model_backend_id="kuato",
             **params,
         )
+
+    def test_direct_model_path(self):
+        args = self._mgr().build_backend_args()
+        self.assertIn("-m", args)
+        self.assertEqual(args[args.index("-m") + 1], "/models/kuato.gguf")
+
+    def test_no_models_dir(self):
+        args = self._mgr().build_backend_args()
+        self.assertNotIn("--models-dir", args)
 
     def test_host_and_port(self):
         args = self._mgr().build_backend_args()
@@ -320,7 +335,7 @@ class BuildBackendArgsTests(unittest.TestCase):
         """build_backend_args() must not contain docker run flags."""
         args = self._mgr().build_backend_args()
         for flag in ("run", "-d", "--name", "--gpus", "--cap-add", "--ulimit",
-                     "--mount", "/models"):
+                     "--mount"):
             self.assertNotIn(flag, args)
 
 
@@ -344,10 +359,9 @@ class BuildDockerRunArgsTests(unittest.TestCase):
             cache_ram=1024, cache_reuse=64, kv_key="q8_0", kv_value="f16",
             reasoning_budget="-1", reasoning_budget_message="Done.",
             spec_default=spec_default,
-            # Legacy assertions in this class verify the router-mode shape
-            # (--models-dir, no -m).  Direct-mode coverage lives in
-            # BuildDockerRunArgsDirectModeTests further down.
-            backend_model_mode="router",
+            launch_model_path_basename="kuato.gguf",
+            launch_model_key="kuato.gguf",
+            launch_model_backend_id="kuato",
         )
 
     def test_starts_with_docker_run_d(self):
@@ -399,10 +413,11 @@ class BuildDockerRunArgsTests(unittest.TestCase):
         args = self._mgr(image="my-image:v1").build_docker_run_args()
         self.assertIn("my-image:v1", args)
 
-    def test_models_dir_flag(self):
+    def test_no_models_dir_flag(self):
         args = self._mgr().build_docker_run_args()
-        self.assertIn("--models-dir", args)
-        self.assertEqual(args[args.index("--models-dir") + 1], "/models")
+        self.assertNotIn("--models-dir", args)
+        self.assertIn("-m", args)
+        self.assertEqual(args[args.index("-m") + 1], "/models/kuato.gguf")
 
     def test_backend_args_appended(self):
         """build_docker_run_args must end with build_backend_args."""
@@ -444,10 +459,6 @@ class HelperTests(unittest.TestCase):
 
 def _make_mgr(runner=None, health_checker=None, autostart=True, **kwargs):
     """Build a BackendManager with injectable runner and health checker.
-
-    Defaults to the pre-direct-mode behaviour (router mode) so existing
-    lifecycle assertions still hold.  Direct-mode tests opt in explicitly
-    via backend_model_mode="direct" + launch_model_path_basename=...
     """
     defaults = dict(
         docker_cmd="docker",
@@ -462,7 +473,9 @@ def _make_mgr(runner=None, health_checker=None, autostart=True, **kwargs):
         reasoning_budget="-1",
         reasoning_budget_message="Done.",
         spec_default=False,
-        backend_model_mode="router",
+        launch_model_path_basename="kuato.gguf",
+        launch_model_key="kuato.gguf",
+        launch_model_backend_id="kuato",
         health_check_interval=0.01,
         health_check_timeout=2.0,
         autostart_delay=0.0,
@@ -765,6 +778,9 @@ class BuildDockerRunArgsHelperCompatTests(unittest.TestCase):
             cache_ram=1024, cache_reuse=64, kv_key="q8_0", kv_value="f16",
             reasoning_budget="-1", reasoning_budget_message="Done.",
             spec_default=False,
+            launch_model_path_basename="kuato.gguf",
+            launch_model_key="kuato.gguf",
+            launch_model_backend_id="kuato",
         )
 
     def test_no_e_flags_by_default(self):
@@ -1004,7 +1020,7 @@ class BackendStateGPUFieldTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Direct vs router backend mode
+# Direct backend mode
 # ---------------------------------------------------------------------------
 
 class BuildDockerRunArgsDirectModeTests(unittest.TestCase):
@@ -1023,7 +1039,6 @@ class BuildDockerRunArgsDirectModeTests(unittest.TestCase):
             cache_ram=1024, cache_reuse=64, kv_key="q8_0", kv_value="f16",
             reasoning_budget="-1", reasoning_budget_message="Done.",
             spec_default=False,
-            backend_model_mode="direct",
             launch_model_path_basename="kuato.gguf",
             launch_model_key="kuato.gguf",
             launch_model_backend_id="kuato",
@@ -1041,10 +1056,10 @@ class BuildDockerRunArgsDirectModeTests(unittest.TestCase):
         args = self._mgr().build_docker_run_args()
         self.assertNotIn("--models-dir", args)
 
-    def test_router_mode_keeps_models_dir_and_omits_m(self):
-        args = self._mgr(backend_model_mode="router", launch_model_path_basename="").build_docker_run_args()
-        self.assertIn("--models-dir", args)
-        self.assertNotIn("-m", args)
+    def test_missing_launch_model_raises_for_command_build(self):
+        mgr = self._mgr(launch_model_path_basename="")
+        with self.assertRaisesRegex(ValueError, "direct backend launch requires"):
+            mgr.build_docker_run_args()
 
     def test_default_mode_is_direct(self):
         # No backend_model_mode passed → default direct.
@@ -1093,7 +1108,6 @@ class BuildDockerRunArgsDirectModeTests(unittest.TestCase):
         mgr = _make_mgr(
             runner=runner,
             health_checker=health_checker,
-            backend_model_mode="direct",
             launch_model_path_basename="",  # no model
         )
         mgr.start()
@@ -1105,7 +1119,7 @@ class BuildDockerRunArgsDirectModeTests(unittest.TestCase):
             time.sleep(0.02)
         self.assertEqual(mgr.phase, PHASE_FAILED)
         snap = mgr.snapshot()
-        self.assertIn("direct backend mode requires a launch model", snap["last_error"])
+        self.assertIn("direct backend launch requires a launch model", snap["last_error"])
         self.assertIsNotNone(snap["launch_model_error"])
         # No docker run should have been attempted
         self.assertFalse(any("run" in a for a in runner_calls if isinstance(a, list)),
@@ -1124,7 +1138,7 @@ class BuildDockerRunArgsDirectModeTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class BackendEndpointTests(unittest.TestCase):
-    """Test /qz/backend/* endpoints by calling the router helper directly."""
+    """Test /qz/backend/* endpoints by calling the backend manager directly."""
 
     def setUp(self):
         runner_calls = []

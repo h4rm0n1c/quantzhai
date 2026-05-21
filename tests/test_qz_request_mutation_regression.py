@@ -1,6 +1,9 @@
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+from proxy.qz_model_state import ModelState, write_model_state
 from proxy.qz_request_router import RequestRouter
 
 class FakeBackend:
@@ -19,6 +22,31 @@ class FakeModelRouter:
     def inject_runtime_state(self, body, model):
         return body
 
+class FakeModelCatalog:
+    def __init__(self):
+        self.entries = [{
+            "key": "test-model",
+            "slug": "test-model",
+            "filename": "test-model.gguf",
+            "backend_id": "test-model",
+            "profile_valid": True,
+        }]
+        self.selected = self.entries[0]
+
+    def resolve(self, query=None):
+        return self.selected, "test"
+
+class FakeBackendManager:
+    def snapshot(self):
+        return {
+            "phase": "healthy",
+            "backend_health_ok": True,
+            "launch_model_key": "test-model",
+            "launch_model_backend_id": "test-model",
+            "launch_model_path_basename": "test-model.gguf",
+            "launch_model_error": None,
+        }
+
 class FakeHandler:
     def __init__(self):
         self.path = "/v1/responses"
@@ -30,6 +58,14 @@ class FakeHandler:
         self.reasoning_stream_format = "raw"
         self._backend_mock = FakeBackend()
         self._model_router_mock = FakeModelRouter()
+        self._model_catalog_mock = FakeModelCatalog()
+        self.backend_manager = FakeBackendManager()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.model_state_path = str(Path(self._tmp.name) / "model-state.json")
+        write_model_state(
+            ModelState(selected_key="test-model", selected_backend_id="test-model", last_load_result="loaded"),
+            self.model_state_path,
+        )
         self.wfile = MagicMock()
         self.searxng_policy = {}
         self.searxng_policy_path = ""
@@ -45,6 +81,12 @@ class FakeHandler:
 
     def _model_router(self):
         return self._model_router_mock
+
+    def _model_catalog(self):
+        return self._model_catalog_mock
+
+    def _initialization_payload(self):
+        return {"state": "ready", "ready": True, "catalog_ready": True}
 
     def _send_json(self, status, body):
         pass

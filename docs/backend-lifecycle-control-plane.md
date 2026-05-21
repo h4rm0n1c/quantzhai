@@ -252,7 +252,6 @@ docker_run_flags = [
     "-p", f"{server_port}:8080",
     "--mount", f"type=bind,src={model_dir},dst=/models,readonly",
     image,
-    "--models-dir", "/models",
 ]
 ```
 
@@ -262,6 +261,7 @@ Constructed from env vars exactly as in qz-up:
 
 ```python
 backend_args = [
+    "-m", f"/models/{launch_model_path_basename}",
     "--host", "0.0.0.0",
     "--port", "8080",
     "-ngl", "999",
@@ -620,7 +620,7 @@ scripts/qz-down --force
 | `QZ_DOCKER_CMD` | `docker` | Docker command; see §15.6 |
 | `QZ_REQUIRE_GPU` | `1` | Set to `0` to allow CPU fallback; with `1` (default), `phase=failed` if GPU offload is not confirmed from container logs |
 | `QZ_GPU_LOG_TAIL` | `1000` | Number of log lines fetched when checking GPU offload after health passes |
-| `QZ_BACKEND_MODEL_MODE` | `direct` | `direct` (default) launches the container with `-m /models/<selected>.gguf` for a single model. `router` opts back into the old `--models-dir` multi-model behaviour where the proxy/router selects/loads models post-launch. |
+| `QZ_BACKEND_MODEL_MODE` | removed | Deprecated compatibility only. Production launches are always direct `-m /models/<selected>.gguf`; `--models-dir` router mode is not supported. |
 
 ### 15.6 QZ_DOCKER_CMD guidance
 
@@ -643,12 +643,11 @@ If your shell lacks an active docker group, use `sudo docker` or install the
 `scripts/qz-install-sudo-helper` wrapper and set `QZ_DOCKER_CMD` accordingly.
 See `.env.example` for the supported patterns.
 
-### 15.9 Direct vs router backend mode (`QZ_BACKEND_MODEL_MODE`)
+### 15.9 Direct backend model launch
 
-`BackendManager` supports two model-binding modes:
+`BackendManager` supports one production model-binding mode:
 
-- **`direct`** (default) — the container launches with `-m /models/<selected>.gguf`. llama-server binds to that single model. Model switching = `docker rm -f` + new `docker run` with a different `-m`. This is the fast/safe path for single-active-model use.
-- **`router`** (opt-in) — the container launches with `--models-dir /models` and the proxy uses the legacy llama-router load/unload path to switch models post-launch.
+- **direct** — the container launches with `-m /models/<selected>.gguf`. llama-server binds to that single model. Model switching = `docker rm -f` + new `docker run` with a different `-m`.
 
 Direct-mode safety gate: `_do_start()` refuses to launch when no `launch_model_path_basename` is set. The `_preload_last_model` flow resolves the persisted selection from `qz.model_state.v1` (or `QZ_MODEL_KEY` seed / catalog default) and calls `BackendManager.set_launch_model(...)` before `begin_autostart()`.
 
@@ -660,19 +659,22 @@ Direct-mode switch flow on `POST /qz/model/select-and-restart`:
 5. Run `_record_load_observation` (log classifier + state update).
 6. On classified failure: HTTP 409 + rollback to `last_good_*` per the post-Slice F recovery rules.
 
-Router-mode switch keeps the existing `_resolve_model_selection` path unchanged.
+`POST /qz/model/reload` restarts the backend with the current persisted selection. `POST /qz/model/select-and-restart` is the canonical runtime mutation path: it persists selection and restarts the backend in one operation.
+
+Legacy `/qz/models/select` and `/qz/models/load` are removed as runtime model-load APIs and return `410 Gone` with `Use /qz/model/select-and-restart.` `/qz/models/refresh` remains catalog metadata refresh only.
 
 ### Observability
 
 `/qz/model/status` and `/qz/control-plane` `models` block now expose:
 
-- `backend_model_mode` — `direct` or `router`
+- `backend_model_mode` — compatibility field, always `direct`
 - `launch_model_key`, `launch_model_backend_id`, `launch_model_path_basename` — what the next/last docker run was parameterised with
 - `model_switch_state` — `idle | selecting | restarting | loading | loaded | failed | rolled_back`
-- `active_load_operation` — `none | backend_restart | router_load | rollback_restart`
+- `active_load_operation` — `none | backend_restart | rollback_restart`
 - `last_good_key`, `last_good_backend_id`, `failed_candidate_key`, `failed_candidate_backend_id`
+- `selected_model_ready`, `request_admission_state`, and runtime death fields (`runtime_failure_*`, `backend_died_after_healthy`)
 
-Operator hints fire on mode + switch state, e.g. *"Direct backend mode: model switch in progress — backend container is restarting with the selected model."*
+Operator hints fire on switch state, e.g. *"Model switch in progress — backend container is restarting with the selected model."*
 
 ### 15.8 GPU offload verification
 

@@ -28,6 +28,7 @@ try:
     from .qz_recovery_jobs import RECOVERY_JOBS
     from .qz_vram_snapshot import get_cached_vram_snapshot
     from .qz_model_status import (
+        build_model_status,
         load_handler_model_state,
         identity_matches_loaded,
         model_selection_hints,
@@ -42,6 +43,7 @@ except ImportError:
     from qz_recovery_jobs import RECOVERY_JOBS
     from qz_vram_snapshot import get_cached_vram_snapshot
     from qz_model_status import (
+        build_model_status,
         load_handler_model_state,
         identity_matches_loaded,
         model_selection_hints,
@@ -204,11 +206,21 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
 
     # --- proxy-owned model selection state (qz.model_state.v1) ---
     selection_state = load_handler_model_state(handler)
+    try:
+        model_status = build_model_status(handler)
+    except Exception:
+        model_status = {}
     selected_identity_from_state = (
         selection_state.selected_key or selection_state.selected_backend_id
     )
     configured_env_model = (os.environ.get("QZ_MODEL_KEY") or "").strip()
-    selected_loaded_mismatch = bool(
+    if model_status:
+        loaded_model = str(model_status.get("backend_loaded_model") or "")
+        loaded_count = 1 if loaded_model else 0
+        if model_status.get("selected_model_ready") is True:
+            backend_ready = True
+            backend_reachable = True
+    selected_loaded_mismatch = bool(model_status.get("selected_loaded_mismatch")) if model_status else bool(
         selected_identity_from_state
         and loaded_model
         and not identity_matches_loaded(
@@ -239,7 +251,7 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
                 bm_snap = _snap
         except Exception:
             pass
-    backend_model_mode = (bm_snap.get("backend_model_mode") or "direct").strip() or "direct"
+    backend_model_mode = "direct"
     bm_phase = bm_snap.get("phase") or ""
     try:
         from .qz_model_status import _derive_model_switch_state
@@ -247,10 +259,11 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
         from qz_model_status import _derive_model_switch_state
     model_switch_state, active_load_operation = _derive_model_switch_state(
         backend_phase=bm_phase,
-        backend_model_mode=backend_model_mode,
         state=selection_state,
         selected_loaded_mismatch=selected_loaded_mismatch,
     )
+    selected_model_ready = bool(model_status.get("selected_model_ready", False))
+    request_admission_state = str(model_status.get("request_admission_state") or "")
 
     payload: dict[str, Any] = {
         "schema": QZ_CONTROL_PLANE_SCHEMA,
@@ -269,11 +282,13 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
             "selected_at":               selection_state.selected_at,
             "backend_loaded_model":      loaded_model,
             "selected_loaded_mismatch":  selected_loaded_mismatch,
+            "selected_model_ready":      selected_model_ready,
+            "request_admission_state":   request_admission_state,
             "selection_reason":          selection_state.selected_reason,
             "model_visible":             state_model_visible,
             "profile_valid":             state_profile_valid,
             "restart_required":          restart_required,
-            # Post-cleanup polish — direct vs router mode + switch state.
+            # Direct launch lifecycle + switch state.
             "backend_model_mode":          backend_model_mode,
             "launch_model_key":            bm_snap.get("launch_model_key", ""),
             "launch_model_backend_id":     bm_snap.get("launch_model_backend_id", ""),
@@ -284,6 +299,11 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
             "last_good_backend_id":        selection_state.last_good_backend_id,
             "failed_candidate_key":        selection_state.failed_candidate_key,
             "failed_candidate_backend_id": selection_state.failed_candidate_backend_id,
+            "runtime_failure_result":      bm_snap.get("runtime_failure_result", ""),
+            "runtime_failure_error":       bm_snap.get("runtime_failure_error", ""),
+            "runtime_failure_error_type":  bm_snap.get("runtime_failure_error_type", ""),
+            "runtime_failure_at":          bm_snap.get("runtime_failure_at"),
+            "backend_died_after_healthy":  bool(bm_snap.get("backend_died_after_healthy", False)),
         },
         "backend": {
             "reachable": backend_reachable,
@@ -299,6 +319,11 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
             "load_error_type":          selection_state.last_load_error_type,
             "insufficient_vram":        selection_state.last_load_error_type == "insufficient_vram",
             "selected_model_failed":    selection_state.last_load_result == "failed",
+            "runtime_failure_result":   bm_snap.get("runtime_failure_result", ""),
+            "runtime_failure_error":    bm_snap.get("runtime_failure_error", ""),
+            "runtime_failure_error_type": bm_snap.get("runtime_failure_error_type", ""),
+            "runtime_failure_at":       bm_snap.get("runtime_failure_at"),
+            "backend_died_after_healthy": bool(bm_snap.get("backend_died_after_healthy", False)),
         },
         "codex_catalog": codex_catalog,
         "operator_hints": _operator_hints(readiness, len(model_ids), backend_error),
@@ -309,7 +334,6 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
             selection_state,
             configured_env_model,
             loaded_model,
-            backend_model_mode=backend_model_mode,
             model_switch_state=model_switch_state,
         )
     )

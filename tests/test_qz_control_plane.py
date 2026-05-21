@@ -75,6 +75,20 @@ def _make_handler(
         }
         handler._model_router.return_value.status_summary.return_value = summary
 
+    bm = MagicMock()
+    phase = "healthy" if backend_ready or loaded_model else "running"
+    launch_key = f"{loaded_model}.gguf" if loaded_model and not loaded_model.endswith(".gguf") else loaded_model
+    bm.snapshot.return_value = {
+        "phase": phase,
+        "backend_health_ok": backend_health_status == 200,
+        "backend_model_mode": "direct",
+        "launch_model_key": launch_key,
+        "launch_model_backend_id": loaded_model.replace(".gguf", "") if loaded_model else "",
+        "launch_model_path_basename": launch_key,
+        "launch_model_error": None,
+    }
+    handler.backend_manager = bm
+
     return handler
 
 
@@ -546,7 +560,7 @@ class ModelSelectionFieldsTests(unittest.TestCase):
 
 
     def test_backend_model_mode_and_launch_model_in_models_section(self):
-        """Post-cleanup polish: models block exposes backend_model_mode + launch_model_*."""
+        """Models block exposes direct-mode readiness and launch_model_*."""
         with self._with_state_file({
             "schema": "qz.model_state.v1",
             "selected_key": "kuato.gguf",
@@ -558,6 +572,7 @@ class ModelSelectionFieldsTests(unittest.TestCase):
             bm = MagicMock()
             bm.snapshot.return_value = {
                 "phase": "healthy",
+                "backend_health_ok": True,
                 "backend_model_mode": "direct",
                 "launch_model_key": "kuato.gguf",
                 "launch_model_backend_id": "kuato",
@@ -570,6 +585,8 @@ class ModelSelectionFieldsTests(unittest.TestCase):
         self.assertEqual(m["launch_model_key"], "kuato.gguf")
         self.assertEqual(m["launch_model_backend_id"], "kuato")
         self.assertEqual(m["launch_model_path_basename"], "kuato.gguf")
+        self.assertTrue(m["selected_model_ready"])
+        self.assertEqual(m["request_admission_state"], "ready")
         self.assertIn("model_switch_state", m)
         self.assertIn("active_load_operation", m)
         self.assertIn("last_good_key", m)

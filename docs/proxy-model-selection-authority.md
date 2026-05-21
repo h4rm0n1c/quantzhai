@@ -39,8 +39,9 @@ self.selected, self.reason = choose_default(self.entries, self.manifest,
                                             requested, last_selected)
 ```
 
-**Effect:** `.env`'s `QZ_MODEL_KEY` overrides operator selection on every proxy
-restart. The operator's `/qz/models/select` is silently undone.
+**Effect before the cleanup:** `.env`'s `QZ_MODEL_KEY` could override operator
+selection on every proxy restart. The canonical runtime mutation endpoint is
+now `/qz/model/select-and-restart`; legacy `/qz/models/select` returns 410.
 
 ### 2.2 `var/model-state.json` writers/readers
 
@@ -56,10 +57,10 @@ restart. The operator's `/qz/models/select` is silently undone.
   `selected_key`, `selected_backend_id`, **and `loaded_model`** as equivalent
   authority. The `loaded_model` fallback means a stale observation field can
   silently become "the selected model" after the operator's selection is lost.
-- `proxy/quantzhai_proxy.py:623-656` `_preload_last_model()` — reads
-  `selected_key`/`selected_backend_id`, then POSTs `/qz/models/select` after
-  proxy startup. This is where operator selection should survive restart, but
-  `QZ_MODEL_KEY` in `.env` overrides it (see 2.1).
+- `proxy/quantzhai_proxy.py` `_preload_last_model()` — reads
+  `selected_key`/`selected_backend_id`, resolves the launch filename, calls
+  `BackendManager.set_launch_model(...)`, then begins autostart. `QZ_MODEL_KEY`
+  is a seed only when no valid persisted selection exists.
 
 ### 2.3 `var/backend-state.json`
 
@@ -90,16 +91,17 @@ the same precedence ladder as runtime selection.
 
 ### 2.5 Existing `/qz/models/*` endpoints
 
-`proxy/qz_request_router.py` already has:
+Current endpoint status:
 
 - `POST /qz/models/refresh` (line 1463)
-- `POST /qz/models/load`     (line 1511)
-- `POST /qz/models/select`   (line 1511)
+- `POST /qz/models/load`     (legacy removed, 410 Gone)
+- `POST /qz/models/select`   (legacy removed, 410 Gone)
+- `GET /qz/model/status`
+- `POST /qz/model/select`
+- `POST /qz/model/reload`
+- `POST /qz/model/select-and-restart`
 
-There is **no** `/qz/model/status`, **no** `/qz/model/reload`, **no**
-`/qz/model/select-and-restart`. The current endpoints work but their state
-contract is muddled (see 2.2/2.3) and they don't expose a
-configured-vs-selected-vs-loaded view.
+`/qz/model/select-and-restart` is the canonical runtime mutation path.
 
 ### 2.6 qz-codex preflight (visibility only)
 
@@ -131,11 +133,11 @@ is a client UI convenience. It is currently *not* wired into proxy authority
 
 ### 2.9 Backend autostart
 
-After `#65`, `BackendManager` launches the llama-server container with
-`--models-dir /models` and no `-m <model>`. The container has every GGUF
-available; selection happens via `/qz/models/select` after the container is up
-and healthy. `_preload_last_model()` is the post-start selector and inherits
-all the precedence bugs in 2.1 / 2.2.
+`BackendManager` launches the llama-server container with
+`-m /models/<selected>.gguf`. The selected model is resolved before backend
+autostart from persisted `qz.model_state.v1`, then `QZ_MODEL_KEY` only as a
+first-run seed, then catalog default. Model switching is a backend restart
+with a new `-m`.
 
 `scripts/qz-up` does **not** select a model — confirmed by grep. Keep it
 that way.
@@ -144,8 +146,8 @@ that way.
 
 - `qz-codex exec -m MODEL` succeeds despite the backend actually serving a
   different model (visibility ≠ active selection — 2.6).
-- Operator's `/qz/models/select` is silently overridden after a proxy restart
-  because `QZ_MODEL_KEY` is set in `.env` (2.1).
+- Operator selection is silently overridden after a proxy restart if
+  `QZ_MODEL_KEY` is treated as authority instead of a one-shot seed (2.1).
 - An old `loaded_model` from `var/backend-state.json` becomes "the selected
   model" after a state-file edit or partial corruption (2.2).
 - Too-large model fails after partial GPU load → backend HTTP `/health`
@@ -259,12 +261,11 @@ No new shell scripts.  `scripts/qz-model*` invariant intact.
 
 ### Direct backend mode + observability surface
 
-Post-cleanup polish adds `BackendManager` direct-mode launch
-(`QZ_BACKEND_MODEL_MODE=direct`, default): the container launches with
-`-m /models/<selected>.gguf` for a single bound model.  Model switches
-become `docker rm -f` + `docker run` with a new `-m`, which is fast and
-robust under VRAM pressure.  Router mode (`QZ_BACKEND_MODEL_MODE=router`)
-preserves the legacy `--models-dir` + post-launch load/unload path.
+BackendManager now has one production launch path: the container starts with
+`-m /models/<selected>.gguf` for a single bound model.  Model switches become
+`docker rm -f` + `docker run` with a new `-m`, which is fast and robust under
+VRAM pressure. `QZ_BACKEND_MODEL_MODE` is deprecated compatibility only; the
+router/`--models-dir` load/unload path is not supported.
 
 `/qz/model/select-and-restart` in direct mode:
 1. Validates and persists the selection.
@@ -273,16 +274,21 @@ preserves the legacy `--models-dir` + post-launch load/unload path.
 4. Polls `phase` until healthy/failed (bounded by `QZ_MODEL_LOAD_TIMEOUT`).
 5. Runs the existing log classifier + recovery (rollback to `last_good_*`).
 
+Legacy `/qz/models/select` and `/qz/models/load` return `410 Gone` with the
+instruction to use `/qz/model/select-and-restart`. `/qz/models/refresh`
+remains catalog metadata refresh only and does not mutate runtime model state.
+
 `/qz/model/status` and `/qz/control-plane.models` gain:
 `backend_model_mode`, `launch_model_*`, `model_switch_state`
 (`idle/selecting/restarting/loading/loaded/failed/rolled_back`),
-`active_load_operation` (`none/backend_restart/router_load/rollback_restart`),
+`active_load_operation` (`none/backend_restart/rollback_restart`),
 plus `last_good_*` / `failed_candidate_*` already added by the post-F
-polish.  qz-top renders a compact `MODEL` panel for mode/switch/op/gpu
-plus an `RCVRY` row for failed-candidate context.
+polish. They also expose `selected_model_ready`, `request_admission_state`,
+and runtime death fields. qz-top renders a compact `MODEL` panel for
+ready/admission/switch/op/gpu plus an `RCVRY` row for failed-candidate context.
 
-See `docs/backend-lifecycle-control-plane.md §15.9` for the full
-direct-vs-router contract.
+See `docs/backend-lifecycle-control-plane.md §15.9` for the full direct launch
+contract.
 
 ## 5. `qz.model_state.v1` schema
 
@@ -419,8 +425,9 @@ Body: `{"model": "<key|backend_id>"}`
 4. Else if `manifest.default_key` or per-entry `default` → use it; write
    state with `selected_source=config_default`.
 5. Else → safe fallback; write state with `selected_source=fallback`.
-6. POST `/qz/models/select` (existing endpoint) to push to llama-server.
-7. Watch backend logs for load result; record in `last_load_*` fields.
+6. Call `BackendManager.set_launch_model(...)`.
+7. Begin autostart; direct `-m` launch binds llama-server to the selected model.
+8. Watch backend logs for load result; record in `last_load_*` fields.
 
 `qz-up` remains startup-only. It may *print* selected model status but must
 not write model state itself.
@@ -579,7 +586,7 @@ scope** for this work; do not anticipate it by adding wrappers.
 | **C-endpoints** | ✅ `proxy/qz_model_status.py` builds `qz.model_status.v1`; new endpoints `GET /qz/model/status`, `POST /qz/model/select`, `POST /qz/model/reload`, `POST /qz/model/select-and-restart`; `ModelCatalog.refresh()` now implements the canonical precedence (persisted selection beats `QZ_MODEL_KEY`); `/qz/control-plane` exposes `configured_env_model`, `selected_source`, `selected_at`, `backend_loaded_model`, `selected_loaded_mismatch`, `selection_reason`, `model_visible`, `profile_valid`, `restart_required`, and backend load-failure surface; operator hints emit QZ_MODEL_KEY-seed warning + mismatch + insufficient-VRAM; 44 new tests; 3032 total pass |
 | **D-qz-codex** | ✅ `qz_codex_exec_preflight` helper in `scripts/qz-codex-common` GETs `/qz/model/status`, compares against selected_key / selected_backend_id / backend_loaded_model with `selected_loaded_mismatch` honoured; mismatch + no `QZ_CODEX_AUTO_SELECT_MODEL` → exit 1 with literal `curl -sS -X POST … /qz/model/select-and-restart`; mismatch + `QZ_CODEX_AUTO_SELECT_MODEL=1` → POST `/qz/model/select-and-restart` with `source=qz_codex`; old `qz-wait-ready --catalog --model` preflight removed; 17 new tests (structural + behavioural with mock proxy); 3049 total pass |
 | **E-load-failure** | ✅ `proxy/qz_model_load_failure.py` classifies recent container logs into `insufficient_vram` / `context_creation_failed` (VRAM-before-context promotion rule); `BackendManager.fetch_recent_logs()` exposes the log buffer; `/qz/model/reload` and `/qz/model/select-and-restart` run the classifier after the resolve+load path and update `last_load_*` observation fields; failure responses are **HTTP 409** with the classified `last_load_*` payload (selection authority preserved); successful reload clears previous load_error; 22 new tests; 3071 total pass |
-| **F-smoke** | ✅ Full cold-start smoke on real hardware (kuato.gguf good / 27B Q5_K_M too-large) exercised every endpoint and surface; uncovered and fixed 4 bugs: classifier false-positives (`common_fit_params … n_gpu_layers already set by user`, `cudaMalloc … retrying without pipeline parallelism`), stale `last_load_*` across proxy restart (legacy `/qz/models/select` now runs `_record_load_observation`), `selected_source` downgrade by legacy `_persist_model_state` (now preserves canonical sources when `selected_backend_id` matches), and qz-codex exit-code propagation (`! cmd; then exit $?` always exited 0 — fixed to `|| exit $?`); 5 new regression tests; 3081 total pass. Results recorded in §16. |
+| **F-smoke** | ✅ Full cold-start smoke on real hardware (kuato.gguf good / 27B Q5_K_M too-large) exercised every endpoint and surface; uncovered and fixed 4 bugs: classifier false-positives (`common_fit_params … n_gpu_layers already set by user`, `cudaMalloc … retrying without pipeline parallelism`), stale `last_load_*` across proxy restart, `selected_source` downgrade by legacy `_persist_model_state` (now preserves canonical sources when `selected_backend_id` matches), and qz-codex exit-code propagation (`! cmd; then exit $?` always exited 0 — fixed to `|| exit $?`); 5 new regression tests; 3081 total pass. Results recorded in §16. |
 
 ## 16. Slice F smoke results (2026-05-22)
 
@@ -605,7 +612,7 @@ Models exercised:
 Bugs found and fixed during the smoke:
 
 1. **Classifier false-positives.** `common_fit_params: failed to fit params to free device memory: n_gpu_layers already set by user to 999, abort` is informational under user-override of `-ngl`; `cudaMalloc failed: out of memory` followed by `sched_reserve: compute buffer allocation failed, retrying without pipeline parallelism` is recovered by llama.cpp. The classifier now ignores lines containing known informational qualifiers and applies a latest-success-wins rule (same shape as the GPU offload check in `BackendManager`).
-2. **Stale `last_load_*` across proxy restart.** `_preload_last_model` posts the persisted selection to the legacy `/qz/models/select` endpoint at startup; that handler did not run `_record_load_observation`, so stale failure observations from previous runs survived a restart. The legacy handler now invokes the observation helper on every load/select.
+2. **Stale `last_load_*` across proxy restart.** Historical router preload posted the persisted selection to the legacy `/qz/models/select` endpoint at startup; that handler did not run `_record_load_observation`, so stale failure observations from previous runs survived a restart. The current direct launch path sets the BackendManager launch model before autostart and the legacy endpoint returns 410.
 3. **`selected_source` downgrade.** `qz_model_router._persist_model_state` historically wrote legacy source strings (`resolve_model_selection`, `status_snapshot`, `load_backend_model`) that overwrote canonical `operator` / `qz_codex` / `migration` tags. The writer now preserves an existing canonical source when `selected_backend_id` is unchanged.
 4. **qz-codex exit-code propagation.** `if ! qz_codex_exec_preflight; then exit $?; fi` — the `!` inverts the function's exit code, so `$?` inside the `then` branch is always 0 and the script ran Codex anyway. Replaced with `qz_codex_exec_preflight … || exit $?` so a mismatch actually halts the command.
 

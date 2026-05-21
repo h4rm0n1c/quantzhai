@@ -139,18 +139,17 @@ _TRIGGER_WARNINGS: dict = {
     "clear_failure":        "Clearing failure state does not start or restart the backend.",
     "select_model":         (
         "Selecting a model changes the active selection state only; "
-        "the model is NOT loaded. Call reload_selected_model separately to load it."
+        "the model is NOT loaded. Call reload_selected_model to restart the backend with it."
     ),
     "start_backend":        (
-        "Starting the backend creates or starts the container without modifying models. "
-        "Use restart_backend if the existing container must be replaced."
+        "Starting the backend launches llama-server with the selected model."
     ),
     "restart_backend":      (
-        "Restarting the backend will interrupt active requests and requires a model reload afterward."
+        "Restarting the backend will interrupt active requests and relaunch the selected model."
     ),
     "reload_selected_model": (
         "Reloading the selected model may interrupt active requests. "
-        "Backend process is not restarted."
+        "The backend process is restarted with -m for the selected model."
     ),
 }
 
@@ -872,18 +871,19 @@ class RequestRouter:
         """Resolve the selected model id for reload_selected_model.
 
         Returns (model_id, error_message). model_id is empty on failure.
-        Uses model router's selected entry; falls back to selected_model_entry().
+        Uses the persisted proxy model-state selection.
         """
         try:
-            router = self.handler._model_router()
-            model_id = router.selected_backend_id() or ""
-            if not model_id:
-                entry = router.selected_model_entry()
-                if entry:
-                    model_id = entry.get("backend_id") or entry.get("key") or ""
+            try:
+                from .qz_model_state import load_model_state, selected_identity_from_state
+            except ImportError:
+                from qz_model_state import load_model_state, selected_identity_from_state
+            state_path = self._model_state_path_for_endpoint()
+            state = load_model_state(state_path).state if state_path else None
+            model_id = selected_identity_from_state(state) if state else ""
             if not model_id:
                 return "", (
-                    "No model selected. Use POST /qz/models/select to choose a model "
+                    "No model selected. Use POST /qz/model/select-and-restart to choose a model "
                     "before calling reload_selected_model."
                 )
             return model_id, ""
@@ -891,27 +891,17 @@ class RequestRouter:
             return "", str(exc)
 
     def _do_reload_selected_model(self) -> tuple[bool, str]:
-        """Load the currently selected model into the running backend.
+        """Restart the backend with the currently selected model.
 
-        Uses ModelRouter.load_backend_model(model_id, wait=True).
-        Does not restart the backend. Does not call Docker.
+        Direct -m mode is the only supported runtime path.
         Returns (success, error_message). Never raises.
         """
         try:
             model_id, resolve_err = self._selected_model_for_reload()
             if not model_id:
                 return False, resolve_err or "No model selected."
-
-            timeout = float(getattr(self.handler.__class__, "model_load_timeout", 120.0))
-            router = self.handler._model_router()
-            router.load_backend_model(model_id, wait=True, timeout=timeout)
-
-            # load_backend_model updates cls.model_load_state; check the outcome
-            state = str(getattr(self.handler.__class__, "model_load_state", "") or "")
-            err   = str(getattr(self.handler.__class__, "model_load_error", "") or "")
-            if state == "ready":
-                return True, ""
-            return False, err or f"Model load did not complete (state={state!r})"
+            self._invoke_selected_model_reload(model_id)
+            return True, ""
         except Exception as exc:
             return False, str(exc)
 
@@ -951,25 +941,20 @@ class RequestRouter:
             return False, str(exc)
 
     def _do_start_backend(self) -> tuple[bool, str]:
-        """Non-destructive backend start via BackendClient.start_container().
+        """Start BackendManager with the selected direct -m launch model.
 
-        Does not load or unload models. Does not rm -f existing containers.
         Returns (success, error_message). Never raises.
         """
         try:
-            router = self.handler._model_router()
-            context_length = router.backend_context_length()
-            if not isinstance(context_length, int) or context_length <= 0:
-                context_length = int(os.environ.get("QZ_CONTEXT", 131072))
-
-            backend = self.handler._backend()
-            backend.start_container(context_length)
-
-            cls = self.handler.__class__
-            cls.model_load_state = "idle"
-            cls.model_load_error = None
-            cls.model_load_finished_at = time.time()
-            return True, ""
+            model_id, resolve_err = self._selected_model_for_reload()
+            if not model_id:
+                return False, resolve_err or "No model selected."
+            mgr = getattr(self.handler, "backend_manager", None)
+            if mgr is None:
+                return False, "backend_manager not initialised"
+            self._set_manager_launch_model(model_id, mgr)
+            result = mgr.start()
+            return bool(result.get("ok")), str(result.get("error") or "")
         except Exception as exc:
             error = str(exc)
             try:
@@ -982,30 +967,20 @@ class RequestRouter:
             return False, error
 
     def _do_restart_backend(self) -> tuple[bool, str]:
-        """Execute backend restart via BackendClient.restart_container().
-
-        Gets the configured context length from the model router (prefers confirmed
-        backend inventory, then cached state, then QZ_CONTEXT env default).
-        Calls backend.restart_container(context_size) — all Docker/process details
-        stay inside qz_backend.py. Updates handler model_load_state on completion.
+        """Restart BackendManager with the selected direct -m launch model.
 
         Returns (success, error_message). Never raises.
         """
         try:
-            router = self.handler._model_router()
-            context_length = router.backend_context_length()
-            if not isinstance(context_length, int) or context_length <= 0:
-                context_length = int(os.environ.get("QZ_CONTEXT", 131072))
-
-            backend = self.handler._backend()
-            backend.restart_container(context_length)
-
-            # Backend is up but empty — model needs to be reloaded on next request
-            cls = self.handler.__class__
-            cls.model_load_state = "idle"
-            cls.model_load_error = None
-            cls.model_load_finished_at = time.time()
-            return True, ""
+            model_id, resolve_err = self._selected_model_for_reload()
+            if not model_id:
+                return False, resolve_err or "No model selected."
+            mgr = getattr(self.handler, "backend_manager", None)
+            if mgr is None:
+                return False, "backend_manager not initialised"
+            self._set_manager_launch_model(model_id, mgr)
+            result = mgr.restart()
+            return bool(result.get("ok")), str(result.get("error") or "")
         except Exception as exc:
             error = str(exc)
             try:
@@ -1244,7 +1219,7 @@ class RequestRouter:
             if not precheck_model_id:
                 self.handler._send_json(409, self._recovery_error_payload(
                     "selected_model_missing",
-                    precheck_err or "No model selected; use /qz/models/select before reload.",
+                    precheck_err or "No model selected; use /qz/model/select-and-restart before reload.",
                     action=action,
                     blocked_by="state",
                     recovery_status=runtime_rs,
@@ -1583,44 +1558,10 @@ class RequestRouter:
             return
 
         if self.handler.path in ("/qz/models/load", "/qz/models/select"):
-            if not self._proxy_startup_ready():
-                self.handler._send_json(503, self._proxy_initializing_error_payload())
-                return
-            length = int(self.handler.headers.get("Content-Length", "0") or "0")
-            raw = self.handler.rfile.read(length) if length else b"{}"
-            try:
-                body = json.loads(raw.decode("utf-8"))
-            except Exception as e:
-                self.handler._send_json(400, {"error": f"invalid JSON: {e}"})
-                return
-            requested = body.get("model") or body.get("key") or body.get("name")
-            catalog = self.handler._model_catalog()
-            resolve_error: str | None = None
-            with self._request_gate(self.handler.path, requested or "", False):
-                selected, reason = self.handler._resolve_model_selection(requested)
-            if selected is None:
-                resolve_error = reason if isinstance(reason, str) else "model selection resolution failed"
-            # Slice E: keep qz.model_state.v1 last_load_* observation fresh
-            # whenever the legacy load/select path runs (this is how the
-            # proxy preload posts the persisted selection at startup).
-            # Default rollback_on_failure=True so preload retries fall back
-            # cleanly when the persisted selection no longer fits.
-            self._record_load_observation(
-                resolve_succeeded=selected is not None,
-                resolve_error=resolve_error,
-                rollback_on_failure=True,
-            )
-            if selected is None:
-                if isinstance(reason, dict):
-                    self.handler._send_json(503, reason)
-                else:
-                    self.handler._send_json(404, {"error": "no model selected", "reason": reason})
-                return
-            self.handler._send_json(200, {
-                "selected": selected,
-                "reason": reason,
-                "backend": self.handler._backend_models(),
-                "catalog": catalog.to_payload(),
+            self.handler._send_json(410, {
+                "ok": False,
+                "error": "legacy router model-loading endpoint removed",
+                "message": "Use /qz/model/select-and-restart.",
             })
             return
 
@@ -1917,14 +1858,16 @@ class RequestRouter:
             if logs:
                 failure = classify_model_load_failure(logs)
 
-        # Pull current backend_loaded_model for the observation.
         backend_loaded = ""
         try:
-            router = self.handler._model_router()
-            backend_models = router.backend_models()
-            loaded = router.loaded_backend_models(backend_models)
-            if loaded and isinstance(loaded[0], dict):
-                backend_loaded = (loaded[0].get("id") or "").strip()
+            snap = getattr(self.handler, "backend_manager", None).snapshot()
+            if snap.get("phase") == "healthy" and snap.get("backend_health_ok") is True:
+                backend_loaded = (
+                    snap.get("launch_model_backend_id")
+                    or snap.get("launch_model_key")
+                    or snap.get("launch_model_path_basename")
+                    or ""
+                ).strip()
         except Exception:
             pass
 
@@ -1966,40 +1909,13 @@ class RequestRouter:
         return False, None, None, False
 
     def _invoke_selected_model_reload(self, requested: str):
-        """Invoke the model reload appropriate for the current backend mode.
-
-        Direct mode (default): set BackendManager launch model and restart
-        the container with ``-m /models/<basename>``.  Wait for the
-        container to reach phase=healthy or fail.
-
-        Router mode: legacy resolve_model_selection path (llama-server
-        unload/load + optional BackendManager context restart).
-        """
+        """Restart the backend with ``-m /models/<basename>`` for requested."""
         mgr = getattr(self.handler, "backend_manager", None)
-        mode = getattr(mgr, "backend_model_mode", "router") if mgr is not None else "router"
+        if mgr is None:
+            raise RuntimeError("backend_manager not initialised")
+        return self._direct_mode_reload(requested, mgr)
 
-        if mode == "direct" and mgr is not None:
-            return self._direct_mode_reload(requested, mgr)
-
-        # Router mode — preserve the legacy resolve+load path.
-        with self._request_gate("/qz/model/reload", requested, False):
-            selected, reason = self.handler._resolve_model_selection(requested)
-        if selected is None:
-            if isinstance(reason, dict):
-                msg = reason.get("reason") or reason.get("error") or "model selection resolution failed"
-            else:
-                msg = reason or "model selection resolution failed"
-            raise RuntimeError(str(msg))
-        return selected, reason
-
-    def _direct_mode_reload(self, requested: str, mgr) -> tuple[dict, str]:
-        """Restart the BackendManager container with the selected model.
-
-        ``requested`` is the user-facing identity (catalog key/alias).
-        Matches the catalog entry, sets the launch model on ``mgr``, calls
-        ``mgr.restart()``, and waits until the container reports healthy
-        or the lifecycle fails.
-        """
+    def _set_manager_launch_model(self, requested: str, mgr) -> tuple[dict, str]:
         try:
             from .qz_model_catalog import match_model
         except ImportError:
@@ -2018,6 +1934,11 @@ class RequestRouter:
             raise RuntimeError(f"could not resolve launch filename for {requested!r}")
 
         mgr.set_launch_model(key=key, backend_id=backend_id, path_basename=filename)
+        return entry, "direct backend launch model set"
+
+    def _direct_mode_reload(self, requested: str, mgr) -> tuple[dict, str]:
+        """Restart the BackendManager container with the selected model."""
+        entry, _ = self._set_manager_launch_model(requested, mgr)
         with self._request_gate("/qz/model/reload", requested, False):
             result = mgr.restart()
         if not result.get("ok"):
@@ -2752,7 +2673,19 @@ class RequestRouter:
 
         client_model = body.get("model") or ""
         with self._request_gate(upstream_path, client_model, client_wants_stream):
-            selected_model, selection_reason = self.handler._resolve_model_selection(client_model)
+            catalog = self.handler._model_catalog()
+            if client_model:
+                selected_model, selection_reason = catalog.resolve(query=client_model)
+            else:
+                selected_model = catalog.selected or (catalog.entries[0] if catalog.entries else None)
+                selection_reason = "default"
+            if selected_model is not None and selected_model.get("profile_valid", True) is False:
+                try:
+                    from .qz_model_router import profile_backend_error_payload
+                except ImportError:
+                    from qz_model_router import profile_backend_error_payload
+                selection_reason = profile_backend_error_payload(selected_model, client_model or "")
+                selected_model = None
             if selected_model is None:
                 error_text = selection_reason.get("reason") if isinstance(selection_reason, dict) else selection_reason
                 self._emit_request_telemetry("request_failed", started_at, upstream_path, client_model, error=error_text or "no model available", phase="select_model", request_id=request_id)
@@ -2817,6 +2750,74 @@ class RequestRouter:
                     pass
                 self.handler._send_json(503, payload)
                 return
+
+            if upstream_path == "/v1/responses":
+                try:
+                    from .qz_model_status import build_model_status, identity_matches_loaded
+                except ImportError:
+                    from qz_model_status import build_model_status, identity_matches_loaded
+                model_status = build_model_status(self.handler)
+                active_ready = bool(model_status.get("selected_model_ready"))
+                active_loaded = str(model_status.get("backend_loaded_model") or "")
+                requested_key = str(selected_model.get("key") or selected_model.get("slug") or "")
+                requested_backend = str(selected_model.get("backend_id") or requested_key)
+                request_matches_active = identity_matches_loaded(
+                    requested_key,
+                    requested_backend,
+                    active_loaded,
+                )
+                if not active_ready or not request_matches_active:
+                    initialization = self.handler._initialization_payload()
+                    cp = build_control_plane_status(self.handler)
+                    ss = cp.get("service_status") or build_service_status(cp)
+                    reason = (
+                        "selected model is not ready for direct backend launch"
+                        if not active_ready
+                        else "requested model is not the active direct-launched model"
+                    )
+                    payload = build_responses_error_payload(
+                        error="model not ready",
+                        reason=reason,
+                        requested_model=client_model or requested_backend,
+                        proxy_initialization=initialization,
+                        readiness={
+                            "proxy_ready": bool(initialization.get("ready")),
+                            "catalog_ready": bool(initialization.get("catalog_ready")),
+                            "model_visible": True,
+                            "backend_ready": active_ready,
+                            "selected_model_ready": active_ready,
+                            "request_admission_state": model_status.get("request_admission_state"),
+                        },
+                        operator_hint=(
+                            "Use POST /qz/model/select-and-restart to select and "
+                            "restart the backend with the requested model."
+                        ),
+                        status_code=503,
+                        service_status=ss,
+                    )
+                    payload["model_status"] = model_status
+                    self._emit_request_telemetry(
+                        "request_failed",
+                        started_at,
+                        upstream_path,
+                        client_model,
+                        error=reason,
+                        phase="model_readiness",
+                        request_id=request_id,
+                    )
+                    try:
+                        self.handler.telemetry.emit("responses_rejected_model_not_ready", {
+                            "request_id": request_id,
+                            "model": client_model,
+                            "path": upstream_path,
+                            "stream": bool(client_wants_stream),
+                            "selected_model_ready": active_ready,
+                            "request_admission_state": model_status.get("request_admission_state"),
+                        })
+                    except Exception:
+                        pass
+                    self.handler._send_json(503, payload)
+                    return
 
             selected_identity = (
                 selected_model.get("slug")
@@ -3116,6 +3117,16 @@ class RequestRouter:
                 append_capture("latest-json-api.log", traceback.format_exc() + "\n")
             except Exception:
                 pass
+            if upstream_path == "/v1/responses":
+                try:
+                    mgr = getattr(self.handler, "backend_manager", None)
+                    if mgr is not None and callable(getattr(mgr, "record_runtime_failure", None)):
+                        mgr.record_runtime_failure(
+                            error=str(e),
+                            error_type="connection_failure",
+                        )
+                except Exception:
+                    pass
             self._emit_request_telemetry(
                 "request_failed",
                 started_at,

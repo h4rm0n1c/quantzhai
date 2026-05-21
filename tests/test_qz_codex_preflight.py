@@ -222,6 +222,8 @@ def _status(
         "selected_at": "2026-05-21T10:00:00Z",
         "backend_loaded_model": backend_loaded_model,
         "selected_loaded_mismatch": mismatch,
+        "selected_model_ready": bool(backend_loaded_model and not mismatch),
+        "request_admission_state": "ready" if backend_loaded_model and not mismatch else "unavailable",
         "model_visible": True,
         "profile_valid": True,
         "backend_phase": "healthy",

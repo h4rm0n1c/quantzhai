@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from proxy.qz_request_router import (
     RequestRouter,
 )
 from proxy.qz_recovery_state import RecoveryRuntimeState
+from proxy.qz_model_state import ModelState, write_model_state
 import unittest.mock
 
 
@@ -717,16 +719,23 @@ class RestartBackendBodyValidationTests(unittest.TestCase):
 
 class DoRestartBackendTests(unittest.TestCase):
     def _make_router(self, backend_ok=True, context_length=131072):
-        class _FakeBackend:
+        class _FakeBackendManager:
             def __init__(self, ok):
                 self._ok = ok
-                self.called_with = None
+                self.restart_called = 0
+                self.launch = None
 
-            def restart_container(self, ctx):
-                self.called_with = ctx
+            def set_launch_model(self, **kwargs):
+                self.launch = kwargs
+
+            def restart(self):
+                self.restart_called += 1
                 if not self._ok:
-                    raise RuntimeError("Docker failed")
-                return {"health_status": 200}
+                    return {"ok": False, "error": "Docker failed"}
+                return {"ok": True}
+
+            def snapshot(self):
+                return {"phase": "healthy" if self._ok else "failed", "last_error": "Docker failed" if not self._ok else ""}
 
         class _FakeRouter:
             def __init__(self, ctx):
@@ -744,18 +753,24 @@ class DoRestartBackendTests(unittest.TestCase):
             __class__ = _FakeHandlerClass
 
             def __init__(self, ok, ctx):
-                self._backend_obj = _FakeBackend(ok)
+                self.backend_manager = _FakeBackendManager(ok)
                 self._router_obj = _FakeRouter(ctx)
+                self._catalog = type("_Catalog", (), {
+                    "entries": [{"key": "qwen3.gguf", "backend_id": "qwen3-6b", "filename": "qwen3.gguf"}],
+                })()
+                self._tmp = tempfile.TemporaryDirectory()
+                self.model_state_path = str(Path(self._tmp.name) / "model-state.json")
+                write_model_state(ModelState(selected_key="qwen3.gguf", selected_backend_id="qwen3-6b"), self.model_state_path)
 
-            def _backend(self, *a, **kw):
-                return self._backend_obj
+            def _model_catalog(self):
+                return self._catalog
 
             def _model_router(self):
                 return self._router_obj
 
         router = RequestRouter.__new__(RequestRouter)
         router.handler = _FakeHandler(backend_ok, context_length)
-        return router, router.handler._backend_obj
+        return router, router.handler.backend_manager
 
     def test_success_returns_true(self):
         router, _ = self._make_router(backend_ok=True)
@@ -763,10 +778,11 @@ class DoRestartBackendTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(error, "")
 
-    def test_success_calls_restart_container(self):
+    def test_success_calls_restart_manager(self):
         router, backend = self._make_router(backend_ok=True, context_length=65536)
         router._do_restart_backend()
-        self.assertEqual(backend.called_with, 65536)
+        self.assertEqual(backend.restart_called, 1)
+        self.assertEqual(backend.launch["backend_id"], "qwen3-6b")
 
     def test_failure_returns_false_with_message(self):
         router, _ = self._make_router(backend_ok=False)
@@ -934,31 +950,24 @@ class ReloadBodyValidationTests(unittest.TestCase):
 
 class SelectedModelForReloadTests(unittest.TestCase):
     def _make_router(self, backend_id="", entry_key=""):
-        class _FakeRouter:
-            def __init__(self, bid, ek):
-                self._bid = bid
-                self._ek = ek
-
-            def selected_backend_id(self):
-                return self._bid
-
-            def selected_model_entry(self):
-                if self._ek:
-                    return {"backend_id": self._bid or self._ek, "key": self._ek}
-                return None
-
         class _FakeHandler:
-            def _model_router(self):
-                return _FakeRouter(backend_id, entry_key)
+            def __init__(self):
+                self._tmp = tempfile.TemporaryDirectory()
+                self.model_state_path = str(Path(self._tmp.name) / "model-state.json")
+                if backend_id or entry_key:
+                    write_model_state(
+                        ModelState(selected_key=entry_key, selected_backend_id=backend_id),
+                        self.model_state_path,
+                    )
 
         router = RequestRouter.__new__(RequestRouter)
         router.handler = _FakeHandler()
         return router
 
     def test_returns_backend_id(self):
-        router = self._make_router(backend_id="qwen3-6b")
+        router = self._make_router(backend_id="qwen3-6b", entry_key="qwen3.gguf")
         model_id, err = router._selected_model_for_reload()
-        self.assertEqual(model_id, "qwen3-6b")
+        self.assertEqual(model_id, "qwen3.gguf")
         self.assertEqual(err, "")
 
     def test_falls_back_to_entry_key(self):
@@ -991,8 +1000,7 @@ class DoReloadSelectedModelTests(unittest.TestCase):
     """
 
     def _make_router(self, backend_id="qwen3-6b", load_succeeds=True):
-        """Returns (router, inner_fake_router)."""
-        inner_router_ref: list = [None]
+        """Returns (router, fake backend manager)."""
 
         class FH:
             model_load_state = "idle"
@@ -1000,40 +1008,47 @@ class DoReloadSelectedModelTests(unittest.TestCase):
             model_load_timeout = 30.0
             restart_called = False
 
-            def _model_router(self):
-                return inner_router_ref[0]
-
-        class _FakeRouter:
+        class _FakeBackendManager:
             def __init__(self, bid, hcls, succeeds):
                 self._bid = bid
                 self._hcls = hcls
                 self._succeeds = succeeds
-                self.load_called_with = None
+                self.restart_called = 0
+                self.launch = None
 
-            def selected_backend_id(self):
-                return self._bid
+            def set_launch_model(self, **kwargs):
+                self.launch = kwargs
 
-            def selected_model_entry(self):
-                return {"backend_id": self._bid} if self._bid else None
-
-            def load_backend_model(self, model_id, wait=False, timeout=None):
-                self.load_called_with = model_id
+            def restart(self):
+                self.restart_called += 1
                 if self._succeeds:
                     self._hcls.model_load_state = "ready"
                     self._hcls.model_load_error = None
+                    return {"ok": True}
                 else:
                     self._hcls.model_load_state = "failed"
                     self._hcls.model_load_error = "load HTTP 422"
+                    return {"ok": False, "error": "load HTTP 422"}
 
-            def restart_backend_for_context(self, *a, **kw):
-                FH.restart_called = True
-
-        inner = _FakeRouter(backend_id, FH, load_succeeds)
-        inner_router_ref[0] = inner
+            def snapshot(self):
+                return {
+                    "phase": "healthy" if self._succeeds else "failed",
+                    "last_error": "" if self._succeeds else "load HTTP 422",
+                }
 
         router = RequestRouter.__new__(RequestRouter)
-        router.handler = FH()
-        return router, inner
+        handler = FH()
+        handler.backend_manager = _FakeBackendManager(backend_id, FH, load_succeeds)
+        handler._catalog = type("_Catalog", (), {
+            "entries": [{"key": "qwen3.gguf", "backend_id": backend_id, "filename": "qwen3.gguf"}] if backend_id else [],
+        })()
+        handler._tmp = tempfile.TemporaryDirectory()
+        handler.model_state_path = str(Path(handler._tmp.name) / "model-state.json")
+        if backend_id:
+            write_model_state(ModelState(selected_key="qwen3.gguf", selected_backend_id=backend_id), handler.model_state_path)
+        handler._model_catalog = lambda: handler._catalog
+        router.handler = handler
+        return router, handler.backend_manager
 
     def test_success(self):
         router, _ = self._make_router(backend_id="qwen3-6b", load_succeeds=True)
@@ -1041,10 +1056,11 @@ class DoReloadSelectedModelTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(error, "")
 
-    def test_calls_load_with_model_id(self):
+    def test_sets_launch_model_and_restarts(self):
         router, inner = self._make_router(backend_id="qwen3-6b", load_succeeds=True)
         router._do_reload_selected_model()
-        self.assertEqual(inner.load_called_with, "qwen3-6b")
+        self.assertEqual(inner.restart_called, 1)
+        self.assertEqual(inner.launch["backend_id"], "qwen3-6b")
 
     def test_failure(self):
         router, _ = self._make_router(backend_id="qwen3-6b", load_succeeds=False)
@@ -1219,8 +1235,6 @@ class StartBackendConfirmTests(unittest.TestCase):
 
 class DoStartBackendTests(unittest.TestCase):
     def _make_router(self, backend_ok=True, context_length=131072):
-        inner_router_ref: list = [None]
-
         class FH:
             model_load_state = "idle"
             model_load_error = None
@@ -1228,24 +1242,25 @@ class DoStartBackendTests(unittest.TestCase):
             restart_called = False
             start_called = False
 
-            def _model_router(self):
-                return inner_router_ref[0]
-
-        class _FakeBackend:
+        class _FakeBackendManager:
             def __init__(self, ok):
                 self._ok = ok
-                self.start_called_with = None
+                self.start_called = 0
                 self.restart_called = False
+                self.launch = None
 
-            def start_container(self, ctx, **kw):
-                self.start_called_with = ctx
+            def set_launch_model(self, **kwargs):
+                self.launch = kwargs
+
+            def start(self):
+                self.start_called += 1
                 if not self._ok:
-                    raise RuntimeError("docker start failed")
-                return {"health_status": 200, "already_running": False}
+                    return {"ok": False, "error": "docker start failed"}
+                return {"ok": True}
 
-            def restart_container(self, ctx, **kw):
+            def restart(self):
                 self.restart_called = True
-                return {"health_status": 200}
+                return {"ok": True}
 
         class _FakeRouter:
             def __init__(self, ctx):
@@ -1254,24 +1269,26 @@ class DoStartBackendTests(unittest.TestCase):
             def backend_context_length(self):
                 return self._ctx
 
-        fake_backend = _FakeBackend(backend_ok)
-
-        class _FakeRouterInst(_FakeRouter):
-            pass
-
-        inner_router = _FakeRouterInst(context_length)
-        inner_router_ref[0] = inner_router
-
         class _FH(FH):
-            def _model_router(self):
-                return inner_router_ref[0]
+            def __init__(self):
+                self.backend_manager = _FakeBackendManager(backend_ok)
+                self._router = _FakeRouter(context_length)
+                self._catalog = type("_Catalog", (), {
+                    "entries": [{"key": "qwen3.gguf", "backend_id": "qwen3-6b", "filename": "qwen3.gguf"}],
+                })()
+                self._tmp = tempfile.TemporaryDirectory()
+                self.model_state_path = str(Path(self._tmp.name) / "model-state.json")
+                write_model_state(ModelState(selected_key="qwen3.gguf", selected_backend_id="qwen3-6b"), self.model_state_path)
 
-            def _backend(self, *a, **kw):
-                return fake_backend
+            def _model_router(self):
+                return self._router
+
+            def _model_catalog(self):
+                return self._catalog
 
         router = RequestRouter.__new__(RequestRouter)
         router.handler = _FH()
-        return router, fake_backend
+        return router, router.handler.backend_manager
 
     def test_success(self):
         router, _ = self._make_router(backend_ok=True)
@@ -1279,10 +1296,11 @@ class DoStartBackendTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(error, "")
 
-    def test_calls_start_container(self):
+    def test_calls_start_manager(self):
         router, backend = self._make_router(backend_ok=True, context_length=65536)
         router._do_start_backend()
-        self.assertEqual(backend.start_called_with, 65536)
+        self.assertEqual(backend.start_called, 1)
+        self.assertEqual(backend.launch["backend_id"], "qwen3-6b")
 
     def test_failure(self):
         router, _ = self._make_router(backend_ok=False)
@@ -1290,7 +1308,7 @@ class DoStartBackendTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("docker start failed", error)
 
-    def test_does_not_call_restart_container(self):
+    def test_does_not_call_restart_manager(self):
         router, backend = self._make_router(backend_ok=True)
         router._do_start_backend()
         self.assertFalse(backend.restart_called)

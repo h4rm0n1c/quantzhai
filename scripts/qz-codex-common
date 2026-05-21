@@ -299,6 +299,8 @@ def fetch_status():
 def active_match(data, req):
     if not isinstance(data, dict):
         return False
+    if data.get("selected_model_ready") is not True:
+        return False
     loaded = (data.get("backend_loaded_model") or "").strip()
     sk = (data.get("selected_key") or "").strip()
     sbid = (data.get("selected_backend_id") or "").strip()
@@ -318,10 +320,14 @@ def print_mismatch(data, req):
     selected = ""
     loaded = ""
     source = ""
+    ready = False
+    admission = ""
     if isinstance(data, dict):
         selected = data.get("selected_key") or data.get("selected_backend_id") or ""
         loaded = data.get("backend_loaded_model") or ""
         source = data.get("selected_source") or ""
+        ready = data.get("selected_model_ready")
+        admission = data.get("request_admission_state") or ""
     selected = selected or "<none>"
     loaded = loaded or "<none>"
     source = source or "<none>"
@@ -330,6 +336,9 @@ def print_mismatch(data, req):
     print("  Active selected model: {}".format(selected), file=e)
     print("  Backend loaded model:  {}".format(loaded), file=e)
     print("  Selected source:       {}".format(source), file=e)
+    print("  Selected ready:        {}".format(ready), file=e)
+    if admission:
+        print("  Admission state:       {}".format(admission), file=e)
     print("", file=e)
     print("Set QZ_CODEX_AUTO_SELECT_MODEL=1 to let qz-codex select/restart automatically,", file=e)
     print("or call the proxy endpoint manually:", file=e)
