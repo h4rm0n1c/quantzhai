@@ -244,6 +244,85 @@ class ModelCatalogProfileValidationTests(unittest.TestCase):
             self.assertEqual(catalog.selected["key"], "z-backend.gguf")
             self.assertEqual(catalog.reason, "default_key=z-backend.gguf")
 
+    def test_valid_persisted_selection_beats_qz_model_key(self):
+        """Slice C precedence: persisted selected_key wins over QZ_MODEL_KEY."""
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ, {"QZ_MODEL_KEY": "a-backend.gguf"}, clear=False
+        ):
+            os.environ.pop("QZ_MODEL_STATE_PATH", None)
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            _write_gguf(model_dir / "a-backend.gguf")
+            _write_gguf(model_dir / "z-backend.gguf")
+            state = root / "var" / "model-state.json"
+            state.write_text(json.dumps({
+                "selected_key": "z-backend.gguf",
+                "selected_backend_id": "z-backend",
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+
+            self.assertEqual(catalog.selected["key"], "z-backend.gguf")
+            self.assertEqual(catalog.reason, "last_selected=z-backend.gguf")
+
+    def test_qz_model_key_seeds_when_no_persisted_selection(self):
+        """Slice C precedence: QZ_MODEL_KEY only kicks in when no valid persisted selection exists."""
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ, {"QZ_MODEL_KEY": "z-backend.gguf"}, clear=False
+        ):
+            os.environ.pop("QZ_MODEL_STATE_PATH", None)
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            _write_gguf(model_dir / "a-backend.gguf")
+            _write_gguf(model_dir / "z-backend.gguf")
+            # No state file → QZ_MODEL_KEY seeds the selection
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+
+            self.assertEqual(catalog.selected["key"], "z-backend.gguf")
+            self.assertEqual(catalog.reason, "matched z-backend.gguf")
+
+    def test_qz_model_key_seeds_when_persisted_is_invalid(self):
+        """Slice C precedence: invalid persisted falls through to QZ_MODEL_KEY before catalog default."""
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ, {"QZ_MODEL_KEY": "z-backend.gguf"}, clear=False
+        ):
+            os.environ.pop("QZ_MODEL_STATE_PATH", None)
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            _write_gguf(model_dir / "a-backend.gguf")
+            _write_gguf(model_dir / "z-backend.gguf")
+            state = root / "var" / "model-state.json"
+            state.write_text(json.dumps({
+                "selected_key": "missing-profile.gguf",
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+
+            self.assertEqual(catalog.selected["key"], "z-backend.gguf")
+            # Reason comes from the QZ_MODEL_KEY seed match, not last_selected
+            self.assertEqual(catalog.reason, "matched z-backend.gguf")
+
+    def test_loaded_model_only_state_does_not_become_selected(self):
+        """Slice B regression at the catalog level — loaded_model is not authority."""
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ, {"QZ_MODEL_KEY": ""}, clear=False
+        ):
+            os.environ.pop("QZ_MODEL_STATE_PATH", None)
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            _write_gguf(model_dir / "a-backend.gguf")
+            _write_gguf(model_dir / "z-backend.gguf")
+            state = root / "var" / "model-state.json"
+            state.write_text(json.dumps({
+                "loaded_model": "z-backend.gguf",
+            }), encoding="utf-8")
+
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+
+            # Falls through to catalog default (alphabetical) since loaded_model
+            # is observation, not selection authority.
+            self.assertEqual(catalog.selected["key"], "a-backend.gguf")
+
     def test_symlink_profile_routes_to_target_backend(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -5,7 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -378,6 +378,152 @@ class ServiceStatusInControlPlaneTests(unittest.TestCase):
         for field in ("schema", "ok", "status", "readiness", "proxy_initialization",
                       "models", "backend", "codex_catalog", "operator_hints"):
             self.assertIn(field, p, f"existing field removed: {field}")
+
+
+# ---------------------------------------------------------------------------
+# Slice C — proxy-owned model selection fields in /qz/control-plane
+# ---------------------------------------------------------------------------
+
+class ModelSelectionFieldsTests(unittest.TestCase):
+    """Verify /qz/control-plane surfaces configured vs selected vs loaded."""
+
+    def _with_state_file(self, state_payload: dict):
+        """Return a context-manager-like helper for a state file + env patch."""
+        return _StateFileFixture(state_payload)
+
+    def test_models_section_has_new_fields(self):
+        with self._with_state_file({
+            "schema": "qz.model_state.v1",
+            "selected_key": "kuato.gguf",
+            "selected_backend_id": "kuato",
+            "selected_label": "Kuato",
+            "selected_source": "operator",
+            "selected_at": "2026-05-21T10:00:00Z",
+            "selected_reason": "POST /qz/model/select",
+        }) as fix:
+            h = _make_handler()
+            h.model_state_path = fix.path
+            p = build_control_plane_status(h)
+        m = p["models"]
+        for field in (
+            "configured_env_model",
+            "selected_source",
+            "selected_at",
+            "backend_loaded_model",
+            "selected_loaded_mismatch",
+            "selection_reason",
+            "model_visible",
+            "profile_valid",
+            "restart_required",
+        ):
+            self.assertIn(field, m, f"models.{field} missing")
+        self.assertEqual(m["selected_source"], "operator")
+        self.assertEqual(m["selection_reason"], "POST /qz/model/select")
+
+    def test_backend_section_has_load_failure_fields(self):
+        with self._with_state_file({
+            "schema": "qz.model_state.v1",
+            "selected_key": "kuato.gguf",
+            "selected_backend_id": "kuato",
+            "last_load_result": "failed",
+            "last_load_error": "cudaMalloc failed",
+            "last_load_error_type": "insufficient_vram",
+        }) as fix:
+            h = _make_handler(loaded_model="")
+            h.model_state_path = fix.path
+            p = build_control_plane_status(h)
+        b = p["backend"]
+        self.assertTrue(b["model_load_failed"])
+        self.assertEqual(b["load_error"], "cudaMalloc failed")
+        self.assertEqual(b["load_error_type"], "insufficient_vram")
+        self.assertTrue(b["insufficient_vram"])
+        self.assertTrue(b["selected_model_failed"])
+
+    def test_configured_env_model_exposed(self):
+        with self._with_state_file({
+            "schema": "qz.model_state.v1",
+            "selected_key": "kuato.gguf",
+            "selected_backend_id": "kuato",
+        }) as fix:
+            h = _make_handler()
+            h.model_state_path = fix.path
+            with patch.dict(os.environ, {"QZ_MODEL_KEY": "envseed.gguf"}, clear=False):
+                p = build_control_plane_status(h)
+        self.assertEqual(p["models"]["configured_env_model"], "envseed.gguf")
+        self.assertEqual(p["models"]["selected"], "kuato.gguf")
+
+    def test_selected_loaded_mismatch_true(self):
+        with self._with_state_file({
+            "schema": "qz.model_state.v1",
+            "selected_key": "kuato.gguf",
+            "selected_backend_id": "kuato",
+        }) as fix:
+            h = _make_handler(loaded_model="other-model")
+            h.model_state_path = fix.path
+            p = build_control_plane_status(h)
+        self.assertTrue(p["models"]["selected_loaded_mismatch"])
+        self.assertTrue(any("differs from loaded" in hint for hint in p["operator_hints"]))
+
+    def test_selected_loaded_mismatch_false_when_aligned(self):
+        with self._with_state_file({
+            "schema": "qz.model_state.v1",
+            "selected_key": "kuato.gguf",
+            "selected_backend_id": "kuato",
+        }) as fix:
+            h = _make_handler(loaded_model="kuato")
+            h.model_state_path = fix.path
+            p = build_control_plane_status(h)
+        self.assertFalse(p["models"]["selected_loaded_mismatch"])
+
+    def test_qz_model_key_seed_only_hint_emitted(self):
+        with self._with_state_file({
+            "schema": "qz.model_state.v1",
+            "selected_key": "kuato.gguf",
+            "selected_backend_id": "kuato",
+        }) as fix:
+            h = _make_handler(loaded_model="kuato")
+            h.model_state_path = fix.path
+            with patch.dict(os.environ, {"QZ_MODEL_KEY": "envseed"}, clear=False):
+                p = build_control_plane_status(h)
+        self.assertTrue(any("QZ_MODEL_KEY" in hint for hint in p["operator_hints"]))
+
+    def test_qz_model_key_matches_selection_no_hint(self):
+        with self._with_state_file({
+            "schema": "qz.model_state.v1",
+            "selected_key": "kuato.gguf",
+            "selected_backend_id": "kuato",
+        }) as fix:
+            h = _make_handler(loaded_model="kuato")
+            h.model_state_path = fix.path
+            with patch.dict(os.environ, {"QZ_MODEL_KEY": "kuato"}, clear=False):
+                p = build_control_plane_status(h)
+        self.assertFalse(any("QZ_MODEL_KEY" in hint for hint in p["operator_hints"]))
+
+    def test_no_selection_no_mismatch(self):
+        with self._with_state_file({}) as fix:
+            h = _make_handler(loaded_model="kuato")
+            h.model_state_path = fix.path
+            p = build_control_plane_status(h)
+        self.assertFalse(p["models"]["selected_loaded_mismatch"])
+        self.assertEqual(p["models"]["selected_source"], "")
+
+
+class _StateFileFixture:
+    """Context manager that creates a tempfile state file."""
+
+    def __init__(self, payload: dict):
+        self.payload = payload
+        self._tmp = None
+        self.path = None
+
+    def __enter__(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = str(Path(self._tmp.name) / "model-state.json")
+        Path(self.path).write_text(json.dumps(self.payload), encoding="utf-8")
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._tmp.cleanup()
 
 
 if __name__ == "__main__":

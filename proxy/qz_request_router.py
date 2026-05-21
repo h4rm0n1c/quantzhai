@@ -532,6 +532,22 @@ class RequestRouter:
             })
             return
 
+        if self.handler.path == "/qz/model/status":
+            if not self._proxy_startup_ready():
+                self.handler._send_json(503, self._proxy_initializing_error_payload())
+                return
+            try:
+                from .qz_model_status import build_model_status
+            except ImportError:
+                from qz_model_status import build_model_status
+            try:
+                payload = build_model_status(self.handler)
+            except Exception as exc:
+                self.handler._send_json(500, {"ok": False, "error": str(exc)})
+                return
+            self.handler._send_json(200, payload)
+            return
+
         if self.handler.path == "/qz/backend/status":
             mgr = getattr(self.handler, "backend_manager", None)
             if mgr is None:
@@ -1508,6 +1524,18 @@ class RequestRouter:
             })
             return
 
+        if self.handler.path == "/qz/model/select":
+            self._handle_model_select_endpoint(restart=False)
+            return
+
+        if self.handler.path == "/qz/model/select-and-restart":
+            self._handle_model_select_endpoint(restart=True)
+            return
+
+        if self.handler.path == "/qz/model/reload":
+            self._handle_model_reload_endpoint()
+            return
+
         if self.handler.path in ("/qz/models/load", "/qz/models/select"):
             if not self._proxy_startup_ready():
                 self.handler._send_json(503, self._proxy_initializing_error_payload())
@@ -1538,6 +1566,207 @@ class RequestRouter:
             return
 
         self.proxy_raw("POST")
+
+    # ------------------------------------------------------------------
+    # Slice C: /qz/model/* endpoint handlers — proxy-owned model selection
+    # ------------------------------------------------------------------
+
+    def _model_state_path_for_endpoint(self) -> Path | None:
+        raw = getattr(self.handler, "model_state_path", None)
+        if isinstance(raw, str) and raw.strip():
+            return Path(raw).expanduser()
+        env_path = os.environ.get("QZ_MODEL_STATE_PATH")
+        if env_path:
+            return Path(env_path).expanduser()
+        return None
+
+    def _handle_model_select_endpoint(self, restart: bool) -> None:
+        """Handle POST /qz/model/select or /qz/model/select-and-restart."""
+        if not self._proxy_startup_ready():
+            self.handler._send_json(503, self._proxy_initializing_error_payload())
+            return
+
+        try:
+            from .qz_model_status import build_model_status
+            from .qz_model_state import (
+                SELECTED_SOURCES,
+                load_model_state,
+                state_from_selection,
+                update_load_observation,
+                write_model_state,
+            )
+            from .qz_model_catalog import match_model
+        except ImportError:
+            from qz_model_status import build_model_status
+            from qz_model_state import (
+                SELECTED_SOURCES,
+                load_model_state,
+                state_from_selection,
+                update_load_observation,
+                write_model_state,
+            )
+            from qz_model_catalog import match_model
+
+        length = int(self.handler.headers.get("Content-Length", "0") or "0")
+        raw = self.handler.rfile.read(length) if length else b"{}"
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except Exception as exc:
+            self.handler._send_json(400, {"ok": False, "error": f"invalid JSON: {exc}"})
+            return
+        if not isinstance(body, dict):
+            self.handler._send_json(400, {"ok": False, "error": "request body must be an object"})
+            return
+
+        requested = body.get("model") or body.get("key") or body.get("name")
+        if not isinstance(requested, str) or not requested.strip():
+            self.handler._send_json(400, {
+                "ok": False,
+                "error": "missing 'model' field in request body",
+            })
+            return
+
+        source = body.get("source") or "operator"
+        if source not in SELECTED_SOURCES:
+            self.handler._send_json(400, {
+                "ok": False,
+                "error": f"unknown selected_source {source!r}; must be one of {sorted(SELECTED_SOURCES)}",
+            })
+            return
+
+        catalog = self.handler._model_catalog()
+        entry = match_model(catalog.entries, requested.strip())
+        if entry is None:
+            self.handler._send_json(404, {
+                "ok": False,
+                "error": f"model {requested!r} not found in catalog",
+                "available_count": len(catalog.entries),
+            })
+            return
+        if entry.get("profile_valid", True) is False:
+            self.handler._send_json(400, {
+                "ok": False,
+                "error": f"profile invalid for model {requested!r}",
+                "profile_error": entry.get("profile_error"),
+            })
+            return
+
+        state_path = self._model_state_path_for_endpoint()
+        existing = load_model_state(state_path).state if state_path else None
+        runtime_context = entry.get("runtime_context_length")
+        new_state = state_from_selection(
+            entry,
+            source=source,
+            reason=f"POST {self.handler.path}",
+            runtime_context_length=runtime_context if isinstance(runtime_context, int) else None,
+        )
+        if existing is not None:
+            new_state = update_load_observation(
+                new_state,
+                loaded_model=existing.last_loaded_model,
+                result=existing.last_load_result,
+                error=existing.last_load_error,
+                error_type=existing.last_load_error_type,
+            )
+        try:
+            write_model_state(new_state, state_path)
+        except Exception as exc:
+            self.handler._send_json(500, {
+                "ok": False,
+                "error": f"failed to persist model state: {exc}",
+            })
+            return
+
+        # Keep the in-memory ModelCatalog.selected aligned with the new persisted choice.
+        try:
+            catalog.select(query=requested.strip())
+        except Exception:
+            pass
+
+        if not restart:
+            try:
+                payload = build_model_status(self.handler)
+            except Exception as exc:
+                self.handler._send_json(500, {"ok": False, "error": str(exc)})
+                return
+            self.handler._send_json(200, payload)
+            return
+
+        # select-and-restart: invoke the existing resolve+load path which handles
+        # llama-server unload/load and (when needed) BackendManager context restart.
+        try:
+            self._invoke_selected_model_reload(requested.strip())
+        except Exception as exc:
+            payload = build_model_status(self.handler)
+            payload["ok"] = False
+            payload["error"] = str(exc)
+            self.handler._send_json(500, payload)
+            return
+
+        payload = build_model_status(self.handler)
+        self.handler._send_json(200, payload)
+
+    def _handle_model_reload_endpoint(self) -> None:
+        """Handle POST /qz/model/reload using the current persisted selection."""
+        if not self._proxy_startup_ready():
+            self.handler._send_json(503, self._proxy_initializing_error_payload())
+            return
+
+        try:
+            from .qz_model_status import build_model_status
+            from .qz_model_state import load_model_state, selected_identity_from_state
+            from .qz_model_catalog import match_model
+        except ImportError:
+            from qz_model_status import build_model_status
+            from qz_model_state import load_model_state, selected_identity_from_state
+            from qz_model_catalog import match_model
+
+        state_path = self._model_state_path_for_endpoint()
+        state = load_model_state(state_path).state if state_path else None
+        identity = selected_identity_from_state(state) if state else ""
+        if not identity:
+            self.handler._send_json(409, {
+                "ok": False,
+                "error": "no selected model; POST /qz/model/select first",
+            })
+            return
+
+        catalog = self.handler._model_catalog()
+        entry = match_model(catalog.entries, identity)
+        if entry is None:
+            self.handler._send_json(404, {
+                "ok": False,
+                "error": f"selected model {identity!r} not found in current catalog",
+            })
+            return
+
+        try:
+            self._invoke_selected_model_reload(identity)
+        except Exception as exc:
+            payload = build_model_status(self.handler)
+            payload["ok"] = False
+            payload["error"] = str(exc)
+            self.handler._send_json(500, payload)
+            return
+
+        payload = build_model_status(self.handler)
+        self.handler._send_json(200, payload)
+
+    def _invoke_selected_model_reload(self, requested: str):
+        """Call the existing resolve_model_selection path for the selected model.
+
+        Raises RuntimeError when resolution fails.  The existing path handles
+        llama-server unload/load and BackendManager context restarts.
+        """
+        with self._request_gate("/qz/model/reload", requested, False):
+            selected, reason = self.handler._resolve_model_selection(requested)
+        if selected is None:
+            if isinstance(reason, dict):
+                msg = reason.get("reason") or reason.get("error") or "model selection resolution failed"
+            else:
+                msg = reason or "model selection resolution failed"
+            raise RuntimeError(str(msg))
+        return selected, reason
 
     def _web_runtime(self, selected_model=None):
         scr = getattr(self.handler, "search_config_result", None)

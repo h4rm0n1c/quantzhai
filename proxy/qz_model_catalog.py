@@ -849,8 +849,24 @@ class ModelCatalog:
         if self.reload_manifest_on_refresh:
             self.manifest = load_manifest(self.root)
         self.entries, self.errors = scan_models(self.model_dir, self.manifest)
-        requested = query or os.environ.get("QZ_MODEL_KEY")
-        last_selected = "" if requested else load_last_selected_model(self.root)
+        # Precedence (proxy-owned authority — see
+        # docs/proxy-model-selection-authority.md §4):
+        #   1. explicit query              → operator/seed at refresh time
+        #   2. valid persisted selection   → wins over QZ_MODEL_KEY
+        #   3. QZ_MODEL_KEY as seed        → only when no valid persisted selection
+        #   4. manifest default / fallback → handled in choose_default
+        if query:
+            requested = query
+            last_selected = ""
+        else:
+            last_selected = load_last_selected_model(self.root)
+            if last_selected and match_model(self.entries, last_selected) is not None:
+                requested = None
+            else:
+                env_seed = os.environ.get("QZ_MODEL_KEY")
+                requested = env_seed.strip() if isinstance(env_seed, str) and env_seed.strip() else None
+                if requested:
+                    last_selected = ""
         self.selected, self.reason = choose_default(self.entries, self.manifest, requested, last_selected)
         payload = cache_payload(self.root, self.model_dir, self.manifest, self.entries, self.selected, self.reason, self.errors)
         self.cache_path = write_cache(self.root, payload)

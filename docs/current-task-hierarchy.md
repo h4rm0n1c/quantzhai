@@ -39,7 +39,14 @@ Slice B-state — ✅ qz.model_state.v1 in proxy/qz_model_state.py;
   load_last_selected_model no longer reads loaded_model;
   _persist_model_state routed through new module; 32 new tests;
   2988 total pass
-Slice C-endpoints — /qz/model/status/select/reload/select-and-restart
+Slice C-endpoints — ✅ /qz/model/status, /qz/model/select,
+  /qz/model/reload, /qz/model/select-and-restart;
+  proxy/qz_model_status.py builds qz.model_status.v1;
+  ModelCatalog.refresh() now enforces precedence
+  (persisted > QZ_MODEL_KEY seed > catalog default);
+  /qz/control-plane exposes configured_env_model, selected_source,
+  selected_loaded_mismatch, load-failure surface, operator hints;
+  44 new tests; 3032 total pass
 Slice D-qz-codex — replace visibility-only preflight; QZ_CODEX_AUTO_SELECT_MODEL
 Slice E-load-failure — classify VRAM/context-create failures from logs
 Slice F-smoke — manual cold-start acceptance

@@ -27,6 +27,12 @@ try:
     from .qz_active_requests import ACTIVE_REQUESTS
     from .qz_recovery_jobs import RECOVERY_JOBS
     from .qz_vram_snapshot import get_cached_vram_snapshot
+    from .qz_model_status import (
+        load_handler_model_state,
+        identity_matches_loaded,
+        model_selection_hints,
+    )
+    from .qz_model_catalog import match_model
 except ImportError:
     from qz_paths import codex_model_catalog_path as _codex_model_catalog_path
     from qz_service_status import build_service_status
@@ -35,6 +41,12 @@ except ImportError:
     from qz_active_requests import ACTIVE_REQUESTS
     from qz_recovery_jobs import RECOVERY_JOBS
     from qz_vram_snapshot import get_cached_vram_snapshot
+    from qz_model_status import (
+        load_handler_model_state,
+        identity_matches_loaded,
+        model_selection_hints,
+    )
+    from qz_model_catalog import match_model
 from typing import Any
 
 QZ_CONTROL_PLANE_SCHEMA = "qz.control_plane.status.v1"
@@ -190,6 +202,33 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
     overall = _overall_status(readiness)
     ok = proxy_ready and catalog_ready  # backend is optional; ok = proxy+catalog
 
+    # --- proxy-owned model selection state (qz.model_state.v1) ---
+    selection_state = load_handler_model_state(handler)
+    selected_identity_from_state = (
+        selection_state.selected_key or selection_state.selected_backend_id
+    )
+    configured_env_model = (os.environ.get("QZ_MODEL_KEY") or "").strip()
+    selected_loaded_mismatch = bool(
+        selected_identity_from_state
+        and loaded_model
+        and not identity_matches_loaded(
+            selection_state.selected_key,
+            selection_state.selected_backend_id,
+            loaded_model,
+        )
+    )
+    state_model_visible = False
+    state_profile_valid = True
+    if selected_identity_from_state and catalog_ready:
+        try:
+            catalog = handler._model_catalog()
+            entry = match_model(catalog.entries, selected_identity_from_state)
+            if entry is not None:
+                state_model_visible = True
+                state_profile_valid = entry.get("profile_valid", True) is not False
+        except Exception:
+            pass
+
     payload: dict[str, Any] = {
         "schema": QZ_CONTROL_PLANE_SCHEMA,
         "ok": ok,
@@ -201,6 +240,16 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
             "ids": sorted(model_ids),
             "selected": selected_id,
             "selected_backend_id": selected_backend_id,
+            # Slice C — proxy-owned selection authority surface.
+            "configured_env_model":      configured_env_model,
+            "selected_source":           selection_state.selected_source,
+            "selected_at":               selection_state.selected_at,
+            "backend_loaded_model":      loaded_model,
+            "selected_loaded_mismatch":  selected_loaded_mismatch,
+            "selection_reason":          selection_state.selected_reason,
+            "model_visible":             state_model_visible,
+            "profile_valid":             state_profile_valid,
+            "restart_required":          restart_required,
         },
         "backend": {
             "reachable": backend_reachable,
@@ -210,10 +259,20 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
             "loaded_count": loaded_count,
             "restart_required": restart_required,
             "error": backend_error,
+            # Slice C — selection-failure surface (populated by Slice E).
+            "model_load_failed":        selection_state.last_load_result == "failed",
+            "load_error":               selection_state.last_load_error,
+            "load_error_type":          selection_state.last_load_error_type,
+            "insufficient_vram":        selection_state.last_load_error_type == "insufficient_vram",
+            "selected_model_failed":    selection_state.last_load_result == "failed",
         },
         "codex_catalog": codex_catalog,
         "operator_hints": _operator_hints(readiness, len(model_ids), backend_error),
     }
+    # Append model-selection-specific operator hints.
+    payload["operator_hints"].extend(
+        model_selection_hints(selection_state, configured_env_model, loaded_model)
+    )
     # Additive: canonical service/recovery status derived from this payload.
     # Does not change existing fields; safe when backend is down.
     payload["service_status"] = build_service_status(payload)
