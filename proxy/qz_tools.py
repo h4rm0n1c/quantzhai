@@ -143,6 +143,15 @@ class ToolRegistry:
                 return adapter
         return None
 
+    def adapter_for_name(self, name: str):
+        """Return the adapter whose upstream_name matches name, or None."""
+        if not name:
+            return None
+        for adapter in self.adapters:
+            if getattr(adapter, "upstream_name", None) == name:
+                return adapter
+        return None
+
     def normalize_tool_choice(self, tool_choice: dict):
         for adapter in self.adapters:
             normalized = adapter.normalize_tool_choice(tool_choice)

@@ -120,6 +120,7 @@ def public_tool_lifecycle_event(
     ], seq
 
 
+
 def web_search_call_lifecycle_event(stage: str, item_id: str, output_index: int, sequence_start: int = 0):
     return public_tool_lifecycle_event(
         "response.web_search_call",
@@ -143,13 +144,15 @@ def rewrite_sse_payload(event_type, payload, output_index_offset: int = 0, prepe
     if not isinstance(payload, dict):
         return event_type, payload
 
-    rewritten = json.loads(json.dumps(payload))
+    rewritten = dict(payload)
 
     if output_index_offset and isinstance(rewritten.get("output_index"), int):
         rewritten["output_index"] += output_index_offset
 
     response = rewritten.get("response")
-    if isinstance(response, dict):
+    if isinstance(response, dict) and (model or prepend_output):
+        response = dict(response)
+        rewritten["response"] = response
         if model:
             response["model"] = model
         if prepend_output and isinstance(response.get("output"), list):

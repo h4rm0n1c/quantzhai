@@ -767,7 +767,7 @@ class SearchConfigProfilesTests(unittest.TestCase):
 
     def test_empty_search_config_profiles_does_not_break_runtime(self):
         runtime = WebSearchRuntime(search_config_profiles={})
-        self.assertIsInstance(runtime._valid_profiles(), set)
+        self.assertIsInstance(runtime._valid_profiles(), (set, frozenset))
 
     def test_none_search_config_profiles_treated_as_empty(self):
         runtime = WebSearchRuntime(search_config_profiles=None)
@@ -1618,6 +1618,53 @@ class RetrieveMaxCharsParamTests(unittest.TestCase):
             self.assertNotIn("127.0.0.1", serialized)
             self.assertNotIn("8890", serialized)
             self.assertNotIn("/retrieve?", serialized)
+
+
+class FurryProfileTests(unittest.TestCase):
+    def _runtime_with_config(self, profiles):
+        return WebSearchRuntime(search_config_profiles=profiles)
+
+    def test_furry_fse_profile_uses_only_fse(self):
+        from proxy.qz_search_config import load_search_config
+        cfg = load_search_config()
+        profiles = cfg.config.get("profiles", {})
+        self.assertIn("furry_fse", profiles)
+        fse_cfg = profiles["furry_fse"]
+        self.assertEqual(fse_cfg.get("engines"), ["fse"])
+
+    def test_furry_images_profile_uses_e926_and_furbooru(self):
+        from proxy.qz_search_config import load_search_config
+        cfg = load_search_config()
+        profiles = cfg.config.get("profiles", {})
+        self.assertIn("furry_images", profiles)
+        img_cfg = profiles["furry_images"]
+        engines = img_cfg.get("engines", [])
+        self.assertIn("e926", engines)
+        self.assertIn("furbooru", engines)
+        self.assertNotIn("fse", engines)
+
+    def test_furry_fse_is_valid_profile_in_runtime(self):
+        runtime = self._runtime_with_config({"furry_fse": {"categories": ["general"], "engines": ["fse"]}})
+        self.assertIn("furry_fse", runtime._valid_profiles())
+
+    def test_furry_images_is_valid_profile_in_runtime(self):
+        runtime = self._runtime_with_config({"furry_images": {"categories": ["images"], "engines": ["e926", "furbooru"]}})
+        self.assertIn("furry_images", runtime._valid_profiles())
+
+    def test_capabilities_exposes_furry_fse_and_furry_images(self):
+        from proxy.qz_tool_web import build_web_search_capabilities
+        from proxy.qz_search_config import load_search_config
+        cfg = load_search_config()
+        profiles = cfg.config.get("profiles", {})
+        runtime = WebSearchRuntime(search_config_profiles=profiles)
+        caps = build_web_search_capabilities(runtime)
+        self.assertIn("furry_fse", caps["profiles"])
+        self.assertIn("furry_images", caps["profiles"])
+
+    def test_furry_fse_profile_in_VALID_WEB_SEARCH_PROFILES_static(self):
+        from proxy.qz_tool_web import VALID_WEB_SEARCH_PROFILES
+        self.assertIn("furry_fse", VALID_WEB_SEARCH_PROFILES)
+        self.assertIn("furry_images", VALID_WEB_SEARCH_PROFILES)
 
 
 if __name__ == "__main__":

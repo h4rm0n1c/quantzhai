@@ -119,5 +119,72 @@ class ToolRequestNormalizationTests(unittest.TestCase):
                     os.environ["QZ_VAR_DIR"] = old_var_dir
 
 
+class ToolDedupAndReplacementTests(unittest.TestCase):
+    def test_function_typed_web_search_is_replaced_by_proxy_schema(self):
+        """Codex sends type=function name=web_search — proxy must replace with its schema."""
+        codex_tool = {
+            "type": "function",
+            "name": "web_search",
+            "description": "Stale Codex default web search description.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+        }
+        body = {"tools": [codex_tool]}
+
+        report = normalize_tool_request_for_llamacpp(body, write_captures=False)
+
+        self.assertEqual(len(body["tools"]), 1)
+        tool = body["tools"][0]
+        self.assertEqual(tool["name"], "web_search")
+        self.assertIn("capabilities", tool["description"])
+        self.assertNotIn("Stale Codex default", tool["description"])
+        self.assertEqual(report.replaced, ("web_search",))
+        self.assertEqual(report.translated, ())
+
+    def test_function_typed_web_search_deduped_when_structured_also_present(self):
+        """If both type=web_search and type=function name=web_search present, only one upstream tool."""
+        body = {
+            "tools": [
+                {"type": "web_search"},
+                {"type": "function", "name": "web_search", "description": "Stale."},
+            ]
+        }
+
+        report = normalize_tool_request_for_llamacpp(body, write_captures=False)
+
+        names = [t.get("name") for t in body["tools"]]
+        self.assertEqual(names.count("web_search"), 1)
+        # First occurrence (type=web_search) was translated; second was dropped as duplicate
+        self.assertIn("web_search", report.translated)
+
+    def test_duplicate_function_tool_names_deduped(self):
+        """Two function tools with the same name collapse to one."""
+        body = {
+            "tools": [
+                {"type": "function", "name": "exec_command", "description": "First."},
+                {"type": "function", "name": "exec_command", "description": "Second."},
+            ]
+        }
+
+        normalize_tool_request_for_llamacpp(body, write_captures=False)
+
+        self.assertEqual(len(body["tools"]), 1)
+
+    def test_replaced_appears_in_capture_notes(self):
+        body = {"tools": [{"type": "function", "name": "web_search", "description": "Old."}]}
+
+        report = normalize_tool_request_for_llamacpp(body, write_captures=False)
+
+        notes = report.capture_notes()
+        self.assertIn("replaced: web_search", notes)
+
+    def test_non_proxy_function_tool_passes_through_unchanged(self):
+        custom = {"type": "function", "name": "my_custom_tool", "description": "Custom."}
+        body = {"tools": [custom]}
+
+        normalize_tool_request_for_llamacpp(body, write_captures=False)
+
+        self.assertEqual(body["tools"], [custom])
+
+
 if __name__ == "__main__":
     unittest.main()

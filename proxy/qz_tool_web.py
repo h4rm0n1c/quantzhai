@@ -214,6 +214,13 @@ VALID_WEB_SEARCH_PROFILES = {
     "ai_models",
     "reference",
     "sysadmin",
+    # Shipped in config/default/search.json
+    "character_cards",
+    "furry",
+    "furry_fse",
+    "furry_images",
+    "gaming_wikis",
+    "archives",
 }
 
 
@@ -675,15 +682,20 @@ def _resolve_budget_mode(
 
 
 _PROFILE_DESCRIPTION_FALLBACKS = {
+    "auto": "Runtime-selected profile; inspect selected_profile in search output.",
     "broad": "General web search.",
     "coding": "Code, documentation, package, repository, and technical Q&A search.",
+    "sysadmin": "Linux, networking, services, manpages, and distro docs search.",
     "research": "Higher quality general and academic research search.",
     "news": "Current news and recent event search.",
-    "character_cards": "Character card search.",
-    "furry": "Furry story, image, and community corpus search.",
-    "gaming_wikis": "Gaming and MediaWiki source search.",
-    "archives": "Archive, torrent, and old-web style source search.",
-    "auto": "Runtime-selected profile; inspect selected_profile in search output.",
+    "ai_models": "Model, dataset, Hugging Face and Ollama discovery.",
+    "reference": "Definitions, dictionaries, and reference texts.",
+    "character_cards": "Character card metadata. Agent API retrieval available.",
+    "furry": "Furry community: prose/story discovery (FSE) and image metadata (e926, furbooru). SFW-biased.",
+    "furry_fse": "Furry prose/story discovery via FSE only. Agent API retrieval available.",
+    "furry_images": "Furry image metadata (e926, furbooru). SFW-biased.",
+    "gaming_wikis": "Gaming and mod wiki pages. Agent API retrieval available.",
+    "archives": "File/torrent archives and retro/old-web sources.",
 }
 
 
@@ -988,6 +1000,35 @@ class WebSearchRuntime:
         self.max_retrieved_chars     = _default_budget["max_retrieved_chars"]
 
         self.retrieval_cache: dict = {}
+
+        # Pre-build immutable per-instance caches — inputs are set once at __init__.
+        _policy_profiles = (self.searxng_policy or {}).get("web_search_profiles") or {}
+        _all_profiles = set(VALID_WEB_SEARCH_PROFILES)
+        if isinstance(_policy_profiles, dict):
+            _all_profiles.update(n for n in _policy_profiles if isinstance(n, str) and n.strip())
+        if isinstance(self.search_config_profiles, dict):
+            _all_profiles.update(n for n in self.search_config_profiles if isinstance(n, str) and n.strip())
+        self._valid_profiles_cache: frozenset = frozenset(_all_profiles)
+
+        _caps = self.searxng_capabilities or {}
+        _ok_engines: set = set()
+        for _n, _m in (_caps.get("engine_probe") or {}).items():
+            if isinstance(_m, dict) and _m.get("status") == "ok":
+                _ok_engines.add(_n)
+        if not _ok_engines:
+            for _item in (_caps.get("recommended_for_coding_agent") or []):
+                if isinstance(_item, dict) and _item.get("name"):
+                    _ok_engines.add(_item["name"])
+        self._allowed_engines_cache: frozenset = frozenset(_ok_engines)
+
+        _blocked_general: set = set(_string_list(self.searxng_policy.get("disabled_even_if_configured")))
+        _blocked_general.update(_string_list(self.searxng_policy.get("non_text_engines_disabled_for_current_web_search_tool")))
+        _blocked_general.update(_string_list(self.searxng_policy.get("quarantine_until_fixed")))
+        self._blocked_engines_general: frozenset = frozenset(_blocked_general)
+        self._blocked_engines_coding: frozenset = frozenset(
+            _blocked_general | set(_string_list(self.searxng_policy.get("never_for_coding_agent")))
+        )
+
         if low_result_fallback_threshold is not None:
             self.low_result_fallback_threshold = _resolve_budget_int(low_result_fallback_threshold, 2)
         else:
@@ -1021,35 +1062,13 @@ class WebSearchRuntime:
         cache[key] = {"ts": _now_float(), "value": value}
 
     def _allowed_engine_names(self):
-        caps = self.searxng_capabilities or {}
-        ok = set()
-        for name, meta in (caps.get("engine_probe") or {}).items():
-            if isinstance(meta, dict) and meta.get("status") == "ok":
-                ok.add(name)
-        if ok:
-            return ok
-        for item in caps.get("recommended_for_coding_agent") or []:
-            if isinstance(item, dict) and item.get("name"):
-                ok.add(item["name"])
-        return ok
+        return self._allowed_engines_cache
 
     def _valid_profiles(self):
-        profiles = set(VALID_WEB_SEARCH_PROFILES)
-        policy_profiles = (self.searxng_policy or {}).get("web_search_profiles") or {}
-        if isinstance(policy_profiles, dict):
-            profiles.update(
-                name for name in policy_profiles.keys()
-                if isinstance(name, str) and name.strip()
-            )
-        if isinstance(self.search_config_profiles, dict):
-            profiles.update(
-                name for name in self.search_config_profiles.keys()
-                if isinstance(name, str) and name.strip()
-            )
-        return profiles
+        return self._valid_profiles_cache
 
     def _is_valid_profile(self, profile: str):
-        return profile in self._valid_profiles()
+        return profile in self._valid_profiles_cache
 
     def _policy_get_path(self, dotted, default=None):
         obj = self.searxng_policy or {}
@@ -1062,13 +1081,9 @@ class WebSearchRuntime:
         return obj if obj is not None else default
 
     def _blocked_engines(self, profile: str):
-        policy = self.searxng_policy or {}
-        blocked = set(_string_list(policy.get("disabled_even_if_configured")))
-        blocked.update(_string_list(policy.get("non_text_engines_disabled_for_current_web_search_tool")))
-        blocked.update(_string_list(policy.get("quarantine_until_fixed")))
         if profile == "coding":
-            blocked.update(_string_list(policy.get("never_for_coding_agent")))
-        return blocked
+            return self._blocked_engines_coding
+        return self._blocked_engines_general
 
     def _filter_engines(self, engines, profile: str):
         blocked = self._blocked_engines(profile)

@@ -29,6 +29,7 @@ WRITE_STDIN_TOOL_HINT = (
 class ToolRequestNormalizationReport:
     translated: tuple[str, ...] = ()
     dropped: tuple[str, ...] = ()
+    replaced: tuple[str, ...] = ()
     has_exec_session: bool = False
     tool_choice_normalized: bool = False
     tool_choice_forced_auto: bool = False
@@ -37,6 +38,8 @@ class ToolRequestNormalizationReport:
         notes = []
         if self.translated:
             notes.append("translated: " + ", ".join(self.translated))
+        if self.replaced:
+            notes.append("replaced: " + ", ".join(self.replaced))
         if self.dropped:
             notes.append("dropped: " + ", ".join(self.dropped))
         return "\n".join(notes) + ("\n" if notes else "")
@@ -83,6 +86,8 @@ def normalize_tool_request_for_llamacpp(
     clean = []
     dropped = []
     translated = []
+    replaced = []
+    seen_names: set = set()
     has_exec_session = input_has_exec_session(body.get("input"))
 
     for tool in tools:
@@ -97,18 +102,36 @@ def normalize_tool_request_for_llamacpp(
                 dropped.append("write_stdin(no live exec session)")
                 continue
             if tool_name == "exec_command":
-                clean.append(append_tool_hint(tool, FILE_EDIT_TOOL_HINT))
+                if tool_name not in seen_names:
+                    seen_names.add(tool_name)
+                    clean.append(append_tool_hint(tool, FILE_EDIT_TOOL_HINT))
                 continue
             if tool_name == "write_stdin":
-                clean.append(append_tool_hint(tool, WRITE_STDIN_TOOL_HINT))
+                if tool_name not in seen_names:
+                    seen_names.add(tool_name)
+                    clean.append(append_tool_hint(tool, WRITE_STDIN_TOOL_HINT))
                 continue
+            # If a proxy-local adapter owns this function name, replace client schema.
+            name_adapter = tool_registry.adapter_for_name(tool_name)
+            if name_adapter:
+                if tool_name not in seen_names:
+                    seen_names.add(tool_name)
+                    clean.append(name_adapter.to_upstream_tool(tool))
+                    replaced.append(tool_name)
+                continue
+            if tool_name in seen_names:
+                dropped.append(f"{tool_name}(duplicate)")
+                continue
+            seen_names.add(tool_name)
             clean.append(tool)
             continue
 
         tool_adapter = tool_registry.adapter_for_tool(tool)
         if tool_adapter:
-            clean.append(tool_adapter.to_upstream_tool(tool))
-            translated.append(tool_adapter.upstream_name)
+            if tool_adapter.upstream_name not in seen_names:
+                seen_names.add(tool_adapter.upstream_name)
+                clean.append(tool_adapter.to_upstream_tool(tool))
+                translated.append(tool_adapter.upstream_name)
             continue
 
         dropped.append(str(tool_name))
@@ -130,6 +153,7 @@ def normalize_tool_request_for_llamacpp(
     report = ToolRequestNormalizationReport(
         translated=tuple(translated),
         dropped=tuple(dropped),
+        replaced=tuple(replaced),
         has_exec_session=has_exec_session,
         tool_choice_normalized=tool_choice_normalized,
         tool_choice_forced_auto=tool_choice_forced_auto,

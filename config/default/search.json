@@ -90,6 +90,20 @@
       "description": "Furry community: prose/story discovery (FSE) and image metadata (e926, furbooru). SFW-biased.",
       "categories": ["general", "images"],
       "engines": ["fse", "e926", "furbooru"],
+      "fallback_profiles": ["furry_fse", "broad"]
+    },
+
+    "furry_fse": {
+      "description": "Furry prose/story discovery via FSE only. Agent API retrieval available.",
+      "categories": ["general"],
+      "engines": ["fse"],
+      "fallback_profiles": ["broad"]
+    },
+
+    "furry_images": {
+      "description": "Furry image metadata search (e926, furbooru). SFW-biased.",
+      "categories": ["images"],
+      "engines": ["e926", "furbooru"],
       "fallback_profiles": ["broad"]
     },
 
