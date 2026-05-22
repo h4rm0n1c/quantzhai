@@ -167,9 +167,14 @@ def _request_admission_state(
     selected_model_ready: bool,
     last_load_result: str,
     launch_model_error: Any,
+    gpu_required: bool = True,
+    gpu_offload_state: str = "unknown",
 ) -> str:
     if selected_model_ready:
         return "ready"
+    # GPU gate: if require_gpu is set and GPU confirmed absent, report explicitly.
+    if gpu_required and gpu_offload_state in ("cpu_fallback", "failed", "unknown_after_retries"):
+        return "failed_gpu_not_available"
     if not selected_identity:
         return "unavailable"
     if last_load_result == "failed" or launch_model_error:
@@ -293,6 +298,9 @@ def build_model_status(handler: Any) -> dict[str, Any]:
     launch_model_path_basename = (mgr_snap.get("launch_model_path_basename") or "").strip()
     launch_model_error = mgr_snap.get("launch_model_error")
     backend_health_ok = mgr_snap.get("backend_health_ok")
+    gpu_required = bool(mgr_snap.get("gpu_required", True))
+    gpu_offload_state = str(mgr_snap.get("gpu_offload_state") or "unknown")
+    gpu_observed = mgr_snap.get("gpu_observed")  # True/False/None
 
     launch_matches_selected = _selected_launch_matches(
         selected_key=selected_key,
@@ -301,6 +309,12 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         launch_model_backend_id=launch_model_backend_id,
         launch_model_path_basename=launch_model_path_basename,
     )
+    # GPU gate: if require_gpu=True and GPU is not confirmed, model is not ready.
+    # Blocking GPU states: cpu_fallback, failed, unknown_after_retries.
+    # "unknown" (before retry completes) is non-blocking — admitted tentatively.
+    _gpu_blocking = gpu_required and gpu_offload_state in (
+        "cpu_fallback", "failed", "unknown_after_retries"
+    )
     selected_model_ready = bool(
         backend_phase == "healthy"
         and backend_health_ok is True
@@ -308,6 +322,7 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         and launch_matches_selected
         and state.last_load_result != "failed"
         and not launch_model_error
+        and not _gpu_blocking
     )
 
     model_switch_state, active_load_operation = _derive_model_switch_state(
@@ -322,6 +337,8 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         selected_model_ready=selected_model_ready,
         last_load_result=state.last_load_result,
         launch_model_error=launch_model_error,
+        gpu_required=gpu_required,
+        gpu_offload_state=gpu_offload_state,
     )
 
     recommended_action = _recommended_action(
@@ -355,6 +372,9 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         "selected_loaded_mismatch": selected_loaded_mismatch,
         "model_visible": model_visible,
         "profile_valid": profile_valid,
+        "gpu_required": gpu_required,
+        "gpu_offload_state": gpu_offload_state,
+        "gpu_observed": gpu_observed,
         "backend_phase": backend_phase,
         "backend_health_ok": backend_health_ok,
         "backend_gpu_state": backend_gpu_state,

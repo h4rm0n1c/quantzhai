@@ -3,6 +3,23 @@
 Date: 2026-05-22
 Status: active control sheet — Slice B audit complete; Slice B2 fixes next.
 
+## P0 Fix: GPU launch contract and admission gate — COMPLETE
+
+```text
+Changes:
+1. BackendManager: retry GPU log check (default 5×2s) when require_gpu=True and
+   state is "unknown" — closes race where health passes before model-load logs appear.
+   After retries: unknown_after_retries → FAIL (not admitted).
+2. BackendManager: gpu_observed field added to BackendState/snapshot.
+3. qz_model_status.py: selected_model_ready gates on gpu_offload_state.
+   cpu_fallback/failed/unknown_after_retries → not ready.
+   request_admission_state="failed_gpu_not_available" for these states.
+   gpu_required/gpu_offload_state/gpu_observed exposed in /qz/model/status.
+4. 27 new tests: launch contract drift detection, admission gate, retry logic.
+5. Smoke plan: mandatory GPU preflight gate added.
+3253 total tests pass.
+```
+
 ## Fix Pass M2: live smoke — RED (GPU not loaded)
 
 ```text

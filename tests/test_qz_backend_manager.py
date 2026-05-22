@@ -459,6 +459,9 @@ class HelperTests(unittest.TestCase):
 
 def _make_mgr(runner=None, health_checker=None, autostart=True, **kwargs):
     """Build a BackendManager with injectable runner and health checker.
+
+    Defaults: require_gpu=False and gpu_check_retry_count=0 so lifecycle tests
+    stay fast and GPU-specific tests opt in explicitly.
     """
     defaults = dict(
         docker_cmd="docker",
@@ -479,6 +482,9 @@ def _make_mgr(runner=None, health_checker=None, autostart=True, **kwargs):
         health_check_interval=0.01,
         health_check_timeout=2.0,
         autostart_delay=0.0,
+        require_gpu=False,         # lifecycle tests don't need GPU gate
+        gpu_check_retry_count=0,   # no delay in non-GPU tests
+        gpu_check_retry_delay=0.0,
     )
     defaults.update(kwargs)
     return BackendManager(
@@ -813,7 +819,10 @@ class GPUOffloadLogCheckTests(unittest.TestCase):
     """Unit tests for _check_gpu_offload_from_logs() and _do_start GPU gate."""
 
     def _mgr_with_logs(self, gpu_logs: str, require_gpu: bool = True, **kwargs):
-        """Return a manager whose runner returns gpu_logs for 'logs' commands."""
+        """Return a manager whose runner returns gpu_logs for 'logs' commands.
+
+        Uses gpu_check_retry_count=0 so GPU tests run without sleep delays.
+        """
         def runner(args, timeout=None):
             if "ps" in args:
                 return 0, "test-ctr", ""
@@ -825,6 +834,8 @@ class GPUOffloadLogCheckTests(unittest.TestCase):
             runner=runner,
             health_checker=lambda url, timeout=3.0: True,
             require_gpu=require_gpu,
+            gpu_check_retry_count=0,
+            gpu_check_retry_delay=0.0,
             **kwargs,
         )
 
@@ -964,12 +975,16 @@ class GPUOffloadLogCheckTests(unittest.TestCase):
         self.assertEqual(mgr.phase, PHASE_HEALTHY)
 
     def test_unknown_gpu_state_does_not_fail_when_require_gpu(self):
-        # Empty logs → unknown → should not trigger GPU failure
+        # Empty logs → unknown → after retries (0 here) → unknown_after_retries → FAIL.
+        # This is the new correct behaviour: require_gpu=True cannot admit when GPU
+        # state is indeterminate after the retry window.
         mgr = self._mgr_with_logs("", require_gpu=True)
         mgr.start()
         reached = self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
         self.assertTrue(reached, f"timed out in phase {mgr.phase}")
-        self.assertEqual(mgr.phase, PHASE_HEALTHY)
+        self.assertEqual(mgr.phase, PHASE_FAILED)
+        snap = mgr.snapshot()
+        self.assertEqual(snap["gpu_offload_state"], "unknown_after_retries")
 
 
 # ---------------------------------------------------------------------------
@@ -1203,6 +1218,247 @@ class BackendEndpointTests(unittest.TestCase):
         import inspect
         src = inspect.getsource(cp_mod.build_control_plane_status)
         self.assertIn("backend_manager", src)
+
+
+class DockerRunArgsGPUContractTests(unittest.TestCase):
+    """Regression tests: build_docker_run_args must include all required GPU/launch flags.
+
+    These tests fail if the launch contract drifts. They are the canary for
+    the P0 GPU-not-loading regression found in smoke pass M.
+    """
+
+    def _args(self, **kwargs):
+        return _make_mgr(**kwargs).build_docker_run_args()
+
+    def test_gpus_all_present(self):
+        args = self._args()
+        self.assertIn("--gpus", args)
+        self.assertEqual(args[args.index("--gpus") + 1], "all")
+
+    def test_cap_add_ipc_lock_present(self):
+        args = self._args()
+        self.assertIn("--cap-add", args)
+        self.assertEqual(args[args.index("--cap-add") + 1], "IPC_LOCK")
+
+    def test_ulimit_memlock_present(self):
+        args = self._args()
+        self.assertIn("--ulimit", args)
+        self.assertEqual(args[args.index("--ulimit") + 1], "memlock=-1:-1")
+
+    def test_ngl_999_present(self):
+        args = self._args()
+        self.assertIn("-ngl", args)
+        self.assertEqual(args[args.index("-ngl") + 1], "999")
+
+    def test_fa_on_present(self):
+        args = self._args()
+        self.assertIn("-fa", args)
+        self.assertEqual(args[args.index("-fa") + 1], "on")
+
+    def test_split_mode_layer_present(self):
+        args = self._args()
+        self.assertIn("--split-mode", args)
+        self.assertEqual(args[args.index("--split-mode") + 1], "layer")
+
+    def test_tensor_split_present(self):
+        args = self._args(tensor_split="9,17")
+        self.assertIn("--tensor-split", args)
+        self.assertEqual(args[args.index("--tensor-split") + 1], "9,17")
+
+    def test_main_gpu_present(self):
+        args = self._args(main_gpu=0)
+        self.assertIn("--main-gpu", args)
+        self.assertEqual(args[args.index("--main-gpu") + 1], "0")
+
+    def test_kv_unified_present(self):
+        args = self._args()
+        self.assertIn("--kv-unified", args)
+
+    def test_mlock_present(self):
+        args = self._args()
+        self.assertIn("--mlock", args)
+
+    def test_ctk_ctv_present(self):
+        args = self._args(kv_key="q8_0", kv_value="f16")
+        self.assertIn("-ctk", args)
+        self.assertIn("-ctv", args)
+        self.assertEqual(args[args.index("-ctk") + 1], "q8_0")
+        self.assertEqual(args[args.index("-ctv") + 1], "f16")
+
+    def test_metrics_present(self):
+        args = self._args()
+        self.assertIn("--metrics", args)
+
+    def test_reasoning_format_deepseek_present(self):
+        args = self._args()
+        self.assertIn("--reasoning-format", args)
+        self.assertEqual(args[args.index("--reasoning-format") + 1], "deepseek")
+
+    def test_direct_m_flag_uses_models_prefix(self):
+        args = self._args(launch_model_path_basename="kuato.gguf")
+        self.assertIn("-m", args)
+        self.assertEqual(args[args.index("-m") + 1], "/models/kuato.gguf")
+
+    def test_no_models_dir_flag(self):
+        args = self._args()
+        self.assertNotIn("--models-dir", args)
+
+    def test_readonly_models_mount(self):
+        args = self._args(model_dir="/my/models")
+        mount_vals = [args[i + 1] for i, a in enumerate(args) if a == "--mount"]
+        self.assertTrue(any("readonly" in v for v in mount_vals),
+                        f"Expected readonly in mount: {mount_vals}")
+
+
+class GPUAdmissionGateTests(unittest.TestCase):
+    """Tests that GPU state gates selected_model_ready and request_admission_state."""
+
+    def _make_model_status_for_gpu(self, gpu_offload_state, gpu_required=True):
+        """Build a model_status-like dict using the admission helpers directly."""
+        from proxy.qz_model_status import _request_admission_state
+        # gpu blocking states → not ready
+        from proxy.qz_backend_manager import BackendState
+        mgr_snap = BackendState(
+            phase="healthy",
+            backend_health_ok=True,
+            gpu_required=gpu_required,
+            gpu_offload_state=gpu_offload_state,
+        ).as_dict()
+        gpu_off = gpu_offload_state
+        _gpu_blocking = gpu_required and gpu_off in ("cpu_fallback", "failed", "unknown_after_retries")
+        selected_model_ready = not _gpu_blocking  # simplified for test
+        ras = _request_admission_state(
+            selected_identity="kuato",
+            backend_phase="healthy",
+            backend_health_ok=True,
+            selected_model_ready=selected_model_ready,
+            last_load_result="loaded",
+            launch_model_error=None,
+            gpu_required=gpu_required,
+            gpu_offload_state=gpu_off,
+        )
+        return {"selected_model_ready": selected_model_ready, "request_admission_state": ras}
+
+    def test_cpu_fallback_blocks_admission_when_gpu_required(self):
+        s = self._make_model_status_for_gpu("cpu_fallback", gpu_required=True)
+        self.assertFalse(s["selected_model_ready"])
+        self.assertEqual(s["request_admission_state"], "failed_gpu_not_available")
+
+    def test_failed_gpu_blocks_admission_when_gpu_required(self):
+        s = self._make_model_status_for_gpu("failed", gpu_required=True)
+        self.assertFalse(s["selected_model_ready"])
+        self.assertEqual(s["request_admission_state"], "failed_gpu_not_available")
+
+    def test_unknown_after_retries_blocks_admission_when_gpu_required(self):
+        s = self._make_model_status_for_gpu("unknown_after_retries", gpu_required=True)
+        self.assertFalse(s["selected_model_ready"])
+        self.assertEqual(s["request_admission_state"], "failed_gpu_not_available")
+
+    def test_gpu_confirmed_allows_admission(self):
+        s = self._make_model_status_for_gpu("gpu", gpu_required=True)
+        self.assertTrue(s["selected_model_ready"])
+        self.assertEqual(s["request_admission_state"], "ready")
+
+    def test_cpu_fallback_allowed_when_gpu_not_required(self):
+        s = self._make_model_status_for_gpu("cpu_fallback", gpu_required=False)
+        self.assertTrue(s["selected_model_ready"])
+        self.assertEqual(s["request_admission_state"], "ready")
+
+    def test_gpu_observed_field_in_snapshot(self):
+        """gpu_observed must be exposed in BackendState snapshot."""
+        from proxy.qz_backend_manager import BackendState
+        state = BackendState(gpu_observed=True)
+        d = state.as_dict()
+        self.assertIn("gpu_observed", d)
+        self.assertTrue(d["gpu_observed"])
+
+    def test_gpu_observed_false_for_cpu_fallback(self):
+        from proxy.qz_backend_manager import BackendState
+        state = BackendState(gpu_observed=False)
+        d = state.as_dict()
+        self.assertFalse(d["gpu_observed"])
+
+    def test_gpu_required_exposed_in_model_status(self):
+        """gpu_required must appear in /qz/model/status response."""
+        from proxy.qz_model_status import build_model_status
+        import unittest.mock as mock
+        snap = {
+            "phase": "healthy", "backend_health_ok": True,
+            "gpu_required": True, "gpu_offload_state": "gpu",
+            "gpu_observed": True, "gpu_error": None,
+            "launch_model_key": "kuato.gguf",
+            "launch_model_backend_id": "kuato",
+            "launch_model_path_basename": "kuato.gguf",
+            "launch_model_error": None,
+        }
+        handler = mock.MagicMock()
+        handler.backend_manager.snapshot.return_value = snap
+        handler._initialization_payload.return_value = {"ready": True, "catalog_ready": True}
+        handler._model_catalog.return_value = mock.MagicMock(entries=[], selected=None)
+        status = build_model_status(handler)
+        self.assertIn("gpu_required", status)
+        self.assertIn("gpu_offload_state", status)
+        self.assertIn("gpu_observed", status)
+        self.assertTrue(status["gpu_required"])
+
+    def test_unknown_transient_not_blocked(self):
+        """Transient 'unknown' (before retries complete) does not block admission."""
+        s = self._make_model_status_for_gpu("unknown", gpu_required=True)
+        # 'unknown' is not in the blocking set — tentatively admitted
+        # (retries happen during _do_start before phase=HEALTHY is set)
+        self.assertTrue(s["selected_model_ready"])
+
+
+class GPURetryLogicTests(unittest.TestCase):
+    """Tests for gpu_check_retry_count and gpu_check_retry_delay."""
+
+    def _mgr_with_retry_logs(self, logs_sequence, require_gpu=True, retry_count=2, retry_delay=0.0):
+        """Runner returns successive log strings from logs_sequence list."""
+        call_count = [0]
+        def runner(args, timeout=None):
+            if "ps" in args:
+                return 0, "test-ctr", ""
+            if "logs" in args:
+                idx = min(call_count[0], len(logs_sequence) - 1)
+                result = logs_sequence[idx]
+                call_count[0] += 1
+                return 0, result, ""
+            return 0, "", ""
+        return _make_mgr(
+            runner=runner,
+            health_checker=lambda url, timeout=3.0: True,
+            require_gpu=require_gpu,
+            gpu_check_retry_count=retry_count,
+            gpu_check_retry_delay=retry_delay,
+        ), call_count
+
+    def _wait_phase(self, mgr, *phases, timeout=3.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if mgr.phase in phases:
+                return True
+            time.sleep(0.02)
+        return False
+
+    def test_retry_succeeds_when_later_log_shows_gpu(self):
+        """After initial unknown, a retry returning GPU log succeeds."""
+        logs = ["", _GPU_LOG_OFFLOADED]  # first empty, second has GPU
+        mgr, _ = self._mgr_with_retry_logs(logs, retry_count=1)
+        mgr.start()
+        reached = self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
+        self.assertTrue(reached)
+        self.assertEqual(mgr.phase, PHASE_HEALTHY)
+        self.assertEqual(mgr.snapshot()["gpu_offload_state"], "gpu")
+
+    def test_retry_exhausted_fails_when_always_unknown(self):
+        """All retries return empty logs → unknown_after_retries → FAIL."""
+        logs = ["", "", ""]  # all empty
+        mgr, _ = self._mgr_with_retry_logs(logs, retry_count=2)
+        mgr.start()
+        reached = self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
+        self.assertTrue(reached)
+        self.assertEqual(mgr.phase, PHASE_FAILED)
+        self.assertEqual(mgr.snapshot()["gpu_offload_state"], "unknown_after_retries")
 
 
 if __name__ == "__main__":

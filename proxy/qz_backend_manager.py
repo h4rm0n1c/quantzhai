@@ -118,7 +118,8 @@ class BackendState:
     last_error: str | None = None
     autostart: bool = True
     gpu_required: bool = True
-    gpu_offload_state: str = "unknown"  # unknown | gpu | cpu_fallback | failed
+    gpu_offload_state: str = "unknown"  # unknown | gpu | cpu_fallback | failed | unknown_after_retries
+    gpu_observed: bool | None = None   # True=GPU confirmed, False=CPU-only confirmed, None=not yet checked
     gpu_error: str | None = None
     # Direct launch metadata.  ``launch_model_*`` are observation-only
     # descriptors of the next docker run argv; the model selection authority
@@ -149,6 +150,7 @@ class BackendState:
             "autostart":                   self.autostart,
             "gpu_required":                self.gpu_required,
             "gpu_offload_state":           self.gpu_offload_state,
+            "gpu_observed":                self.gpu_observed,
             "gpu_error":                   self.gpu_error,
             "backend_model_mode":          self.backend_model_mode,
             "launch_model_key":            self.launch_model_key,
@@ -201,6 +203,8 @@ class BackendManager:
         autostart: bool = True,
         require_gpu: bool = True,
         gpu_log_tail: int = 1000,
+        gpu_check_retry_count: int = 5,
+        gpu_check_retry_delay: float = 2.0,
         launch_model_key: str = "",
         launch_model_backend_id: str = "",
         launch_model_path_basename: str = "",
@@ -235,6 +239,8 @@ class BackendManager:
         self._spec_default           = bool(spec_default)
         self._require_gpu            = bool(require_gpu)
         self._gpu_log_tail           = int(gpu_log_tail)
+        self._gpu_check_retry_count  = max(0, int(gpu_check_retry_count))
+        self._gpu_check_retry_delay  = max(0.0, float(gpu_check_retry_delay))
         self._launch_model_key       = _safe_str(launch_model_key)
         self._launch_model_backend_id = _safe_str(launch_model_backend_id)
         self._launch_model_path_basename = _safe_str(launch_model_path_basename)
@@ -651,22 +657,46 @@ class BackendManager:
                 if rc_ps != 0 or self._container_name not in out_ps:
                     raise RuntimeError("container exited before becoming healthy")
                 if self._health_checker(health_url, timeout=3.0):
+                    # GPU offload check with retry to handle the race where health
+                    # passes before llama.cpp finishes logging model-load lines.
                     gpu_state, gpu_err = self._check_gpu_offload_from_logs()
-                    if self._require_gpu and gpu_state in ("cpu_fallback", "failed"):
+                    retries_left = self._gpu_check_retry_count if self._require_gpu else 0
+                    while gpu_state == "unknown" and retries_left > 0:
+                        time.sleep(self._gpu_check_retry_delay)
+                        gpu_state, gpu_err = self._check_gpu_offload_from_logs()
+                        retries_left -= 1
+                    if gpu_state == "unknown" and self._require_gpu:
+                        gpu_state = "unknown_after_retries"
+                        gpu_err = (
+                            f"GPU offload state could not be confirmed after "
+                            f"{self._gpu_check_retry_count} retries. "
+                            "Logs may be unavailable or model load not yet complete."
+                        )
+                    _gpu_observed: bool | None = (
+                        True if gpu_state == "gpu"
+                        else False if gpu_state in ("cpu_fallback", "failed")
+                        else None
+                    )
+                    _gpu_blocking = self._require_gpu and gpu_state in (
+                        "cpu_fallback", "failed", "unknown_after_retries"
+                    )
+                    if _gpu_blocking:
                         err_str = gpu_err or f"GPU not used (gpu_offload_state={gpu_state})"
                         with self._lock:
                             self._state.phase = PHASE_FAILED
                             self._state.backend_health_ok = False
                             self._state.gpu_offload_state = gpu_state
+                            self._state.gpu_observed = _gpu_observed
                             self._state.gpu_error = gpu_err
                             self._state.last_error = err_str
-                        self._emit("backend_failed", {"error": err_str})
+                        self._emit("backend_failed", {"error": err_str, "gpu_offload_state": gpu_state})
                         return
                     with self._lock:
                         self._state.phase = PHASE_HEALTHY
                         self._state.backend_health_ok = True
                         self._state.last_healthy_at = _iso_now()
                         self._state.gpu_offload_state = gpu_state
+                        self._state.gpu_observed = _gpu_observed
                         self._state.gpu_error = gpu_err
                     self._emit("backend_healthy")
                     return

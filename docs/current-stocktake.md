@@ -7,6 +7,13 @@ This document is a rolling point-in-time snapshot. For the live execution order,
 read `docs/current-task-hierarchy.md`. For architecture authority, read
 `docs/current-architecture-authority.md`.
 
+## P0 Fix: GPU launch contract and admission gate — COMPLETE
+
+BackendManager now retries GPU log check (5×2s) to close health-before-GPU-log race.
+unknown_after_retries → backend FAILS. selected_model_ready gates on GPU state.
+gpu_required/gpu_offload_state/gpu_observed in /qz/model/status.
+27 new tests. 3253 total pass. Smoke plan has mandatory GPU preflight gate.
+
 ## Fix Pass M2: live smoke — RED (GPU not loaded after restart)
 
 After fresh qz-down/qz-up, both GPUs showed ~0 MiB VRAM. Model ran CPU-only.
