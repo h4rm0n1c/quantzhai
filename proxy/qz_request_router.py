@@ -38,6 +38,7 @@ try:
         normalize_tool_output_for_codex,
         normalize_tools_for_llamacpp,
     )
+    from .qz_tool_request import normalize_tool_request_for_llamacpp as _normalize_tool_request
     from .qz_responses_stream import ResponsesStreamRuntime
     from .qz_sse import _normalize_response_usage, make_sse_block
     from .qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
@@ -92,6 +93,7 @@ except ImportError:
         normalize_tool_output_for_codex,
         normalize_tools_for_llamacpp,
     )
+    from qz_tool_request import normalize_tool_request_for_llamacpp as _normalize_tool_request
     from qz_responses_stream import ResponsesStreamRuntime
     from qz_sse import _normalize_response_usage, make_sse_block
     from qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
@@ -2522,6 +2524,18 @@ class RequestRouter:
                             )
                         except Exception:
                             pass
+                    elif rr_decision.kind == "error":
+                        # Dropped/unknown non-proxy-local tool: inject error result so
+                        # the model sees feedback instead of the original call.
+                        next_input.append(rr_decision.error_result)
+                        try:
+                            self.handler.telemetry.emit("tool_call_error", {
+                                "tool": item.get("name") or "",
+                                "error": (rr_decision.error_result or {}).get("output", ""),
+                                "request_id": request_id,
+                            })
+                        except Exception:
+                            pass
                     else:
                         record_tool_call(item, repeated_read_state)
                         next_input.append(item)
@@ -2533,6 +2547,18 @@ class RequestRouter:
                     dropped_tool_names=dropped_tool_names,
                     repeated_read_state=repeated_read_state,
                 )
+                if decision.coercion_applied:
+                    _coercion_event = "coercion_failed" if decision.coercion_error else "coercion_succeeded"
+                    try:
+                        self.handler.telemetry.emit(_coercion_event, {
+                            "tool": item.get("name") or "",
+                            "call_id": item.get("call_id") or item.get("id") or "",
+                            "correction_applied": not bool(decision.coercion_error),
+                            "error_summary": decision.coercion_error[:200] if decision.coercion_error else "",
+                            "request_id": request_id,
+                        })
+                    except Exception:
+                        pass
                 if decision.kind == "error":
                     next_input.append(decision.error_result)
                     continue
@@ -2895,7 +2921,18 @@ class RequestRouter:
                             )
                             return
                 body = normalize_responses_input_for_qwen(body, selected_model=selected_model)
-                body = normalize_tools_for_llamacpp(body)
+                _tool_norm_report = _normalize_tool_request(body, write_captures=True)
+                if _tool_norm_report.replaced or _tool_norm_report.translated or _tool_norm_report.dropped:
+                    try:
+                        self.handler.telemetry.emit("tool_schema_replaced", {
+                            "replaced": list(_tool_norm_report.replaced),
+                            "translated": list(_tool_norm_report.translated),
+                            "dropped_count": len(_tool_norm_report.dropped),
+                            "tool_choice_forced_auto": _tool_norm_report.tool_choice_forced_auto,
+                            "request_id": request_id,
+                        })
+                    except Exception:
+                        pass
 
                 prompt_contract = self._prompt_contract(
                     body,

@@ -7,6 +7,15 @@ This document is a rolling point-in-time snapshot. For the live execution order,
 read `docs/current-task-hierarchy.md`. For architecture authority, read
 `docs/current-architecture-authority.md`.
 
+## Fix Pass H: B2 tool schema/coercion/advice — COMPLETE
+
+ToolCoercionResult guard (both-set/neither-set/empty rejected). WebSearchProxyToolExecutor
+now has coerce() for pre-execution validation. Non-streaming dropped/unknown gap fixed.
+tool_schema_replaced, coercion_succeeded, coercion_failed telemetry added.
+19 new tests. 3158 total pass.
+
+**Next: Fix Pass I** — response.id threading through StreamRunState.
+
 ## End-to-end smoke plan (Slice G) — COMPLETE. Audit series A–G complete.
 
 `docs/end-to-end-smoke-plan.md` contains 37 smoke tests, command blocks, expected

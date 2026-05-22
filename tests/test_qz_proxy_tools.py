@@ -543,5 +543,100 @@ class RepeatedReadDecisionTests(unittest.TestCase):
         self.assertEqual(decision.kind, "error")
 
 
+class CoercionInfoTests(unittest.TestCase):
+    """Tests that coercion_applied and coercion_error are set correctly in decisions."""
+
+    def _make_registry(self):
+        from proxy.qz_proxy_tools import make_proxy_local_tool_registry
+        return make_proxy_local_tool_registry(FakeWebRuntime())
+
+    def test_malformed_web_search_sets_coercion_applied_and_error(self):
+        import json
+        registry = self._make_registry()
+        call = {
+            "type": "function_call", "name": "web_search",
+            "call_id": "c1", "arguments": "{not valid json}",
+        }
+        decision = registry.completed_call_decision(call, "native")
+        self.assertEqual(decision.kind, "error")
+        self.assertTrue(decision.coercion_applied)
+        self.assertTrue(bool(decision.coercion_error))
+        self.assertNotIn("{not valid json}", decision.coercion_error)
+
+    def test_valid_web_search_sets_coercion_applied_no_error(self):
+        import json
+        registry = self._make_registry()
+        call = {
+            "type": "function_call", "name": "web_search",
+            "call_id": "c1",
+            "arguments": json.dumps({"action": "search", "query": "test"}),
+        }
+        decision = registry.completed_call_decision(call, "native")
+        self.assertEqual(decision.kind, "proxy_local")
+        self.assertTrue(decision.coercion_applied)
+        self.assertEqual(decision.coercion_error, "")
+
+    def test_dropped_tool_does_not_set_coercion_applied(self):
+        registry = self._make_registry()
+        call = {
+            "type": "function_call", "name": "dropped_tool",
+            "call_id": "c1", "arguments": "{}",
+        }
+        decision = registry.completed_call_decision(
+            call, "native", dropped_tool_names=frozenset({"dropped_tool"})
+        )
+        self.assertEqual(decision.kind, "error")
+        self.assertFalse(decision.coercion_applied)
+
+    def test_unknown_tool_does_not_set_coercion_applied(self):
+        registry = self._make_registry()
+        call = {
+            "type": "function_call", "name": "mystery_tool",
+            "call_id": "c1", "arguments": "{}",
+        }
+        decision = registry.completed_call_decision(call, "native")
+        self.assertEqual(decision.kind, "error")
+        self.assertFalse(decision.coercion_applied)
+
+    def test_codex_native_does_not_set_coercion_applied(self):
+        registry = self._make_registry()
+        call = {
+            "type": "function_call", "name": "exec_command",
+            "call_id": "c1", "arguments": "{}",
+        }
+        decision = registry.completed_call_decision(call, "native")
+        self.assertEqual(decision.kind, "public")
+        self.assertFalse(decision.coercion_applied)
+
+    def test_apply_patch_sibling_patch_sets_coercion_applied(self):
+        import json
+        registry = self._make_registry()
+        call = {
+            "type": "function_call", "name": "apply_patch",
+            "call_id": "c1",
+            "arguments": json.dumps({
+                "operation": {"type": "create_file", "path": "test.py"},
+                "patch": "x = 1\n",
+            }),
+        }
+        decision = registry.completed_call_decision(call, "native")
+        self.assertEqual(decision.kind, "public")
+        self.assertTrue(decision.coercion_applied)
+        self.assertEqual(decision.coercion_error, "")
+
+    def test_apply_patch_malformed_sets_coercion_error(self):
+        import json
+        registry = self._make_registry()
+        call = {
+            "type": "function_call", "name": "apply_patch",
+            "call_id": "c1",
+            "arguments": json.dumps({"operation": {"type": "create_file", "path": "x.py"}}),
+        }
+        decision = registry.completed_call_decision(call, "native")
+        self.assertEqual(decision.kind, "error")
+        self.assertTrue(decision.coercion_applied)
+        self.assertTrue(bool(decision.coercion_error))
+
+
 if __name__ == "__main__":
     unittest.main()

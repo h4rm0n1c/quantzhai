@@ -40,13 +40,23 @@ class ToolLifecycleSpec:
 class ToolCoercionResult:
     """Result of a tool's coerce() call.
 
-    Exactly one field is set:
+    Exactly one field must be set:
     - corrected_arguments: coercion succeeded; re-run with this JSON string.
     - error_message: coercion failed; inject this as an error tool result so
       the model can see what went wrong and retry.
     """
     corrected_arguments: str | None = None
     error_message: str | None = None
+
+    def __post_init__(self):
+        has_args = self.corrected_arguments is not None
+        has_err = self.error_message is not None
+        if has_args and has_err:
+            raise ValueError("ToolCoercionResult: set corrected_arguments OR error_message, not both")
+        if not has_args and not has_err:
+            raise ValueError("ToolCoercionResult: exactly one of corrected_arguments or error_message must be set")
+        if has_err and not self.error_message:
+            raise ValueError("ToolCoercionResult: error_message must be non-empty when set")
 
     def succeeded(self) -> bool:
         return self.corrected_arguments is not None

@@ -54,6 +54,9 @@ class WebSearchProxyToolExecutor(ProxyLocalToolExecutor):
     def __init__(self, web_runtime):
         self.web_runtime = web_runtime
 
+    def coerce(self, call: dict):
+        return WEB_SEARCH_TOOL_ADAPTER.coerce(call)
+
     def started_public_item(self, call: dict, public_index: int) -> dict:
         item_id = call.get("id") or call.get("call_id") or f"{self.lifecycle.name}_local_{public_index}"
         return {
@@ -208,9 +211,16 @@ class ProxyLocalToolRegistry:
                 coercion = executor.coerce(call)
                 if not coercion.succeeded():
                     error = synthesize_tool_error_result(call, coercion.error_message or "")
-                    return CompletedToolCallDecision(kind="error", call=call, error_result=error)
+                    return CompletedToolCallDecision(
+                        kind="error", call=call, error_result=error,
+                        coercion_applied=True,
+                        coercion_error=(coercion.error_message or "")[:200],
+                    )
                 corrected = call if not coercion.corrected_arguments else dict(call, arguments=coercion.corrected_arguments)
-                return CompletedToolCallDecision(kind="proxy_local", call=corrected)
+                return CompletedToolCallDecision(
+                    kind="proxy_local", call=corrected,
+                    coercion_applied=True,
+                )
             return CompletedToolCallDecision(kind="proxy_local", call=call)
 
         # 3. Protocol adapter (e.g. apply_patch): coerce then convert shape.
@@ -218,13 +228,18 @@ class ProxyLocalToolRegistry:
             coercion = self.tool_registry.coerce_call(call)
             if not coercion.succeeded():
                 error = synthesize_tool_error_result(call, coercion.error_message or "")
-                return CompletedToolCallDecision(kind="error", call=call, error_result=error)
+                return CompletedToolCallDecision(
+                    kind="error", call=call, error_result=error,
+                    coercion_applied=True,
+                    coercion_error=(coercion.error_message or "")[:200],
+                )
             corrected = call if not coercion.corrected_arguments else dict(call, arguments=coercion.corrected_arguments)
             public_item = self.tool_registry.output_to_codex(corrected, apply_patch_output_style)
             return CompletedToolCallDecision(
                 kind="public",
                 call=corrected,
                 public_item=public_item if public_item is not None else corrected,
+                coercion_applied=True,
             )
 
         # 4. Known Codex-native tool: check for repeated-read signal first.

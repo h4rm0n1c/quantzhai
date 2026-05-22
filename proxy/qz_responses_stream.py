@@ -1683,6 +1683,15 @@ class ResponsesStreamRuntime:
                                 repeated_read_state=repeated_read_state,
                             )
 
+                            if decision.coercion_applied:
+                                _coercion_event = "coercion_failed" if decision.coercion_error else "coercion_succeeded"
+                                self._emit(_coercion_event, {
+                                    "tool": hs.completed_call.get("name") or "",
+                                    "call_id": hs.completed_call.get("call_id") or hs.completed_call.get("id") or "",
+                                    "correction_applied": not bool(decision.coercion_error),
+                                    "error_summary": decision.coercion_error[:200] if decision.coercion_error else "",
+                                })
+
                             if decision.kind == "signal":
                                 # Advisory repeated-read signal: inject output upstream,
                                 # continue the hop loop. No public Codex lifecycle event.

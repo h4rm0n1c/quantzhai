@@ -4039,5 +4039,233 @@ class ProxyLocalTerminalSuppressionHelperTests(unittest.TestCase):
         self.assertFalse(result)
 
 
+class CoercionTelemetryStreamingTests(unittest.TestCase):
+    """Tests for coercion_succeeded/coercion_failed telemetry in the streaming path."""
+
+    def _run(self, stream_chunks, telemetry, apply_patch_output_style="native"):
+        calls = []
+
+        def opener(body):
+            calls.append(json.loads(json.dumps(body)))
+            if len(calls) == 1:
+                return FakeStream(stream_chunks)
+            return FakeStream(_final_message_stream())
+
+        chunks = []
+        from proxy.qz_responses_stream import ResponsesStreamRuntime
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=chunks.append,
+            stream_opener=opener,
+            capture_enabled=False,
+            telemetry=telemetry,
+        )
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "test"}]}],
+            "tools": [{"type": "web_search"}],
+        }
+        runtime.run(body, "test-model.gguf", apply_patch_output_style)
+        return b"".join(chunks).decode("utf-8"), calls
+
+    def test_malformed_web_search_emits_coercion_failed_telemetry(self):
+        telemetry = TelemetryBus()
+        bad_args_stream = _named_function_call_stream(
+            "fc_bad", "call_bad", "web_search", "{not valid json}"
+        )
+        stream_text, calls = self._run(bad_args_stream, telemetry)
+
+        telem_events = telemetry.recent()
+        self.assertTrue(
+            any(e.get("type") == "coercion_failed" for e in telem_events), telem_events
+        )
+        failed = next(e for e in telem_events if e.get("type") == "coercion_failed")
+        self.assertEqual((failed.get("payload") or {}).get("tool"), "web_search")
+        # No raw arguments in telemetry
+        self.assertNotIn("{not valid json}", str(failed))
+
+    def test_malformed_web_search_function_call_not_in_codex_stream(self):
+        telemetry = TelemetryBus()
+        bad_args_stream = _named_function_call_stream(
+            "fc_bad", "call_bad", "web_search", "{not valid json}"
+        )
+        stream_text, calls = self._run(bad_args_stream, telemetry)
+
+        # function_call type never appears in Codex-visible stream
+        self.assertNotIn('"type": "function_call"', stream_text)
+        # Error injected into next hop input
+        self.assertGreater(len(calls), 1)
+        next_input = calls[1].get("input") or []
+        error_items = [i for i in next_input if isinstance(i, dict)
+                       and i.get("type") == "function_call_output"]
+        self.assertTrue(error_items, next_input)
+
+    def test_valid_web_search_emits_coercion_succeeded_telemetry(self):
+        import json as _json
+        telemetry = TelemetryBus()
+        good_args_stream = _named_function_call_stream(
+            "fc_web", "call_web",
+            "web_search", _json.dumps({"action": "search", "query": "test"})
+        )
+        stream_text, _ = self._run(good_args_stream, telemetry)
+
+        telem_events = telemetry.recent()
+        self.assertTrue(
+            any(e.get("type") == "coercion_succeeded" for e in telem_events), telem_events
+        )
+        succeeded = next(e for e in telem_events if e.get("type") == "coercion_succeeded")
+        self.assertEqual((succeeded.get("payload") or {}).get("tool"), "web_search")
+        self.assertTrue((succeeded.get("payload") or {}).get("correction_applied"))
+
+    def test_dropped_tool_emits_tool_call_error_not_coercion_failed(self):
+        telemetry = TelemetryBus()
+        dropped_stream = _named_function_call_stream(
+            "fc_drop", "call_drop", "secret_tool", "{}"
+        )
+
+        chunks = []
+        from proxy.qz_responses_stream import ResponsesStreamRuntime
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=chunks.append,
+            stream_opener=lambda body: FakeStream(
+                dropped_stream if not chunks else _final_message_stream()
+            ),
+            capture_enabled=False,
+            telemetry=telemetry,
+        )
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "test"}]}],
+            "metadata": {"qz_dropped_tool_names": ["secret_tool"]},
+        }
+        runtime.run(body, "test-model.gguf")
+        telem_events = telemetry.recent()
+
+        self.assertTrue(any(e.get("type") == "tool_call_error" for e in telem_events))
+        self.assertFalse(any(e.get("type") == "coercion_failed" for e in telem_events))
+
+    def test_apply_patch_sibling_patch_coercion_emits_coercion_succeeded(self):
+        import json as _json
+        telemetry = TelemetryBus()
+        sibling_args = _json.dumps({
+            "operation": {"type": "create_file", "path": "test.py"},
+            "patch": "x = 1\n",
+        })
+        patch_stream = _named_function_call_stream(
+            "fc_patch", "call_patch", "apply_patch", sibling_args
+        )
+
+        calls = []
+        chunks = []
+        from proxy.qz_responses_stream import ResponsesStreamRuntime
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=chunks.append,
+            stream_opener=lambda body: FakeStream(patch_stream if not calls else []),
+            capture_enabled=False,
+            telemetry=telemetry,
+        )
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "test"}]}],
+            "metadata": {"qz_tool_policy": {
+                "schema": "qz.tool_policy.v1",
+                "apply_patch_declared": True,
+                "apply_patch_client_tool_type": "custom",
+                "apply_patch_output_style": "custom",
+            }},
+        }
+        runtime.run(body, "test-model.gguf", "custom")
+        stream_text = b"".join(chunks).decode("utf-8")
+
+        telem_events = telemetry.recent()
+        self.assertTrue(
+            any(e.get("type") == "coercion_succeeded" for e in telem_events), telem_events
+        )
+        # Patch content appears only in structured custom_tool_call, not in assistant text
+        self.assertIn("custom_tool_call", stream_text)
+        self.assertNotIn('"type": "message"', stream_text)
+
+
+class NonStreamingDroppedToolGapTests(unittest.TestCase):
+    """Tests that the non-streaming path applies dropped/unknown tool errors."""
+
+    def _make_runtime(self):
+        from proxy.qz_proxy_tools import make_proxy_local_tool_registry
+        web_runtime = FakeWebRuntime()
+        return make_proxy_local_tool_registry(web_runtime), web_runtime
+
+    def test_dropped_non_proxy_local_tool_error_injected_next_input(self):
+        """Dropped apply_patch call (non-proxy-local) in a web_search response hop
+        should produce error result in next_input, not pass through unchanged."""
+        from proxy.qz_proxy_tools import ProxyLocalToolRegistry, make_proxy_local_tool_registry
+        from proxy.qz_tool_lifecycle import CompletedToolCallDecision
+
+        registry, _ = self._make_runtime()
+        dropped = frozenset({"apply_patch"})
+
+        call = {
+            "type": "function_call", "name": "apply_patch",
+            "call_id": "call_ap", "arguments": "{}",
+        }
+        decision = registry.completed_call_decision(call, "native", dropped_tool_names=dropped)
+
+        self.assertEqual(decision.kind, "error")
+        self.assertIsNotNone(decision.error_result)
+        self.assertIn("apply_patch", decision.error_result["output"])
+        self.assertIn("not available", decision.error_result["output"])
+        self.assertFalse(decision.coercion_applied)
+
+    def test_unknown_non_proxy_local_tool_error_injected(self):
+        registry, _ = self._make_runtime()
+        call = {
+            "type": "function_call", "name": "mystery_tool",
+            "call_id": "call_myst", "arguments": "{}",
+        }
+        decision = registry.completed_call_decision(call, "native")
+
+        self.assertEqual(decision.kind, "error")
+        self.assertIn("mystery_tool", decision.error_result["output"])
+        self.assertIn("not recognised", decision.error_result["output"])
+
+    def test_exec_command_still_passes_through(self):
+        registry, _ = self._make_runtime()
+        call = {
+            "type": "function_call", "name": "exec_command",
+            "call_id": "call_exec", "arguments": "{}",
+        }
+        decision = registry.completed_call_decision(call, "native")
+        self.assertEqual(decision.kind, "public")
+
+    def test_tool_schema_replaced_event_has_correct_payload(self):
+        """tool_schema_replaced payload is bounded and does not include raw schemas."""
+        from proxy.qz_tool_request import normalize_tool_request_for_llamacpp
+        body = {
+            "tools": [
+                {"type": "function", "name": "web_search",
+                 "description": "stale schema", "parameters": {"type": "object"}},
+            ]
+        }
+        report = normalize_tool_request_for_llamacpp(body, write_captures=False)
+        self.assertEqual(report.replaced, ("web_search",))
+        # Verify that the tool description was replaced with proxy schema
+        upstream_tool = body["tools"][0]
+        self.assertNotEqual(upstream_tool.get("description"), "stale schema")
+        self.assertIn("capabilities", upstream_tool.get("description", ""))
+
+
 if __name__ == "__main__":
     unittest.main()

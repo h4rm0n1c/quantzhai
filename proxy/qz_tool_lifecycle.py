@@ -15,6 +15,8 @@ class CompletedToolCallDecision:
     error_result: dict | None = None   # set when kind == "error"
     signal_result: dict | None = None  # set when kind == "signal" (advisory function_call_output)
     signal_metadata: dict | None = None  # telemetry payload for repeated_read_signal
+    coercion_applied: bool = False     # True when coerce() was called for this decision
+    coercion_error: str = ""           # Non-empty when coerce() returned a failure
 
 
 @dataclass(frozen=True)

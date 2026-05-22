@@ -3,6 +3,43 @@
 Date: 2026-05-22
 Status: active control sheet — Slice B audit complete; Slice B2 fixes next.
 
+## Recently completed — Fix Pass H: B2 tool schema/coercion/advice fixes
+
+```text
+Status: COMPLETE
+
+Changes:
+1. ToolCoercionResult __post_init__: rejects both-set, neither-set, empty error_message.
+   No path can produce {"ok":false,"error":""} through this interface any more.
+
+2. WebSearchProxyToolExecutor.coerce(): delegates to WEB_SEARCH_TOOL_ADAPTER.coerce().
+   Malformed web_search JSON now triggers pre-execution coercion error and
+   coercion_failed telemetry instead of falling through to in-band error.
+
+3. Non-streaming dropped/unknown gap fixed: _run_responses_locally now handles
+   kind="error" for non-proxy-local items (dropped/unknown tools get error result
+   injected into next_input, not the original call).
+
+4. tool_schema_replaced telemetry: emitted in proxy_json_api after initial tool
+   normalisation when any replacement/translation/drop occurred.
+
+5. coercion_succeeded / coercion_failed telemetry: emitted from
+   ResponsesStreamRuntime (streaming) and _run_responses_locally (non-streaming)
+   when completed_call_decision.coercion_applied is set.
+   Payload: tool, call_id, correction_applied, error_summary (no raw args).
+
+6. CompletedToolCallDecision: coercion_applied + coercion_error fields added.
+   completed_call_decision populates these when coerce() runs.
+
+Tests added: 19 new across test_qz_tools, test_qz_proxy_tools,
+test_qz_responses_stream. Covers: ToolCoercionResult guards, coercion info
+fields, streaming coercion telemetry, non-streaming gap, tool_schema_replaced.
+
+3158 tests total pass.
+
+Next: Fix Pass I — response.id threading + zero-usage fallback documentation.
+```
+
 ## Recently completed — End-to-end smoke plan (Slice G — final audit slice)
 
 ```text

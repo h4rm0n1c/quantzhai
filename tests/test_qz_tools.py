@@ -63,6 +63,21 @@ class ToolCoercionResultTests(unittest.TestCase):
         self.assertFalse(r.succeeded())
         self.assertIsNone(r.corrected_arguments)
 
+    def test_neither_set_raises(self):
+        from proxy.qz_tools import ToolCoercionResult
+        with self.assertRaises(ValueError):
+            ToolCoercionResult()
+
+    def test_both_set_raises(self):
+        from proxy.qz_tools import ToolCoercionResult
+        with self.assertRaises(ValueError):
+            ToolCoercionResult(corrected_arguments='{}', error_message="oops")
+
+    def test_empty_error_message_raises(self):
+        from proxy.qz_tools import ToolCoercionResult
+        with self.assertRaises(ValueError):
+            ToolCoercionResult(error_message="")
+
 
 class SynthesizeToolErrorResultTests(unittest.TestCase):
     def test_produces_function_call_output(self):
