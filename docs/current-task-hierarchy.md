@@ -3,6 +3,39 @@
 Date: 2026-05-22
 Status: active control sheet — Slice B audit complete; Slice B2 fixes next.
 
+## Recently completed — Fix Pass L: search profile/capabilities fixes
+
+```text
+Status: COMPLETE
+
+Changes:
+1. config/default/search.json: furry_images gains retrieval_expected=false
+   and retrieval_kind="image_metadata". Prevents capabilities from claiming
+   prose retrieval for image tag/rating engines (e926/furbooru).
+
+2. proxy/qz_tool_web.py build_web_search_capabilities:
+   - Per-profile: engine_availability_known, effective_engine_count,
+     blocked_engines, probe_unavailable_engines (when probe data is present).
+   - Global warning: "Engine availability has not been probed" when no probe.
+   - Per-profile warning: "Profile X has no available engines" when all engines
+     are filtered after policy+probe.
+   - SoFurry: if probe detects sofurry but no profile is configured, warning
+     "SoFurry engine detected but not configured". Silent otherwise.
+   - usage_notes: explicit engines override note, furry_fse/furry_images
+     retrieval distinction, SoFurry absent note.
+
+Confirmed correct:
+- e926/furbooru/fse are NOT in non_text suppression list (verified).
+- furry_fse retrieval_expected remains True (FSE Agent API prose).
+- furry remains documented as mixed convenience profile.
+- SoFurry absent from config; no fake profile added.
+- FSE explicit override profile="furry", engines=["fse"] works correctly.
+
+15 new tests. 3226 total pass.
+
+Next: Fix Pass M — final live smoke rerun.
+```
+
 ## Recently completed — Fix Pass K: qz-top/qz-thoughts observability fixes
 
 ```text

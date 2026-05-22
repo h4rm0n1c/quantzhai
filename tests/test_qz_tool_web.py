@@ -1666,6 +1666,178 @@ class FurryProfileTests(unittest.TestCase):
         self.assertIn("furry_fse", VALID_WEB_SEARCH_PROFILES)
         self.assertIn("furry_images", VALID_WEB_SEARCH_PROFILES)
 
+    # --- Fix Pass L: Slice F missing tests ---
+
+    def test_furry_images_retrieval_expected_is_false(self):
+        """furry_images must not claim prose retrieval (Fix Pass L)."""
+        from proxy.qz_search_config import load_search_config
+        from proxy.qz_tool_web import _profile_retrieval_expected
+        cfg = load_search_config()
+        img_cfg = cfg.config.get("profiles", {}).get("furry_images", {})
+        self.assertFalse(_profile_retrieval_expected(img_cfg),
+                         "furry_images must not claim prose retrieval")
+
+    def test_furry_images_retrieval_kind_is_image_metadata(self):
+        from proxy.qz_search_config import load_search_config
+        cfg = load_search_config()
+        img_cfg = cfg.config.get("profiles", {}).get("furry_images", {})
+        self.assertEqual(img_cfg.get("retrieval_kind"), "image_metadata")
+
+    def test_furry_fse_retrieval_expected_remains_true(self):
+        from proxy.qz_search_config import load_search_config
+        from proxy.qz_tool_web import _profile_retrieval_expected
+        cfg = load_search_config()
+        fse_cfg = cfg.config.get("profiles", {}).get("furry_fse", {})
+        self.assertTrue(_profile_retrieval_expected(fse_cfg))
+
+    def test_capabilities_furry_images_not_prose_retrieval(self):
+        from proxy.qz_tool_web import build_web_search_capabilities
+        from proxy.qz_search_config import load_search_config
+        cfg = load_search_config()
+        runtime = WebSearchRuntime(search_config_profiles=cfg.config.get("profiles", {}))
+        caps = build_web_search_capabilities(runtime)
+        img_profile = caps["profiles"].get("furry_images", {})
+        self.assertFalse(img_profile.get("retrieval_expected"),
+                         "furry_images capabilities must not claim prose retrieval")
+
+    def test_capabilities_furry_fse_retrieval_expected_true(self):
+        from proxy.qz_tool_web import build_web_search_capabilities
+        from proxy.qz_search_config import load_search_config
+        cfg = load_search_config()
+        runtime = WebSearchRuntime(search_config_profiles=cfg.config.get("profiles", {}))
+        caps = build_web_search_capabilities(runtime)
+        fse_profile = caps["profiles"].get("furry_fse", {})
+        self.assertTrue(fse_profile.get("retrieval_expected"))
+
+    def test_capabilities_engine_availability_unknown_without_probe(self):
+        """Without probe data, capabilities must say availability unknown."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+        runtime = WebSearchRuntime(
+            search_config_profiles={"furry_images": {"engines": ["e926", "furbooru"]}},
+            capabilities={},  # no probe
+        )
+        caps = build_web_search_capabilities(runtime)
+        self.assertFalse(
+            caps["profiles"]["furry_images"]["engine_availability_known"],
+            "Availability should be unknown without probe data",
+        )
+        warning_text = " ".join(caps.get("warnings", []))
+        self.assertIn("not been probed", warning_text)
+
+    def test_capabilities_effective_engines_with_probe(self):
+        """With probe data, capabilities includes effective/unavailable engine info."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+        runtime = WebSearchRuntime(
+            search_config_profiles={
+                "furry_images": {"engines": ["e926", "furbooru"]},
+                "furry_fse": {"engines": ["fse"]},
+            },
+            capabilities={"engine_probe": {
+                "e926": {"status": "ok"},
+                "fse": {"status": "ok"},
+                # furbooru absent — probe unavailable
+            }},
+        )
+        caps = build_web_search_capabilities(runtime)
+        img = caps["profiles"]["furry_images"]
+        fse = caps["profiles"]["furry_fse"]
+        self.assertTrue(img["engine_availability_known"])
+        self.assertIn("furbooru", img.get("probe_unavailable_engines", []))
+        self.assertEqual(fse["effective_engine_count"], 1)
+
+    def test_capabilities_zero_effective_engines_warning(self):
+        """Profile with all engines probe-unavailable triggers warning."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+        runtime = WebSearchRuntime(
+            search_config_profiles={"custom": {"engines": ["engine_x", "engine_y"]}},
+            capabilities={"engine_probe": {"engine_z": {"status": "ok"}}},
+        )
+        caps = build_web_search_capabilities(runtime)
+        warning_text = " ".join(caps.get("warnings", []))
+        self.assertIn("no available engines", warning_text)
+
+    def test_capabilities_no_local_url_leak(self):
+        """Capabilities must not expose local SearXNG URLs."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+        from proxy.qz_search_config import load_search_config
+        cfg = load_search_config()
+        runtime = WebSearchRuntime(
+            search_config_profiles=cfg.config.get("profiles", {}),
+            base_url="http://127.0.0.1:8890",
+        )
+        caps = build_web_search_capabilities(runtime)
+        caps_str = str(caps)
+        self.assertNotIn("127.0.0.1", caps_str)
+        self.assertNotIn("localhost", caps_str)
+        self.assertNotIn(":8890", caps_str)
+
+    def test_e926_furbooru_fse_not_in_non_text_blocked(self):
+        """e926, furbooru, and fse must not be in the non_text suppression list."""
+        import json
+        from pathlib import Path
+        policy_path = Path(__file__).resolve().parents[1] / "config/default/search-policy.json"
+        if not policy_path.exists():
+            self.skipTest("search-policy.json not found")
+        policy = json.loads(policy_path.read_text())
+        blocked = policy.get("non_text_engines_disabled_for_current_web_search_tool", [])
+        self.assertNotIn("e926", blocked)
+        self.assertNotIn("furbooru", blocked)
+        self.assertNotIn("fse", blocked)
+
+    def test_furry_sofurry_profile_absent_by_default(self):
+        """furry_sofurry profile is not configured unless explicitly added."""
+        from proxy.qz_tool_web import VALID_WEB_SEARCH_PROFILES
+        from proxy.qz_search_config import load_search_config
+        cfg = load_search_config()
+        profiles = cfg.config.get("profiles", {})
+        self.assertNotIn("furry_sofurry", profiles,
+                         "furry_sofurry must not be configured unless SoFurry is verified")
+
+    def test_sofurry_probe_does_not_create_profile(self):
+        """Probe detecting sofurry engine does NOT auto-create a profile."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+        runtime = WebSearchRuntime(
+            search_config_profiles={},
+            capabilities={"engine_probe": {"sofurry": {"status": "ok"}}},
+        )
+        caps = build_web_search_capabilities(runtime)
+        self.assertNotIn("furry_sofurry", caps["profiles"])
+        # But a warning should mention the unconfigured engine
+        warning_text = " ".join(caps.get("warnings", []))
+        self.assertIn("SoFurry", warning_text)
+
+    def test_explicit_fse_override_resolves_to_fse_only(self):
+        """profile='furry', engines=['fse'] routes only to fse."""
+        calls = []
+
+        def fake_query(query, categories=None, engines=None, top_k=12):
+            calls.append({"query": query, "engines": engines or []})
+            return {"results": []}
+
+        runtime = WebSearchRuntime(
+            search_config_profiles={
+                "furry": {"categories": ["general", "images"], "engines": ["fse", "e926", "furbooru"]},
+            },
+            capabilities={"engine_probe": {"fse": {"status": "ok"}, "e926": {"status": "ok"}, "furbooru": {"status": "ok"}}},
+        )
+        runtime._query_searxng = fake_query
+        runtime._search_web("test", profile="furry", engines=["fse"])
+        self.assertEqual(calls[0]["engines"], ["fse"])
+
+    def test_capabilities_usage_notes_mention_explicit_engines(self):
+        from proxy.qz_tool_web import build_web_search_capabilities
+        runtime = WebSearchRuntime(search_config_profiles={})
+        caps = build_web_search_capabilities(runtime)
+        notes_str = " ".join(caps.get("usage_notes", []))
+        self.assertIn("engines", notes_str.lower())
+
+    def test_capabilities_usage_notes_mention_sofurry_absent(self):
+        from proxy.qz_tool_web import build_web_search_capabilities
+        runtime = WebSearchRuntime(search_config_profiles={})
+        caps = build_web_search_capabilities(runtime)
+        notes_str = " ".join(caps.get("usage_notes", []))
+        self.assertIn("SoFurry", notes_str)
+
 
 if __name__ == "__main__":
     unittest.main()

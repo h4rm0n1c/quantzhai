@@ -801,6 +801,11 @@ def build_web_search_capabilities(runtime) -> dict:
             if name not in profile_names:
                 profile_names.append(name)
 
+    # Probe/allowlist data for per-profile engine availability.
+    _probe_engines: frozenset = getattr(runtime, "_allowed_engines_cache", frozenset())
+    _blocked_general: frozenset = getattr(runtime, "_blocked_engines_general", frozenset())
+    _engine_availability_known: bool = bool(_probe_engines)
+
     for name in sorted(profile_names):
         cfg = config_profiles.get(name)
         if not isinstance(cfg, dict):
@@ -812,7 +817,20 @@ def build_web_search_capabilities(runtime) -> dict:
             cfg.get("description") or cfg.get("purpose") or _PROFILE_DESCRIPTION_FALLBACKS.get(name, ""),
             220,
         )
-        profiles[name] = {
+        # Compute effective/availability fields for this profile.
+        blocked_here = [e for e in raw_engines if e in _blocked_general]
+        if _engine_availability_known:
+            unavailable_here = [e for e in raw_engines
+                                 if e not in _probe_engines and e not in blocked_here]
+            effective_here = [e for e in raw_engines
+                              if e not in _blocked_general and e in _probe_engines]
+        else:
+            unavailable_here = []
+            effective_here = raw_engines  # unknown; assume all configured
+        effective_count = len(effective_here)
+        # retrieval_kind: explicit config field for image-metadata-only profiles.
+        retrieval_kind = str(cfg.get("retrieval_kind") or "")
+        profile_entry: dict = {
             "description": description,
             "categories": categories,
             "engines": engines,
@@ -820,7 +838,40 @@ def build_web_search_capabilities(runtime) -> dict:
             "retrieval_expected": _profile_retrieval_expected(cfg),
             "intended_use": _safe_capability_text(cfg.get("intended_use") or description, 180),
             "source_kinds_expected": _profile_source_kinds(name, cfg),
+            "engine_availability_known": _engine_availability_known,
+            "effective_engine_count": effective_count,
         }
+        if retrieval_kind:
+            profile_entry["retrieval_kind"] = retrieval_kind
+        if blocked_here:
+            profile_entry["blocked_engines"] = _safe_capability_list(blocked_here, limit=16)
+        if _engine_availability_known and unavailable_here:
+            profile_entry["probe_unavailable_engines"] = _safe_capability_list(
+                unavailable_here, limit=16
+            )
+        if _engine_availability_known and effective_count == 0 and raw_engines:
+            warnings.append(
+                f"Profile '{name}' has no available engines after policy/probe filtering."
+            )
+        profiles[name] = profile_entry
+
+    # Global probe-availability warning.
+    if not _engine_availability_known:
+        warnings.append(
+            "Engine availability has not been probed; "
+            "configured engines may not exist in local SearXNG."
+        )
+
+    # SoFurry note: always absent unless probe/config discovers it.
+    sofurry_in_probe = "sofurry" in _probe_engines
+    if sofurry_in_probe and "furry_sofurry" not in profiles:
+        warnings.append(
+            "SoFurry engine detected in local SearXNG probe but no furry_sofurry profile "
+            "is configured. Add the profile to config/user/search.json to enable it."
+        )
+    elif not sofurry_in_probe:
+        # Silent — SoFurry absence is expected; no user-visible noise.
+        pass
 
     budget_modes = {}
     for mode in _budget_mode_names(getattr(runtime, "_budget_mode_table", None)):
@@ -926,6 +977,12 @@ def build_web_search_capabilities(runtime) -> dict:
             "There is no automatic keyword routing.",
             "retrieval_endpoint is never exposed.",
             "Retrieve content selectively; do not dump large retrieved text.",
+            "Use engines=[...] to narrow a profile to specific configured engines.",
+            "Invalid or probe-unavailable explicit engines may produce no results.",
+            "furry_fse: prose/story retrieval expected (FSE Agent API).",
+            "furry_images: image metadata only (e926/furbooru tags/ratings); prose retrieval not expected.",
+            "furry: mixed convenience profile covering prose (FSE) and image metadata (e926/furbooru).",
+            "SoFurry is not configured. It is not discoverable unless added to config/user/search.json.",
         ],
         "warnings": warnings[:8],
     }

@@ -7,6 +7,15 @@ This document is a rolling point-in-time snapshot. For the live execution order,
 read `docs/current-task-hierarchy.md`. For architecture authority, read
 `docs/current-architecture-authority.md`.
 
+## Fix Pass L: search profile/capabilities fixes — COMPLETE
+
+furry_images.retrieval_expected=False + retrieval_kind=image_metadata. Capabilities gains
+per-profile engine_availability_known, effective_engine_count, probe_unavailable_engines,
+blocked_engines. Global "not probed" warning. SoFurry: absent by default; warning when
+detected in probe but not configured. 15 new tests. 3226 total pass.
+
+**Next: Fix Pass M** — final live smoke rerun.
+
 ## Fix Pass K: qz-top/qz-thoughts observability fixes — COMPLETE
 
 Control-plane now exposes profile fields (prompt_files, reasoning_level, context lengths).

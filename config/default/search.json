@@ -101,10 +101,12 @@
     },
 
     "furry_images": {
-      "description": "Furry image metadata search (e926, furbooru). SFW-biased.",
+      "description": "Furry image metadata search (e926, furbooru). SFW-biased. Returns image tags/ratings/metadata, not prose text.",
       "categories": ["images"],
       "engines": ["e926", "furbooru"],
-      "fallback_profiles": ["broad"]
+      "fallback_profiles": ["broad"],
+      "retrieval_expected": false,
+      "retrieval_kind": "image_metadata"
     },
 
     "gaming_wikis": {
