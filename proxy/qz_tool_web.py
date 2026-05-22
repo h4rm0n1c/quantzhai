@@ -756,16 +756,21 @@ def _profile_source_strict(
     profile: str,
     cfg_source_strict: bool,
     explicit_engines: list,
+    guidance_source_strict: bool = False,
 ) -> bool:
     """True when search must stay within expected sources — no fallback, no broadening.
 
-    Triggers:
-    - profile config sets source_strict=true, OR
-    - profile name is "furry_fse" (always source-pinned by design), OR
-    - caller supplied explicit_engines that are all "fse" (source-pinned override).
+    Priority order:
+    1. Local config source_strict=true
+    2. Provider guidance source_strict=true
+    3. profile=="furry_fse" — deprecated compat fallback, kept until guidance always present
+    4. All explicit_engines are "fse" — deprecated compat fallback
     """
     if cfg_source_strict:
         return True
+    if guidance_source_strict:
+        return True
+    # Deprecated compatibility fallbacks. Remove when provider guidance is always present.
     if profile == "furry_fse":
         return True
     if explicit_engines and all(e.strip().lower() == "fse" for e in explicit_engines):
@@ -846,6 +851,18 @@ def build_web_search_capabilities(runtime) -> dict:
     """Return a bounded model-readable summary of the live web_search runtime."""
     warnings = []
     profiles = {}
+
+    # Fetch provider guidance (cached, short timeout, failure = empty dict).
+    guidance: dict = {}
+    if hasattr(runtime, "_fetch_provider_guidance_cached"):
+        try:
+            guidance = runtime._fetch_provider_guidance_cached() or {}
+        except Exception:
+            pass
+    guidance_warnings = list(getattr(runtime, "_provider_guidance_warnings", []))
+    guidance_profiles: dict = (guidance.get("profiles") or {}) if guidance else {}
+    guidance_available = bool(guidance)
+
     config_profiles = getattr(runtime, "search_config_profiles", None) or {}
     if not isinstance(config_profiles, dict):
         config_profiles = {}
@@ -892,8 +909,9 @@ def build_web_search_capabilities(runtime) -> dict:
         effective_count = len(effective_here)
         # retrieval_kind: explicit config field for image-metadata-only profiles.
         retrieval_kind = str(cfg.get("retrieval_kind") or "")
-        # source_strict: profile may not fall back to other engines.
-        source_strict_flag = bool(cfg.get("source_strict")) or name == "furry_fse"
+        # source_strict: from local config, provider guidance, or deprecated compat fallback.
+        _guidance_strict_flag = bool((guidance_profiles.get(name) or {}).get("source_strict"))
+        source_strict_flag = bool(cfg.get("source_strict")) or name == "furry_fse" or _guidance_strict_flag
         fallback_profiles_cap = (
             []
             if source_strict_flag
@@ -933,12 +951,28 @@ def build_web_search_capabilities(runtime) -> dict:
                     f"{strict_missing!r} are not available in local SearXNG probe. "
                     "Searches will return zero results."
                 )
-        # Provider preference: source-strict FSE profile prefers fse_direct when available.
-        if name == "furry_fse":
-            profile_entry["provider_preference"] = ["fse_direct", "searxng_fse"]
-            profile_entry["provider_preference_note"] = (
-                "fse_direct preferred (not yet implemented); currently routes via SearXNG fse engine"
-            )
+        # Attach compact provider guidance for this profile, if available.
+        _pg = guidance_profiles.get(name) or {}
+        if _pg and isinstance(_pg, dict):
+            _guidance_compact: dict = {}
+            for _gf in ("purpose", "use_when", "do_not_use_for", "source_strict",
+                        "supports_pagination", "max_pages_cap", "retrieval_guidance"):
+                _gv = _pg.get(_gf)
+                if _gv is None:
+                    continue
+                if isinstance(_gv, str):
+                    _guidance_compact[_gf] = _safe_capability_text(_gv, 220)
+                elif isinstance(_gv, bool):
+                    _guidance_compact[_gf] = _gv
+            _hard_rules = _pg.get("hard_rules")
+            if isinstance(_hard_rules, list):
+                _guidance_compact["hard_rules"] = _safe_capability_list(_hard_rules, limit=8, item_limit=160)
+            if _guidance_compact:
+                profile_entry["provider_guidance"] = _guidance_compact
+            # Provider preference from guidance only — not hard-coded.
+            _pref = _pg.get("provider_preference")
+            if isinstance(_pref, list) and _pref:
+                profile_entry["provider_preference"] = _safe_capability_list(_pref, limit=4, item_limit=40)
         profiles[name] = profile_entry
 
     # Global probe-availability warning.
@@ -947,17 +981,6 @@ def build_web_search_capabilities(runtime) -> dict:
             "Engine availability has not been probed; "
             "configured engines may not exist in local SearXNG."
         )
-
-    # SoFurry note: always absent unless probe/config discovers it.
-    sofurry_in_probe = "sofurry" in _probe_engines
-    if sofurry_in_probe and "furry_sofurry" not in profiles:
-        warnings.append(
-            "SoFurry engine detected in local SearXNG probe but no furry_sofurry profile "
-            "is configured. Add the profile to config/user/search.json to enable it."
-        )
-    elif not sofurry_in_probe:
-        # Silent — SoFurry absence is expected; no user-visible noise.
-        pass
 
     budget_modes = {}
     for mode in _budget_mode_names(getattr(runtime, "_budget_mode_table", None)):
@@ -996,22 +1019,12 @@ def build_web_search_capabilities(runtime) -> dict:
     config_source = _safe_capability_text(getattr(runtime, "search_config_source", "") or "runtime", 80)
     config_path = _safe_config_path(getattr(runtime, "search_config_path", ""))
 
-    _fse_in_probe = "fse" in _probe_engines
-    providers_info = {
+    providers_info: dict = {
         "searxng": {
             "available": base_url_configured,
             "provider_id": "searxng",
             "probe_status": "probed" if _engine_availability_known else "not_probed",
             "note": "SearXNG local search instance. Engine-filtered web search.",
-        },
-        "fse_direct": {
-            "available": False,
-            "provider_id": "fse_direct",
-            "note": (
-                "Direct FSE provider not implemented. "
-                "FSE search runs through the SearXNG fse engine module. "
-                "Use profile=furry_fse or engines=[fse] for source-strict FSE search via SearXNG."
-            ),
         },
         "agent_retrieve": {
             "available": base_url_configured,
@@ -1019,14 +1032,18 @@ def build_web_search_capabilities(runtime) -> dict:
             "note": "Agent API retrieval for selected search results (action=retrieve).",
         },
     }
+    # Merge provider-specific entries from guidance (provider owns these names).
+    if guidance:
+        for _pid, _pdata in (guidance.get("providers") or {}).items():
+            if isinstance(_pdata, dict) and isinstance(_pid, str) and _pid.strip() and _pid not in providers_info:
+                providers_info[_pid] = {
+                    k: (_safe_capability_text(v, 120) if isinstance(v, str) else v)
+                    for k, v in _pdata.items()
+                    if k in ("available", "provider_id", "note", "reason")
+                }
 
     if not base_url_configured:
         warnings.append("SearXNG provider is not available: no base URL configured.")
-    if _engine_availability_known and not _fse_in_probe and "furry_fse" in profiles:
-        warnings.append(
-            "fse_direct is not available and SearXNG fse engine is absent from probe. "
-            "profile=furry_fse has no working provider. Check SearXNG fse engine configuration."
-        )
 
     return {
         "ok": True,
@@ -1071,6 +1088,14 @@ def build_web_search_capabilities(runtime) -> dict:
             ],
         },
         "providers": providers_info,
+        "provider_guidance": {
+            "available": guidance_available,
+            "provider_id": _safe_capability_text((guidance.get("provider_id") or ""), 60) if guidance_available else None,
+            "schema": _safe_capability_text((guidance.get("schema") or ""), 60) if guidance_available else None,
+            "profiles_present": sorted((guidance.get("profiles") or {}).keys()) if guidance_available else [],
+            "warnings": [_safe_capability_text(w, 180) for w in (guidance.get("warnings") or [])[:4]],
+            "fetch_warnings": [_safe_capability_text(w, 180) for w in guidance_warnings[:4]],
+        },
         "agent_api": {
             "base_url_configured": base_url_configured,
             "status": "configured_not_probed" if base_url_configured else "not_configured",
@@ -1098,11 +1123,8 @@ def build_web_search_capabilities(runtime) -> dict:
             "Retrieve content selectively; do not dump large retrieved text.",
             "Use engines=[...] to narrow a profile to specific configured engines.",
             "Invalid or probe-unavailable explicit engines may produce no results.",
-            "furry_fse: source-strict — only fse engine / fse.anthro.fr results; no fallback to other engines.",
-            "furry_fse: prose/story retrieval expected (FSE Agent API).",
-            "furry_images: image metadata only (e926/furbooru tags/ratings); prose retrieval not expected.",
-            "furry: mixed convenience profile covering prose (FSE) and image metadata (e926/furbooru).",
-            "SoFurry is not configured. It is not discoverable unless added to config/user/search.json.",
+            "Source-strict profiles enforce exact engine matching; they never fall back to other engines.",
+            "Use action=capabilities to inspect provider_guidance for profile-specific usage instructions.",
         ],
         "warnings": warnings[:8],
     }
@@ -1178,6 +1200,12 @@ class WebSearchRuntime:
 
         self.retrieval_cache: dict = {}
 
+        # Provider guidance cache — fetched lazily from Agent API /guidance endpoint.
+        self._provider_guidance: dict = {}
+        self._provider_guidance_fetched_at: float = 0.0
+        self._provider_guidance_warnings: list = []
+        self._provider_guidance_cache_ttl: float = 120.0
+
         # Pre-build immutable per-instance caches — inputs are set once at __init__.
         _policy_profiles = (self.searxng_policy or {}).get("web_search_profiles") or {}
         _all_profiles = set(VALID_WEB_SEARCH_PROFILES)
@@ -1216,6 +1244,41 @@ class WebSearchRuntime:
                 self.low_result_fallback_threshold = max(1, legacy)
             except Exception:
                 self.low_result_fallback_threshold = 2
+
+    def _fetch_provider_guidance_cached(self) -> dict:
+        """Fetch /guidance from the Agent API. Returns {} on failure; failures are warnings.
+
+        Caches for _provider_guidance_cache_ttl seconds. The /guidance endpoint is
+        optional — its absence is normal and not an error. Provider guidance is generic:
+        any Agent API may expose it; searchengines-private is one example.
+        """
+        now = _now_float()
+        if self._provider_guidance_fetched_at > 0 and (now - self._provider_guidance_fetched_at) < self._provider_guidance_cache_ttl:
+            return self._provider_guidance
+        if not self.searxng_base_url:
+            self._provider_guidance_fetched_at = now
+            return self._provider_guidance
+        url = self.searxng_base_url.rstrip("/") + "/guidance"
+        try:
+            raw, _ctype, _final = _http_fetch(url, min(float(self.searxng_timeout), 5.0), "application/json")
+            guidance = json.loads(raw.decode("utf-8", errors="replace"))
+            if not isinstance(guidance, dict):
+                guidance = {}
+            self._provider_guidance = guidance
+            self._provider_guidance_warnings = []
+        except Exception as exc:
+            self._provider_guidance = {}
+            self._provider_guidance_warnings = [f"Provider guidance unavailable: {type(exc).__name__}"]
+        self._provider_guidance_fetched_at = now
+        return self._provider_guidance
+
+    def _get_guidance_source_strict(self, profile: str) -> bool:
+        """Return source_strict from cached provider guidance (no network fetch)."""
+        guidance = self._provider_guidance
+        if not isinstance(guidance, dict) or not guidance:
+            return False
+        pg = (guidance.get("profiles") or {}).get(profile) or {}
+        return bool(pg.get("source_strict"))
 
     def _emit(self, event_type: str, payload: dict | None = None):
         if not self.telemetry:
@@ -1542,12 +1605,12 @@ class WebSearchRuntime:
         primary_engines = self._filter_engines(explicit_engines, route["profile"]) if explicit_engines else route["engines"]
         query_categories = [] if route["profile"] in ("ai_models", "broad") and primary_engines else primary_categories
 
-        # Source-strict enforcement: profile="furry_fse", source_strict=true in config,
-        # or explicit_engines=["fse"] all pin the search to expected sources only.
+        # Source-strict enforcement: config flag, provider guidance, or deprecated fallbacks.
         source_strict = _profile_source_strict(
             route["profile"],
             bool(route.get("source_strict")),
             explicit_engines,
+            guidance_source_strict=self._get_guidance_source_strict(route["profile"]),
         )
         if source_strict:
             # Never fall back — silently broadening would return unrelated results.

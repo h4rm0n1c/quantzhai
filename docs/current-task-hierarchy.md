@@ -1,7 +1,52 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-22
-Status: active control sheet — web search provider architecture audit and hardening complete.
+Status: active control sheet — web search provider boundary decoupling complete.
+
+## P0/P1: Web Search Provider Boundary Decoupling — COMPLETE
+
+```text
+Changes:
+1. qz_tool_web.py: _profile_source_strict — added guidance_source_strict parameter.
+   Priority: local config → provider guidance → deprecated compat fallbacks
+   (furry_fse by name, explicit engines=["fse"]).
+
+2. qz_tool_web.py: WebSearchRuntime — added _fetch_provider_guidance_cached() and
+   _get_guidance_source_strict(). Generic /guidance endpoint; any Agent API may
+   expose it. Failures are warnings, not fatal. Cached for 120s.
+
+3. qz_tool_web.py: _search_web — now passes guidance_source_strict to source_strict
+   computation from cached guidance (no network per search).
+
+4. qz_tool_web.py: build_web_search_capabilities — removed all searchengines-specific
+   hard-coded lore:
+   - Removed sofurry_in_probe → SoFurry warning block
+   - Removed "SoFurry is not configured..." from usage_notes
+   - Removed "furry_fse: source-strict...", "furry_images: image metadata...",
+     "furry: mixed convenience..." from usage_notes
+   - Removed hard-coded provider_preference=["fse_direct", "searxng_fse"] for furry_fse
+   - Removed fse_direct from static providers_info
+   - Removed fse_direct-specific probe warning
+   Added:
+   - Generic "source-strict profiles enforce exact engine matching..." usage note
+   - provider_guidance section in return dict (available, provider_id, schema,
+     profiles_present, warnings, fetch_warnings)
+   - Per-profile provider_guidance fields merged from guidance (purpose, use_when,
+     do_not_use_for, hard_rules, retrieval_guidance, source_strict, provider_preference)
+   - Guidance-provided providers merged into providers section
+
+5. docs/search-provider-boundary-audit.md: full KEEP_GENERIC / KEEP_FALLBACK /
+   MOVE_TO_PROVIDER_GUIDANCE / REMOVE_LEAK classification for all searchengines-
+   specific items. Documents boundary rules and /guidance expected schema.
+
+6. 11 new tests in WebSearchProviderGuidanceTests. 209 total in test_qz_tool_web.py.
+   Updated 8 existing tests to reflect removed hard-coded lore.
+
+Key principle: QuantZhai is a generic search/retrieval orchestrator. Provider-specific
+guidance (FSE quirks, SoFurry restrictions, fse_direct availability, per-profile
+usage prose) belongs in searchengines-private /guidance endpoint. QuantZhai fetches
+and passes it through without hard-coding the content.
+```
 
 ## P0/P1: Web Search Provider Architecture Audit + Hardening — COMPLETE
 

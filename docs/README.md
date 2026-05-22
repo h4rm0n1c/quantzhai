@@ -47,6 +47,7 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 8e. [Observability UI audit](observability-ui-audit.md) — Slice E: qz-thoughts/qz-top data sources, visibility tables, reconnect audit, misleading-state audit, token observability.
 8f. [Search profile granularity audit](search-profile-granularity-audit.md) — Slice F: profile inventory, furry/FSE/SoFurry audit, engine availability, policy/suppression, capabilities output, retrieval accuracy.
 8f2. [Web search provider architecture audit](web-search-provider-architecture-audit.md) — P0/P1: provider architecture map, fse_direct honest finding, count mismatch semantics, trace log fields, operator debugging commands.
+8f3. [Search provider boundary audit](search-provider-boundary-audit.md) — QuantZhai/searchengines-private boundary: KEEP_GENERIC/KEEP_FALLBACK/MOVE_TO_PROVIDER_GUIDANCE/REMOVE_LEAK classification, /guidance schema, boundary rules.
 8g. [End-to-end smoke plan](end-to-end-smoke-plan.md) — Slice G: 37-test smoke matrix, command blocks, expected outputs, failure classification, fix-pass ordering H–M, result template.
 8h. [End-to-end smoke results](end-to-end-smoke-results.md) — Fix Pass M: automated smoke results (YELLOW). 14 PASS, 1 FAIL (stale proxy), 16 SKIP. Operator live run required for GREEN.
 9. [Master stabilisation plan](master-stabilisation-plan.md) — broader stabilisation map; current authority and task hierarchy win for state/memory terms.

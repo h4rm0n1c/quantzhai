@@ -1794,7 +1794,7 @@ class FurryProfileTests(unittest.TestCase):
                          "furry_sofurry must not be configured unless SoFurry is verified")
 
     def test_sofurry_probe_does_not_create_profile(self):
-        """Probe detecting sofurry engine does NOT auto-create a profile."""
+        """Probe detecting sofurry engine does NOT auto-create a profile or emit a SoFurry warning."""
         from proxy.qz_tool_web import build_web_search_capabilities
         runtime = WebSearchRuntime(
             search_config_profiles={},
@@ -1802,9 +1802,9 @@ class FurryProfileTests(unittest.TestCase):
         )
         caps = build_web_search_capabilities(runtime)
         self.assertNotIn("furry_sofurry", caps["profiles"])
-        # But a warning should mention the unconfigured engine
+        # QuantZhai should not mention SoFurry unless provider guidance exposes it.
         warning_text = " ".join(caps.get("warnings", []))
-        self.assertIn("SoFurry", warning_text)
+        self.assertNotIn("SoFurry", warning_text)
 
     def test_explicit_fse_override_resolves_to_fse_only(self):
         """profile='furry', engines=['fse'] routes only to fse."""
@@ -1831,12 +1831,13 @@ class FurryProfileTests(unittest.TestCase):
         notes_str = " ".join(caps.get("usage_notes", []))
         self.assertIn("engines", notes_str.lower())
 
-    def test_capabilities_usage_notes_mention_sofurry_absent(self):
+    def test_capabilities_usage_notes_no_sofurry_hardcoded(self):
+        """capabilities usage_notes must NOT hard-code SoFurry — that is provider guidance territory."""
         from proxy.qz_tool_web import build_web_search_capabilities
         runtime = WebSearchRuntime(search_config_profiles={})
         caps = build_web_search_capabilities(runtime)
         notes_str = " ".join(caps.get("usage_notes", []))
-        self.assertIn("SoFurry", notes_str)
+        self.assertNotIn("SoFurry", notes_str)
 
     # --- Source-strict tests ---
 
@@ -2412,7 +2413,7 @@ class WebSearchProviderDiagnosticsTests(unittest.TestCase):
         self.assertFalse(result.get("count_mismatch"))
 
     def test_capabilities_providers_section_present(self):
-        """capabilities must include a providers section."""
+        """capabilities must include a providers section with generic providers."""
         from proxy.qz_tool_web import build_web_search_capabilities
         runtime = WebSearchRuntime(search_config_profiles={})
         caps = build_web_search_capabilities(runtime)
@@ -2420,19 +2421,18 @@ class WebSearchProviderDiagnosticsTests(unittest.TestCase):
                       "capabilities must have a providers section")
         providers = caps["providers"]
         self.assertIn("searxng", providers)
-        self.assertIn("fse_direct", providers)
         self.assertIn("agent_retrieve", providers)
+        # fse_direct is searchengines-private — must not appear unless provider guidance adds it.
+        self.assertNotIn("fse_direct", providers,
+                         "fse_direct must not be hard-coded in static providers")
 
-    def test_capabilities_fse_direct_unavailable(self):
-        """capabilities must honestly report fse_direct as unavailable (not implemented)."""
+    def test_capabilities_no_fse_direct_without_guidance(self):
+        """fse_direct must not appear in providers without provider guidance."""
         from proxy.qz_tool_web import build_web_search_capabilities
         runtime = WebSearchRuntime(search_config_profiles={})
         caps = build_web_search_capabilities(runtime)
-        fse_direct = caps["providers"]["fse_direct"]
-        self.assertFalse(fse_direct.get("available"),
-                         "fse_direct must be reported as unavailable")
-        self.assertIn("note", fse_direct,
-                      "fse_direct must include an explanatory note")
+        self.assertNotIn("fse_direct", caps["providers"],
+                         "fse_direct is provider-guidance territory, not static QuantZhai knowledge")
 
     def test_capabilities_searxng_availability_reflects_base_url(self):
         """capabilities searxng.available is True when base_url configured, False otherwise."""
@@ -2451,22 +2451,51 @@ class WebSearchProviderDiagnosticsTests(unittest.TestCase):
         self.assertTrue(caps_with_url["providers"]["searxng"]["available"],
                         "searxng.available must be True with a base URL")
 
-    def test_capabilities_furry_fse_provider_preference(self):
-        """capabilities.profiles.furry_fse must advertise provider_preference."""
+    def test_capabilities_no_provider_preference_without_guidance(self):
+        """furry_fse must NOT have hard-coded provider_preference without provider guidance."""
         from proxy.qz_tool_web import build_web_search_capabilities
         from proxy.qz_search_config import load_search_config
         cfg = load_search_config()
         runtime = WebSearchRuntime(search_config_profiles=cfg.config.get("profiles", {}))
         caps = build_web_search_capabilities(runtime)
         fse_profile = caps["profiles"].get("furry_fse", {})
+        self.assertNotIn("provider_preference", fse_profile,
+                         "provider_preference must not be hard-coded; it should come from provider guidance")
+
+    def test_capabilities_provider_preference_from_guidance(self):
+        """provider_preference appears in profile when provider guidance supplies it."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+        import time
+        runtime = WebSearchRuntime(
+            search_config_profiles={
+                "furry_fse": {
+                    "engines": ["fse"],
+                    "source_strict": True,
+                    "fallback_profiles": [],
+                },
+            },
+        )
+        # Pre-seed guidance cache with provider_preference.
+        runtime._provider_guidance = {
+            "schema": "qz.provider_guidance.v1",
+            "provider_id": "test-provider",
+            "profiles": {
+                "furry_fse": {
+                    "source_strict": True,
+                    "provider_preference": ["fse_direct", "searxng_fse"],
+                    "purpose": "FSE prose search",
+                }
+            }
+        }
+        runtime._provider_guidance_fetched_at = time.time()
+        caps = build_web_search_capabilities(runtime)
+        fse_profile = caps["profiles"].get("furry_fse", {})
         self.assertIn("provider_preference", fse_profile,
-                      "furry_fse must expose provider_preference in capabilities")
-        pref = fse_profile["provider_preference"]
-        self.assertIn("fse_direct", pref,
-                      "fse_direct must appear in furry_fse provider_preference")
+                      "provider_preference must appear when guidance provides it")
+        self.assertIn("fse_direct", fse_profile["provider_preference"])
 
     def test_capabilities_warns_when_fse_absent_from_probe(self):
-        """capabilities warns when fse absent from probe and furry_fse configured."""
+        """capabilities warns when source-strict profile has fse engine absent from probe."""
         from proxy.qz_tool_web import build_web_search_capabilities
         runtime = WebSearchRuntime(
             search_config_profiles={
@@ -2480,17 +2509,27 @@ class WebSearchProviderDiagnosticsTests(unittest.TestCase):
         )
         caps = build_web_search_capabilities(runtime)
         warning_text = " ".join(caps.get("warnings", []))
-        self.assertIn("fse_direct", warning_text.lower() or warning_text,
-                      "Must warn when fse_direct unavailable and fse engine absent")
+        # Generic source-strict probe warning (no fse_direct reference).
+        self.assertIn("source-strict", warning_text.lower(),
+                      "Must warn that source-strict profile has required engine unavailable")
 
-    def test_capabilities_no_sofurry_provider(self):
-        """capabilities must never include a sofurry provider — not implemented."""
+    def test_capabilities_no_sofurry_without_guidance(self):
+        """capabilities must not mention SoFurry without provider guidance."""
         from proxy.qz_tool_web import build_web_search_capabilities
         runtime = WebSearchRuntime(search_config_profiles={})
         caps = build_web_search_capabilities(runtime)
+        # Not in providers
         providers = caps.get("providers", {})
         self.assertNotIn("sofurry", providers,
-                         "SoFurry must not appear as a provider")
+                         "SoFurry must not appear as a provider without guidance")
+        # Not in usage_notes
+        notes_str = " ".join(caps.get("usage_notes", []))
+        self.assertNotIn("SoFurry", notes_str,
+                         "SoFurry must not appear in usage_notes without guidance")
+        # Not in warnings (sofurry probe block removed)
+        warnings_str = " ".join(caps.get("warnings", []))
+        self.assertNotIn("SoFurry", warnings_str,
+                         "SoFurry must not appear in warnings without guidance")
 
     def test_capabilities_regression_broad_profile_unaffected(self):
         """Adding providers section must not affect broad profile capabilities."""
@@ -2515,6 +2554,193 @@ class WebSearchProviderDiagnosticsTests(unittest.TestCase):
         coding = caps["profiles"].get("coding", {})
         self.assertFalse(coding.get("source_strict", False))
         self.assertNotIn("provider_preference", coding)
+
+
+class WebSearchProviderGuidanceTests(unittest.TestCase):
+    """Tests for provider guidance integration (generic /guidance endpoint)."""
+
+    def _make_runtime_with_guidance(self, guidance: dict):
+        import time as _time
+        runtime = WebSearchRuntime(
+            search_config_profiles={
+                "furry_fse": {
+                    "categories": ["general"],
+                    "engines": ["fse"],
+                    "fallback_profiles": [],
+                },
+                "broad": {
+                    "categories": ["general", "web"],
+                    "engines": ["duckduckgo"],
+                    "fallback_profiles": [],
+                },
+            },
+        )
+        runtime._provider_guidance = guidance
+        runtime._provider_guidance_fetched_at = _time.time()
+        return runtime
+
+    def test_guidance_source_strict_causes_no_fallback(self):
+        """Provider guidance source_strict=true causes no fallback, even without local config."""
+        calls = []
+
+        def fake_query(query, categories=None, engines=None, top_k=12):
+            calls.append({"engines": engines or []})
+            return {"results": [], "provider_id": "searxng", "provider_reported_count": 0,
+                    "parsed_result_count": 0, "count_mismatch": False, "warnings": []}
+
+        guidance = {
+            "schema": "qz.provider_guidance.v1",
+            "provider_id": "test",
+            "profiles": {
+                "furry_fse": {"source_strict": True}
+            }
+        }
+        runtime = self._make_runtime_with_guidance(guidance)
+        runtime._query_searxng = fake_query
+        # furry_fse has no local source_strict in this config, but guidance says True.
+        result = runtime._search_web("test", profile="furry_fse")
+        self.assertEqual(len(calls), 1,
+                         "Guidance source_strict must suppress fallback")
+        self.assertIsNone(result.get("fallback_used"))
+
+    def test_local_source_strict_works_without_guidance(self):
+        """Local config source_strict=True still enforces no-fallback without guidance."""
+        calls = []
+
+        def fake_query(query, categories=None, engines=None, top_k=12):
+            calls.append({})
+            return {"results": [], "provider_id": "searxng", "provider_reported_count": 0,
+                    "parsed_result_count": 0, "count_mismatch": False, "warnings": []}
+
+        runtime = WebSearchRuntime(
+            search_config_profiles={
+                "my_strict": {
+                    "categories": ["general"],
+                    "engines": ["myengine"],
+                    "source_strict": True,
+                    "expected_engines": ["myengine"],
+                    "fallback_profiles": [],
+                },
+            },
+        )
+        runtime._query_searxng = fake_query
+        runtime._search_web("test", profile="my_strict")
+        self.assertEqual(len(calls), 1,
+                         "Local source_strict must suppress fallback without guidance")
+
+    def test_furry_fse_still_strict_without_guidance(self):
+        """furry_fse is still source-strict via deprecated compat fallback."""
+        from proxy.qz_tool_web import _profile_source_strict
+        # Without guidance (guidance_source_strict=False), furry_fse compat fallback kicks in.
+        self.assertTrue(_profile_source_strict("furry_fse", False, [], guidance_source_strict=False))
+
+    def test_guidance_source_strict_works_for_arbitrary_profile(self):
+        """Any profile becomes source-strict when guidance says so."""
+        from proxy.qz_tool_web import _profile_source_strict
+        # A profile that is NOT furry_fse and has no local source_strict,
+        # but guidance marks it source_strict=True.
+        self.assertTrue(_profile_source_strict("my_custom", False, [], guidance_source_strict=True))
+
+    def test_no_guidance_no_source_strict_for_arbitrary_profile(self):
+        """Without guidance and without config, an arbitrary profile is not source-strict."""
+        from proxy.qz_tool_web import _profile_source_strict
+        self.assertFalse(_profile_source_strict("my_custom", False, [], guidance_source_strict=False))
+
+    def test_capabilities_provider_guidance_section(self):
+        """capabilities includes a provider_guidance section."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+        runtime = WebSearchRuntime(search_config_profiles={})
+        caps = build_web_search_capabilities(runtime)
+        self.assertIn("provider_guidance", caps,
+                      "capabilities must include provider_guidance section")
+        pg = caps["provider_guidance"]
+        self.assertIn("available", pg)
+        self.assertIn("profiles_present", pg)
+        self.assertIn("fetch_warnings", pg)
+
+    def test_capabilities_provider_guidance_available_when_seeded(self):
+        """provider_guidance.available=True when guidance is pre-seeded."""
+        import time as _time
+        from proxy.qz_tool_web import build_web_search_capabilities
+        runtime = WebSearchRuntime(search_config_profiles={})
+        runtime._provider_guidance = {
+            "schema": "qz.provider_guidance.v1",
+            "provider_id": "test-guidance",
+            "profiles": {"test_profile": {"source_strict": False}},
+        }
+        runtime._provider_guidance_fetched_at = _time.time()
+        caps = build_web_search_capabilities(runtime)
+        pg = caps["provider_guidance"]
+        self.assertTrue(pg["available"],
+                        "provider_guidance.available must be True when guidance seeded")
+        self.assertEqual(pg["provider_id"], "test-guidance")
+        self.assertIn("test_profile", pg["profiles_present"])
+
+    def test_capabilities_profile_gets_guidance_fields(self):
+        """Profile entry includes provider_guidance fields when guidance has them."""
+        import time as _time
+        from proxy.qz_tool_web import build_web_search_capabilities
+        runtime = WebSearchRuntime(
+            search_config_profiles={
+                "my_profile": {
+                    "categories": ["general"],
+                    "engines": ["myengine"],
+                    "fallback_profiles": [],
+                },
+            },
+        )
+        runtime._provider_guidance = {
+            "profiles": {
+                "my_profile": {
+                    "purpose": "Search for my things.",
+                    "use_when": "Looking for my_profile content.",
+                    "hard_rules": ["Never use broad fallback."],
+                }
+            }
+        }
+        runtime._provider_guidance_fetched_at = _time.time()
+        caps = build_web_search_capabilities(runtime)
+        my_p = caps["profiles"].get("my_profile", {})
+        self.assertIn("provider_guidance", my_p,
+                      "Profile must have provider_guidance when guidance has it")
+        self.assertIn("purpose", my_p["provider_guidance"])
+        self.assertIn("hard_rules", my_p["provider_guidance"])
+
+    def test_capabilities_guidance_providers_merged(self):
+        """Provider-specific providers from guidance are merged into providers section."""
+        import time as _time
+        from proxy.qz_tool_web import build_web_search_capabilities
+        runtime = WebSearchRuntime(search_config_profiles={})
+        runtime._provider_guidance = {
+            "providers": {
+                "fse_direct": {
+                    "available": False,
+                    "provider_id": "fse_direct",
+                    "note": "Direct FSE search. Not yet available.",
+                }
+            }
+        }
+        runtime._provider_guidance_fetched_at = _time.time()
+        caps = build_web_search_capabilities(runtime)
+        providers = caps["providers"]
+        self.assertIn("fse_direct", providers,
+                      "Guidance-provided providers must appear in capabilities")
+        self.assertFalse(providers["fse_direct"]["available"])
+
+    def test_no_sofurry_in_capabilities_anywhere_without_guidance(self):
+        """SoFurry must not appear anywhere in capabilities without provider guidance."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+        runtime = WebSearchRuntime(search_config_profiles={})
+        caps = build_web_search_capabilities(runtime)
+        caps_str = json.dumps(caps)
+        # Only allow "SoFurry" if it comes from a profile description (config-level)
+        # — but the static usage_notes and warnings must not contain it.
+        notes_str = " ".join(caps.get("usage_notes", []))
+        self.assertNotIn("SoFurry", notes_str)
+        warnings_str = " ".join(caps.get("warnings", []))
+        self.assertNotIn("SoFurry", warnings_str)
+        for pid in caps.get("providers", {}):
+            self.assertNotIn("sofurry", pid.lower())
 
 
 if __name__ == "__main__":

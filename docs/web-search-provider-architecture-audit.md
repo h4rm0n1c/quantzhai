@@ -1,7 +1,7 @@
 # Web Search Provider Architecture Audit
 
 Date: 2026-05-22
-Status: Initial audit and hardening — P0/P1 provider redesign
+Status: Post-decoupling — provider guidance active. See also: docs/search-provider-boundary-audit.md
 
 ---
 
