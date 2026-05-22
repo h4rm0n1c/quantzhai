@@ -687,6 +687,80 @@ class DirectModeControlPlaneTests(unittest.TestCase):
         self.assertTrue(p["backend"]["loaded_model"],
                         "backend.loaded_model must not be empty for a healthy direct backend")
 
+    # --- A: readiness and top-level status correctness ---
+
+    def test_direct_healthy_readiness_backend_ready_true(self):
+        """readiness.backend_ready must be True when direct backend is healthy.
+
+        Regression test for the ordering bug: readiness was built before
+        model_status updated backend_ready, leaving it False even when the
+        model was ready.
+        """
+        h = self._make_direct_handler(state_payload={
+            "schema": "qz.model_state.v1",
+            "selected_key": "kuato.gguf",
+            "selected_backend_id": "kuato",
+            "selected_source": "operator",
+        })
+        p = build_control_plane_status(h)
+        self.assertTrue(p["readiness"]["backend_ready"],
+                        f"readiness.backend_ready should be True; got {p['readiness']['backend_ready']!r}")
+        self.assertTrue(p["readiness"]["backend_reachable"],
+                        "readiness.backend_reachable should be True")
+
+    def test_direct_healthy_status_not_model_not_loaded(self):
+        """Top-level status must not be 'model_not_loaded' when direct backend is healthy.
+
+        Regression test: status was derived from stale readiness before model_status
+        promoted backend_ready, so it incorrectly showed 'model_not_loaded'.
+        """
+        h = self._make_direct_handler(state_payload={
+            "schema": "qz.model_state.v1",
+            "selected_key": "kuato.gguf",
+            "selected_backend_id": "kuato",
+            "selected_source": "operator",
+        })
+        p = build_control_plane_status(h)
+        self.assertNotEqual(p["status"], "model_not_loaded",
+                            f"status must not be 'model_not_loaded'; got {p['status']!r}")
+        self.assertEqual(p["status"], "ready")
+
+    def test_direct_healthy_no_stale_model_not_loaded_hint(self):
+        """Operator hints must not say 'no model is loaded' when direct backend is healthy."""
+        h = self._make_direct_handler(state_payload={
+            "schema": "qz.model_state.v1",
+            "selected_key": "kuato.gguf",
+            "selected_backend_id": "kuato",
+            "selected_source": "operator",
+        })
+        p = build_control_plane_status(h)
+        stale_hint = "no model is loaded yet"
+        for hint in p.get("operator_hints", []):
+            self.assertNotIn(stale_hint, str(hint).lower(),
+                             f"Stale hint found: {hint!r}")
+
+    def test_direct_healthy_model_switch_state_loaded(self):
+        """models.model_switch_state must be 'loaded' when direct backend is healthy."""
+        h = self._make_direct_handler(state_payload={
+            "schema": "qz.model_state.v1",
+            "selected_key": "kuato.gguf",
+            "selected_backend_id": "kuato",
+            "selected_source": "operator",
+        })
+        p = build_control_plane_status(h)
+        self.assertEqual(p["models"]["model_switch_state"], "loaded",
+                         f"model_switch_state should be 'loaded'; got {p['models']['model_switch_state']!r}")
+
+    def test_router_mode_backend_ready_false_still_shows_model_not_loaded(self):
+        """Non-direct path (router says not ready) must still show model_not_loaded.
+
+        Regression guard: verifies the fix doesn't break non-direct cases.
+        """
+        h = _make_handler(backend_health_status=200, backend_ready=False, loaded_model="")
+        p = build_control_plane_status(h)
+        self.assertEqual(p["status"], "model_not_loaded")
+        self.assertFalse(p["readiness"]["backend_ready"])
+
 
 class _StateFileFixture:
     """Context manager that creates a tempfile state file."""

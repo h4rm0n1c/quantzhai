@@ -112,6 +112,74 @@ In `backend_model_mode="direct"`:
 - During `phase=="running"` (loading): `request_admission_state="loading"` and
   recommended_action says "wait" not "reload".
 
+---
+
+## Follow-on Bug: Control-plane Aggregate Readiness Contradiction
+
+Date: 2026-05-22
+Status: FIXED in commit following bd41930.
+
+### Symptom
+
+After bd41930 fixed model_status (selected_model_ready=True, backend_loaded_model
+populated), the control-plane payload contained an internal contradiction:
+- `status="model_not_loaded"` — stale
+- `readiness.backend_ready=False` — stale
+- `backend.ready=True` — correct
+- `backend.loaded_model` — correct, populated
+- `service_status.model_state="loaded"` — correct
+- `service_status.request_admission="accepted"` — correct
+
+qz-top then showed: `LOADED <model>`, `STATE not_loaded`, `SERVICE model=loaded`.
+
+### Root Cause
+
+In `build_control_plane_status` (qz_control_plane.py):
+1. Router probe sets `backend_ready=False` (router doesn't track direct-m model).
+2. `readiness` dict is built with these stale values.
+3. `_overall_status(readiness)` computes `status="model_not_loaded"`.
+4. THEN `model_status` is built and sets `backend_ready=True` locally.
+5. BUT `readiness` dict and `overall` are already frozen — they're NOT updated.
+6. The `backend` section uses the updated local vars → `backend.ready=True`.
+7. The `service_status` is built from the full payload → sees correct model_status fields.
+
+Result: `status`/`readiness` are stale while `backend` and `service_status` are correct.
+
+### Fix
+
+Move `readiness` dict construction and `overall = _overall_status(readiness)` to AFTER
+the `model_status` block that updates `backend_ready` and `backend_reachable`. Also use
+`model_status.model_switch_state` directly (carries the "loaded" override) instead of
+recomputing from `_derive_model_switch_state`.
+
+### Control-plane Source of Truth Doctrine
+
+`model_status` (from `build_model_status`) is the authoritative source for direct-backend
+readiness. The control-plane aggregate must not contradict it:
+- `readiness.backend_ready` = True when `model_status.selected_model_ready=True`
+- `readiness.backend_reachable` = True when `model_status.selected_model_ready=True`
+- `status` = "ready" when readiness confirms backend_ready
+- `operator_hints` must not emit "no model loaded" when `backend_ready=True`
+- `service_status.model_state` = "loaded" when `models.selected_model_ready=True`
+
+### Status Snapshot Non-Authority Rule
+
+`_persist_model_state` with `source="status_snapshot"` must never overwrite a canonical
+source (operator, qz_codex, env_seed, fallback, migration). Status_snapshot is
+observational — the router observed X. Deliberate operator selections must survive.
+
+Fixed in `_persist_model_state`: when `source="status_snapshot"`, preserve any canonical
+existing `selected_source` regardless of `backend_id` match.
+
+### qz-top STATE Fallback
+
+qz-top `model_status_from_control_plane` now defensively checks `service_status.model_state`:
+if `selected_state` would be "not_loaded" or "unknown" but `service_status.model_state="loaded"`,
+use "loaded". This ensures STATE is not stale even if the top-level `status` string
+is temporarily wrong due to a timing race.
+
+---
+
 ### qz-up Startup Message
 
 qz-up now waits up to 8 seconds for the backend phase to leave idle/start_requested

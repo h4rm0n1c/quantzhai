@@ -219,22 +219,10 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
     # --- codex catalog artifact ---
     codex_catalog = _codex_catalog_info()
 
-    # --- readiness map ---
-    models_visible = len(model_ids) > 0
-    readiness: dict[str, Any] = {
-        "proxy_http": True,       # we're handling the request, so HTTP is up
-        "proxy_ready": proxy_ready,
-        "catalog_ready": catalog_ready,
-        "models_visible": models_visible,
-        "backend_reachable": backend_reachable,
-        "backend_ready": backend_ready,
-        "codex_catalog_ready": codex_catalog.get("exists", False),
-    }
-
-    overall = _overall_status(readiness)
-    ok = proxy_ready and catalog_ready  # backend is optional; ok = proxy+catalog
-
     # --- proxy-owned model selection state (qz.model_state.v1) ---
+    # Must be computed before readiness so that direct-backend confirmation
+    # (selected_model_ready=True) can update backend_reachable / backend_ready
+    # before they are frozen into the readiness dict.
     selection_state = load_handler_model_state(handler)
     try:
         model_status = build_model_status(handler)
@@ -248,6 +236,9 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
         loaded_model = str(model_status.get("backend_loaded_model") or "")
         loaded_count = 1 if loaded_model else 0
         if model_status.get("selected_model_ready") is True:
+            # Direct-backend confirmation: model_status is authoritative for
+            # direct -m mode.  Promote readiness flags so the rest of the
+            # control-plane response is internally consistent.
             backend_ready = True
             backend_reachable = True
     selected_loaded_mismatch = bool(model_status.get("selected_loaded_mismatch")) if model_status else bool(
@@ -271,7 +262,7 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
         except Exception:
             pass
 
-    # Backend manager mode + derived model switch state.
+    # Backend manager snapshot (for direct launch fields in models section).
     bm_snap = {}
     bm = getattr(handler, "backend_manager", None)
     if bm is not None and callable(getattr(bm, "snapshot", None)):
@@ -282,18 +273,43 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
         except Exception:
             pass
     backend_model_mode = "direct"
-    bm_phase = bm_snap.get("phase") or ""
-    try:
-        from .qz_model_status import _derive_model_switch_state
-    except ImportError:
-        from qz_model_status import _derive_model_switch_state
-    model_switch_state, active_load_operation = _derive_model_switch_state(
-        backend_phase=bm_phase,
-        state=selection_state,
-        selected_loaded_mismatch=selected_loaded_mismatch,
-    )
+
+    # model_switch_state: use the value from model_status, which already applies
+    # the direct-healthy override (loaded when selected_model_ready=True).
+    # Fall back to _derive_model_switch_state only when model_status is missing.
+    if model_status and "model_switch_state" in model_status:
+        model_switch_state = str(model_status["model_switch_state"])
+        active_load_operation = str(model_status.get("active_load_operation") or "none")
+    else:
+        try:
+            from .qz_model_status import _derive_model_switch_state
+        except ImportError:
+            from qz_model_status import _derive_model_switch_state
+        bm_phase = bm_snap.get("phase") or ""
+        model_switch_state, active_load_operation = _derive_model_switch_state(
+            backend_phase=bm_phase,
+            state=selection_state,
+            selected_loaded_mismatch=selected_loaded_mismatch,
+        )
     selected_model_ready = bool(model_status.get("selected_model_ready", False))
     request_admission_state = str(model_status.get("request_admission_state") or "")
+
+    # --- readiness map ---
+    # Built AFTER model_status processing so that direct-backend confirmation
+    # is reflected in backend_reachable / backend_ready before the map is frozen.
+    models_visible = len(model_ids) > 0
+    readiness: dict[str, Any] = {
+        "proxy_http": True,       # we're handling the request, so HTTP is up
+        "proxy_ready": proxy_ready,
+        "catalog_ready": catalog_ready,
+        "models_visible": models_visible,
+        "backend_reachable": backend_reachable,
+        "backend_ready": backend_ready,
+        "codex_catalog_ready": codex_catalog.get("exists", False),
+    }
+
+    overall = _overall_status(readiness)
+    ok = proxy_ready and catalog_ready  # backend is optional; ok = proxy+catalog
 
     payload: dict[str, Any] = {
         "schema": QZ_CONTROL_PLANE_SCHEMA,

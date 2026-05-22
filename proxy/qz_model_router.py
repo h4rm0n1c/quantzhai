@@ -258,15 +258,21 @@ class ModelRouter:
         label = label_raw.strip() if isinstance(label_raw, str) else ""
 
         # Preserve an existing canonical SELECTED_SOURCES tag (operator,
-        # qz_codex, env_seed, etc.) when the underlying *backend selection*
-        # has not changed.  Compare by backend_id rather than selected_key
-        # because resolve() may legitimately remap the user-facing alias
-        # (e.g. "OpenYourMind…Q4_K_S.gguf" → its "kuato.gguf" symlink alias)
-        # while routing to the same backend target.
+        # qz_codex, env_seed, etc.) when:
+        #   a) The write source is "status_snapshot" (observational — must never
+        #      overwrite deliberate operator/qz_codex/env_seed choices), OR
+        #   b) The underlying backend selection has not changed (compare by
+        #      backend_id rather than selected_key because resolve() may remap
+        #      the user-facing alias while routing to the same backend target).
         new_source = source or ""
         new_at = _iso_state_now()
         new_reason = reason or ""
-        if (
+        if source == "status_snapshot" and existing.selected_source in SELECTED_SOURCES:
+            # Observational reconciliation writes must not overwrite canonical sources.
+            new_source = existing.selected_source
+            new_at = existing.selected_at or new_at
+            new_reason = existing.selected_reason or new_reason
+        elif (
             existing.selected_source in SELECTED_SOURCES
             and existing.selected_backend_id
             and existing.selected_backend_id == backend_id

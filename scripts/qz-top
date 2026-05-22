@@ -358,6 +358,13 @@ def model_status_from_control_plane(cp: Optional[dict]) -> "ModelStatus":
     }
     selected_state = _status_map.get(overall_status, overall_status)
     load_state = overall_status
+    # Defensive: service_status.model_state is derived from the authoritative
+    # model_status (direct-backend aware) and may be "loaded" even when the
+    # top-level status string is stale ("model_not_loaded") due to a timing
+    # race between the router probe and model_status evaluation.
+    ss = cp.get("service_status") or {}
+    if selected_state in ("not_loaded", "unknown") and ss.get("model_state") == "loaded":
+        selected_state = "loaded"
 
     # Use backend error, or first backend-related hint, as the error field.
     error = backend_error

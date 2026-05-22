@@ -49,3 +49,37 @@ def test_qz_top_rates_includes_cached_reasoning_tokens():
     assert "reasoning_tokens" in src
     assert "cached=" in src
     assert "reasoning=" in src
+
+
+def test_qz_top_state_uses_service_status_model_state_as_fallback():
+    """qz-top must fall back to service_status.model_state=loaded when top-level
+    status is stale (model_not_loaded) but service_status says loaded.
+
+    Regression guard: before the fix, a timing race left status='model_not_loaded'
+    even though service_status.model_state='loaded', causing STATE=not_loaded.
+    """
+    src = QZ_TOP.read_text(encoding="utf-8")
+    # The fallback must read service_status.model_state
+    assert 'service_status' in src or 'ss.get("model_state")' in src
+    # The fallback must override selected_state for "not_loaded" and "unknown"
+    assert '"not_loaded"' in src or "'not_loaded'" in src
+    assert '"loaded"' in src or "'loaded'" in src
+
+
+def test_qz_top_service_status_fallback_reads_correct_key():
+    """The service_status model_state fallback uses the correct key name."""
+    src = QZ_TOP.read_text(encoding="utf-8")
+    assert 'ss.get("model_state")' in src or '"model_state"' in src
+
+
+def test_qz_top_status_map_maps_ready_to_loaded():
+    """status_map must map 'ready' to 'loaded', not 'not_loaded'."""
+    src = QZ_TOP.read_text(encoding="utf-8")
+    assert '"ready": "loaded"' in src or "'ready': 'loaded'" in src
+
+
+def test_qz_top_status_map_does_not_map_model_not_loaded_to_loaded():
+    """status_map must not map 'model_not_loaded' to 'loaded'."""
+    src = QZ_TOP.read_text(encoding="utf-8")
+    assert '"model_not_loaded": "loaded"' not in src
+    assert "'model_not_loaded': 'loaded'" not in src

@@ -3,6 +3,30 @@
 Date: 2026-05-22
 Status: active control sheet — P0 direct-mode loaded model reconciliation fix complete.
 
+## P0/P1 Fix: Control-plane direct backend readiness — COMPLETE
+
+```text
+Changes:
+1. qz_control_plane.py: Move readiness dict + _overall_status computation to
+   AFTER model_status processing.  Previously readiness was built with stale
+   router-probe values, then model_status updated backend_ready/backend_reachable
+   locally but didn't update the already-frozen readiness dict.  This caused:
+     status="model_not_loaded" while backend.ready=True (internally inconsistent)
+     readiness.backend_ready=False while service_status.model_state=loaded
+     stale "no model is loaded" operator hint
+2. qz_control_plane.py: Use model_status.model_switch_state directly (already
+   carries the bd41930 "loaded" override) instead of re-deriving from
+   _derive_model_switch_state (which lacked the override).
+3. qz_model_router.py: _persist_model_state: when source="status_snapshot",
+   never overwrite a canonical existing source (operator, qz_codex, fallback, etc.)
+   regardless of backend_id match.  Status_snapshot is observational; it must
+   not demote deliberate operator selections.
+4. scripts/qz-top: Defensive fallback in model_status_from_control_plane:
+   if selected_state="not_loaded" but service_status.model_state="loaded",
+   use "loaded" so STATE is never stale when service_status is authoritative.
+5. 15 new tests. 3285 total tests pass.
+```
+
 ## P0 Fix: Direct -m loaded model reconciliation — COMPLETE
 
 ```text
