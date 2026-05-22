@@ -690,6 +690,22 @@ def main():
             print(f"QuantZhai: set_launch_model failed: {exc}", flush=True)
             return
 
+        # Normalize persisted status_snapshot source: the reconciliation path
+        # writes "status_snapshot" as the source when it observes model state
+        # from a backend probe.  On proxy restart, once a real model entry is
+        # resolved and the launch model is set, upgrade the source to "fallback"
+        # so status_snapshot never acts as a permanent authority label.
+        try:
+            from .qz_model_state import load_model_state, write_model_state
+            _ms_result = load_model_state(Path(ProxyHandler.model_state_path))
+            _ms = _ms_result.state
+            if _ms.selected_source == "status_snapshot" and _ms.has_selection():
+                from dataclasses import replace as _replace
+                _normalized = _replace(_ms, selected_source="fallback")
+                write_model_state(_normalized, Path(ProxyHandler.model_state_path))
+        except Exception:
+            pass
+
         if _backend_autostart:
             print("QuantZhai: requesting backend autostart...", flush=True)
             _backend_manager.begin_autostart()

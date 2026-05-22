@@ -911,6 +911,53 @@ class GPUOffloadLogCheckTests(unittest.TestCase):
         self.assertEqual(state, "failed")
         self.assertIsNotNone(err)
 
+    def test_gpu_logs_in_stderr_detected(self):
+        """GPU offload patterns in container stderr are classified correctly.
+
+        docker logs sends container-stderr to client-stderr.  llama-server writes
+        its model-load messages to stderr.  The checker must combine stdout+stderr.
+        """
+        def runner(args, timeout=None):
+            if "ps" in args:
+                return 0, "test-ctr", ""
+            if "logs" in args:
+                # GPU lines go to stderr; stdout is empty
+                return 0, "", _GPU_LOG_OFFLOADED
+            return 0, "", ""
+        mgr = _make_mgr(
+            runner=runner,
+            health_checker=lambda url, timeout=3.0: True,
+            require_gpu=True,
+            gpu_check_retry_count=0,
+            gpu_check_retry_delay=0.0,
+        )
+        state, err = mgr._check_gpu_offload_from_logs()
+        self.assertEqual(state, "gpu", "GPU offload in stderr must be detected")
+        self.assertIsNone(err)
+
+    def test_fetch_recent_logs_combines_stderr(self):
+        """fetch_recent_logs must return content from both stdout and stderr."""
+        def runner(args, timeout=None):
+            if "logs" in args:
+                return 0, "stdout-line\n", "stderr-line\n"
+            return 0, "", ""
+        mgr = _make_mgr(runner=runner)
+        logs = mgr.fetch_recent_logs()
+        self.assertIsNotNone(logs)
+        self.assertIn("stdout-line", logs)
+        self.assertIn("stderr-line", logs)
+
+    def test_fetch_recent_logs_stderr_only(self):
+        """fetch_recent_logs returns content when only stderr has data."""
+        def runner(args, timeout=None):
+            if "logs" in args:
+                return 0, "", "only-in-stderr\n"
+            return 0, "", ""
+        mgr = _make_mgr(runner=runner)
+        logs = mgr.fetch_recent_logs()
+        self.assertIsNotNone(logs)
+        self.assertIn("only-in-stderr", logs)
+
     # --- _do_start GPU gate ---
 
     def test_cuda_init_failure_marks_phase_failed_when_require_gpu(self):

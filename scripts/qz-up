@@ -97,7 +97,32 @@ write_runtime_state --phase proxy-started --source env
 printf 'QuantZhai proxy ready: http://%s:%s\n' "$QZ_PROXY_HOST" "$QZ_PROXY_PORT"
 
 # Check backend status from proxy to provide an honest startup message.
-_B_STATUS=$(curl -fsS "http://${QZ_PROXY_HOST}:${QZ_PROXY_PORT}/qz/backend/status" 2>/dev/null) || _B_STATUS=""
+# Wait briefly (up to ~8 s) for autostart to leave idle/start_requested so
+# we can show the resolved launch model name rather than a stale idle snapshot.
+_B_STATUS=""
+_B_WAIT_SECS=8
+_B_WAITED=0
+while [[ "$_B_WAITED" -lt "$_B_WAIT_SECS" ]]; do
+  _B_STATUS=$(curl -fsS "http://${QZ_PROXY_HOST}:${QZ_PROXY_PORT}/qz/backend/status" 2>/dev/null) || _B_STATUS=""
+  if [[ -n "$_B_STATUS" ]]; then
+    _B_PHASE_QUICK=$(python3 -c '
+import json, sys
+try:
+    data = json.loads(sys.stdin.read())
+    backend = data.get("backend_manager") or data
+    print(backend.get("phase") or "idle")
+except Exception:
+    print("idle")
+' <<<"$_B_STATUS" 2>/dev/null) || _B_PHASE_QUICK="idle"
+    # Stop waiting once the phase has moved past idle/start_requested
+    if [[ "$_B_PHASE_QUICK" != "idle" && "$_B_PHASE_QUICK" != "start_requested" ]]; then
+      break
+    fi
+  fi
+  sleep 1
+  _B_WAITED=$(( _B_WAITED + 1 ))
+done
+
 if [[ -n "$_B_STATUS" ]]; then
   _B_INFO=$(python3 -c '
 import json, sys

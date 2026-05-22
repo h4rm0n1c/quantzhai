@@ -49,16 +49,22 @@ class _FakeBackendManager:
         phase: str = "healthy",
         gpu_state: str = "gpu",
         loaded_id: str = "",
-        backend_health_ok: bool = True,
+        backend_health_ok: bool | None = None,
+        gpu_required: bool = True,
     ):
+        # Default backend_health_ok to True for "healthy" phase, False otherwise
+        if backend_health_ok is None:
+            backend_health_ok = (phase == "healthy")
         self._snap = {
             "phase": phase,
             "backend_health_ok": backend_health_ok,
             "gpu_offload_state": gpu_state,
+            "gpu_required": gpu_required,
             "launch_model_key": f"{loaded_id}.gguf" if loaded_id and not loaded_id.endswith(".gguf") else loaded_id,
             "launch_model_backend_id": loaded_id.replace(".gguf", "") if loaded_id else "",
             "launch_model_path_basename": f"{loaded_id}.gguf" if loaded_id and not loaded_id.endswith(".gguf") else loaded_id,
             "launch_model_error": None,
+            "container_running": phase in ("running", "healthy"),
         }
 
     def snapshot(self):
@@ -254,6 +260,167 @@ class BuildModelStatusTests(unittest.TestCase):
         self.assertEqual(payload["backend_phase"], "healthy")
         self.assertEqual(payload["backend_gpu_state"], "gpu")
         self.assertFalse(payload["selected_model_ready"])
+
+    # --- direct-mode effective loaded model ---
+
+    def test_direct_healthy_selected_model_ready_true(self):
+        """Direct healthy + launch matches selected + gpu=gpu => selected_model_ready."""
+        with self._tmp() as tmp:
+            state_path = Path(tmp) / "model-state.json"
+            write_model_state(
+                ModelState(
+                    selected_key="kuato.gguf",
+                    selected_backend_id="kuato",
+                    selected_source="operator",
+                ),
+                state_path,
+            )
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[_entry("kuato.gguf", "kuato")],
+                manager=_FakeBackendManager(phase="healthy", gpu_state="gpu", loaded_id="kuato"),
+            )
+            with patch.dict(os.environ, {"QZ_MODEL_KEY": ""}, clear=False):
+                payload = build_model_status(handler)
+        self.assertTrue(payload["selected_model_ready"])
+        self.assertEqual(payload["request_admission_state"], "ready")
+        self.assertEqual(payload["model_switch_state"], "loaded")
+        self.assertIsNone(payload["recommended_action"])
+        self.assertEqual(payload["backend_loaded_model_source"], "direct_launch")
+
+    def test_direct_healthy_stale_failed_result_still_ready(self):
+        """Direct healthy backend overrides stale last_load_result='failed'.
+
+        In direct-m mode BackendManager health IS the load confirmation.  A
+        historical failure record must not block a currently-healthy backend.
+        """
+        with self._tmp() as tmp:
+            state_path = Path(tmp) / "model-state.json"
+            write_model_state(
+                ModelState(
+                    selected_key="kuato.gguf",
+                    selected_backend_id="kuato",
+                    selected_source="operator",
+                    last_load_result="failed",
+                    last_load_error="previous start failed",
+                    last_load_error_type="unknown",
+                ),
+                state_path,
+            )
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[_entry("kuato.gguf", "kuato")],
+                manager=_FakeBackendManager(phase="healthy", gpu_state="gpu", loaded_id="kuato"),
+            )
+            with patch.dict(os.environ, {"QZ_MODEL_KEY": ""}, clear=False):
+                payload = build_model_status(handler)
+        self.assertTrue(payload["selected_model_ready"],
+                        "Healthy direct backend must override stale last_load_result=failed")
+        self.assertEqual(payload["request_admission_state"], "ready")
+        self.assertEqual(payload["model_switch_state"], "loaded")
+
+    def test_direct_healthy_backend_loaded_model_populated(self):
+        """Direct healthy backend populates backend_loaded_model from launch model."""
+        with self._tmp() as tmp:
+            state_path = Path(tmp) / "model-state.json"
+            write_model_state(
+                ModelState(selected_key="kuato.gguf", selected_backend_id="kuato",
+                           selected_source="operator"),
+                state_path,
+            )
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[_entry("kuato.gguf", "kuato")],
+                manager=_FakeBackendManager(phase="healthy", gpu_state="gpu", loaded_id="kuato"),
+            )
+            with patch.dict(os.environ, {"QZ_MODEL_KEY": ""}, clear=False):
+                payload = build_model_status(handler)
+        self.assertEqual(payload["backend_loaded_model"], "kuato")
+        self.assertEqual(payload["backend_loaded_model_source"], "direct_launch")
+
+    def test_direct_running_request_admission_loading(self):
+        """Direct backend in running phase => request_admission_state loading."""
+        with self._tmp() as tmp:
+            state_path = Path(tmp) / "model-state.json"
+            write_model_state(
+                ModelState(selected_key="kuato.gguf", selected_backend_id="kuato",
+                           selected_source="operator"),
+                state_path,
+            )
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[_entry("kuato.gguf", "kuato")],
+                manager=_FakeBackendManager(phase="running", gpu_state="unknown",
+                                            loaded_id="kuato", backend_health_ok=False),
+            )
+            with patch.dict(os.environ, {"QZ_MODEL_KEY": ""}, clear=False):
+                payload = build_model_status(handler)
+        self.assertFalse(payload["selected_model_ready"])
+        self.assertEqual(payload["request_admission_state"], "loading")
+
+    def test_direct_running_recommended_action_says_loading_not_reload(self):
+        """During backend loading, recommended_action must not say POST reload."""
+        with self._tmp() as tmp:
+            state_path = Path(tmp) / "model-state.json"
+            write_model_state(
+                ModelState(selected_key="kuato.gguf", selected_backend_id="kuato",
+                           selected_source="operator"),
+                state_path,
+            )
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[_entry("kuato.gguf", "kuato")],
+                manager=_FakeBackendManager(phase="running", gpu_state="unknown",
+                                            loaded_id="kuato", backend_health_ok=False),
+            )
+            with patch.dict(os.environ, {"QZ_MODEL_KEY": ""}, clear=False):
+                payload = build_model_status(handler)
+        action = payload["recommended_action"] or ""
+        # The action must not positively instruct the operator to POST reload.
+        # It may mention the endpoint name in a "do not" context.
+        self.assertNotIn("POST /qz/model/reload to load", action,
+                         "Must not positively instruct POST reload while backend is loading")
+        self.assertIn("loading", action.lower(),
+                      "Should mention loading state during active backend start")
+
+    def test_direct_healthy_selected_differs_from_launch_mismatch(self):
+        """Direct healthy + selected key differs from launch model => mismatch."""
+        with self._tmp() as tmp:
+            state_path = Path(tmp) / "model-state.json"
+            write_model_state(
+                ModelState(selected_key="other.gguf", selected_backend_id="other",
+                           selected_source="operator"),
+                state_path,
+            )
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[_entry("kuato.gguf", "kuato"), _entry("other.gguf", "other")],
+                manager=_FakeBackendManager(phase="healthy", gpu_state="gpu", loaded_id="kuato"),
+            )
+            with patch.dict(os.environ, {"QZ_MODEL_KEY": ""}, clear=False):
+                payload = build_model_status(handler)
+        self.assertTrue(payload["selected_loaded_mismatch"])
+        self.assertFalse(payload["selected_model_ready"])
+
+    def test_direct_healthy_cpu_fallback_not_ready(self):
+        """Direct healthy + gpu_required=True + cpu_fallback => not ready."""
+        with self._tmp() as tmp:
+            state_path = Path(tmp) / "model-state.json"
+            write_model_state(
+                ModelState(selected_key="kuato.gguf", selected_backend_id="kuato",
+                           selected_source="operator"),
+                state_path,
+            )
+            handler = _FakeHandler(
+                state_path=state_path,
+                entries=[_entry("kuato.gguf", "kuato")],
+                manager=_FakeBackendManager(phase="healthy", gpu_state="cpu_fallback",
+                                            loaded_id="kuato"),
+            )
+            with patch.dict(os.environ, {"QZ_MODEL_KEY": ""}, clear=False):
+                payload = build_model_status(handler)
+        self.assertFalse(payload["selected_model_ready"])
+        self.assertEqual(payload["request_admission_state"], "failed_gpu_not_available")
 
 
 # ---------------------------------------------------------------------------

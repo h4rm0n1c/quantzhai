@@ -1,7 +1,46 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-22
-Status: active control sheet — P0 backend autostart fix complete.
+Status: active control sheet — P0 direct-mode loaded model reconciliation fix complete.
+
+## P0 Fix: Direct -m loaded model reconciliation — COMPLETE
+
+```text
+Changes:
+1. qz_backend_manager.py: GPU log check now combines stdout+stderr.
+   docker logs sends container-stderr to client-stderr; llama-server writes
+   GPU offload messages to stderr.  Combining both streams means "offloaded N/N
+   layers to GPU" and "CUDA0 model buffer size" are now correctly detected.
+   PRIMARY fix: resolves phase never reaching HEALTHY due to unknown_after_retries
+   when docker logs returned empty stdout and GPU lines were in stderr.
+2. qz_model_status.py: Remove last_load_result != "failed" gate from
+   selected_model_ready in direct mode.  BackendManager health IS the load
+   confirmation for direct -m launches; router-era last_load_result history
+   must not block a currently-healthy backend.
+3. qz_model_status.py: Override model_switch_state to "loaded"/"none" when
+   selected_model_ready is True.  Prevents stale "idle" state from appearing
+   even when the backend is confirmed healthy.
+4. qz_model_status.py: _recommended_action now detects active loading phase
+   (backend_phase=running + launch_model_key populated) and returns "loading"
+   message instead of "POST /qz/model/reload" instruction.
+5. qz_model_status.py: Added backend_loaded_model_source field to output.
+   "direct_launch" when backend_loaded_model comes from BackendManager health;
+   "unknown" when no loaded model.
+6. quantzhai_proxy.py: Normalize status_snapshot source in _preload_last_model.
+   On proxy restart, if model-state.json has selected_source=status_snapshot
+   (reconciliation-written, non-canonical), upgrade to "fallback" so status_snapshot
+   does not persist as a permanent authority label.
+7. scripts/qz-up: Bounded wait (up to 8s) for backend status to leave idle
+   before printing startup message.  Prevents premature "no launch model resolved"
+   when autostart hasn't triggered yet from a stale immediate read.
+8. 56 new tests covering all new behaviors.
+3270 total tests pass.
+
+Known root cause: llama-server writes all model-load diagnostics to stderr.
+docker logs routes container-stderr to subprocess-stderr, which the GPU log
+checker was discarding.  After fix, GPU offload patterns are found and the
+health loop completes, transitioning phase to HEALTHY.
+```
 
 ## P0 Fix: Backend autostart and model preload contract — COMPLETE
 

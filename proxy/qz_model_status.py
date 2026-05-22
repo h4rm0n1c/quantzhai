@@ -198,6 +198,8 @@ def _recommended_action(
     backend_loaded_model: str,
     selected_loaded_mismatch: bool,
     last_load_error_type: str | None,
+    backend_phase: str = "",
+    launch_model_key: str = "",
 ) -> str | None:
     """Operator-actionable hint, or None when no action is needed."""
     if last_load_error_type == "insufficient_vram":
@@ -213,6 +215,13 @@ def _recommended_action(
             "POST /qz/model/reload or /qz/model/select-and-restart."
         )
     if selected_identity and not backend_loaded_model:
+        # Backend is actively loading — don't suggest reload while in flight.
+        if backend_phase in ("start_requested", "starting", "running") and launch_model_key:
+            return (
+                "Backend is loading the selected model. "
+                "Check /qz/backend/status for progress; "
+                "do not POST /qz/model/reload while the backend is starting."
+            )
         return (
             "No backend-loaded model yet. POST /qz/model/reload to load the "
             "selected model."
@@ -315,12 +324,15 @@ def build_model_status(handler: Any) -> dict[str, Any]:
     _gpu_blocking = gpu_required and gpu_offload_state in (
         "cpu_fallback", "failed", "unknown_after_retries"
     )
+    # In direct-m mode the BackendManager health check IS the load confirmation.
+    # last_load_result is router-era history and must not block a healthy direct
+    # backend; if the backend is healthy and launch matches selected, the model
+    # is loaded regardless of prior failure records.
     selected_model_ready = bool(
         backend_phase == "healthy"
         and backend_health_ok is True
         and selected_identity
         and launch_matches_selected
-        and state.last_load_result != "failed"
         and not launch_model_error
         and not _gpu_blocking
     )
@@ -330,6 +342,12 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         state=state,
         selected_loaded_mismatch=selected_loaded_mismatch,
     )
+    # Override: when the direct backend is confirmed healthy and launch matches
+    # selected, the switch state IS "loaded" — no longer "idle" due to stale
+    # last_load_result history.
+    if selected_model_ready:
+        model_switch_state = "loaded"
+        active_load_operation = "none"
     request_admission_state = _request_admission_state(
         selected_identity=selected_identity,
         backend_phase=backend_phase,
@@ -346,6 +364,8 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         backend_loaded_model=backend_loaded_model,
         selected_loaded_mismatch=selected_loaded_mismatch,
         last_load_error_type=state.last_load_error_type,
+        backend_phase=backend_phase,
+        launch_model_key=launch_model_key,
     )
 
     # Recovery surface: last-known-good vs. failed candidate, and a rollback
@@ -359,6 +379,11 @@ def build_model_status(handler: Any) -> dict[str, Any]:
     recovery_available = bool(state.last_good_key or state.last_good_backend_id)
     recommended_recovery_action = _recommended_recovery_action(state)
 
+    # Provenance for backend_loaded_model: how was the loaded model determined?
+    # "direct_launch"  — BackendManager phase==healthy with confirmed GPU offload
+    # "unknown"        — no loaded model could be determined
+    _backend_loaded_model_source = "direct_launch" if backend_loaded_model else "unknown"
+
     return {
         "ok": True,
         "schema": QZ_MODEL_STATUS_SCHEMA,
@@ -369,6 +394,7 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         "selected_source": state.selected_source,
         "selected_at": state.selected_at,
         "backend_loaded_model": backend_loaded_model,
+        "backend_loaded_model_source": _backend_loaded_model_source,
         "selected_loaded_mismatch": selected_loaded_mismatch,
         "model_visible": model_visible,
         "profile_valid": profile_valid,

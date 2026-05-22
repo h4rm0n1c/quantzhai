@@ -539,14 +539,18 @@ class BackendManager:
 
         Safe to call even when the container has gone away — failures of the
         underlying docker call return None instead of raising.
+
+        Combines stdout and stderr because llama-server writes its model-load
+        diagnostics to stderr.
         """
         try:
-            rc, out, _ = self._runner(self.build_docker_logs_args(tail=tail), timeout=15.0)
+            rc, out, err = self._runner(self.build_docker_logs_args(tail=tail), timeout=15.0)
         except Exception:
             return None
         if rc != 0:
             return None
-        return out if isinstance(out, str) else None
+        combined = (out or "") + "\n" + (err or "")
+        return combined if combined.strip() else None
 
     # ------------------------------------------------------------------
     # GPU offload verification
@@ -565,10 +569,17 @@ class BackendManager:
           'cpu_fallback' — CPU_Mapped present, no GPU success signal anywhere
           'failed'       — hard CUDA init/compile failure is the last signal
           'unknown'      — logs unavailable or no recognisable signal
+
+        Note: docker logs sends container-stdout to client-stdout and
+        container-stderr to client-stderr.  llama-server writes its model-load
+        lines (offload counts, CUDA buffer sizes) to stderr.  We combine both
+        streams so GPU offload evidence is detected regardless of which fd the
+        container process used.
         """
-        rc, logs, _ = self._runner(self.build_docker_logs_args(), timeout=15.0)
+        rc, logs_out, logs_err = self._runner(self.build_docker_logs_args(), timeout=15.0)
         if rc != 0:
             return "unknown", None
+        logs = (logs_out or "") + "\n" + (logs_err or "")
 
         _HARD_FAIL_PATTERNS = [
             "ggml_cuda_init: failed to initialize CUDA",

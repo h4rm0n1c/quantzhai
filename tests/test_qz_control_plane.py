@@ -593,6 +593,101 @@ class ModelSelectionFieldsTests(unittest.TestCase):
         self.assertIn("failed_candidate_key", m)
 
 
+class DirectModeControlPlaneTests(unittest.TestCase):
+    """Verify control-plane correctness when direct-m backend is healthy."""
+
+    def _make_direct_handler(self, *, state_payload: dict, loaded_model: str = "kuato"):
+        """Build a handler with a state file and direct backend manager."""
+        from unittest.mock import MagicMock
+        tmp_dir = tempfile.mkdtemp()
+        state_path = str(Path(tmp_dir) / "model-state.json")
+        Path(state_path).write_text(json.dumps(state_payload), encoding="utf-8")
+        self._tmp_dirs = getattr(self, "_tmp_dirs", [])
+        self._tmp_dirs.append(tmp_dir)
+
+        h = _make_handler(loaded_model=loaded_model)
+        h.model_state_path = state_path
+        bm = MagicMock()
+        launch_key = f"{loaded_model}.gguf" if loaded_model and not loaded_model.endswith(".gguf") else loaded_model
+        bm.snapshot.return_value = {
+            "phase": "healthy",
+            "backend_health_ok": True,
+            "backend_model_mode": "direct",
+            "gpu_required": True,
+            "gpu_offload_state": "gpu",
+            "gpu_observed": True,
+            "launch_model_key": launch_key,
+            "launch_model_backend_id": loaded_model.replace(".gguf", "") if loaded_model else "",
+            "launch_model_path_basename": launch_key,
+            "launch_model_error": None,
+            "container_running": True,
+        }
+        h.backend_manager = bm
+        return h
+
+    def tearDown(self):
+        import shutil
+        for d in getattr(self, "_tmp_dirs", []):
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_direct_healthy_model_state_is_loaded(self):
+        """service_status.model_state must be 'loaded' when direct backend is healthy."""
+        h = self._make_direct_handler(state_payload={
+            "schema": "qz.model_state.v1",
+            "selected_key": "kuato.gguf",
+            "selected_backend_id": "kuato",
+            "selected_source": "operator",
+        })
+        p = build_control_plane_status(h)
+        ss = p["service_status"]
+        self.assertEqual(ss["model_state"], "loaded",
+                         f"Expected model_state=loaded, got {ss['model_state']!r}")
+
+    def test_direct_healthy_not_rejected_model_not_loaded(self):
+        """service_status.request_admission must not be rejected_model_not_loaded."""
+        h = self._make_direct_handler(state_payload={
+            "schema": "qz.model_state.v1",
+            "selected_key": "kuato.gguf",
+            "selected_backend_id": "kuato",
+            "selected_source": "operator",
+        })
+        p = build_control_plane_status(h)
+        ss = p["service_status"]
+        self.assertNotEqual(ss["request_admission"], "rejected_model_not_loaded",
+                            f"Got unexpected: {ss['request_admission']!r}")
+        self.assertEqual(ss["request_admission"], "accepted")
+
+    def test_direct_healthy_stale_failed_still_shows_loaded(self):
+        """Stale last_load_result=failed must not block a healthy direct backend."""
+        h = self._make_direct_handler(state_payload={
+            "schema": "qz.model_state.v1",
+            "selected_key": "kuato.gguf",
+            "selected_backend_id": "kuato",
+            "selected_source": "operator",
+            "last_load_result": "failed",
+            "last_load_error": "previous attempt failed",
+            "last_load_error_type": "unknown",
+        })
+        p = build_control_plane_status(h)
+        self.assertTrue(p["models"]["selected_model_ready"],
+                        "Healthy direct backend must override stale last_load_result=failed")
+        ss = p["service_status"]
+        self.assertEqual(ss["model_state"], "loaded")
+        self.assertEqual(ss["request_admission"], "accepted")
+
+    def test_direct_healthy_backend_loaded_model_populated_in_cp(self):
+        """backend.loaded_model must be non-empty in control-plane when direct is healthy."""
+        h = self._make_direct_handler(state_payload={
+            "schema": "qz.model_state.v1",
+            "selected_key": "kuato.gguf",
+            "selected_backend_id": "kuato",
+            "selected_source": "operator",
+        })
+        p = build_control_plane_status(h)
+        self.assertTrue(p["backend"]["loaded_model"],
+                        "backend.loaded_model must not be empty for a healthy direct backend")
+
+
 class _StateFileFixture:
     """Context manager that creates a tempfile state file."""
 
