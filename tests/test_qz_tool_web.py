@@ -1838,6 +1838,351 @@ class FurryProfileTests(unittest.TestCase):
         notes_str = " ".join(caps.get("usage_notes", []))
         self.assertIn("SoFurry", notes_str)
 
+    # --- Source-strict tests ---
+
+    def test_furry_fse_config_fallback_profiles_empty(self):
+        """furry_fse must have no fallback_profiles in config (never broaden)."""
+        from proxy.qz_search_config import load_search_config
+        cfg = load_search_config()
+        fse_cfg = cfg.config.get("profiles", {}).get("furry_fse", {})
+        fallbacks = fse_cfg.get("fallback_profiles", None)
+        self.assertIsNotNone(fallbacks, "furry_fse must explicitly declare fallback_profiles")
+        self.assertEqual(list(fallbacks), [], "furry_fse fallback_profiles must be empty")
+
+    def test_furry_fse_config_source_strict_true(self):
+        """furry_fse config must declare source_strict=true."""
+        from proxy.qz_search_config import load_search_config
+        cfg = load_search_config()
+        fse_cfg = cfg.config.get("profiles", {}).get("furry_fse", {})
+        self.assertTrue(fse_cfg.get("source_strict"), "furry_fse must be source_strict=true")
+
+    def test_furry_fse_config_engines_only_fse(self):
+        """furry_fse engines must be exactly ['fse']."""
+        from proxy.qz_search_config import load_search_config
+        cfg = load_search_config()
+        fse_cfg = cfg.config.get("profiles", {}).get("furry_fse", {})
+        self.assertEqual(fse_cfg.get("engines"), ["fse"])
+
+    def test_furry_fse_config_expected_domains(self):
+        """furry_fse must declare expected_domains including fse.anthro.fr."""
+        from proxy.qz_search_config import load_search_config
+        cfg = load_search_config()
+        fse_cfg = cfg.config.get("profiles", {}).get("furry_fse", {})
+        domains = fse_cfg.get("expected_domains", [])
+        self.assertIn("fse.anthro.fr", domains)
+
+    def test_profile_source_strict_furry_fse_by_name(self):
+        """_profile_source_strict is true for furry_fse by name alone."""
+        from proxy.qz_tool_web import _profile_source_strict
+        self.assertTrue(_profile_source_strict("furry_fse", False, []))
+
+    def test_profile_source_strict_cfg_flag(self):
+        """_profile_source_strict is true when cfg_source_strict=True."""
+        from proxy.qz_tool_web import _profile_source_strict
+        self.assertTrue(_profile_source_strict("custom", True, []))
+
+    def test_profile_source_strict_explicit_fse_only(self):
+        """_profile_source_strict is true when explicit_engines=['fse']."""
+        from proxy.qz_tool_web import _profile_source_strict
+        self.assertTrue(_profile_source_strict("furry", False, ["fse"]))
+
+    def test_profile_source_strict_false_for_mixed_explicit(self):
+        """_profile_source_strict is false when explicit_engines has non-fse engines."""
+        from proxy.qz_tool_web import _profile_source_strict
+        self.assertFalse(_profile_source_strict("furry", False, ["fse", "e926"]))
+
+    def test_profile_source_strict_false_for_broad(self):
+        """_profile_source_strict is false for broad with no explicit engines."""
+        from proxy.qz_tool_web import _profile_source_strict
+        self.assertFalse(_profile_source_strict("broad", False, []))
+
+    def test_result_matches_expected_engine(self):
+        """_result_matches_expected_source matches on engine field."""
+        from proxy.qz_tool_web import _result_matches_expected_source
+        result = {"engine": "fse", "engines": [], "url": "https://example.com/x"}
+        self.assertTrue(_result_matches_expected_source(result, ["fse"], [], []))
+
+    def test_result_matches_expected_engines_list(self):
+        """_result_matches_expected_source matches on engines list."""
+        from proxy.qz_tool_web import _result_matches_expected_source
+        result = {"engine": None, "engines": ["fse", "extra"], "url": "https://example.com/x"}
+        self.assertTrue(_result_matches_expected_source(result, ["fse"], [], []))
+
+    def test_result_matches_expected_domain(self):
+        """_result_matches_expected_source matches on URL domain."""
+        from proxy.qz_tool_web import _result_matches_expected_source
+        result = {"engine": "", "engines": [], "url": "https://fse.anthro.fr/stories/123"}
+        self.assertTrue(_result_matches_expected_source(result, [], ["fse.anthro.fr"], []))
+
+    def test_result_matches_expected_retrieval_source(self):
+        """_result_matches_expected_source matches on retrieval_source."""
+        from proxy.qz_tool_web import _result_matches_expected_source
+        result = {"engine": "", "engines": [], "url": "https://example.com/x", "retrieval_source": "fse"}
+        self.assertTrue(_result_matches_expected_source(result, [], [], ["fse"]))
+
+    def test_result_not_matches_duckduckgo(self):
+        """_result_matches_expected_source rejects engine=duckduckgo for FSE-strict."""
+        from proxy.qz_tool_web import _result_matches_expected_source
+        result = {"engine": "duckduckgo", "engines": ["duckduckgo"], "url": "https://wattpad.com/x"}
+        self.assertFalse(_result_matches_expected_source(result, ["fse"], ["fse.anthro.fr"], ["fse"]))
+
+    def test_result_not_matches_engines_list_duckduckgo(self):
+        """_result_matches_expected_source rejects engines=['duckduckgo']."""
+        from proxy.qz_tool_web import _result_matches_expected_source
+        result = {"engine": None, "engines": ["duckduckgo"], "url": "https://rule34.xxx/x"}
+        self.assertFalse(_result_matches_expected_source(result, ["fse"], ["fse.anthro.fr"], ["fse"]))
+
+    def test_furry_fse_no_fallback_when_zero_results(self):
+        """profile='furry_fse' must not fall back to broad when primary returns zero results."""
+        calls = []
+
+        def fake_query(query, categories=None, engines=None, top_k=12):
+            calls.append({"engines": engines or [], "categories": categories or []})
+            return {"results": []}
+
+        runtime = WebSearchRuntime(
+            search_config_profiles={
+                "furry_fse": {
+                    "categories": ["general"],
+                    "engines": ["fse"],
+                    "source_strict": True,
+                    "expected_engines": ["fse"],
+                    "expected_domains": ["fse.anthro.fr"],
+                    "fallback_profiles": [],
+                },
+                "broad": {
+                    "categories": ["general", "web"],
+                    "engines": ["duckduckgo", "bing"],
+                    "fallback_profiles": [],
+                },
+            },
+        )
+        runtime._query_searxng = fake_query
+        result = runtime._search_web("dragon transformation", profile="furry_fse")
+        # Must only call once (no fallback to broad)
+        self.assertEqual(len(calls), 1, "furry_fse must not trigger fallback searches")
+        self.assertNotIn("duckduckgo", calls[0]["engines"])
+        self.assertEqual(result.get("fallback_used"), None)
+
+    def test_furry_fse_discards_wrong_source_results(self):
+        """furry_fse must discard results from non-FSE engines."""
+        wrong_result = {"engine": "duckduckgo", "engines": ["duckduckgo"], "url": "https://wattpad.com/story/1", "title": "Wattpad"}
+        fse_result = {"engine": "fse", "engines": ["fse"], "url": "https://fse.anthro.fr/stories/999", "title": "FSE Story"}
+
+        def fake_query(query, categories=None, engines=None, top_k=12):
+            return {"results": [wrong_result, fse_result]}
+
+        runtime = WebSearchRuntime(
+            search_config_profiles={
+                "furry_fse": {
+                    "categories": ["general"],
+                    "engines": ["fse"],
+                    "source_strict": True,
+                    "expected_engines": ["fse"],
+                    "expected_domains": ["fse.anthro.fr"],
+                    "fallback_profiles": [],
+                },
+            },
+        )
+        runtime._query_searxng = fake_query
+        result = runtime._search_web("dragon", profile="furry_fse")
+        urls = [r["url"] for r in result.get("results", [])]
+        self.assertNotIn("https://wattpad.com/story/1", urls, "Wattpad result must be discarded")
+        self.assertIn("https://fse.anthro.fr/stories/999", urls, "FSE result must be kept")
+
+    def test_furry_fse_all_wrong_source_returns_zero_with_warning(self):
+        """furry_fse returns zero results and warning when all results are wrong-source."""
+        def fake_query(query, categories=None, engines=None, top_k=12):
+            return {"results": [
+                {"engine": "duckduckgo", "engines": ["duckduckgo"], "url": "https://rule34.xxx/post/1", "title": "X"},
+                {"engine": "bing", "engines": ["bing"], "url": "https://wattpad.com/2", "title": "Y"},
+            ]}
+
+        runtime = WebSearchRuntime(
+            search_config_profiles={
+                "furry_fse": {
+                    "categories": ["general"],
+                    "engines": ["fse"],
+                    "source_strict": True,
+                    "expected_engines": ["fse"],
+                    "expected_domains": ["fse.anthro.fr"],
+                    "fallback_profiles": [],
+                },
+            },
+        )
+        runtime._query_searxng = fake_query
+        result = runtime._search_web("dragon", profile="furry_fse")
+        self.assertEqual(result.get("results", []), [], "All wrong-source results must be discarded")
+        warning = result.get("source_strict_warning", "")
+        self.assertIn("source-strict", warning, "Must include source_strict_warning")
+        self.assertIn("2", warning, "Warning must mention discarded count")
+
+    def test_furry_profile_with_explicit_fse_engine_is_source_strict(self):
+        """profile='furry', engines=['fse'] must behave source-strict (no fallback)."""
+        calls = []
+
+        def fake_query(query, categories=None, engines=None, top_k=12):
+            calls.append({"engines": engines or []})
+            return {"results": []}
+
+        runtime = WebSearchRuntime(
+            search_config_profiles={
+                "furry": {
+                    "categories": ["general", "images"],
+                    "engines": ["fse", "e926", "furbooru"],
+                    "fallback_profiles": ["broad"],
+                },
+                "broad": {"engines": ["duckduckgo"], "fallback_profiles": []},
+            },
+        )
+        runtime._query_searxng = fake_query
+        runtime._search_web("dragon", profile="furry", engines=["fse"])
+        # Explicit engine override + fse-only = source_strict; must not call fallback
+        self.assertEqual(len(calls), 1, "Explicit fse-only override must not trigger fallback")
+
+    def test_broad_profile_still_uses_fallback(self):
+        """Broad profile must still fall back when below threshold (regression guard)."""
+        calls = []
+
+        def fake_query(query, categories=None, engines=None, top_k=12):
+            calls.append({"engines": engines or [], "categories": categories or []})
+            return {"results": []}
+
+        runtime = WebSearchRuntime(
+            search_config_profiles={
+                "broad": {
+                    "categories": ["general"],
+                    "engines": ["bing"],
+                    "fallback_profiles": ["reference"],
+                },
+                "reference": {
+                    "categories": ["dictionaries"],
+                    "engines": ["wiktionary"],
+                    "fallback_profiles": [],
+                },
+            },
+            low_result_fallback_threshold=2,
+        )
+        runtime._query_searxng = fake_query
+        runtime._search_web("test query", profile="broad")
+        # Must have tried the fallback profile too
+        self.assertGreater(len(calls), 1, "Broad must still attempt fallback")
+
+    def test_route_log_includes_source_strict_fields(self):
+        """route_log must include source_strict and wrong_source_results_discarded."""
+        import json
+        from pathlib import Path
+        import tempfile, os
+
+        # Temporarily redirect runtime_log to a temp file
+        logged = {}
+
+        def fake_query(query, categories=None, engines=None, top_k=12):
+            return {"results": []}
+
+        # Capture what _emit receives
+        emitted = []
+
+        runtime = WebSearchRuntime(
+            search_config_profiles={
+                "furry_fse": {
+                    "categories": ["general"],
+                    "engines": ["fse"],
+                    "source_strict": True,
+                    "expected_engines": ["fse"],
+                    "expected_domains": ["fse.anthro.fr"],
+                    "fallback_profiles": [],
+                },
+            },
+        )
+        runtime._query_searxng = fake_query
+
+        original_emit = runtime._emit
+        def capturing_emit(event_type, payload):
+            emitted.append((event_type, payload))
+        runtime._emit = capturing_emit
+
+        runtime._search_web("dragon", profile="furry_fse")
+        route_events = [p for t, p in emitted if t == "web_search_route"]
+        self.assertTrue(route_events, "Must have emitted web_search_route")
+        first_event = route_events[0]
+        self.assertIn("source_strict", first_event)
+        self.assertTrue(first_event["source_strict"])
+
+    def test_capabilities_furry_fse_source_strict_true(self):
+        """capabilities.profiles.furry_fse must advertise source_strict=true."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+        from proxy.qz_search_config import load_search_config
+        cfg = load_search_config()
+        runtime = WebSearchRuntime(search_config_profiles=cfg.config.get("profiles", {}))
+        caps = build_web_search_capabilities(runtime)
+        fse_profile = caps["profiles"].get("furry_fse", {})
+        self.assertTrue(fse_profile.get("source_strict"), "capabilities must show source_strict=true for furry_fse")
+
+    def test_capabilities_furry_fse_no_broad_fallback(self):
+        """capabilities.profiles.furry_fse must not advertise broad as fallback."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+        from proxy.qz_search_config import load_search_config
+        cfg = load_search_config()
+        runtime = WebSearchRuntime(search_config_profiles=cfg.config.get("profiles", {}))
+        caps = build_web_search_capabilities(runtime)
+        fse_profile = caps["profiles"].get("furry_fse", {})
+        fallbacks = fse_profile.get("fallback_profiles", [])
+        self.assertEqual(list(fallbacks), [], "furry_fse capabilities must show empty fallback_profiles")
+
+    def test_capabilities_warns_when_fse_probe_unavailable(self):
+        """capabilities must warn when fse engine is missing from SearXNG probe."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+        runtime = WebSearchRuntime(
+            search_config_profiles={
+                "furry_fse": {
+                    "engines": ["fse"],
+                    "source_strict": True,
+                    "fallback_profiles": [],
+                },
+            },
+            capabilities={"engine_probe": {"duckduckgo": {"status": "ok"}}},  # fse absent
+        )
+        caps = build_web_search_capabilities(runtime)
+        warning_text = " ".join(caps.get("warnings", []))
+        self.assertIn("fse", warning_text.lower())
+        self.assertIn("source-strict", warning_text.lower())
+
+    def test_capabilities_no_warning_when_fse_probe_available(self):
+        """capabilities must not warn when fse is present in SearXNG probe."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+        runtime = WebSearchRuntime(
+            search_config_profiles={
+                "furry_fse": {
+                    "engines": ["fse"],
+                    "source_strict": True,
+                    "fallback_profiles": [],
+                },
+            },
+            capabilities={"engine_probe": {"fse": {"status": "ok"}}},
+        )
+        caps = build_web_search_capabilities(runtime)
+        warning_text = " ".join(caps.get("warnings", []))
+        self.assertNotIn("source-strict", warning_text.lower())
+
+    def test_capabilities_usage_notes_mention_furry_fse_source_strict(self):
+        """usage_notes must mention that furry_fse is source-strict."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+        runtime = WebSearchRuntime(search_config_profiles={})
+        caps = build_web_search_capabilities(runtime)
+        notes_str = " ".join(caps.get("usage_notes", []))
+        self.assertIn("source-strict", notes_str.lower())
+
+    def test_furry_images_fallback_unchanged(self):
+        """furry_images is not source-strict; its fallback behaviour is unaffected."""
+        from proxy.qz_tool_web import _profile_source_strict
+        self.assertFalse(_profile_source_strict("furry_images", False, []))
+
+    def test_furry_mixed_profile_not_strict_without_explicit_fse(self):
+        """profile='furry' without explicit fse engine is not source-strict."""
+        from proxy.qz_tool_web import _profile_source_strict
+        self.assertFalse(_profile_source_strict("furry", False, []))
+
 
 if __name__ == "__main__":
     unittest.main()

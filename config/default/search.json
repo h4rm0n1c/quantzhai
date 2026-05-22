@@ -94,10 +94,14 @@
     },
 
     "furry_fse": {
-      "description": "Furry prose/story discovery via FSE only. Agent API retrieval available.",
+      "description": "Furry prose/story discovery via FSE only. Source-strict: no fallback to other engines. Agent API retrieval available.",
       "categories": ["general"],
       "engines": ["fse"],
-      "fallback_profiles": ["broad"]
+      "source_strict": true,
+      "expected_engines": ["fse"],
+      "expected_domains": ["fse.anthro.fr"],
+      "expected_retrieval_sources": ["fse"],
+      "fallback_profiles": []
     },
 
     "furry_images": {

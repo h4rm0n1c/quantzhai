@@ -752,6 +752,68 @@ def _profile_retrieval_expected(cfg: dict) -> bool:
     ))
 
 
+def _profile_source_strict(
+    profile: str,
+    cfg_source_strict: bool,
+    explicit_engines: list,
+) -> bool:
+    """True when search must stay within expected sources — no fallback, no broadening.
+
+    Triggers:
+    - profile config sets source_strict=true, OR
+    - profile name is "furry_fse" (always source-pinned by design), OR
+    - caller supplied explicit_engines that are all "fse" (source-pinned override).
+    """
+    if cfg_source_strict:
+        return True
+    if profile == "furry_fse":
+        return True
+    if explicit_engines and all(e.strip().lower() == "fse" for e in explicit_engines):
+        return True
+    return False
+
+
+def _result_matches_expected_source(
+    result: dict,
+    expected_engines: list,
+    expected_domains: list,
+    expected_retrieval_sources: list,
+) -> bool:
+    """True when result came from an expected source in source-strict mode.
+
+    Accepts when any of:
+    - result.engine or result.engines includes an expected engine name
+    - result.url contains an expected domain
+    - result.retrieval_source matches an expected retrieval source
+    """
+    if not isinstance(result, dict):
+        return False
+
+    # Engine fields
+    engine = str(result.get("engine") or "").strip().lower()
+    engines_raw = result.get("engines") or []
+    all_engines: set = {engine} | {str(e).lower() for e in engines_raw if e} - {""}
+
+    if expected_engines:
+        exp_lower = {e.strip().lower() for e in expected_engines if e}
+        if all_engines & exp_lower:
+            return True
+
+    # URL domain
+    url = str(result.get("url") or "").lower()
+    for domain in (expected_domains or []):
+        if domain.strip().lower() in url:
+            return True
+
+    # retrieval_source annotation (added by _annotate_source)
+    rs = str(result.get("retrieval_source") or "").strip().lower()
+    if rs and expected_retrieval_sources:
+        if rs in {s.strip().lower() for s in expected_retrieval_sources if s}:
+            return True
+
+    return False
+
+
 def _collect_retrieval_sources(runtime) -> list:
     sources = set(_RETRIEVAL_SOURCE_KIND.keys())
     sources.add("mediawiki")
@@ -830,6 +892,13 @@ def build_web_search_capabilities(runtime) -> dict:
         effective_count = len(effective_here)
         # retrieval_kind: explicit config field for image-metadata-only profiles.
         retrieval_kind = str(cfg.get("retrieval_kind") or "")
+        # source_strict: profile may not fall back to other engines.
+        source_strict_flag = bool(cfg.get("source_strict")) or name == "furry_fse"
+        fallback_profiles_cap = (
+            []
+            if source_strict_flag
+            else _safe_capability_list(cfg.get("fallback_profiles"), limit=8)
+        )
         profile_entry: dict = {
             "description": description,
             "categories": categories,
@@ -840,6 +909,8 @@ def build_web_search_capabilities(runtime) -> dict:
             "source_kinds_expected": _profile_source_kinds(name, cfg),
             "engine_availability_known": _engine_availability_known,
             "effective_engine_count": effective_count,
+            "source_strict": source_strict_flag,
+            "fallback_profiles": fallback_profiles_cap,
         }
         if retrieval_kind:
             profile_entry["retrieval_kind"] = retrieval_kind
@@ -853,6 +924,15 @@ def build_web_search_capabilities(runtime) -> dict:
             warnings.append(
                 f"Profile '{name}' has no available engines after policy/probe filtering."
             )
+        # Source-strict profiles get a targeted warning when required engines are missing.
+        if source_strict_flag and _engine_availability_known and raw_engines:
+            strict_missing = [e for e in raw_engines if e not in _probe_engines and e not in blocked_here]
+            if strict_missing:
+                warnings.append(
+                    f"Profile '{name}' is source-strict but required engine(s) "
+                    f"{strict_missing!r} are not available in local SearXNG probe. "
+                    "Searches will return zero results."
+                )
         profiles[name] = profile_entry
 
     # Global probe-availability warning.
@@ -979,6 +1059,7 @@ def build_web_search_capabilities(runtime) -> dict:
             "Retrieve content selectively; do not dump large retrieved text.",
             "Use engines=[...] to narrow a profile to specific configured engines.",
             "Invalid or probe-unavailable explicit engines may produce no results.",
+            "furry_fse: source-strict — only fse engine / fse.anthro.fr results; no fallback to other engines.",
             "furry_fse: prose/story retrieval expected (FSE Agent API).",
             "furry_images: image metadata only (e926/furbooru tags/ratings); prose retrieval not expected.",
             "furry: mixed convenience profile covering prose (FSE) and image metadata (e926/furbooru).",
@@ -1241,12 +1322,22 @@ class WebSearchRuntime:
                 categories = ["q&a"]
                 engines = ["stackoverflow", "superuser", "askubuntu", "discuss.python"]
 
+        # Source-strict fields — consumed by _search_web to enforce no-fallback + filtering.
+        source_strict_cfg = bool(cfg.get("source_strict"))
+        expected_engines_cfg = _string_list(cfg.get("expected_engines"))
+        expected_domains_cfg = _string_list(cfg.get("expected_domains"))
+        expected_retrieval_sources_cfg = _string_list(cfg.get("expected_retrieval_sources"))
+
         return {
             "requested_profile": requested_profile,
             "profile": actual_profile,
             "categories": categories,
             "engines": self._filter_engines(engines, actual_profile),
             "fallback_profiles": fallback_profiles,
+            "source_strict": source_strict_cfg,
+            "expected_engines": expected_engines_cfg,
+            "expected_domains": expected_domains_cfg,
+            "expected_retrieval_sources": expected_retrieval_sources_cfg,
         }
 
     def _coding_profile(self):
@@ -1363,6 +1454,20 @@ class WebSearchRuntime:
         primary_engines = self._filter_engines(explicit_engines, route["profile"]) if explicit_engines else route["engines"]
         query_categories = [] if route["profile"] in ("ai_models", "broad") and primary_engines else primary_categories
 
+        # Source-strict enforcement: profile="furry_fse", source_strict=true in config,
+        # or explicit_engines=["fse"] all pin the search to expected sources only.
+        source_strict = _profile_source_strict(
+            route["profile"],
+            bool(route.get("source_strict")),
+            explicit_engines,
+        )
+        if source_strict:
+            # Never fall back — silently broadening would return unrelated results.
+            route["fallback_profiles"] = []
+        expected_engines_strict = route.get("expected_engines") or []
+        expected_domains_strict = route.get("expected_domains") or []
+        expected_retrieval_sources_strict = route.get("expected_retrieval_sources") or []
+
         threshold = max(1, min(self.low_result_fallback_threshold, self.max_results_per_query))
 
         self._emit("web_search_route", {
@@ -1376,9 +1481,32 @@ class WebSearchRuntime:
             "fallback_profiles": route["fallback_profiles"],
             "explicit_categories": bool(explicit_categories),
             "explicit_engines": bool(explicit_engines),
+            "source_strict": source_strict,
         })
 
         result = self._query_searxng(query, query_categories, primary_engines, top_k=top_k)
+
+        # Source-strict result validation: discard results not from expected sources.
+        # If SearXNG falls back to other engines (e.g. DuckDuckGo instead of fse),
+        # we catch and discard those wrong-source results here.
+        wrong_source_discarded = 0
+        if source_strict and (expected_engines_strict or expected_domains_strict or expected_retrieval_sources_strict):
+            orig_results = list(result.get("results") or [])
+            filtered = [
+                r for r in orig_results
+                if _result_matches_expected_source(
+                    r, expected_engines_strict, expected_domains_strict, expected_retrieval_sources_strict
+                )
+            ]
+            wrong_source_discarded = len(orig_results) - len(filtered)
+            result["results"] = filtered
+            if wrong_source_discarded > 0 and not filtered:
+                result["source_strict_warning"] = (
+                    f"profile {route['profile']!r} is source-strict; "
+                    f"SearXNG returned {wrong_source_discarded} non-source result(s), "
+                    "likely engine fallback or misconfiguration. Returning zero results."
+                )
+
         result.update({
             "requested_profile": route["requested_profile"],
             "profile": route["profile"],
@@ -1404,10 +1532,16 @@ class WebSearchRuntime:
             "threshold": threshold,
             "explicit_categories": bool(explicit_categories),
             "explicit_engines": bool(explicit_engines),
+            "source_strict": source_strict,
+            "expected_engines": expected_engines_strict,
+            "expected_domains": expected_domains_strict,
+            "expected_retrieval_sources": expected_retrieval_sources_strict,
+            "wrong_source_results_discarded": wrong_source_discarded,
+            "fallback_suppressed_reason": "source_strict" if source_strict else None,
         }
 
-        # Explicit engine/category calls are expert overrides. Do not silently route elsewhere.
-        if explicit_categories or explicit_engines or len(result.get("results") or []) >= threshold:
+        # Explicit engine/category calls and source-strict profiles skip fallback.
+        if explicit_categories or explicit_engines or source_strict or len(result.get("results") or []) >= threshold:
             runtime_log("latest-web-search-route.json", route_log)
             return result
 

@@ -3,6 +3,30 @@
 Date: 2026-05-22
 Status: active control sheet — P0 direct-mode loaded model reconciliation fix complete.
 
+## P0/P1 Fix: furry_fse source-strict search — COMPLETE
+
+```text
+Changes:
+1. config/default/search.json: furry_fse now declares source_strict=true,
+   expected_engines=["fse"], expected_domains=["fse.anthro.fr"],
+   expected_retrieval_sources=["fse"], fallback_profiles=[].
+2. qz_tool_web.py: _profile_source_strict() — true for furry_fse by name,
+   any profile with source_strict=true, or explicit_engines=["fse"] only.
+3. qz_tool_web.py: _result_matches_expected_source() — validates result
+   against expected engines/domains/retrieval_sources.
+4. qz_tool_web.py: _search_web — enforces no-fallback + wrong-source
+   result filtering for source-strict profiles. All wrong-source results
+   are discarded with a clear warning; SearXNG engine fallback to
+   DuckDuckGo/general cannot silently broaden an FSE search.
+5. qz_tool_web.py: capabilities now advertise source_strict=true and
+   fallback_profiles=[] for furry_fse. Warning emitted when fse engine
+   is probe-absent. usage_notes updated.
+6. route_log: now includes source_strict, expected_engines,
+   expected_domains, expected_retrieval_sources,
+   wrong_source_results_discarded, fallback_suppressed_reason.
+7. 28 new tests. 3313 total tests pass.
+```
+
 ## P0/P1 Fix: Control-plane direct backend readiness — COMPLETE
 
 ```text
