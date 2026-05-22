@@ -26,3 +26,26 @@ def test_qz_top_renders_runtime_failure_as_runtime_death():
 def test_qz_top_no_longer_renders_backend_mode_as_loaded_state():
     src = QZ_TOP.read_text(encoding="utf-8")
     assert "mode={model_status.backend_model_mode}" not in src
+
+
+def test_qz_top_shows_proxy_offline_label_when_not_proxy():
+    src = QZ_TOP.read_text(encoding="utf-8")
+    assert "PROXY OFFLINE" in src
+    assert "proxy_offline" in src or "not proxy" in src
+
+
+def test_qz_top_control_plane_reads_profile_section():
+    src = QZ_TOP.read_text(encoding="utf-8")
+    assert 'pf = cp.get("profile") or {}' in src
+    assert 'pf.get("reasoning_level")' in src
+    assert 'pf.get("prompt_files")' in src
+    assert 'pf.get("selected_context_length")' in src
+    assert 'pf.get("backend_context_length")' in src
+
+
+def test_qz_top_rates_includes_cached_reasoning_tokens():
+    src = QZ_TOP.read_text(encoding="utf-8")
+    assert "cached_tokens" in src
+    assert "reasoning_tokens" in src
+    assert "cached=" in src
+    assert "reasoning=" in src

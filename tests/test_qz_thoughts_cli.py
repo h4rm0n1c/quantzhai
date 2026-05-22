@@ -592,5 +592,167 @@ class NativeToolOutputRenderingTests(unittest.TestCase):
         self.assertIn("Connection refused", result.stdout)
 
 
+class NewTelemetryRenderingTests(unittest.TestCase):
+    """Tests for Fix Pass H/J/K telemetry event rendering in qz-thoughts."""
+
+    def _apply(self, ev_type, payload):
+        ns = _load_qz_thoughts_namespace()
+        state = ns["ThoughtState"](path=None)
+        feed = object.__new__(ns["TelemetryFeed"])
+        feed.state = state
+        feed._apply_event({
+            "seq": 1, "type": ev_type, "ts": 4102444801,
+            "payload": {**payload, "request_id": "req-k"},
+        })
+        return state
+
+    def test_tool_schema_replaced_renders_compact(self):
+        state = self._apply("tool_schema_replaced", {
+            "replaced": ["web_search"],
+            "translated": [],
+            "dropped_count": 0,
+        })
+        activity_str = str(state.activity)
+        self.assertIn("schema", activity_str)
+        self.assertIn("web_search", activity_str)
+
+    def test_coercion_succeeded_renders(self):
+        state = self._apply("coercion_succeeded", {
+            "tool": "web_search",
+            "correction_applied": True,
+            "error_summary": "",
+        })
+        activity_str = str(state.activity)
+        self.assertIn("coerce", activity_str)
+        self.assertIn("web_search", activity_str)
+
+    def test_coercion_failed_renders_bounded_summary(self):
+        state = self._apply("coercion_failed", {
+            "tool": "apply_patch",
+            "correction_applied": False,
+            "error_summary": "missing diff field",
+        })
+        activity_str = str(state.activity)
+        self.assertIn("coerce", activity_str)
+        self.assertIn("apply_patch", activity_str)
+        self.assertIn("missing diff", activity_str)
+
+    def test_coercion_failed_does_not_expose_raw_args(self):
+        state = self._apply("coercion_failed", {
+            "tool": "apply_patch",
+            "correction_applied": False,
+            "error_summary": "invalid JSON",
+        })
+        activity_str = str(state.activity)
+        self.assertNotIn('{"arguments":', activity_str)
+        self.assertNotIn("raw_patch_content", activity_str)
+
+    def test_output_text_artifact_aborted_renders(self):
+        state = self._apply("output_text_artifact_aborted", {
+            "reason": "output_text_tool_artifact",
+            "chars_scanned": 256,
+            "model": "test-model",
+        })
+        activity_str = str(state.activity)
+        self.assertIn("artifact", activity_str)
+        self.assertIn("256", activity_str)
+
+    def test_output_text_artifact_aborted_no_raw_artifact(self):
+        state = self._apply("output_text_artifact_aborted", {
+            "reason": "output_text_tool_artifact",
+            "chars_scanned": 128,
+            "model": "test-model",
+        })
+        # Artifact text must not appear; only metadata
+        activity_str = str(state.activity)
+        self.assertNotIn("*** Begin Patch", activity_str)
+        self.assertNotIn("password=", activity_str)
+
+    def test_usage_synthetic_renders_unknown(self):
+        state = self._apply("usage_synthetic", {
+            "usage_unknown": True,
+            "usage_source": "synthetic_empty",
+            "model": "test-model",
+        })
+        activity_str = str(state.activity)
+        self.assertIn("usage", activity_str)
+        self.assertTrue(
+            "unknown" in activity_str or "synthetic" in activity_str,
+            activity_str,
+        )
+
+    def test_responses_rejected_model_missing_renders_distinct(self):
+        state = self._apply("responses_rejected_model_missing", {
+            "model": "kuato",
+            "available_count": 3,
+        })
+        backend_str = str(state.backend)
+        self.assertIn("rejected", backend_str)
+        self.assertIn("kuato", backend_str)
+
+    def test_responses_rejected_proxy_not_ready_renders_distinct(self):
+        state = self._apply("responses_rejected_proxy_not_ready", {
+            "model": "kuato",
+        })
+        backend_str = str(state.backend)
+        self.assertIn("rejected", backend_str)
+        self.assertIn("not ready", backend_str)
+
+    def test_response_completed_usage_row_added(self):
+        ns = _load_qz_thoughts_namespace()
+        state = ns["ThoughtState"](path=None)
+        feed = object.__new__(ns["TelemetryFeed"])
+        feed.state = state
+        # Simulate sse_event for response.completed with usage
+        feed._apply_event({
+            "seq": 1, "type": "sse_event", "ts": 4102444801,
+            "payload": {
+                "event_type": "response.completed",
+                "payload": {
+                    "response": {
+                        "id": "resp_test",
+                        "model": "test-model",
+                        "status": "completed",
+                        "usage": {
+                            "input_tokens": 100,
+                            "output_tokens": 50,
+                            "total_tokens": 150,
+                            "input_tokens_details": {"cached_tokens": 30},
+                            "output_tokens_details": {"reasoning_tokens": 10},
+                        },
+                    }
+                },
+            },
+        })
+        activity_str = str(state.activity)
+        self.assertIn("in=100", activity_str)
+        self.assertIn("out=50", activity_str)
+        self.assertIn("cached=30", activity_str)
+        self.assertIn("reason=10", activity_str)
+
+    def test_response_completed_zero_usage_no_usage_row(self):
+        """Zero usage should not generate a usage row (avoids synthetic-zero confusion)."""
+        ns = _load_qz_thoughts_namespace()
+        state = ns["ThoughtState"](path=None)
+        feed = object.__new__(ns["TelemetryFeed"])
+        feed.state = state
+        feed._apply_event({
+            "seq": 1, "type": "sse_event", "ts": 4102444801,
+            "payload": {
+                "event_type": "response.completed",
+                "payload": {
+                    "response": {
+                        "id": "resp_test",
+                        "model": "test-model",
+                        "status": "completed",
+                        "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+                    }
+                },
+            },
+        })
+        usage_rows = [(k, v) for k, v in state.activity if k == "usage"]
+        self.assertEqual(usage_rows, [])
+
+
 if __name__ == "__main__":
     unittest.main()

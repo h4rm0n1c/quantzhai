@@ -7,6 +7,16 @@ This document is a rolling point-in-time snapshot. For the live execution order,
 read `docs/current-task-hierarchy.md`. For architecture authority, read
 `docs/current-architecture-authority.md`.
 
+## Fix Pass K: qz-top/qz-thoughts observability fixes — COMPLETE
+
+Control-plane now exposes profile fields (prompt_files, reasoning_level, context lengths).
+qz-top reads them; shows PROXY OFFLINE label; shows cached/reasoning tokens in rates.
+qz-thoughts: usage row after response.completed; distinct model-not-ready rejection label;
+compact rows for tool_schema_replaced, coercion_*, output_text_artifact_aborted, usage_synthetic.
+14 new tests. 3211 total pass.
+
+**Next: Fix Pass L** — search profile/capabilities fixes.
+
 ## Fix Pass J: output_text tool artifact detection — COMPLETE
 
 _looks_like_output_tool_artifact detector added. Stricter than reasoning artifact.

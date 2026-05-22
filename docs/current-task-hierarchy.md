@@ -3,6 +3,43 @@
 Date: 2026-05-22
 Status: active control sheet — Slice B audit complete; Slice B2 fixes next.
 
+## Recently completed — Fix Pass K: qz-top/qz-thoughts observability fixes
+
+```text
+Status: COMPLETE
+
+Changes:
+1. proxy/qz_control_plane.py: added "profile" section to payload with
+   prompt_files, reasoning_level, reasoning_policy, sampling,
+   selected_context_length, backend_context_length, profile_symlink.
+   Extracted from router.status_summary() backend + prompt sections.
+
+2. scripts/qz-top:
+   - model_status_from_control_plane now reads new "profile" section;
+     no more "not exposed by /qz/control-plane yet" for these fields.
+   - draw_profile() and once(): PROXY OFFLINE label when ModelStatus is all-empty
+     (proxy unreachable → _proxy_offline detection → red/bold state, "PROXY OFFLINE"
+     in loaded field and "offline" in state field).
+   - Rates.cached_tokens + reasoning_tokens fields added.
+   - _apply_request_completed_telemetry: reads input_tokens_details.cached_tokens
+     and output_tokens_details.reasoning_tokens.
+   - once() LIVE THROUGHPUT: prints "details  cached=N reasoning=N" when non-zero.
+
+3. scripts/qz-thoughts:
+   - response.completed sse_event: extracts usage and appends compact
+     "usage in=N out=N [cached=N] [reason=N]" activity row.
+   - New event handlers: responses_rejected_model_missing (renders "rejected:
+     model not found"), responses_rejected_proxy_not_ready (renders "rejected:
+     model not ready") — distinct from generic request_failed error rows.
+   - New event handlers: tool_schema_replaced, coercion_succeeded,
+     coercion_failed, output_text_artifact_aborted, usage_synthetic.
+     All compact, no raw args/patches/URLs.
+
+14 new tests. 3211 total pass.
+
+Next: Fix Pass L — search profile/capabilities fixes.
+```
+
 ## Recently completed — Fix Pass J: output_text tool artifact detection
 
 ```text

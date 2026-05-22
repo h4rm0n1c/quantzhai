@@ -62,6 +62,8 @@ class Rates:
     total_max: float = 0.0
     total_tokens: int = 0       # latest request (input + output)
     total_ms: float = 0.0       # latest request
+    cached_tokens: int = 0      # latest request (from input_tokens_details)
+    reasoning_tokens: int = 0   # latest request (from output_tokens_details)
     recent: List[Tuple[str, str]] = None
 
 
@@ -370,21 +372,22 @@ def model_status_from_control_plane(cp: Optional[dict]) -> "ModelStatus":
     budget = str(os.environ.get("QZ_REASONING_BUDGET", ""))
 
     bm = cp.get("backend_manager") or {}
+    pf = cp.get("profile") or {}
     return ModelStatus(
         ready=bool(m.get("selected_model_ready") or r.get("backend_ready")),
         profile=selected_key,
         selected=str(selected_backend_id or selected_key),
         selected_key=selected_key,
         selected_backend_id=selected_backend_id,
-        profile_symlink=False,           # not exposed by /qz/control-plane yet
-        prompt_files=[],                 # not exposed by /qz/control-plane yet
-        reasoning_level="",             # not exposed by /qz/control-plane yet
-        reasoning_policy="",            # not exposed by /qz/control-plane yet
-        sampling={},                    # not exposed by /qz/control-plane yet
+        profile_symlink=bool(pf.get("profile_symlink")),
+        prompt_files=list(pf.get("prompt_files") or []),
+        reasoning_level=str(pf.get("reasoning_level") or ""),
+        reasoning_policy=str(pf.get("reasoning_policy") or ""),
+        sampling=dict(pf.get("sampling") or {}),
         backend_reasoning_budget=budget,
         selected_state=selected_state,
-        selected_context_length=0,      # not exposed by /qz/control-plane yet
-        backend_context_length=0,       # not exposed by /qz/control-plane yet
+        selected_context_length=int(pf.get("selected_context_length") or 0),
+        backend_context_length=int(pf.get("backend_context_length") or 0),
         loaded=loaded_model,
         loaded_count=loaded_count,
         load_state=load_state,
@@ -933,6 +936,10 @@ def _apply_request_completed_telemetry(rates: Rates, payload: dict):
     total_tokens = _positive_int(usage.get("total_tokens"))
     if not total_tokens:
         total_tokens = prompt_tokens + gen_tokens
+    _input_details = usage.get("input_tokens_details") if isinstance(usage.get("input_tokens_details"), dict) else {}
+    _output_details = usage.get("output_tokens_details") if isinstance(usage.get("output_tokens_details"), dict) else {}
+    cached_tokens = _positive_int(_input_details.get("cached_tokens"))
+    reasoning_tokens = _positive_int(_output_details.get("reasoning_tokens"))
 
     if prompt_tokens and prompt_ms:
         prompt_rate = _positive_float(prompt_tokens * 1000.0 / prompt_ms)
@@ -955,6 +962,10 @@ def _apply_request_completed_telemetry(rates: Rates, payload: dict):
         rates.total_max = max(rates.total_max, total_rate)
         rates.total_tokens = total_tokens     # latest request
         rates.total_ms = elapsed
+    if cached_tokens:
+        rates.cached_tokens = cached_tokens
+    if reasoning_tokens:
+        rates.reasoning_tokens = reasoning_tokens
     return rates
 
 
@@ -1269,13 +1280,17 @@ class UI:
             self.add(y + 2, cx, f"{clip(value, width):<{width}}", self.white)
             cx += width + 1
 
-        loaded = model_status.loaded or "none"
+        # Detect proxy-offline: ModelStatus() is all-empty and not proxy
+        _proxy_offline = not (model_status.loaded or model_status.selected_key or model_status.profile)
+        loaded = model_status.loaded or ("PROXY OFFLINE" if _proxy_offline else "none")
         loaded_suffix = f" ({model_status.loaded_count})" if model_status.loaded_count > 1 else ""
-        state = model_status.selected_state or model_status.load_state or "unknown"
+        state = model_status.selected_state or model_status.load_state or ("offline" if _proxy_offline else "unknown")
         state_attr = self.green | self.bold if model_status.ready else self.yellow | self.bold
-        if model_status.error:
+        if _proxy_offline:
             state_attr = self.red | self.bold
-        profile_bits = [model_status.profile or model_status.selected_key or "?"]
+        elif model_status.error:
+            state_attr = self.red | self.bold
+        profile_bits = [model_status.profile or model_status.selected_key or ("?" if not _proxy_offline else "")]
         if model_status.selected_backend_id and model_status.selected_backend_id not in profile_bits:
             profile_bits.append(f"backend={model_status.selected_backend_id}")
         if model_status.profile_symlink:
@@ -1673,6 +1688,8 @@ def once():
     print(f"  ╭─ BACKEND {backend_light} ─╮  ╭─ PROXY {proxy_light} ─╮")
     print()
     print("PROFILE")
+    if not proxy:
+        print("  [PROXY OFFLINE — status unavailable]")
     live_ctx = context_display(model_status)
     print(f"  ctx={live_ctx} np={os.environ.get('QZ_PARALLEL', '?')} split={os.environ.get('QZ_TENSOR_SPLIT', '?')} batch={os.environ.get('QZ_BATCH', '?')} ubatch={os.environ.get('QZ_UBATCH', '?')} cache={human_bytes_from_mib(parse_num(os.environ.get('QZ_CACHE_RAM', '0')))} reuse={os.environ.get('QZ_CACHE_REUSE', '?')} kv={os.environ.get('QZ_KV_KEY', '?')}/{os.environ.get('QZ_KV_VALUE', '?')} rbudget={model_status.backend_reasoning_budget or '?'}")
     loaded_suffix = f" ({model_status.loaded_count})" if model_status.loaded_count > 1 else ""
@@ -1901,6 +1918,13 @@ def once():
     print(f"  prompt   latest={tps_str(rates.prompt_latest)} t/s  max={tps_str(rates.prompt_max)} t/s  tokens={human_si(rates.prompt_tokens, precision=1)}  time={human_duration_ms(rates.prompt_ms)}")
     print(f"  generate latest={tps_str(rates.gen_latest)} t/s  max={tps_str(rates.gen_max)} t/s  tokens={human_si(rates.gen_tokens, precision=1)}  time={human_duration_ms(rates.gen_ms)}")
     print(f"  total    latest={tps_str(rates.total_latest)} t/s  max={tps_str(rates.total_max)} t/s  tokens={human_si(rates.total_tokens, precision=1)}  time={human_duration_ms(rates.total_ms)}")
+    _token_detail_parts = []
+    if rates.cached_tokens:
+        _token_detail_parts.append(f"cached={human_si(rates.cached_tokens, precision=1)}")
+    if rates.reasoning_tokens:
+        _token_detail_parts.append(f"reasoning={human_si(rates.reasoning_tokens, precision=1)}")
+    if _token_detail_parts:
+        print(f"  details  {' '.join(_token_detail_parts)}")
     print(f"  requests={human_si(rates.requests, precision=1)} checkpoints={human_si(rates.checkpoints, precision=1)} restores={human_si(rates.restores, precision=1)} CUDA_OOM={human_si(rates.oom, precision=1)}")
     if benchmark is not None:
         print()

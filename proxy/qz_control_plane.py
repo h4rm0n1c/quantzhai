@@ -173,6 +173,15 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
     restart_required = False
     backend_error: str | None = None
 
+    # Profile fields from router backend/prompt summary
+    profile_reasoning_level = ""
+    profile_reasoning_policy = ""
+    profile_sampling: dict = {}
+    profile_context_length: int = 0
+    profile_backend_context_length: int = 0
+    profile_prompt_files: list = []
+    profile_symlink: bool = False
+
     if proxy_ready:
         try:
             router = handler._model_router()
@@ -183,6 +192,27 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
             loaded_model = summary.get("loaded_model") or ""
             loaded_count = int(summary.get("loaded_count") or 0)
             restart_required = bool(summary.get("restart_required", False))
+            # Extract profile fields from the rich status_summary dict.
+            _sb = summary.get("backend") or {}
+            profile_reasoning_level = str(_sb.get("selected_reasoning_level") or "")
+            profile_reasoning_policy = str(_sb.get("selected_reasoning_policy") or "")
+            _samp = _sb.get("selected_sampling_params")
+            if isinstance(_samp, dict):
+                profile_sampling = _samp
+            _ctx = _sb.get("selected_context_length")
+            if isinstance(_ctx, int) and _ctx > 0:
+                profile_context_length = _ctx
+            _bctx = _sb.get("backend_context_length")
+            if isinstance(_bctx, int) and _bctx > 0:
+                profile_backend_context_length = _bctx
+            _prompt = summary.get("prompt") or {}
+            _files = _prompt.get("files_loaded")
+            if isinstance(_files, list):
+                profile_prompt_files = [str(f) for f in _files if f]
+            # profile_symlink from selected entry overrides if available
+            _sel_entry = summary.get("selected") or {}
+            if isinstance(_sel_entry, dict):
+                profile_symlink = bool(_sel_entry.get("profile_symlink"))
         except Exception as exc:
             backend_error = str(exc)
 
@@ -326,6 +356,15 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
             "backend_died_after_healthy": bool(bm_snap.get("backend_died_after_healthy", False)),
         },
         "codex_catalog": codex_catalog,
+        "profile": {
+            "prompt_files": profile_prompt_files,
+            "reasoning_level": profile_reasoning_level,
+            "reasoning_policy": profile_reasoning_policy,
+            "sampling": profile_sampling,
+            "selected_context_length": profile_context_length,
+            "backend_context_length": profile_backend_context_length,
+            "profile_symlink": profile_symlink,
+        },
         "operator_hints": _operator_hints(readiness, len(model_ids), backend_error),
     }
     # Append model-selection-specific operator hints.
