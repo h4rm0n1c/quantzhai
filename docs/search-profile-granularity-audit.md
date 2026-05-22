@@ -5,6 +5,7 @@ Status: Slice F discovery — authoritative profile/engine/capabilities map.
 
 Related:
 - `docs/search-config-contract.md` — search.json schema, precedence, §60/§64/§65 designs.
+- `docs/web-search-provider-architecture-audit.md` — provider architecture, fse_direct finding, count semantics, trace logs.
 - `docs/runtime-streaming-tool-contract-audit.md` — Slice A pipeline.
 
 ---

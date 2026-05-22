@@ -933,6 +933,12 @@ def build_web_search_capabilities(runtime) -> dict:
                     f"{strict_missing!r} are not available in local SearXNG probe. "
                     "Searches will return zero results."
                 )
+        # Provider preference: source-strict FSE profile prefers fse_direct when available.
+        if name == "furry_fse":
+            profile_entry["provider_preference"] = ["fse_direct", "searxng_fse"]
+            profile_entry["provider_preference_note"] = (
+                "fse_direct preferred (not yet implemented); currently routes via SearXNG fse engine"
+            )
         profiles[name] = profile_entry
 
     # Global probe-availability warning.
@@ -990,6 +996,38 @@ def build_web_search_capabilities(runtime) -> dict:
     config_source = _safe_capability_text(getattr(runtime, "search_config_source", "") or "runtime", 80)
     config_path = _safe_config_path(getattr(runtime, "search_config_path", ""))
 
+    _fse_in_probe = "fse" in _probe_engines
+    providers_info = {
+        "searxng": {
+            "available": base_url_configured,
+            "provider_id": "searxng",
+            "probe_status": "probed" if _engine_availability_known else "not_probed",
+            "note": "SearXNG local search instance. Engine-filtered web search.",
+        },
+        "fse_direct": {
+            "available": False,
+            "provider_id": "fse_direct",
+            "note": (
+                "Direct FSE provider not implemented. "
+                "FSE search runs through the SearXNG fse engine module. "
+                "Use profile=furry_fse or engines=[fse] for source-strict FSE search via SearXNG."
+            ),
+        },
+        "agent_retrieve": {
+            "available": base_url_configured,
+            "provider_id": "agent_retrieve",
+            "note": "Agent API retrieval for selected search results (action=retrieve).",
+        },
+    }
+
+    if not base_url_configured:
+        warnings.append("SearXNG provider is not available: no base URL configured.")
+    if _engine_availability_known and not _fse_in_probe and "furry_fse" in profiles:
+        warnings.append(
+            "fse_direct is not available and SearXNG fse engine is absent from probe. "
+            "profile=furry_fse has no working provider. Check SearXNG fse engine configuration."
+        )
+
     return {
         "ok": True,
         "schema": "qz.web_search.capabilities.v1",
@@ -1032,6 +1070,7 @@ def build_web_search_capabilities(runtime) -> dict:
                 "retrieval_retriever",
             ],
         },
+        "providers": providers_info,
         "agent_api": {
             "base_url_configured": base_url_configured,
             "status": "configured_not_probed" if base_url_configured else "not_configured",
@@ -1378,17 +1417,21 @@ class WebSearchRuntime:
 
     def _query_searxng(self, query: str, categories=None, engines=None, top_k: int = WEB_SEARCH_MAX_RESULTS):
         if not self.searxng_base_url:
-            return {"error": "SearXNG is not configured.", "results": []}
+            return {
+                "error": "SearXNG is not configured.", "results": [],
+                "provider_id": "searxng", "provider_reported_count": None,
+                "parsed_result_count": 0, "count_mismatch": False, "warnings": [],
+            }
 
         categories = [c for c in (categories or []) if isinstance(c, str) and c.strip()]
         engines = [e for e in (engines or []) if isinstance(e, str) and e.strip()]
-        key = json.dumps({
+        cache_key = json.dumps({
             "q": query,
             "categories": categories,
             "engines": engines,
             "top_k": top_k,
         }, sort_keys=True)
-        cached = self._cache_get(self.web_search_cache, key, WEB_SEARCH_SEARCH_CACHE_TTL)
+        cached = self._cache_get(self.web_search_cache, cache_key, WEB_SEARCH_SEARCH_CACHE_TTL)
         if cached is not None:
             return cached
 
@@ -1407,9 +1450,25 @@ class WebSearchRuntime:
             raw, _content_type, _final_url = _http_fetch(url, self.searxng_timeout, "application/json")
             payload = json.loads(raw.decode("utf-8", errors="replace"))
         except Exception as e:
-            result = {"error": str(e), "results": []}
-            self._cache_put(self.web_search_cache, key, result)
+            result = {
+                "error": str(e), "results": [],
+                "provider_id": "searxng", "provider_reported_count": None,
+                "parsed_result_count": 0, "count_mismatch": False, "warnings": [],
+            }
+            self._cache_put(self.web_search_cache, cache_key, result)
             return result
+
+        # Extract provider-reported result count (SearXNG metadata — diagnostic only).
+        # Never use this for routing/fallback decisions; always use len(parsed results).
+        provider_reported_count = None
+        for _count_field in ("number_of_results", "result_count", "numberOfResults"):
+            _raw_count = payload.get(_count_field)
+            if _raw_count is not None:
+                try:
+                    provider_reported_count = int(_raw_count)
+                    break
+                except (TypeError, ValueError):
+                    pass
 
         results = []
         seen = set()
@@ -1435,6 +1494,17 @@ class WebSearchRuntime:
             if len(results) >= max(1, int(top_k or self.max_results_per_query)):
                 break
 
+        parsed_result_count = len(results)
+        # Mismatch: SearXNG says 0 but we parsed real results — SearXNG metadata bug.
+        count_mismatch = (provider_reported_count == 0 and parsed_result_count > 0)
+        provider_warnings: list = []
+        if count_mismatch:
+            provider_warnings.append(
+                f"searxng_result_count_mismatch: provider reported 0 results "
+                f"but {parsed_result_count} result(s) were parsed; "
+                "using parsed count for routing (SearXNG metadata bug)"
+            )
+
         result = {
             "query": query,
             "results": results,
@@ -1442,8 +1512,26 @@ class WebSearchRuntime:
             "engines": engines,
             "unresponsive_engines": payload.get("unresponsive_engines") or [],
             "answers": payload.get("answers") or [],
+            "provider_id": "searxng",
+            "provider_reported_count": provider_reported_count,
+            "parsed_result_count": parsed_result_count,
+            "count_mismatch": count_mismatch,
+            "warnings": provider_warnings,
         }
-        self._cache_put(self.web_search_cache, key, result)
+
+        runtime_log("latest-web-search-provider-raw-summary.json", {
+            "provider_id": "searxng",
+            "query": query,
+            "requested_engines": engines,
+            "requested_categories": categories,
+            "provider_reported_count": provider_reported_count,
+            "parsed_result_count": parsed_result_count,
+            "count_mismatch": count_mismatch,
+            "unresponsive_engines": payload.get("unresponsive_engines") or [],
+            "warnings": provider_warnings,
+        })
+
+        self._cache_put(self.web_search_cache, cache_key, result)
         return result
 
     def _search_web(self, query: str, profile="auto", categories=None, engines=None, top_k: int = WEB_SEARCH_MAX_RESULTS):
@@ -1484,6 +1572,20 @@ class WebSearchRuntime:
             "source_strict": source_strict,
         })
 
+        runtime_log("latest-web-search-request.json", {
+            "action": "search",
+            "query": query,
+            "requested_profile": route["requested_profile"],
+            "selected_profile": route["profile"],
+            "provider_id": "searxng",
+            "requested_engines_before_filter": _string_list(explicit_engines) if explicit_engines else _string_list(route.get("engines") or []),
+            "requested_engines_after_filter": primary_engines,
+            "categories_before": primary_categories,
+            "categories_after": query_categories,
+            "source_strict": source_strict,
+            "fallback_profiles": route["fallback_profiles"],
+        })
+
         result = self._query_searxng(query, query_categories, primary_engines, top_k=top_k)
 
         # Source-strict result validation: discard results not from expected sources.
@@ -1501,11 +1603,30 @@ class WebSearchRuntime:
             wrong_source_discarded = len(orig_results) - len(filtered)
             result["results"] = filtered
             if wrong_source_discarded > 0 and not filtered:
-                result["source_strict_warning"] = (
+                source_strict_warning_text = (
                     f"profile {route['profile']!r} is source-strict; "
                     f"SearXNG returned {wrong_source_discarded} non-source result(s), "
                     "likely engine fallback or misconfiguration. Returning zero results."
                 )
+                result["source_strict_warning"] = source_strict_warning_text
+                result.setdefault("warnings", []).append(source_strict_warning_text)
+
+        accepted_result_count = len(result.get("results") or [])
+        provider_warnings = list(result.get("warnings") or [])
+
+        runtime_log("latest-web-search-normalized.json", {
+            "query": query,
+            "selected_profile": route["profile"],
+            "provider_id": result.get("provider_id", "searxng"),
+            "provider_reported_count": result.get("provider_reported_count"),
+            "parsed_result_count": result.get("parsed_result_count"),
+            "accepted_result_count": accepted_result_count,
+            "wrong_source_results_discarded": wrong_source_discarded,
+            "source_strict": source_strict,
+            "count_mismatch": result.get("count_mismatch", False),
+            "result_urls": [r.get("url", "") for r in (result.get("results") or [])[:10]],
+            "warnings": provider_warnings,
+        })
 
         result.update({
             "requested_profile": route["requested_profile"],
@@ -1516,7 +1637,9 @@ class WebSearchRuntime:
             "categories": primary_categories,
             "engines": primary_engines,
             "query_categories": query_categories,
+            "accepted_result_count": accepted_result_count,
         })
+        result["warnings"] = provider_warnings
 
         route_log = {
             "query": query,
@@ -1528,7 +1651,12 @@ class WebSearchRuntime:
             "engines": primary_engines,
             "fallback_profiles": route["fallback_profiles"],
             "fallback_used": None,
-            "result_count": len(result.get("results") or []),
+            "provider_id": result.get("provider_id", "searxng"),
+            "provider_reported_count": result.get("provider_reported_count"),
+            "parsed_result_count": result.get("parsed_result_count"),
+            "accepted_result_count": accepted_result_count,
+            "count_mismatch": result.get("count_mismatch", False),
+            "result_count": accepted_result_count,
             "threshold": threshold,
             "explicit_categories": bool(explicit_categories),
             "explicit_engines": bool(explicit_engines),
@@ -1538,10 +1666,11 @@ class WebSearchRuntime:
             "expected_retrieval_sources": expected_retrieval_sources_strict,
             "wrong_source_results_discarded": wrong_source_discarded,
             "fallback_suppressed_reason": "source_strict" if source_strict else None,
+            "warnings": provider_warnings,
         }
 
         # Explicit engine/category calls and source-strict profiles skip fallback.
-        if explicit_categories or explicit_engines or source_strict or len(result.get("results") or []) >= threshold:
+        if explicit_categories or explicit_engines or source_strict or accepted_result_count >= threshold:
             runtime_log("latest-web-search-route.json", route_log)
             return result
 

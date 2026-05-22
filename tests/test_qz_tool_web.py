@@ -2184,5 +2184,338 @@ class FurryProfileTests(unittest.TestCase):
         self.assertFalse(_profile_source_strict("furry", False, []))
 
 
+class WebSearchCountMismatchTests(unittest.TestCase):
+    """SearXNG reported count must never drive routing; parsed count is authoritative."""
+
+    def _make_runtime(self):
+        return WebSearchRuntime(
+            search_config_profiles={
+                "furry_fse": {
+                    "categories": ["general"],
+                    "engines": ["fse"],
+                    "source_strict": True,
+                    "expected_engines": ["fse"],
+                    "expected_domains": ["fse.anthro.fr"],
+                    "fallback_profiles": [],
+                },
+                "broad": {
+                    "categories": ["general", "web"],
+                    "engines": ["duckduckgo"],
+                    "fallback_profiles": [],
+                },
+            },
+        )
+
+    def _fse_result(self, story_id=42):
+        return {
+            "engine": "fse",
+            "engines": ["fse"],
+            "url": f"https://fse.anthro.fr/stories/{story_id}-dragon-tale",
+            "title": "Dragon Tale",
+            "content": "A story about dragons",
+        }
+
+    def _fake_query_with_mismatch(self, results):
+        """Return a fake _query_searxng that simulates provider_reported_count=0 but real results."""
+        def fake_query(query, categories=None, engines=None, top_k=12):
+            return {
+                "query": query,
+                "results": list(results),
+                "categories": categories or [],
+                "engines": engines or [],
+                "unresponsive_engines": [],
+                "answers": [],
+                "provider_id": "searxng",
+                "provider_reported_count": 0,
+                "parsed_result_count": len(results),
+                "count_mismatch": len(results) > 0,
+                "warnings": (
+                    [f"searxng_result_count_mismatch: provider reported 0 results "
+                     f"but {len(results)} result(s) were parsed; using parsed count for routing"]
+                    if results else []
+                ),
+            }
+        return fake_query
+
+    def test_count_mismatch_zero_reported_valid_parsed_returns_result(self):
+        """number_of_results=0 with valid parsed FSE result still returns the result."""
+        runtime = self._make_runtime()
+        runtime._query_searxng = self._fake_query_with_mismatch([self._fse_result()])
+        result = runtime._search_web("dragon transformation", profile="furry_fse")
+        self.assertEqual(len(result.get("results", [])), 1,
+                         "Result must be returned despite provider reporting count=0")
+        self.assertEqual(result["results"][0]["url"],
+                         "https://fse.anthro.fr/stories/42-dragon-tale")
+
+    def test_count_mismatch_no_fallback_when_accepted_results_exist(self):
+        """number_of_results=0 does not trigger fallback if accepted source-valid results exist."""
+        calls = []
+
+        def fake_query(query, categories=None, engines=None, top_k=12):
+            calls.append({"engines": engines or []})
+            return {
+                "query": query,
+                "results": [self._fse_result()],
+                "provider_id": "searxng",
+                "provider_reported_count": 0,
+                "parsed_result_count": 1,
+                "count_mismatch": True,
+                "warnings": [],
+            }
+
+        runtime = self._make_runtime()
+        runtime._query_searxng = fake_query
+        runtime._search_web("test", profile="furry_fse")
+        self.assertEqual(len(calls), 1,
+                         "Must not call fallback when accepted results exist despite count=0")
+
+    def test_count_mismatch_fields_in_search_result(self):
+        """count_mismatch=True and provider_id appear in _search_web result."""
+        runtime = self._make_runtime()
+        runtime._query_searxng = self._fake_query_with_mismatch([self._fse_result()])
+        result = runtime._search_web("test", profile="furry_fse")
+        self.assertTrue(result.get("count_mismatch"),
+                        "count_mismatch must be propagated to search result")
+        self.assertEqual(result.get("provider_id"), "searxng")
+        self.assertIsNotNone(result.get("provider_reported_count"),
+                             "provider_reported_count must be in result")
+
+    def test_count_mismatch_warning_propagated_to_result(self):
+        """count_mismatch warning from provider is included in result warnings list."""
+        runtime = self._make_runtime()
+        runtime._query_searxng = self._fake_query_with_mismatch([self._fse_result()])
+        result = runtime._search_web("test", profile="furry_fse")
+        warnings_text = " ".join(result.get("warnings") or [])
+        self.assertIn("searxng_result_count_mismatch", warnings_text,
+                      "Mismatch warning must appear in result warnings")
+
+    def test_count_mismatch_broad_fallback_uses_parsed_count(self):
+        """Broad profile: fallback decision uses parsed count, not provider_reported_count=0."""
+        calls = []
+
+        def fake_query(query, categories=None, engines=None, top_k=12):
+            calls.append({"engines": engines or []})
+            # Simulate: provider says 0 but we actually have results
+            n = 3 if ("duckduckgo" in (engines or [])) else 0
+            return {
+                "query": query,
+                "results": [{"engine": "duckduckgo", "engines": ["duckduckgo"],
+                              "url": f"https://example.com/{i}", "title": f"Result {i}"}
+                             for i in range(n)],
+                "provider_id": "searxng",
+                "provider_reported_count": 0,
+                "parsed_result_count": n,
+                "count_mismatch": n > 0,
+                "warnings": [],
+            }
+
+        runtime = WebSearchRuntime(
+            search_config_profiles={
+                "broad": {
+                    "categories": ["general"],
+                    "engines": ["duckduckgo"],
+                    "fallback_profiles": [],
+                },
+            },
+            low_result_fallback_threshold=2,
+        )
+        runtime._query_searxng = fake_query
+        result = runtime._search_web("test", profile="broad")
+        # parsed_result_count=3 >= threshold=2, so no fallback needed
+        self.assertEqual(len(result.get("results", [])), 3,
+                         "Parsed results must be returned when parsed count >= threshold")
+
+    def test_accepted_result_count_in_search_result(self):
+        """accepted_result_count reflects post-filter count, not provider metadata."""
+        runtime = self._make_runtime()
+        fse_r = self._fse_result()
+        wrong_r = {"engine": "duckduckgo", "engines": ["duckduckgo"],
+                   "url": "https://wattpad.com/1", "title": "W"}
+
+        def fake_query(query, categories=None, engines=None, top_k=12):
+            return {
+                "query": query,
+                "results": [fse_r, wrong_r],
+                "provider_id": "searxng",
+                "provider_reported_count": 0,
+                "parsed_result_count": 2,
+                "count_mismatch": True,
+                "warnings": [],
+            }
+
+        runtime._query_searxng = fake_query
+        result = runtime._search_web("test", profile="furry_fse")
+        # One wrong-source result is discarded; accepted count is 1
+        self.assertEqual(result.get("accepted_result_count"), 1,
+                         "accepted_result_count must reflect post-filter accepted results")
+
+
+class WebSearchProviderDiagnosticsTests(unittest.TestCase):
+    """Provider trace fields: provider_id, counts, and capabilities providers section."""
+
+    def test_query_searxng_provider_fields_on_success(self):
+        """_query_searxng result includes provider_id, provider_reported_count, etc."""
+        from unittest.mock import patch
+
+        runtime = WebSearchRuntime(base_url="http://127.0.0.1:8888")
+
+        fake_payload = json.dumps({
+            "results": [
+                {"url": "https://fse.anthro.fr/stories/1-test", "title": "Test", "engine": "fse"}
+            ],
+            "number_of_results": 0,
+            "unresponsive_engines": [],
+            "answers": [],
+        }).encode()
+
+        def fake_fetch(url, timeout, accept):
+            return fake_payload, "application/json", url
+
+        with patch("proxy.qz_tool_web._http_fetch", fake_fetch):
+            result = runtime._query_searxng("dragon", engines=["fse"])
+
+        self.assertEqual(result.get("provider_id"), "searxng")
+        self.assertEqual(result.get("provider_reported_count"), 0)
+        self.assertEqual(result.get("parsed_result_count"), 1)
+        self.assertTrue(result.get("count_mismatch"),
+                        "count_mismatch must be True when provider says 0 but 1 parsed")
+
+    def test_query_searxng_provider_fields_on_no_mismatch(self):
+        """count_mismatch is False when provider count matches parsed count."""
+        from unittest.mock import patch
+
+        runtime = WebSearchRuntime(base_url="http://127.0.0.1:8888")
+
+        fake_payload = json.dumps({
+            "results": [
+                {"url": "https://example.com/1", "title": "One", "engine": "duckduckgo"}
+            ],
+            "number_of_results": 1,
+        }).encode()
+
+        def fake_fetch(url, timeout, accept):
+            return fake_payload, "application/json", url
+
+        with patch("proxy.qz_tool_web._http_fetch", fake_fetch):
+            result = runtime._query_searxng("test")
+
+        self.assertFalse(result.get("count_mismatch"),
+                         "count_mismatch must be False when provider count matches")
+
+    def test_query_searxng_provider_fields_when_no_base_url(self):
+        """_query_searxng returns safe provider fields when SearXNG is not configured."""
+        runtime = WebSearchRuntime()
+        result = runtime._query_searxng("test")
+        self.assertEqual(result.get("provider_id"), "searxng")
+        self.assertIsNone(result.get("provider_reported_count"))
+        self.assertEqual(result.get("parsed_result_count"), 0)
+        self.assertFalse(result.get("count_mismatch"))
+
+    def test_capabilities_providers_section_present(self):
+        """capabilities must include a providers section."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+        runtime = WebSearchRuntime(search_config_profiles={})
+        caps = build_web_search_capabilities(runtime)
+        self.assertIn("providers", caps,
+                      "capabilities must have a providers section")
+        providers = caps["providers"]
+        self.assertIn("searxng", providers)
+        self.assertIn("fse_direct", providers)
+        self.assertIn("agent_retrieve", providers)
+
+    def test_capabilities_fse_direct_unavailable(self):
+        """capabilities must honestly report fse_direct as unavailable (not implemented)."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+        runtime = WebSearchRuntime(search_config_profiles={})
+        caps = build_web_search_capabilities(runtime)
+        fse_direct = caps["providers"]["fse_direct"]
+        self.assertFalse(fse_direct.get("available"),
+                         "fse_direct must be reported as unavailable")
+        self.assertIn("note", fse_direct,
+                      "fse_direct must include an explanatory note")
+
+    def test_capabilities_searxng_availability_reflects_base_url(self):
+        """capabilities searxng.available is True when base_url configured, False otherwise."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+
+        runtime_no_url = WebSearchRuntime(search_config_profiles={})
+        caps_no_url = build_web_search_capabilities(runtime_no_url)
+        self.assertFalse(caps_no_url["providers"]["searxng"]["available"],
+                         "searxng.available must be False without a base URL")
+
+        runtime_with_url = WebSearchRuntime(
+            base_url="http://127.0.0.1:8888",
+            search_config_profiles={},
+        )
+        caps_with_url = build_web_search_capabilities(runtime_with_url)
+        self.assertTrue(caps_with_url["providers"]["searxng"]["available"],
+                        "searxng.available must be True with a base URL")
+
+    def test_capabilities_furry_fse_provider_preference(self):
+        """capabilities.profiles.furry_fse must advertise provider_preference."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+        from proxy.qz_search_config import load_search_config
+        cfg = load_search_config()
+        runtime = WebSearchRuntime(search_config_profiles=cfg.config.get("profiles", {}))
+        caps = build_web_search_capabilities(runtime)
+        fse_profile = caps["profiles"].get("furry_fse", {})
+        self.assertIn("provider_preference", fse_profile,
+                      "furry_fse must expose provider_preference in capabilities")
+        pref = fse_profile["provider_preference"]
+        self.assertIn("fse_direct", pref,
+                      "fse_direct must appear in furry_fse provider_preference")
+
+    def test_capabilities_warns_when_fse_absent_from_probe(self):
+        """capabilities warns when fse absent from probe and furry_fse configured."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+        runtime = WebSearchRuntime(
+            search_config_profiles={
+                "furry_fse": {
+                    "engines": ["fse"],
+                    "source_strict": True,
+                    "fallback_profiles": [],
+                },
+            },
+            capabilities={"engine_probe": {"duckduckgo": {"status": "ok"}}},
+        )
+        caps = build_web_search_capabilities(runtime)
+        warning_text = " ".join(caps.get("warnings", []))
+        self.assertIn("fse_direct", warning_text.lower() or warning_text,
+                      "Must warn when fse_direct unavailable and fse engine absent")
+
+    def test_capabilities_no_sofurry_provider(self):
+        """capabilities must never include a sofurry provider — not implemented."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+        runtime = WebSearchRuntime(search_config_profiles={})
+        caps = build_web_search_capabilities(runtime)
+        providers = caps.get("providers", {})
+        self.assertNotIn("sofurry", providers,
+                         "SoFurry must not appear as a provider")
+
+    def test_capabilities_regression_broad_profile_unaffected(self):
+        """Adding providers section must not affect broad profile capabilities."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+        from proxy.qz_search_config import load_search_config
+        cfg = load_search_config()
+        runtime = WebSearchRuntime(search_config_profiles=cfg.config.get("profiles", {}))
+        caps = build_web_search_capabilities(runtime)
+        broad = caps["profiles"].get("broad", {})
+        self.assertFalse(broad.get("source_strict", False),
+                         "broad must not be source_strict")
+        self.assertNotIn("provider_preference", broad,
+                         "broad must not have provider_preference (not source-strict)")
+
+    def test_capabilities_coding_profile_unaffected_by_providers(self):
+        """coding profile must not have provider_preference or source_strict=True."""
+        from proxy.qz_tool_web import build_web_search_capabilities
+        from proxy.qz_search_config import load_search_config
+        cfg = load_search_config()
+        runtime = WebSearchRuntime(search_config_profiles=cfg.config.get("profiles", {}))
+        caps = build_web_search_capabilities(runtime)
+        coding = caps["profiles"].get("coding", {})
+        self.assertFalse(coding.get("source_strict", False))
+        self.assertNotIn("provider_preference", coding)
+
+
 if __name__ == "__main__":
     unittest.main()

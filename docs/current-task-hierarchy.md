@@ -1,7 +1,45 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-22
-Status: active control sheet — P0 direct-mode loaded model reconciliation fix complete.
+Status: active control sheet — web search provider architecture audit and hardening complete.
+
+## P0/P1: Web Search Provider Architecture Audit + Hardening — COMPLETE
+
+```text
+Changes:
+1. qz_tool_web.py: _query_searxng — add provider trace metadata to every result:
+   provider_id, provider_reported_count (DIAGNOSTIC ONLY, never routing),
+   parsed_result_count, count_mismatch, warnings.
+   Log latest-web-search-provider-raw-summary.json after each SearXNG call.
+2. qz_tool_web.py: _search_web — add:
+   - latest-web-search-request.json before provider call (engines before/after filter)
+   - latest-web-search-normalized.json after source-strict filtering
+   - accepted_result_count in all routing decisions
+   - warnings list merged from provider + source-strict filter
+   - route_log now includes provider_id, all count fields, warnings
+3. qz_tool_web.py: build_web_search_capabilities — add providers section:
+   searxng, fse_direct (unavailable), agent_retrieve.
+   furry_fse gets provider_preference: ["fse_direct", "searxng_fse"].
+   Warning when fse_direct absent AND SearXNG fse absent from probe.
+4. New audit doc: docs/web-search-provider-architecture-audit.md
+   - Full architecture map and data-flow diagram
+   - Honest fse_direct finding: no direct FSE search in ~/searchengines/
+   - Known-good direct invocation: searxng-query.sh --engine fse
+   - Operator debugging commands for same-query comparison
+   - Count semantics table
+   - fse_direct future contract
+5. 17 new tests. 198 total in test_qz_tool_web.py.
+
+Key findings from audit:
+- ~/searchengines/ has no direct FSE search script. FSE searching runs through
+  SearXNG's fse engine module. fetch-fse-story.py is retrieval-only (single story).
+- SearXNG number_of_results=0 metadata bug was not causing routing failures
+  (routing already used parsed count) but was invisible. Now captured as
+  count_mismatch with warning.
+- Debugging was blind: raw provider request/response counts, engine filter
+  decisions, and source-strict discard reasons were not captured in trace logs.
+  All four trace log files now written on every search.
+```
 
 ## P0/P1 Fix: furry_fse source-strict search — COMPLETE
 
