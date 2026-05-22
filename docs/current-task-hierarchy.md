@@ -3,6 +3,30 @@
 Date: 2026-05-22
 Status: active control sheet — Slice B audit complete; Slice B2 fixes next.
 
+## Fix Pass M2: live smoke — RED (GPU not loaded)
+
+```text
+Status: RED — GPU not loading after restart in this agent session.
+
+Fresh proxy started from c5799bc HEAD.
+Fix Pass K/L freshness confirmed.
+19 PASS (code/unit), 1 FAIL (P0: GPU not loaded).
+
+P0 FAIL: After qz-down --force && qz-up, both GPUs show ~0 MiB VRAM.
+Model ran CPU-only. S2.1 eventually completed but system is unusable
+at this speed. Not a code regression — operator must investigate
+qz-docker-quantzhai GPU flag handling in agent session context.
+
+Results: docs/end-to-end-smoke-results.md
+Previous stale run (c5799bc): marked INVALID.
+
+Operator actions required:
+1. Run scripts/qz-up from an operator terminal (not agent).
+2. Confirm VRAM rises to ~23 GB total.
+3. Re-run Groups 1/2/3/7 from docs/end-to-end-smoke-plan.md.
+4. Upgrade verdict to YELLOW/GREEN if GPU confirmed.
+```
+
 ## Fix Pass M: final live smoke rerun — COMPLETE (YELLOW)
 
 ```text

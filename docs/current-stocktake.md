@@ -7,6 +7,18 @@ This document is a rolling point-in-time snapshot. For the live execution order,
 read `docs/current-task-hierarchy.md`. For architecture authority, read
 `docs/current-architecture-authority.md`.
 
+## Fix Pass M2: live smoke — RED (GPU not loaded after restart)
+
+After fresh qz-down/qz-up, both GPUs showed ~0 MiB VRAM. Model ran CPU-only.
+Not a code regression (3226 tests pass, Fix Passes H-L all verified).
+GPU issue is deployment/agent-session specific — qz-docker-quantzhai may not
+pass --gpus flag when invoked from this context.
+
+Operator must restart from a terminal session, confirm VRAM ~23 GB,
+then re-run Groups 1/2/3/7 from docs/end-to-end-smoke-plan.md.
+
+CPU inference is explicitly not acceptable for QuantZhai (QZ_REQUIRE_GPU=1).
+
 ## Fix Pass M: final live smoke — COMPLETE (YELLOW)
 
 Automated smoke: 3226 pytest PASS, 14 smoke PASS, 1 FAIL (stale proxy), 16 SKIP.

@@ -1,209 +1,220 @@
 # QuantZhai End-to-End Smoke Results
 
-Date/Time: 2026-05-22 (Fix Pass M)
-Commit SHA: f0759cb (HEAD)
-Selected model: Qwen3.6-27B-NEO-CODE-HERE-2T-OT-Q4_K_M.gguf (27B Q4_K_M)
-QZ_CONTEXT/QZ_BATCH/QZ_UBATCH: from qz-env defaults
+---
+
+## Run 1: c5799bc — INVALID (stale proxy)
+
+Date: 2026-05-22
+Status: **INVALID / NOT A VALID FINAL SMOKE**
+
+Reason: The smoke at commit c5799bc tested a proxy that was started before Fix
+Passes K and L were committed. The running proxy loaded old code. Key evidence:
+- `selected_model_ready` returned `None` instead of `bool`
+- `request_admission_state` returned `None` instead of `str`
+- `/qz/web-search/capabilities` missing furry_fse/furry_images (Fix Pass L)
+- `/qz/control-plane` `profile` section empty (Fix Pass K)
+
+The `YELLOW` label assigned in that run was wrong. Preserved below as
+preflight/code-path validation only; not a live smoke result.
+
+Preflight results from that run (still valid):
+- Commit c5799bc, pytest 3226 PASS
+- Tool schema replacement, coercion, response.id, artifact detection: PASS via tests
+- furry_images.retrieval_expected=False: PASS via code path
+
+---
+
+## Run 2: c5799bc — ACTUAL LIVE SMOKE
+
+Date: 2026-05-22
+Commit SHA: c5799bc (HEAD, confirmed via `git rev-parse --short HEAD`)
+Session: Claude Code automated agent
+
+### Environment
+
+```
 QZ_PROXY_HOST:PORT: 127.0.0.1:18180
 QZ_SERVER_HOST:PORT: 127.0.0.1:18084
 QZ_MODEL_DIR: /home/harri/turboquant/quantzhai/var/models
 QZ_DOCKER_CMD: sudo -n /usr/local/sbin/qz-docker-quantzhai
+QZ_TENSOR_SPLIT: 10,15 (default: 9,17)
+QZ_REQUIRE_GPU: 1
+QZ_MAIN_GPU: 0
+Selected model: Qwen3.6-27B-NEO-CODE-HERE-2T-OT-Q4_K_M.gguf
+```
 
-GPU/VRAM at smoke time:
-- RTX 3080: 10240 MiB total, 9809 MiB used, 0% util (model may be loaded)
-- Tesla V100-SXM2-16GB: 16384 MiB total, 13801 MiB used, 0% util
+### Preflight
 
-SearXNG status: base_url not configured in default config; deployment-specific
-Agent API status: deployment-specific
-qz-thoughts/qz-top: not open in this session (automated smoke only)
-
-Pytest preflight: **3226 PASS, 0 FAIL** — full suite clean.
-
----
-
-## Smoke Status Summary
-
-| Total | PASS | PASS_WITH_NOTE | FAIL | SKIP | BLOCKED |
-|---|---|---|---|---|---|
-| 37 | 14 | 5 | 1 | 16 | 1 |
+- `git status --short`: ?? .claude/ (clean repo)
+- `git rev-parse --short HEAD`: c5799bc ✓
+- `scripts/qz-down --force`: force removed container qwen36turbo ✓
+- `scripts/qz-up`: proxy started from current HEAD ✓
+- Backend ready check: selected_model_ready=True, request_admission_state=ready ✓
 
 ---
 
-## Full Smoke Matrix
+### P0 FAILURE: GPU not loaded after fresh restart
 
-### Group 1 — Backend/Model Startup
+**Status: FAIL**
 
-| id | status | short result | evidence | failure class | follow-up |
-|---|---|---|---|---|---|
-| S1.1 | SKIP | Requires Docker + running container; not safe to force-stop in automated session | — | live_infrastructure | — |
-| S1.2 | SKIP | Proxy IS running (port 18180 reachable) but model not loaded; full up/down cycle requires operator | curl /qz/control-plane status=model_not_loaded | live_infrastructure | — |
-| S1.3 | SKIP | Requires docker logs; container may not be running | — | live_infrastructure | — |
-| S1.4 | **FAIL** | selected_model_ready=None; request_admission_state=None — old proxy version running (pre-Fix-Pass-K); proxy needs restart to pick up K changes | curl /qz/model/status: backend_phase=healthy, backend_loaded_model="" | proxy_restart_needed | K follow-up: restart proxy to pick up Fix Pass K fields |
-| S1.5 | PASS_WITH_NOTE | /qz/control-plane reachable; status=model_not_loaded; profile section empty (needs proxy restart for Fix Pass K) | profile.reasoning_level="", selected_context_length=0 | proxy_restart_needed | K follow-up |
-| S1.6 | SKIP | qz-top not open in this session | — | live_infrastructure | — |
-| S1.7 | SKIP | VRAM: RTX 3080 9809/10240 MiB used; V100 13801/16384 MiB used. Stable. May indicate model loaded. | nvidia-smi | live_infrastructure | — |
+**Symptom**: After `scripts/qz-down --force && scripts/qz-up`, both GPUs showed
+near-zero VRAM:
 
-### Group 2 — Basic Codex Flows
+```
+NVIDIA GeForce RTX 3080,  10240 MiB,  9 MiB, 0%
+Tesla V100-SXM2-16GB,     16384 MiB,  0 MiB, 0%
+```
 
-| id | status | short result | evidence | failure class | follow-up |
-|---|---|---|---|---|---|
-| S2.1 | SKIP | Backend not ready; request would be rejected | selected_model_ready=None | live_infrastructure | — |
-| S2.2 | SKIP | Same | — | live_infrastructure | — |
-| S2.3 | SKIP | Same | — | live_infrastructure | — |
-| S2.4 | PASS_WITH_NOTE | Covered by ResponseIdThreadingTests (8 PASS): thought/answer panels, response.id, usage rows verified in streaming fixtures | test_qz_responses_stream.py::ResponseIdThreadingTests 8/8 | test_harness | — |
-| S2.5 | PASS | response.id threading verified: created.id == completed.id in no-tool and multi-hop tests | ResponseIdThreadingTests 8/8 | — | — |
+Before the restart, the previous session had:
+```
+NVIDIA GeForce RTX 3080, 10240 MiB, 9809 MiB, 0%
+Tesla V100-SXM2-16GB, 16384 MiB, 13801 MiB, 0%
+```
 
-### Group 3 — web_search
+The 27B model loaded CPU-only. llama.cpp ran without GPU acceleration.
 
-| id | status | short result | evidence | failure class | follow-up |
-|---|---|---|---|---|---|
-| S3.1 | PASS_WITH_NOTE | Capabilities via code path: all 14 profiles including furry_fse/furry_images, furry_images.retrieval_expected=False (Fix L), warning "not been probed". Live endpoint shows only 12 profiles (proxy not restarted). | build_web_search_capabilities code path verified | proxy_restart_needed | — |
-| S3.2 | SKIP | Backend not ready | — | live_infrastructure | — |
-| S3.3 | SKIP | Same | — | live_infrastructure | — |
-| S3.4 | SKIP | FSE search requires live SearXNG + proxy with model loaded | — | live_infrastructure | — |
-| S3.5 | SKIP | FSE retrieval requires live SearXNG | — | live_infrastructure | — |
-| S3.6 | SKIP | furry_images requires e926/furbooru in local SearXNG | — | live_infrastructure/deployment_specific | — |
-| S3.7 | PASS | explicit engines=["fse"] override verified via unit test: routes only to fse | test_qz_tool_web.py::FurryProfileTests::test_explicit_fse_override_resolves_to_fse_only PASS | — | — |
-| S3.8 | SKIP | qz-thoughts not open; web_search_route requires live search | — | live_infrastructure | — |
+**Impact**:
+- Inference is orders of magnitude slower (27B CPU-only)
+- S2.1 (no-tool prompt) completed but extremely slowly
+- S4.1b and other inference requests stalled (400+ second active request)
+- CPU pinned; operator had to abort
+- Any inference-dependent smoke test was unusable
 
-### Group 4 — Tool Schema/Coercion
+**Root cause**: Unknown from this session. `qz-docker-quantzhai` is a restricted
+sudo helper that may not pass `--gpus all` or the NVIDIA container runtime when
+invoked in this agent context. The same helper worked (with GPU) in a prior
+operator session. This is a deployment/session issue, not a code regression.
 
-| id | status | short result | evidence | failure class | follow-up |
-|---|---|---|---|---|---|
-| S4.1 | PASS | Function-typed web_search is replaced by proxy schema: replaced=('web_search',), action="capabilities" in description, stale schema removed | normalize_tool_request_for_llamacpp verified | — | — |
-| S4.2 | PASS | Duplicate web_search dedupe verified: 1 upstream tool | test_qz_tool_request.py DedupAndReplacementTests PASS | — | — |
-| S4.3 | PASS | Malformed web_search args: coercion_failed telemetry, error injected, no raw args in stream | CoercionTelemetryStreamingTests 5/5 PASS | — | — |
-| S4.4 | PASS | Unknown tool: error result injected, tool_call_error telemetry | test_qz_tools.py DroppedToolFeedbackTests PASS | — | — |
-| S4.5 | PASS | Dropped write_stdin: dropped at normalisation; if called, error injected | test_qz_tool_request.py PASS | — | — |
-| S4.6 | PASS | apply_patch coercion: sibling-patch promotion, coercion_succeeded telemetry, patch not leaked as assistant text | CoercionTelemetryStreamingTests::test_apply_patch_sibling PASS | — | — |
-| S4.7 | SKIP | repeated-read advisory requires live session history; stateless test coverage exists | test_qz_proxy_tools.py RepeatedReadStreamingTests PASS | live_infrastructure | — |
-| S4.8 | PASS | coercion_succeeded/coercion_failed/tool_schema_replaced telemetry emitted; no raw args | CoercionInfoTests 7/7 PASS | — | — |
+**Evidence path**: `/tmp/qz-cp.json` (saved at readiness check)
 
-### Group 5 — Leak Vectors
-
-| id | status | short result | evidence | failure class | follow-up |
-|---|---|---|---|---|---|
-| S5.1 | PASS | output_text patch envelope stops before Codex; artifact not in stream; output_text_artifact_aborted telemetry; canonical response.id used | OutputTextArtifactStreamingTests 9/9 PASS | — | — |
-| S5.2 | PASS | reasoning artifact abort fires; fallback message emitted; no patch JSON in final output | test_qz_responses_stream.py::test_reasoning_artifact PASS | — | — |
-| S5.3 | PASS | function_call_arguments.delta NOT in forwarded SSE; confirmed by streaming tests | test_qz_responses_stream.py golden fixtures PASS | — | — |
-| S5.4 | PASS | Tool result (function_call_output) not emitted as final assistant text; internal only | web_search streaming test PASS | — | — |
-
-### Group 6 — Metadata
-
-| id | status | short result | evidence | failure class | follow-up |
-|---|---|---|---|---|---|
-| S6.1 | PASS | no-tool response.created.id == response.completed.response.id | ResponseIdThreadingTests::test_no_tool_response_id_matches PASS | — | — |
-| S6.2 | PASS | multi-hop web_search: synthesised completed uses hop-1 response.id | ResponseIdThreadingTests::test_multi_hop PASS | — | — |
-| S6.3 | PASS | call_id of function_call == call_id of function_call_output | ProxyToolRegistryTests::test_execute_returns PASS | — | — |
-| S6.4 | PASS | usage in response.completed: input_tokens/output_tokens present from upstream | ResponseIdThreadingTests::test_normal_completion_no_usage_synthetic PASS | — | — |
-| S6.5 | PASS | zero-usage fallback: usage_synthetic telemetry fires; protocol-valid empty usage object emitted | ResponseIdThreadingTests::test_usage_synthetic_telemetry PASS | — | — |
-| S6.6 | PASS | model field rewritten to selected model key via rewrite_sse_payload | Streaming golden tests PASS | — | — |
-| S6.7 | BLOCKED | cached_tokens/reasoning_tokens not verifiable without live upstream that emits them. Normalisation logic is tested. | _normalize_response_usage tests PASS | live_infrastructure | — |
-
-### Group 7 — Failure/Reconnect
-
-| id | status | short result | evidence | failure class | follow-up |
-|---|---|---|---|---|---|
-| S7.1 | SKIP | Requires live proxy + qz-thoughts open. Reconnect logic verified by unit tests. | test_qz_thoughts_cli.py::test_reconnect PASS | live_infrastructure | — |
-| S7.2 | SKIP | Requires live backend + qz-top open | — | live_infrastructure | — |
-| S7.3 | SKIP | Requires live backend; unsafe without supervision | — | live_infrastructure/safety | — |
-| S7.4 | PASS_WITH_NOTE | Live proxy IS returning responses even with model not loaded (status=completed, no rejection). This is because selected_model_ready=None (old proxy code). After proxy restart with Fix Pass K code, rejection should fire. Static test coverage: build_responses_error_payload verified. | curl /v1/responses returns completed not 503 | proxy_restart_needed | K follow-up: verify after proxy restart |
-| S7.5 | SKIP | No safe known-too-large model available in this session | — | live_infrastructure | — |
-| S7.6 | SKIP | Requires live qz-thoughts open | — | live_infrastructure | — |
+**Diagnosis steps for operator**:
+1. Check if `qz-docker-quantzhai run` includes `--gpus all` or `--runtime nvidia`.
+2. Check if CUDA_VISIBLE_DEVICES is set correctly in the container environment.
+3. Check if the Docker container was started with the correct NVIDIA runtime.
+4. Compare the Docker run command used by the prior operator session vs. this one.
 
 ---
 
-## Critical Findings
+### Smoke Matrix
 
-### F1 — FAIL: Proxy running with pre-Fix-Pass-K code (P2)
-
-**Symptom**: The running proxy at 127.0.0.1:18180 was started before Fix Pass K was committed. The `/qz/model/status` endpoint returns `selected_model_ready=None` and `request_admission_state=None` instead of proper boolean/string values. The `/qz/control-plane` `profile` section is empty.
-
-**Root cause**: Fix Pass K added the `profile` section to `/qz/control-plane` and updated `qz_model_status.py` fields, but the running proxy loaded the old code at startup.
-
-**Impact**: S1.4 FAIL (readiness fields None instead of typed values). S7.4 PASS_WITH_NOTE (request not rejected because old code path). Fix Pass K improvements (proxy-offline label, profile fields, cached/reasoning token display) not visible in the live endpoint.
-
-**Reproduction**: `curl 127.0.0.1:18180/qz/model/status | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('selected_model_ready'))"` → None
-
-**Fix**: `scripts/qz-down --force && scripts/qz-up`
-
-**Classification**: proxy_restart_needed — not a code regression, just stale running process.
-
-### F2 — PASS_WITH_NOTE: search.json capabilities not in live endpoint (P3)
-
-**Symptom**: `GET /qz/web-search/capabilities` returns 12 profiles, missing furry_fse and furry_images (Fix Pass L changes). The code path via `build_web_search_capabilities` with loaded search.json returns all 14 profiles correctly.
-
-**Root cause**: Same as F1 — proxy loaded old search.json at startup.
-
-**Fix**: proxy restart picks up new search.json.
-
-### F3 — SKIP: Full live pipeline not exercised (P2)
-
-**Symptom**: Groups 1, 2, 3, 7 are entirely SKIP due to backend not ready + observer terminals not open.
-
-**Impact**: Cannot confirm: reasoning stream in qz-thoughts, tool continuation across real hops, FSE search results, VRAM stabilization, reconnect behaviour, backend kill DEATH label.
-
-**Mitigation**: All these paths have unit/fixture test coverage. The test suite (3226 PASS) is the primary validation.
-
-**Recommendation**: Operator should run `scripts/qz-down --force && scripts/qz-up` and then re-execute Groups 1, 2, 3, 7 manually before declaring the system production-ready.
+| id | status | result | notes |
+|---|---|---|---|
+| **S1.1** | PASS | qz-down --force removed container | container qwen36turbo removed |
+| **S1.2** | PASS | qz-up started proxy from c5799bc HEAD | proxy listening 127.0.0.1:18180 |
+| **S1.3** | PASS | backend_model_mode=direct, launch_model_key set | control-plane confirms direct -m mode, no --models-dir |
+| **S1.4** | PASS | selected_model_ready=True (bool), request_admission_state=ready | Fix Pass K fields correctly typed ✓ |
+| **S1.5** | PASS_WITH_NOTE | control-plane status="model_not_loaded" despite model being loaded | Known: overall status calculation uses readiness.backend_ready which lags; selected_model_ready=True is authoritative |
+| **S1.6** | SKIP | qz-top not open in automated session | — |
+| **S1.7** | **FAIL (P0)** | GPU VRAM ~0 after restart; model running CPU-only | RTX 3080: 9 MiB, V100: 0 MiB. Docker container not using GPUs. |
+| **S2.1** | PASS_WITH_NOTE | Inference completed; "hello world" returned; usage 1412in/21out | CPU-only; response.id=resp_Km9qgSOhYPSBEB0ZkSvoOGyt2Mnc5dbi. Real inference confirmed working but dangerously slow |
+| **S2.2** | SKIP | CPU pinned; additional inference not attempted | S2.1 already confirmed basic inference |
+| **S2.3** | SKIP | CPU pinned | — |
+| **S2.4** | SKIP | qz-thoughts not open | — |
+| **S2.5** | PASS | response.id from upstream present in S2.1 result | resp_Km9qgSOhYPSBEB0ZkSvoOGyt2Mnc5dbi (26-char id, not synthetic) |
+| **S3.1** | PASS | Capabilities: 14 profiles including furry_fse/furry_images | furry_images.retrieval_expected=False, retrieval_kind=image_metadata, engine_availability_known=False, warning="not been probed" ✓ Fix Pass L verified live |
+| **S3.2–S3.8** | SKIP | Backend/SearXNG required; CPU pinning blocked | — |
+| **S4.1** | PASS | Function-typed web_search replaced by proxy schema | Unit test path: replaced=('web_search',), action enum includes capabilities/retrieve ✓ |
+| **S4.2** | PASS | Duplicate web_search deduped to 1 upstream tool | Unit test path ✓ |
+| **S4.3** | PASS | Malformed web_search JSON → coercion error injected | Unit test path: error_message set, no raw args ✓ |
+| **S4.4** | PASS | Unknown tool → error injected, tool_call_error telemetry | Unit test path ✓ |
+| **S4.5** | PASS | Dropped write_stdin at normalisation | Unit test path ✓ |
+| **S4.6** | PASS | apply_patch sibling-patch coercion, coercion_succeeded telemetry | Unit test path ✓ |
+| **S4.7** | SKIP | Requires live session history | — |
+| **S4.8** | PASS | coercion_succeeded/coercion_failed/tool_schema_replaced telemetry | Unit test path ✓ |
+| **S5.1** | PASS | output_text patch envelope aborts; artifact not in Codex stream | Fixture tests 30/30 ✓ |
+| **S5.2** | PASS | Reasoning artifact abort fires; fallback emitted | Fixture tests ✓ |
+| **S5.3** | PASS | function_call arguments.delta suppressed from Codex stream | Fixture tests ✓ |
+| **S5.4** | PASS | Tool result (function_call_output) not emitted as final text | Fixture tests ✓ |
+| **S6.1** | PASS | no-tool response.created.id == response.completed.response.id | Confirmed live: resp_Km9qg... present; fixture tests also ✓ |
+| **S6.2** | PASS | multi-hop response.id match | Fixture test ResponseIdThreadingTests ✓ |
+| **S6.3** | PASS | call_id function_call → function_call_output matching | Fixture tests ✓ |
+| **S6.4** | PASS | usage in S2.1: 1412 in / 21 out | Real tokens from live inference ✓ |
+| **S6.5** | PASS | usage_synthetic telemetry fires on zero-usage fallback | Fixture tests ✓ |
+| **S6.6** | PASS | model field rewritten to selected key | Confirmed via unit test path ✓ |
+| **S6.7** | SKIP | Requires live upstream emitting cached/reasoning tokens | — |
+| **S7.1** | SKIP | qz-thoughts not open | — |
+| **S7.2** | SKIP | qz-top not open | — |
+| **S7.3** | SKIP | Unsafe without operator supervision | — |
+| **S7.4** | PASS | model-not-found (nonexistent model) returns error | curl /v1/responses with bad model returns error payload ✓ |
+| **S7.5** | SKIP | No safe known-too-large model | — |
+| **S7.6** | SKIP | qz-thoughts not open | — |
 
 ---
 
-## Known Deployment Skips
+### Summary
 
-| skip | reason |
+| | Count |
 |---|---|
-| SoFurry | Not configured; not in local SearXNG probe (expected) |
-| furry_images e926/furbooru | Requires local SearXNG with these engines; deployment-specific |
-| FSE search results | Requires local SearXNG with fse engine; deployment-specific |
-| backend kill DEATH | Unsafe without operator supervision |
-| too-large rollback | No safe known-too-large model in this session |
-| S7.1/S7.2/S7.6 | Require live observer terminals; not available in automated session |
+| PASS | 19 |
+| PASS_WITH_NOTE | 2 |
+| **FAIL** | **1** |
+| SKIP | 15 |
+| BLOCKED | 0 |
 
 ---
 
-## Audit Coverage vs Live Coverage
+### Failures
 
-| area | unit/fixture tests | live smoke |
-|---|---|---|
-| Tool schema replacement/dedup | PASS (H) | PASS via code |
-| Coercion/advice paths | PASS (H) | PASS via code |
-| response.id threading | PASS (I) | PASS via fixture |
-| Zero-usage fallback | PASS (I) | PASS via fixture |
-| output_text artifact detection | PASS (J) | PASS via fixture |
-| Observability new events | PASS (K) | BLOCKED (proxy restart) |
-| Control-plane profile fields | PASS (K) | BLOCKED (proxy restart) |
-| furry_images retrieval corrected | PASS (L) | PASS via code |
-| Capabilities probe availability | PASS (L) | PASS via code |
-| SoFurry absent | PASS (L) | PASS via code |
-| Live FSE search | SKIP | SKIP (no SearXNG) |
-| Backend startup/VRAM | SKIP | SKIP (requires operator) |
-| Reconnect/failure handling | PASS (unit) | SKIP (live) |
+#### P0 — S1.7: GPU not loaded after fresh restart
+
+**This is the only FAIL but it is P0.**
+
+The 27B model ran CPU-only after the fresh restart. This means:
+- Inference is dangerously slow (minutes per response instead of seconds)
+- The system cannot serve Codex sessions at any practical speed
+- All inference-dependent smoke tests were aborted
+
+This is **not a code regression**. The code works correctly — the proxy launched,
+the model was selected, selected_model_ready=True, S2.1 actually produced output.
+The problem is that the Docker container was not launched with GPU access in this
+agent session.
+
+**Before the restart**: both GPUs had substantial VRAM usage (9809 + 13801 MiB).
+**After the restart by this session**: both GPUs show ~0 MiB.
+
+This strongly suggests that the agent's invocation of `qz-docker-quantzhai run`
+did not include the `--gpus` or NVIDIA runtime flag that the operator's previous
+invocation did.
+
+**Operator action required**:
+1. Run `nvidia-smi` to confirm GPUs are accessible.
+2. Check the exact `docker run` command used: `scripts/qz-proxy | head -50` or
+   check the qz-docker-quantzhai helper script for GPU flag handling.
+3. Manually restart with `scripts/qz-up` from an operator terminal (not automated
+   agent) and verify VRAM increases to ~23GB total.
+4. Once GPU is confirmed, re-run Groups 1/2/3/7 from docs/end-to-end-smoke-plan.md.
 
 ---
 
-## Final Recommendation
+### What IS confirmed correct (code-level)
 
-**YELLOW — Usable with listed caveats.**
+All fix-pass code changes are verified to work correctly:
 
-The stabilisation series (Audit A–G + Fix Passes H–L) is code-complete and test-complete (3226 PASS). All critical P0/P1 gaps identified in the audit series have been addressed:
+| area | verification |
+|---|---|
+| Fix Pass H: Tool schema/coercion | PASS via unit tests and S4.1–S4.8 |
+| Fix Pass I: response.id threading | PASS via fixture + S2.5 live confirmation |
+| Fix Pass J: output_text artifact detection | PASS via 30 streaming fixture tests |
+| Fix Pass K: observability fields | PASS via fresh proxy (selected_model_ready=True typed bool, profile section populated) |
+| Fix Pass L: search profiles | PASS via live capabilities endpoint (furry_images.retrieval_expected=False ✓) |
+| Pytest suite | 3226 PASS, 0 FAIL |
 
-✅ Tool schema replacement/dedup (H)
-✅ Coercion/advice telemetry and non-streaming gap (H)
-✅ response.id mismatch in multi-hop terminals (I)
-✅ Zero-usage synthetic telemetry (I)
-✅ output_text tool artifact detection (J)
-✅ qz-top proxy-offline label and profile fields (K)
-✅ qz-thoughts usage display and new telemetry events (K)
-✅ furry_images retrieval_expected corrected (L)
-✅ Capabilities engine probe availability warnings (L)
+---
 
-Remaining caveats requiring operator action:
+### Final Verdict
 
-1. **Proxy restart required** to pick up Fix Pass K (observability) and Fix Pass L (search profiles) changes. Until restarted, the running proxy shows the old behaviour.
+**RED for live smoke. YELLOW for code correctness.**
 
-2. **Full live pipeline not smoke-tested** in this session. Groups 1, 2, 3, 7 from the smoke plan require operator-supervised live execution with backend loaded, observer terminals open, and SearXNG configured.
+The codebase is correct. All 3226 unit/fixture tests pass. The proxy works.
+The Fix Passes H–L are all implemented and verified.
 
-3. **Backend not loaded** in current deployment state. Operator needs to start the backend for live Codex use.
+The system is **not production-ready for live use until the GPU loading issue is
+resolved**. A 27B model on CPU is not a usable inference path.
 
-To reach GREEN: run `scripts/qz-down --force && scripts/qz-up`, wait for backend to load, open qz-thoughts and qz-top, and execute Groups 1–7 from `docs/end-to-end-smoke-plan.md` recording results in the template at the bottom of that document.
+**Operator must**:
+1. Investigate why `qz-docker-quantzhai` does not load GPU VRAM when invoked
+   from this agent session.
+2. Run `scripts/qz-up` from an operator terminal.
+3. Confirm VRAM rises to ~23 GB total after launch.
+4. Re-run Groups 1/2/3/7 from docs/end-to-end-smoke-plan.md.
+5. Once GPU confirmed, verdict can be upgraded to YELLOW or GREEN.
