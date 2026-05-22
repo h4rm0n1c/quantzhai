@@ -8,40 +8,34 @@ Audit series A–F complete. This plan exercises the full Codex ⇄ QuantZhai �
 
 ---
 
-## 0. GPU Preflight Gate (MANDATORY — abort if fails)
+## 0. Backend Preflight Gate (MANDATORY — abort if fails)
 
-Before any live inference test, confirm GPU VRAM is loaded:
+Before GPU checks, confirm the proxy resolved a launch model and requested start:
 
 ```bash
-nvidia-smi --query-gpu=name,memory.used --format=csv,noheader
-curl -s http://$QZ_PROXY_HOST:$QZ_PROXY_PORT/qz/model/status | python3 -c "
+curl -s http://$QZ_PROXY_HOST:$QZ_PROXY_PORT/qz/backend/status | python3 -c "
 import json,sys; d=json.load(sys.stdin)
-print('gpu_offload_state:', d.get('gpu_offload_state'))
-print('gpu_required:', d.get('gpu_required'))
-print('gpu_observed:', d.get('gpu_observed'))
-print('request_admission_state:', d.get('request_admission_state'))
+print('phase:', d.get('phase'))
+print('launch_model_key:', d.get('launch_model_key'))
+print('launch_model_path_basename:', d.get('launch_model_path_basename'))
+print('launch_model_error:', d.get('launch_model_error'))
 "
 ```
 
 Required:
-- `nvidia-smi` shows >1000 MiB used on at least one GPU
-- `gpu_offload_state` == "gpu"
-- `gpu_required` == true
-- `request_admission_state` == "ready" (not "failed_gpu_not_available")
+- `phase` is not "idle", "disabled", or "stopped" (typically "starting", "running", or "healthy")
+- `launch_model_key` is non-empty
+- `launch_model_path_basename` is non-empty
+- `launch_model_error` is null/empty
 
 If any of these fail:
-- STOP. Do not proceed to inference tests.
-- Record S1.7 as FAIL (P0).
-- Investigate why `qz-docker-quantzhai run --gpus all` is not loading GPU VRAM.
-- Check: docker runtime nvidia support, CUDA visibility, helper script GPU flags.
-
-Note: `qz-down --force && qz-up` MUST be run from an operator terminal.
-The automated agent session may not pass `--gpus all` correctly when using the
-restricted `qz-docker-quantzhai` helper.
+- STOP. Record S1.2 as FAIL.
+- Investigate why `_preload_last_model` failed to resolve/set the model.
+- Check: `.env` QZ_MODEL_KEY, `var/models/` contents, `var/model-state.json`.
 
 ---
 
-## 1. Smoke Prerequisites
+## 1. GPU Preflight Gate (MANDATORY — abort if fails)
 
 All smoke runs assume:
 

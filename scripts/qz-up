@@ -95,7 +95,54 @@ write_runtime_state --phase requested --source env
 write_runtime_state --phase proxy-started --source env
 
 printf 'QuantZhai proxy ready: http://%s:%s\n' "$QZ_PROXY_HOST" "$QZ_PROXY_PORT"
-printf 'Backend starting asynchronously under proxy control.\n'
+
+# Check backend status from proxy to provide an honest startup message.
+_B_STATUS=$(curl -fsS "http://${QZ_PROXY_HOST}:${QZ_PROXY_PORT}/qz/backend/status" 2>/dev/null) || _B_STATUS=""
+if [[ -n "$_B_STATUS" ]]; then
+  _B_INFO=$(python3 -c '
+import json, sys
+try:
+    data = json.loads(sys.stdin.read())
+    backend = data.get("backend_manager") or data
+    print(backend.get("phase") or "idle")
+    print(backend.get("launch_model_error") or "")
+    print(str(backend.get("gpu_required")).lower())
+    print(backend.get("gpu_offload_state") or "unknown")
+    print(backend.get("launch_model_key") or "")
+except Exception:
+    sys.exit(1)
+' <<<"$_B_STATUS" 2>/dev/null) || _B_INFO=""
+
+  if [[ -n "$_B_INFO" ]]; then
+    mapfile -t _B_PARTS <<<"$_B_INFO"
+    _B_PHASE="${_B_PARTS[0]:-}"
+    _B_ERROR="${_B_PARTS[1]:-}"
+    _B_GPU_REQ="${_B_PARTS[2]:-}"
+    _B_GPU_STATE="${_B_PARTS[3]:-}"
+    _B_KEY="${_B_PARTS[4]:-}"
+
+    if [[ "$_B_PHASE" == "starting" || "$_B_PHASE" == "start_requested" || "$_B_PHASE" == "running" || "$_B_PHASE" == "healthy" ]]; then
+      printf 'Backend starting asynchronously under proxy control.\n'
+    elif [[ -n "$_B_ERROR" ]]; then
+      printf 'Backend not started: %s\n' "$_B_ERROR"
+    elif [[ "$_B_PHASE" == "failed" ]]; then
+      if [[ "$_B_GPU_REQ" == "true" && ("$_B_GPU_STATE" == "failed" || "$_B_GPU_STATE" == "cpu_fallback") ]]; then
+        printf 'Backend failed: GPU requirement not met.\n'
+      else
+        printf 'Backend failed to start.\n'
+      fi
+    elif [[ -n "$_B_KEY" ]]; then
+      printf 'Backend is idle; model %s resolved, starting shortly.\n' "$_B_KEY"
+    else
+      printf 'Backend is idle; no launch model resolved yet.\n'
+    fi
+  else
+    printf 'Backend starting asynchronously under proxy control.\n'
+  fi
+else
+  printf 'Backend starting asynchronously under proxy control.\n'
+fi
+
 printf 'Check status:  GET  http://%s:%s/qz/backend/status\n' "$QZ_PROXY_HOST" "$QZ_PROXY_PORT"
 printf 'Full status:   GET  http://%s:%s/qz/control-plane\n' "$QZ_PROXY_HOST" "$QZ_PROXY_PORT"
 printf 'Stop stack:    scripts/qz-down\n'

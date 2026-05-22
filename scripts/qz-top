@@ -1255,7 +1255,7 @@ class UI:
         self.draw_status_bar(1, 1, backend_ok, proxy_ok)
         self.add(2, 0, "─" * max(1, w - 1), self.dim)
 
-    def draw_profile(self, y: int, x: int, h: int, w: int, model_status: ModelStatus, srs: Optional["ServiceRecoveryStatus"] = None):
+    def draw_profile(self, y: int, x: int, h: int, w: int, model_status: ModelStatus, srs: Optional["ServiceRecoveryStatus"] = None, cp_is_none: bool = False):
         self.box(y, x, h, w, "PROFILE")
         labels = ["CTX", "NP", "SPLIT", "BATCH", "UBATCH", "CACHE", "REUSE", "KV"]
         values = [
@@ -1280,8 +1280,8 @@ class UI:
             self.add(y + 2, cx, f"{clip(value, width):<{width}}", self.white)
             cx += width + 1
 
-        # Detect proxy-offline: ModelStatus() is all-empty and not proxy
-        _proxy_offline = not (model_status.loaded or model_status.selected_key or model_status.profile)
+        # Detect proxy-offline: the fetch explicitly failed.
+        _proxy_offline = cp_is_none
         loaded = model_status.loaded or ("PROXY OFFLINE" if _proxy_offline else "none")
         loaded_suffix = f" ({model_status.loaded_count})" if model_status.loaded_count > 1 else ""
         state = model_status.selected_state or model_status.load_state or ("offline" if _proxy_offline else "unknown")
@@ -1627,7 +1627,7 @@ class UI:
 
         full_w = w - 2
         gpu_h = 8 + min(2, len(gpus))  # +3 vs original: physical TOTAL + VRAM + COMP rows
-        self.draw_profile(3, 0, 12, full_w, model_status, srs)
+        self.draw_profile(3, 0, 12, full_w, model_status, srs, cp_is_none=(cp is None))
         self.draw_container(15, 0, 5, full_w)
         self.draw_gpu(20, 0, gpu_h, full_w, gpus, vram_snap=vram_snap)
         throughput_y = 20 + gpu_h

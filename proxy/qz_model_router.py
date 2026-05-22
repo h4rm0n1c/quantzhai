@@ -497,7 +497,10 @@ class ModelRouter:
             or backend_state_file.get("loaded_model", "") != loaded_model
             or backend_state_file.get("health_status") != health_status
         )
-        if model_drift:
+        if model_drift and selected_key:
+            # Only persist from status reconciliation when a valid selection
+            # exists.  This prevents "status_snapshot" from creating authoritative
+            # empty selections during startup/scan races.
             self._persist_model_state(selected, reason="status reconciliation", source="status_snapshot")
         if backend_drift:
             self._persist_backend_state(

@@ -62,23 +62,34 @@ if [[ -n "${QZ_CODEX_MODEL_PROVIDER:-}" ]]; then
   QZ_CODEX_EXTRA_ARGS+=(-c "model_provider=\"$QZ_CODEX_MODEL_PROVIDER\"")
 fi
 
-# Exec preflight: for exec subcommand with an explicit model, verify the
-# requested model is the active selected/loaded backend model via GET
-# /qz/model/status.  Visibility in /v1/models is no longer sufficient.
+# Model preflight: verify the requested model is the active selected/loaded
+# backend model via GET /qz/model/status.  Visibility in /v1/models is no
+# longer sufficient.
 #
 # When QZ_CODEX_AUTO_SELECT_MODEL=1, a mismatch triggers a POST to
 # /qz/model/select-and-restart (source=qz_codex).  Otherwise mismatch fails
 # with a literal curl command the operator can paste.
 #
 # See docs/proxy-model-selection-authority.md §8.
-if [[ "${QZ_CODEX_ARGS[0]:-}" == "exec" ]]; then
-  _preflight_model="$(qz_exec_model_from_args "${QZ_CODEX_ARGS[@]}")"
-  if [[ -z "$_preflight_model" ]] && [[ -n "${QZ_CODEX_EXEC_DEFAULT_MODEL:-}" ]]; then
-    _preflight_model="$QZ_CODEX_EXEC_DEFAULT_MODEL"
+
+_preflight_model="$(qz_exec_model_from_args "${QZ_CODEX_ARGS[@]}")"
+if [[ -z "$_preflight_model" ]]; then
+  if [[ "${QZ_CODEX_ARGS[0]:-}" == "exec" ]]; then
+    _preflight_model="${QZ_CODEX_EXEC_DEFAULT_MODEL:-}"
+  else
+    # In interactive mode, check if we have a persisted selection in config.toml
+    # that Codex will use on startup.
+    _preflight_model=$(grep -E '^\s*model\s*=' "$CODEX_HOME/config.toml" 2>/dev/null | cut -d'"' -f2 || true)
+    if [[ -z "$_preflight_model" ]]; then
+       # Fall back to proxy's currently selected model so we at least verify it is READY.
+       _preflight_model=$(qz_proxy_loaded_model)
+    fi
   fi
-  if [[ -n "$_preflight_model" ]]; then
-    qz_codex_exec_preflight "$_preflight_model" || exit $?
-  fi
+fi
+
+if [[ -n "$_preflight_model" ]]; then
+  # Preflight distinguishes: visibility vs selection vs readiness.
+  qz_codex_exec_preflight "$_preflight_model" || exit $?
 fi
 
 exec codex "${QZ_CODEX_EXTRA_ARGS[@]}" "${QZ_CODEX_ARGS[@]}"

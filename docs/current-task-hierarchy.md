@@ -1,7 +1,34 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-22
-Status: active control sheet — Slice B audit complete; Slice B2 fixes next.
+Status: active control sheet — P0 backend autostart fix complete.
+
+## P0 Fix: Backend autostart and model preload contract — COMPLETE
+
+```text
+Changes:
+1. quantzhai_proxy.py: Synchronized launch model resolution in _initialize_proxy_state.
+   _preload_last_model() now called before marking proxy as ready.
+   Ensures /health waits for resolution and autostart enqueuing.
+2. quantzhai_proxy.py: _resolve_launch_model_entry uses load_model_state
+   for consistent resolution with migration support (re-admitting QZ_MODEL_KEY
+   as seed when persisted selection is missing or empty).
+3. qz_backend_manager.py: Enforce launch model check in start() and restart().
+   Returns immediate error if no launch model is set, preventing background
+   failure state.
+4. qz_model_status.py: Tightened model_switch_state derivation.
+   Prevents fake "loaded" state when backend is idle/stopped.
+5. qz_model_router.py: Prevented status reconciliation from persisting
+   empty/drifting selections during startup/scan races.
+6. scripts/qz-up: Honest backend startup message based on proxy status.
+   Distinguishes starting vs idle vs GPU-blocked.
+7. scripts/qz-top: Fixed PROXY OFFLINE label to only show when proxy fetch
+   actually fails, not when backend is unreachable.
+8. qz-codex: Extended model preflight to interactive mode.
+   Verifies model choice against backend active selection before launch.
+9. 3 new tests: backend manager invariants and synchronous start failure.
+3256 total tests pass.
+```
 
 ## P0 Fix: GPU launch contract and admission gate — COMPLETE
 

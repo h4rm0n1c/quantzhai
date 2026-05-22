@@ -1,11 +1,19 @@
 # QuantZhai Post-Stabilisation Stocktake
 
-Date: 2026-05-22 (updated — post-#65 model-selection authority cleanup)
-Status: model-selection authority is proxy-owned; cold-start smoke acceptance passed.
+Date: 2026-05-22 (updated — post-P0 backend autostart fix)
+Status: model-selection authority and backend autostart contract restored.
 
 This document is a rolling point-in-time snapshot. For the live execution order,
 read `docs/current-task-hierarchy.md`. For architecture authority, read
 `docs/current-architecture-authority.md`.
+
+## P0 Fix: Backend autostart and model preload contract — COMPLETE
+
+quantzhai_proxy.py now synchronises launch model resolution before marking ready.
+_preload_last_model() called synchronously during init; /health waits for resolution.
+QZ_MODEL_KEY re-admitted as first-run seed via load_model_state migration support.
+qz_backend_manager.py start()/restart() enforce launch model check immediately.
+qz-up and qz-top fixed for honesty and label accuracy. 3 new tests. 3256 total pass.
 
 ## P0 Fix: GPU launch contract and admission gate — COMPLETE
 

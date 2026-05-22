@@ -630,25 +630,38 @@ def main():
         catalog = getattr(ProxyHandler, "model_catalog", None)
         if not isinstance(catalog, ModelCatalog):
             return None
-        state = read_json(Path(ProxyHandler.model_state_path), default={})
-        requested = ""
-        if isinstance(state, dict):
-            requested = (state.get("selected_key") or state.get("selected_backend_id") or "").strip()
+
+        # Load persisted selection with migration support.
+        try:
+            from .qz_model_state import load_model_state, selected_identity_from_state
+        except ImportError:
+            from qz_model_state import load_model_state, selected_identity_from_state
+
+        state_path = Path(ProxyHandler.model_state_path)
+        state_result = load_model_state(state_path)
+        requested = selected_identity_from_state(state_result.state)
+
         if requested:
             entry, _reason = catalog.resolve(query=requested)
             if entry is not None:
                 return entry
-        # No valid persisted selection — fall back to catalog default.
+
+        # No valid persisted selection — fall back to catalog default
+        # (which already incorporates QZ_MODEL_KEY seed).
         fallback = getattr(catalog, "selected", None)
         return fallback if isinstance(fallback, dict) else None
 
     def _preload_last_model():
+        """Resolve launch model and enqueue autostart. Synchronous resolution."""
         catalog = getattr(ProxyHandler, "model_catalog", None)
-        entry = _resolve_launch_model_entry()
+        if catalog is None:
+            return
 
+        entry = _resolve_launch_model_entry()
         if entry is None:
             print(
-                "QuantZhai: no launch model resolved; "
+                "QuantZhai: no launch model resolved (no persisted selection, "
+                "QZ_MODEL_KEY seed failed, or catalog empty); "
                 "POST /qz/model/select-and-restart to choose one.",
                 flush=True,
             )
@@ -659,13 +672,16 @@ def main():
         filename = entry.get("filename") or entry.get("backend_target") or backend_id
         if isinstance(filename, str) and filename and not filename.endswith(".gguf"):
             filename = f"{filename}.gguf"
+
         if not filename:
             print(
-                "QuantZhai: resolved launch model has no filename; "
+                f"QuantZhai: resolved launch model {key!r} has no filename; "
                 "POST /qz/model/select-and-restart to choose one.",
                 flush=True,
             )
             return
+
+        print(f"QuantZhai: preloading launch model {key!r} (backend_id={backend_id}, filename={filename})", flush=True)
         try:
             _backend_manager.set_launch_model(
                 key=key, backend_id=backend_id, path_basename=filename,
@@ -673,7 +689,9 @@ def main():
         except Exception as exc:
             print(f"QuantZhai: set_launch_model failed: {exc}", flush=True)
             return
+
         if _backend_autostart:
+            print("QuantZhai: requesting backend autostart...", flush=True)
             _backend_manager.begin_autostart()
 
     def _initialize_proxy_state():
@@ -690,8 +708,12 @@ def main():
                 ProxyHandler.search_config_result = _load_search_config(root=root)
             except Exception:
                 ProxyHandler.search_config_result = None
+
+            # Restore startup preload contract: resolve and set launch model BEFORE marking ready.
+            # This ensures /health waits for resolution and autostart is correctly enqueued.
+            _preload_last_model()
+
             ProxyHandler._set_initialization_state("ready")
-            threading.Thread(target=_preload_last_model, daemon=True).start()
             print(
                 f"QuantZhai proxy initialized: catalog={ProxyHandler.model_catalog_path}, searxng_base={ProxyHandler.searxng_base_url}",
                 flush=True,

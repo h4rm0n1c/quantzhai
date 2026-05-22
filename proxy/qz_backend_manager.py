@@ -347,6 +347,17 @@ class BackendManager:
                 return {"ok": False, "action": "start",
                         "error": f"backend is already {phase}",
                         "backend_manager": self._state.as_dict()}
+
+            if not self._launch_model_path_basename:
+                err = ("direct backend launch requires a launch model; "
+                       "POST /qz/model/select-and-restart with a valid model")
+                self._state.phase = PHASE_FAILED
+                self._state.launch_model_error = err
+                self._state.last_error = err
+                return {"ok": False, "action": "start",
+                        "error": err,
+                        "backend_manager": self._state.as_dict()}
+
             self._busy = True
             self._state.phase = PHASE_START_REQUESTED
             self._state.last_start_requested_at = _iso_now()
@@ -399,6 +410,17 @@ class BackendManager:
                 return {"ok": False, "action": "restart",
                         "error": f"another operation is in progress ({phase})",
                         "backend_manager": self._state.as_dict()}
+
+            if not self._launch_model_path_basename:
+                err = ("direct backend restart requires a launch model; "
+                       "POST /qz/model/select-and-restart with a valid model")
+                self._state.phase = PHASE_FAILED
+                self._state.launch_model_error = err
+                self._state.last_error = err
+                return {"ok": False, "action": "restart",
+                        "error": err,
+                        "backend_manager": self._state.as_dict()}
+
             self._busy = True
             self._state.phase = PHASE_STOPPING
         self._emit("backend_restart_requested")

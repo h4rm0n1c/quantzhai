@@ -136,7 +136,7 @@ def _derive_model_switch_state(
         # Backend container is up but llama-server hasn't reported healthy
         # yet — counts as "loading".
         return "loading", "backend_restart"
-    if state.last_load_result == "loaded":
+    if state.last_load_result == "loaded" and backend_phase == "healthy":
         return "loaded", "none"
     return "idle", "none"
 
