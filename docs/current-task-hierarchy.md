@@ -3,6 +3,42 @@
 Date: 2026-05-22
 Status: active control sheet — Slice B audit complete; Slice B2 fixes next.
 
+## Fix Pass M: final live smoke rerun — COMPLETE (YELLOW)
+
+```text
+Status: COMPLETE — automated portion done. Operator live run required for GREEN.
+
+Pytest preflight: 3226 PASS, 0 FAIL.
+Smoke matrix: 14 PASS, 5 PASS_WITH_NOTE, 1 FAIL, 16 SKIP, 1 BLOCKED.
+
+Results: docs/end-to-end-smoke-results.md
+
+FAIL (1):
+  S1.4 — selected_model_ready=None because running proxy is pre-Fix-Pass-K.
+  Fix: scripts/qz-down --force && scripts/qz-up.
+  Not a code regression — stale running process.
+
+Key verified (via tests/code path):
+  ✅ Tool schema replacement/dedup (H)
+  ✅ Coercion/advice telemetry (H)
+  ✅ response.id threading no-tool and multi-hop (I)
+  ✅ Zero-usage synthetic telemetry (I)
+  ✅ output_text artifact detection all paths (J)
+  ✅ qz-thoughts new event rendering (K)
+  ✅ furry_images retrieval_expected=False (L)
+  ✅ Capabilities probe availability warnings (L)
+  ✅ SoFurry absent confirmed (L)
+  ✅ explicit FSE engines override (L)
+
+Not yet live-verified (require operator):
+  - Groups 1/2/3/7 require backend loaded + observer terminals
+  - Control-plane profile fields require proxy restart
+  - FSE/furry_images require local SearXNG with engines
+
+Overall: YELLOW — code-complete, test-complete, operator live run needed
+before declaring GREEN for production use.
+```
+
 ## Recently completed — Fix Pass L: search profile/capabilities fixes
 
 ```text

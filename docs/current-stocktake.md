@@ -7,6 +7,12 @@ This document is a rolling point-in-time snapshot. For the live execution order,
 read `docs/current-task-hierarchy.md`. For architecture authority, read
 `docs/current-architecture-authority.md`.
 
+## Fix Pass M: final live smoke — COMPLETE (YELLOW)
+
+Automated smoke: 3226 pytest PASS, 14 smoke PASS, 1 FAIL (stale proxy), 16 SKIP.
+Results: docs/end-to-end-smoke-results.md. Stabilisation series A–G + H–M code-complete.
+Operator must run qz-down/qz-up and live smoke Groups 1/2/3/7 before GREEN.
+
 ## Fix Pass L: search profile/capabilities fixes — COMPLETE
 
 furry_images.retrieval_expected=False + retrieval_kind=image_metadata. Capabilities gains
