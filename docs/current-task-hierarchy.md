@@ -3,6 +3,42 @@
 Date: 2026-05-22
 Status: active control sheet — Slice B audit complete; Slice B2 fixes next.
 
+## Recently completed — Fix Pass J: output_text tool artifact detection
+
+```text
+Status: COMPLETE
+
+Changes:
+1. _looks_like_output_tool_artifact(text): new detector, stricter than reasoning
+   artifact. Tier 1: exact patch envelope markers (single strong indicator).
+   Tier 2: two+ diff header markers. Tier 3: JSON starting with '{' + multiple
+   specific structural markers (function_call JSON, apply_patch operation JSON,
+   named-tool-with-arguments, web_search action object).
+   Does NOT flag ordinary JSON, prose, code blocks, or explanations.
+
+2. StreamHopState.output_text_artifact_sample: bounded accumulator (2048 chars
+   default, QZ_OUTPUT_TEXT_ARTIFACT_SCAN_LIMIT env override) for output_text
+   artifact detection per hop.
+
+3. response.output_text.delta handler: accumulates sample on each delta, checks
+   detector. On detection: suppresses delta, emits fallback message ("I stopped
+   a malformed tool payload..."), emits output_text_artifact_aborted telemetry
+   with chars_scanned and model (no raw artifact text), returns completed terminal
+   using canonical response_id from Fix Pass I.
+
+4. _emit_output_text_artifact_aborted: new abort method, same pattern as
+   _emit_reasoning_only_aborted.
+
+Telemetry event: output_text_artifact_aborted {reason, chars_scanned, model}
+False positive guard: only triggers on high-confidence structural markers;
+requires '{' as starting character for all JSON-based detection.
+
+30 new tests: 20 detector unit tests + 10 streaming tests.
+3197 total pass.
+
+Next: Fix Pass K — qz-top/qz-thoughts observability fixes.
+```
+
 ## Recently completed — Fix Pass I: response.id threading and fallback usage handling
 
 ```text

@@ -7,6 +7,15 @@ This document is a rolling point-in-time snapshot. For the live execution order,
 read `docs/current-task-hierarchy.md`. For architecture authority, read
 `docs/current-architecture-authority.md`.
 
+## Fix Pass J: output_text tool artifact detection — COMPLETE
+
+_looks_like_output_tool_artifact detector added. Stricter than reasoning artifact.
+StreamHopState.output_text_artifact_sample accumulates bounded sample per hop.
+On detection: fallback message emitted, output_text_artifact_aborted telemetry,
+canonical response_id threaded through. 30 new tests. 3197 total pass.
+
+**Next: Fix Pass K** — qz-top/qz-thoughts observability fixes.
+
 ## Fix Pass I: response.id threading and fallback usage handling — COMPLETE
 
 StreamRunState.upstream_response_id captures response.id from first response.created.

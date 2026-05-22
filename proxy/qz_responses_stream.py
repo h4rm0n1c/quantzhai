@@ -124,6 +124,8 @@ class StreamHopState:
     assistant_item_seen: bool = False
     public_item_seen: bool = False
     max_output_index: int = -1
+    # Output-text artifact detection sample (bounded; checked per delta)
+    output_text_artifact_sample: str = ""
     # Stream observation accumulator (dict keyed by request_id + event counts)
     stream_obs_acc: dict = field(default_factory=dict)
     # Watchdog for no-output and terminal timeouts
@@ -160,6 +162,7 @@ class StreamHopState:
             assistant_item_seen=False,
             public_item_seen=False,
             max_output_index=-1,
+            output_text_artifact_sample="",
             stream_obs_acc={"request_id": request_id},
             watchdog_state=StreamWatchdogState(
                 timeout_secs=stream_no_output_timeout_s,
@@ -353,6 +356,84 @@ def _reasoning_only_abort_reason(
         return "char_limit"
 
     return None
+
+
+OUTPUT_TEXT_ARTIFACT_SCAN_LIMIT = int(os.environ.get("QZ_OUTPUT_TEXT_ARTIFACT_SCAN_LIMIT", "2048"))
+
+
+def _looks_like_output_tool_artifact(text: str) -> bool:
+    """Return True when accumulated output_text content looks like a raw tool or patch payload.
+
+    Stricter than _looks_like_reasoning_tool_artifact — output_text is user-visible and
+    false positives disrupt normal answers.  Only triggers on high-confidence exact markers.
+
+    Tier 1 — single unambiguous marker:
+      *** Begin Patch / *** End Patch   (Codex patch envelope)
+      diff --git a/...                  (git diff format)
+
+    Tier 2 — two structural diff markers:
+      diff --git + (--- a/ or +++ b/)
+
+    Tier 3 — JSON starting with '{' + multiple specific markers:
+      Raw function_call envelope, apply_patch operation JSON,
+      named-tool-call-with-arguments, or raw web_search action object.
+
+    Does NOT flag:
+      Ordinary JSON examples in prose, small snippets, code blocks,
+      tool result summaries, or any text not starting with the artifact.
+    """
+    if not text:
+        return False
+    stripped = text.lstrip()
+
+    # Tier 1A: Exact Codex patch envelope markers — unambiguous regardless of context.
+    if stripped.startswith("*** Begin Patch") or "*** End Patch" in stripped[:120]:
+        return True
+
+    # Tier 1B/2: Git diff format starting the text — very strong signal.
+    if stripped.startswith("diff --git "):
+        return True
+    diff_hits = sum(1 for m in ("--- a/", "+++ b/", "diff --git ") if m in text[:400])
+    if diff_hits >= 2:
+        return True
+
+    # Tier 3: JSON-shaped payloads — only when the sample itself starts with '{'.
+    if not stripped.startswith("{"):
+        return False
+
+    # Collapse whitespace for pattern matching (keep original for length checks).
+    compact = text.replace(" ", "").replace("\n", "").replace("\t", "")
+
+    # Raw function_call envelope: {"type":"function_call","name":...,"arguments":...}
+    if '"type":"function_call"' in compact and '"name"' in compact:
+        return True
+
+    # Raw apply_patch operation JSON: {"operation":{"type":"create_file",...},...}
+    # or {"type":"create_file","path":...,"diff":...}
+    has_op_type = any(t in compact for t in (
+        '"type":"create_file"', '"type":"update_file"', '"type":"modify_file"',
+        '"type":"delete_file"', '"type":"move_file"', '"type":"rename_file"',
+    ))
+    if has_op_type and '"path"' in compact and ('"diff"' in compact or '"content"' in compact):
+        return True
+
+    # Named-tool-call-with-arguments: {"name":"web_search","arguments":...}
+    known_tool_names = ('"name":"web_search"', '"name":"apply_patch"',
+                        '"name":"exec_command"', '"name":"write_stdin"')
+    if '"arguments"' in compact and any(n in compact for n in known_tool_names):
+        return True
+
+    # Raw web_search action object at top level.
+    # Require action value + at least one other web_search-specific field.
+    if '"action":"capabilities"' in compact:
+        return True
+    web_search_actions = ('"action":"search"', '"action":"retrieve"',
+                          '"action":"open_page"', '"action":"find_in_page"')
+    if any(a in compact for a in web_search_actions):
+        if '"query"' in compact or '"url"' in compact or '"profile"' in compact:
+            return True
+
+    return False
 
 
 PRIVATE_FUNCTION_CALL_TIMEOUT_S = float(os.environ.get("QZ_PRIVATE_TOOL_CALL_TIMEOUT_S", "120"))
@@ -1336,6 +1417,36 @@ class ResponsesStreamRuntime:
             repair_body.pop("tool_choice", None)
         return repair_body
 
+    def _emit_output_text_artifact_aborted(
+        self,
+        requested_model: str,
+        summary_started: set,
+        final_usage,
+        chars_scanned: int,
+        public_index: int = 0,
+        sequence: int = 0,
+        response_id: str = "",
+    ) -> tuple:
+        text = (
+            "I stopped a malformed tool payload before it could leak into the assistant response. "
+            "Please retry the request."
+        )
+        output_item = {
+            "id": f"msg_local_{_now_ts()}",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": text, "annotations": []}],
+        }
+        self._emit("output_text_artifact_aborted", {
+            "model": requested_model,
+            "reason": "output_text_tool_artifact",
+            "chars_scanned": int(chars_scanned),
+        })
+        sequence = self._stream_fallback_message(output_item, public_index, sequence)
+        self._emit_completed(requested_model, [output_item], summary_started, usage=final_usage, response_id=response_id)
+        return [output_item], sequence
+
     def _emit_reasoning_only_completed_without_answer(
         self,
         requested_model: str,
@@ -1547,6 +1658,36 @@ class ResponsesStreamRuntime:
                             if delta_text.strip():
                                 hs.visible_output_text_seen = True
                                 hs.watchdog_state.mark_visible_output(event_parsed_at)
+                            # Accumulate bounded sample for artifact detection.
+                            if len(hs.output_text_artifact_sample) < OUTPUT_TEXT_ARTIFACT_SCAN_LIMIT:
+                                remaining = OUTPUT_TEXT_ARTIFACT_SCAN_LIMIT - len(hs.output_text_artifact_sample)
+                                hs.output_text_artifact_sample += delta_text[:remaining]
+                            if delta_text and _looks_like_output_tool_artifact(hs.output_text_artifact_sample):
+                                self._emit_stream_event_timing(
+                                    event_type, event_received_at, event_parsed_at,
+                                    None, suppressed="output_text_artifact_aborted",
+                                )
+                                abort_items, sequence = self._emit_output_text_artifact_aborted(
+                                    requested_model,
+                                    summary_started,
+                                    rs.final_usage,
+                                    len(hs.output_text_artifact_sample),
+                                    public_index=len(public_trace),
+                                    sequence=sequence,
+                                    response_id=rs.upstream_response_id,
+                                )
+                                public_trace.extend(abort_items)
+                                self._emit_stream_completed(requested_model, len(public_trace), rs.started_at, fallback=True)
+                                completed_at = time.time()
+                                return self._build_result(
+                                    requested_model,
+                                    rs.started_at,
+                                    rs.first_output_at,
+                                    completed_at,
+                                    rs.final_usage,
+                                    len(public_trace),
+                                    fallback=True,
+                                )
                         if event_type in {
                             "response.output_item.added",
                             "response.output_item.done",

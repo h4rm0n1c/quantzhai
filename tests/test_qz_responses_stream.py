@@ -4417,5 +4417,329 @@ class NonStreamingDroppedToolGapTests(unittest.TestCase):
         self.assertIn("capabilities", upstream_tool.get("description", ""))
 
 
+class OutputTextArtifactDetectorTests(unittest.TestCase):
+    """Unit tests for _looks_like_output_tool_artifact."""
+
+    def _det(self, text):
+        from proxy.qz_responses_stream import _looks_like_output_tool_artifact
+        return _looks_like_output_tool_artifact(text)
+
+    # --- True positive: patch envelopes ---
+    def test_detects_begin_patch_envelope(self):
+        self.assertTrue(self._det("*** Begin Patch\n*** Add File: foo.py\n+x=1\n*** End Patch"))
+
+    def test_detects_end_patch_alone_within_first_120(self):
+        self.assertTrue(self._det("Here is the change:\n*** End Patch"))
+
+    def test_detects_diff_git_format(self):
+        self.assertTrue(self._det("diff --git a/foo.py b/foo.py\n--- a/foo.py\n+++ b/foo.py\n@@ -1,3 +1,3 @@"))
+
+    def test_detects_two_diff_headers(self):
+        self.assertTrue(self._det("--- a/foo.py\n+++ b/foo.py\n@@ ... @@"))
+
+    # --- True positive: raw function_call JSON ---
+    def test_detects_raw_function_call_json(self):
+        import json
+        payload = json.dumps({"type": "function_call", "name": "apply_patch", "arguments": "{}"})
+        self.assertTrue(self._det(payload))
+
+    # --- True positive: apply_patch operation JSON ---
+    def test_detects_apply_patch_operation_json(self):
+        import json
+        payload = json.dumps({"type": "create_file", "path": "x.py", "diff": "x=1"})
+        self.assertTrue(self._det(payload))
+
+    def test_detects_apply_patch_nested_operation_json(self):
+        import json
+        payload = json.dumps({"operation": {"type": "update_file", "path": "x.py", "diff": "@@+x"}})
+        self.assertTrue(self._det(payload))
+
+    # --- True positive: named tool call with arguments ---
+    def test_detects_named_web_search_call(self):
+        import json
+        payload = json.dumps({"name": "web_search", "arguments": '{"action":"search","query":"test"}'})
+        self.assertTrue(self._det(payload))
+
+    def test_detects_named_apply_patch_call(self):
+        import json
+        payload = json.dumps({"name": "apply_patch", "arguments": "{}"})
+        self.assertTrue(self._det(payload))
+
+    # --- True positive: web_search action object ---
+    def test_detects_web_search_action_search_with_query(self):
+        import json
+        payload = json.dumps({"action": "search", "query": "quantzhai"})
+        self.assertTrue(self._det(payload))
+
+    def test_detects_web_search_action_retrieve_with_url(self):
+        import json
+        payload = json.dumps({"action": "retrieve", "url": "https://example.com"})
+        self.assertTrue(self._det(payload))
+
+    def test_detects_web_search_capabilities_action(self):
+        import json
+        payload = json.dumps({"action": "capabilities"})
+        self.assertTrue(self._det(payload))
+
+    # --- False positive: should NOT detect ---
+    def test_does_not_detect_ordinary_json_config(self):
+        self.assertFalse(self._det('{"profiles": {"broad": {"categories": ["general"]}}}'))
+
+    def test_does_not_detect_prose_mentioning_search(self):
+        self.assertFalse(self._det("You can use search to find information about topics you care about."))
+
+    def test_does_not_detect_prose_mentioning_patch(self):
+        self.assertFalse(self._det("A patch is a small code change. Here is how patches work in git."))
+
+    def test_does_not_detect_empty(self):
+        self.assertFalse(self._det(""))
+
+    def test_does_not_detect_normal_code_block(self):
+        self.assertFalse(self._det("```python\ndef hello():\n    print('hello world')\n```"))
+
+    def test_does_not_detect_single_word_patch(self):
+        self.assertFalse(self._det("patch"))
+
+    def test_does_not_detect_json_explanation_not_starting_with_brace(self):
+        self.assertFalse(self._det("To call web_search, pass {\"action\": \"search\", \"query\": \"...\"}"))
+
+    def test_does_not_detect_search_result_summary(self):
+        self.assertFalse(self._det("Found 3 results for your search. The first result is about Python."))
+
+    def test_does_not_detect_small_json_without_tool_markers(self):
+        self.assertFalse(self._det('{"name": "Alice", "age": 30}'))
+
+    def test_does_not_detect_config_json_at_start(self):
+        self.assertFalse(self._det('{"max_results": 12, "timeout": 15}'))
+
+
+def _output_text_artifact_stream(artifact_text, response_id="resp_artifact_test"):
+    """Build an output_text stream that contains a raw tool/patch artifact."""
+    return [
+        _sse_block("response.created", {
+            "response": {
+                "id": response_id,
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "in_progress",
+                "model": "fake",
+                "output": [],
+            },
+        }),
+        _sse_block("response.output_item.added", {
+            "output_index": 0,
+            "item": {
+                "id": "msg_artifact",
+                "type": "message",
+                "status": "in_progress",
+                "role": "assistant",
+                "content": [],
+            },
+        }),
+        _sse_block("response.output_text.delta", {
+            "item_id": "msg_artifact",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": artifact_text,
+        }),
+        _sse_block("response.output_text.done", {
+            "item_id": "msg_artifact",
+            "output_index": 0,
+            "content_index": 0,
+            "text": artifact_text,
+        }),
+        _sse_block("response.completed", {
+            "response": {
+                "id": response_id,
+                "object": "response",
+                "created_at": 4102444800,
+                "status": "completed",
+                "model": "fake",
+                "output": [{
+                    "id": "msg_artifact",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": artifact_text}],
+                }],
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            },
+        }),
+        b"data: [DONE]\n\n",
+    ]
+
+
+class OutputTextArtifactStreamingTests(unittest.TestCase):
+    """Integration tests for output_text artifact abort in ResponsesStreamRuntime."""
+
+    def _run(self, stream_chunks, telemetry=None):
+        chunks = []
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=chunks.append,
+            stream_opener=lambda body: FakeStream(stream_chunks),
+            capture_enabled=False,
+            telemetry=telemetry,
+        )
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "test"}]}],
+        }
+        runtime.run(body, "test-model.gguf")
+        return _parse_sse_events(b"".join(chunks).decode("utf-8"))
+
+    def test_patch_envelope_aborts_before_reaching_codex(self):
+        """*** Begin Patch in output_text aborts the stream — artifact not in final answer."""
+        telemetry = TelemetryBus()
+        artifact = "*** Begin Patch\n*** Add File: foo.py\n+x=1\n*** End Patch\n"
+        events = self._run(_output_text_artifact_stream(artifact), telemetry=telemetry)
+
+        # output_text_artifact_aborted telemetry emitted
+        telem_events = telemetry.recent()
+        self.assertTrue(
+            any(e.get("type") == "output_text_artifact_aborted" for e in telem_events),
+            [e.get("type") for e in telem_events],
+        )
+        # Artifact text must not appear in any Codex-visible event
+        events_str = str(events)
+        self.assertNotIn("*** Begin Patch", events_str)
+        # Fallback message appears
+        self.assertTrue(any(
+            isinstance(p, dict) and "malformed tool payload" in str(p)
+            for _, p in events
+        ), events)
+        # Stream ends properly
+        event_types = [et for et, _ in events]
+        self.assertIn("response.completed", event_types)
+        self.assertIn(None, event_types)  # [DONE]
+
+    def test_raw_function_call_json_aborts(self):
+        """Raw function_call JSON in output_text is stopped."""
+        import json as _json
+        telemetry = TelemetryBus()
+        artifact = _json.dumps({"type": "function_call", "name": "apply_patch", "arguments": "{}"})
+        events = self._run(_output_text_artifact_stream(artifact), telemetry=telemetry)
+
+        telem_events = telemetry.recent()
+        self.assertTrue(
+            any(e.get("type") == "output_text_artifact_aborted" for e in telem_events)
+        )
+        events_str = str(events)
+        self.assertNotIn('"function_call"', events_str.replace('"response.completed"', '').replace('"output_text"', ''))
+
+    def test_raw_web_search_json_aborts(self):
+        """Raw web_search action JSON in output_text is stopped."""
+        import json as _json
+        telemetry = TelemetryBus()
+        artifact = _json.dumps({"action": "search", "query": "test query", "profile": "broad"})
+        events = self._run(_output_text_artifact_stream(artifact), telemetry=telemetry)
+
+        telem_events = telemetry.recent()
+        self.assertTrue(
+            any(e.get("type") == "output_text_artifact_aborted" for e in telem_events)
+        )
+
+    def test_telemetry_does_not_include_raw_artifact_text(self):
+        """output_text_artifact_aborted payload must not include the raw artifact."""
+        telemetry = TelemetryBus()
+        artifact = "*** Begin Patch\n*** Add File: secret.py\n+password=hunter2\n*** End Patch"
+        self._run(_output_text_artifact_stream(artifact), telemetry=telemetry)
+
+        telem_events = telemetry.recent()
+        aborted = next(
+            (e for e in telem_events if e.get("type") == "output_text_artifact_aborted"),
+            None,
+        )
+        self.assertIsNotNone(aborted)
+        self.assertNotIn("secret.py", str(aborted))
+        self.assertNotIn("hunter2", str(aborted))
+        self.assertNotIn("*** Begin Patch", str(aborted))
+
+    def test_fallback_uses_canonical_response_id(self):
+        """Fallback response.completed uses the upstream response.id from response.created."""
+        import json as _json
+        artifact = "*** Begin Patch\n*** Add File: foo.py\n+x=1\n*** End Patch"
+        events = self._run(_output_text_artifact_stream(artifact, response_id="resp_canonical_123"))
+
+        completed = next(
+            (p for et, p in events if et == "response.completed" and isinstance(p, dict)),
+            None,
+        )
+        self.assertIsNotNone(completed)
+        self.assertEqual((completed.get("response") or {}).get("id"), "resp_canonical_123")
+
+    def test_normal_output_text_streams_unchanged(self):
+        """Normal assistant output_text is not affected by the artifact detector."""
+        events = self._run(_fixture_chunks("basic_message.raw"))
+
+        # response.completed and [DONE] present
+        event_types = [et for et, _ in events]
+        self.assertIn("response.completed", event_types)
+        # output_text_artifact_aborted NOT emitted
+        self.assertNotIn("output_text_artifact_aborted", str(events))
+
+    def test_reasoning_artifact_abort_still_works(self):
+        """Existing reasoning artifact abort is not affected."""
+        telemetry = TelemetryBus()
+        from proxy.qz_responses_stream import ResponsesStreamRuntime
+        chunks = []
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="summary",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=chunks.append,
+            stream_opener=lambda body: FakeStream(_stuck_reasoning_only_stream(delta_count=4)),
+            capture_enabled=False,
+            telemetry=telemetry,
+            reasoning_only_char_limit=12,
+        )
+        runtime.run({"model": "test-model.gguf", "input": [{"type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": "test"}]}]}, "test-model.gguf")
+
+        telem_events = telemetry.recent()
+        self.assertTrue(any(e.get("type") == "reasoning_only_aborted" for e in telem_events))
+
+    def test_web_search_continuation_unchanged(self):
+        """web_search tool continuation still works after the artifact detector."""
+        requests = []
+        web_runtime = FakeWebRuntime()
+
+        def opener(body):
+            requests.append(body)
+            has_output = any(
+                isinstance(i, dict) and i.get("type") == "function_call_output"
+                for i in body.get("input") or []
+            )
+            return FakeStream(_final_message_stream() if has_output else _web_call_stream())
+
+        chunks = []
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=web_runtime,
+            chunk_writer=chunks.append,
+            stream_opener=opener,
+            capture_enabled=False,
+        )
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "test"}]}],
+            "tools": [{"type": "web_search"}],
+        }
+        runtime.run(body, "test-model.gguf")
+        stream_text = b"".join(chunks).decode("utf-8")
+
+        self.assertEqual(len(requests), 2)
+        self.assertIn("web_search_call", stream_text)
+        self.assertNotIn("output_text_artifact_aborted", stream_text)
+
+
 if __name__ == "__main__":
     unittest.main()
