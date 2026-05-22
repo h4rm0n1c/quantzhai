@@ -3925,6 +3925,152 @@ class ReasoningOnlyAbortHelperTests(unittest.TestCase):
         self.assertEqual(result, "timeout")
 
 
+class ResponseIdThreadingTests(unittest.TestCase):
+    """Tests for response.id threading through StreamRunState (Fix Pass I)."""
+
+    def _run_and_parse(self, stream_chunks, web_runtime=None, telemetry=None):
+        chunks = []
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=web_runtime or FakeWebRuntime(),
+            chunk_writer=chunks.append,
+            stream_opener=lambda body: FakeStream(stream_chunks),
+            capture_enabled=False,
+            telemetry=telemetry,
+        )
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "test"}]}],
+        }
+        runtime.run(body, "test-model.gguf")
+        return _parse_sse_events(b"".join(chunks).decode("utf-8"))
+
+    def test_no_tool_response_id_matches_created_to_completed(self):
+        """No-tool stream: response.created.id == response.completed.response.id."""
+        events = self._run_and_parse(_fixture_chunks("basic_message.raw"))
+        created = next(
+            (p for et, p in events if et == "response.created" and isinstance(p, dict)),
+            None,
+        )
+        completed = next(
+            (p for et, p in events if et == "response.completed" and isinstance(p, dict)),
+            None,
+        )
+        self.assertIsNotNone(created)
+        self.assertIsNotNone(completed)
+        created_id = (created.get("response") or {}).get("id")
+        completed_id = (completed.get("response") or {}).get("id")
+        self.assertIsNotNone(created_id)
+        self.assertEqual(created_id, completed_id)
+
+    def test_multi_hop_synthesised_terminal_uses_upstream_response_id(self):
+        """After web_search continuation, synthesised response.completed uses hop-1 response.id."""
+        requests = []
+        web_runtime = FakeWebRuntime()
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            has_tool_output = any(
+                isinstance(item, dict) and item.get("type") == "function_call_output"
+                for item in body.get("input") or []
+            )
+            return FakeStream(_final_message_stream() if has_tool_output else _web_call_stream())
+
+        events = self._run_and_parse([], web_runtime=web_runtime)
+        # Run properly with the opener
+        chunks = []
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=web_runtime,
+            chunk_writer=chunks.append,
+            stream_opener=opener,
+            capture_enabled=False,
+        )
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "test"}]}],
+            "tools": [{"type": "web_search"}],
+        }
+        runtime.run(body, "test-model.gguf")
+        events = _parse_sse_events(b"".join(chunks).decode("utf-8"))
+
+        created_events = [(et, p) for et, p in events if et == "response.created"]
+        completed_events = [(et, p) for et, p in events if et == "response.completed"]
+        self.assertEqual(len(created_events), 1)
+        self.assertEqual(len(completed_events), 1)
+
+        created_id = (created_events[0][1].get("response") or {}).get("id")
+        completed_id = (completed_events[0][1].get("response") or {}).get("id")
+        self.assertIsNotNone(created_id)
+        self.assertIsNotNone(completed_id)
+        # After tool continuation, the synthesised completed must use the upstream ID
+        self.assertEqual(created_id, completed_id)
+
+    def test_upstream_response_id_initialises_empty(self):
+        rs = StreamRunState.fresh(started_at=0.0)
+        self.assertEqual(rs.upstream_response_id, "")
+
+    def test_synthesise_response_id_returns_upstream_when_set(self):
+        rid = ResponsesStreamRuntime._synthesize_response_id("resp_from_upstream", "req1")
+        self.assertEqual(rid, "resp_from_upstream")
+
+    def test_synthesise_response_id_fallback_is_unique(self):
+        id1 = ResponsesStreamRuntime._synthesize_response_id("", "req1")
+        id2 = ResponsesStreamRuntime._synthesize_response_id("", "req1")
+        self.assertNotEqual(id1, id2)
+
+    def test_synthesise_response_id_fallback_not_bare_timestamp(self):
+        import re
+        rid = ResponsesStreamRuntime._synthesize_response_id("", "req_abc")
+        self.assertRegex(rid, r"resp_local_")
+        # Should not be just `resp_local_<digits>` — must have more content
+        self.assertFalse(re.fullmatch(r"resp_local_\d+", rid))
+
+    def test_usage_synthetic_telemetry_emitted_on_zero_usage_fallback(self):
+        """When usage is all-zeros in a fallback terminal, usage_synthetic is emitted."""
+        telemetry = TelemetryBus()
+        # reasoning abort triggers a synthesised terminal with no upstream usage
+        stream_chunks = _stuck_reasoning_only_stream(delta_count=4)
+        chunks = []
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="summary",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=chunks.append,
+            stream_opener=lambda body: FakeStream(stream_chunks),
+            capture_enabled=False,
+            telemetry=telemetry,
+            reasoning_only_char_limit=12,
+        )
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "test"}]}],
+        }
+        runtime.run(body, "test-model.gguf")
+        telem_events = telemetry.recent()
+        self.assertTrue(
+            any(e.get("type") == "usage_synthetic" for e in telem_events),
+            [e.get("type") for e in telem_events],
+        )
+        usage_evt = next(e for e in telem_events if e.get("type") == "usage_synthetic")
+        self.assertTrue((usage_evt.get("payload") or {}).get("usage_unknown"))
+
+    def test_normal_completion_no_usage_synthetic_telemetry(self):
+        """Normal upstream usage does not trigger usage_synthetic telemetry."""
+        telemetry = TelemetryBus()
+        events = self._run_and_parse(_fixture_chunks("basic_message.raw"), telemetry=telemetry)
+        telem_events = telemetry.recent()
+        self.assertFalse(any(e.get("type") == "usage_synthetic" for e in telem_events))
+
+
 class StreamRunStateTests(unittest.TestCase):
     """Unit tests for StreamRunState dataclass — #37 Slices 2H-impl/2I-impl."""
 
@@ -3987,6 +4133,10 @@ class StreamRunStateTests(unittest.TestCase):
         self.assertEqual(rs2.output_index_offset, 0)
         # Also confirm the dicts are different objects
         self.assertIsNot(rs1.final_usage, rs2.final_usage)
+
+    def test_upstream_response_id_defaults_to_empty(self):
+        rs = StreamRunState.fresh(started_at=0.0)
+        self.assertEqual(rs.upstream_response_id, "")
 
 
 class ProxyLocalTerminalSuppressionHelperTests(unittest.TestCase):

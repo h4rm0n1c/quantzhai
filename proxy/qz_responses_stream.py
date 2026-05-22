@@ -231,6 +231,7 @@ class StreamRunState:
     first_output_at: float | None = None
     final_usage: dict = field(default_factory=dict)
     output_index_offset: int = 0
+    upstream_response_id: str = ""  # response.id from first non-suppressed response.created
 
     @classmethod
     def fresh(cls, started_at: float) -> "StreamRunState":
@@ -243,6 +244,7 @@ class StreamRunState:
             first_output_at=None,
             final_usage=_normalize_response_usage({}),
             output_index_offset=0,
+            upstream_response_id="",
         )
 
 
@@ -752,6 +754,7 @@ class ResponsesStreamRuntime:
         output_index_offset=0,
         prepend_output=None,
         model=None,
+        response_id: str = "",
     ):
         if isinstance(payload, dict):
             event_type, payload = rewrite_sse_payload(
@@ -760,6 +763,7 @@ class ResponsesStreamRuntime:
                 output_index_offset=output_index_offset,
                 prepend_output=prepend_output,
                 model=model,
+                response_id=response_id,
             )
             return transform_sse_event(
                 [make_sse_block(event_type, payload)],
@@ -833,17 +837,42 @@ class ResponsesStreamRuntime:
         forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(chunks)
         return sequence, forwarded_chunks, forwarded_bytes
 
-    def _emit_completed(self, requested_model: str, output: list, summary_started: set, usage=None):
+    @staticmethod
+    def _synthesize_response_id(response_id: str, request_id: str = "") -> str:
+        """Return the upstream response.id when known, otherwise a unique fallback.
+
+        Avoids timestamp collisions by including the request_id (when available)
+        and a uuid segment. Never uses a bare _now_ts() timestamp.
+        """
+        if response_id:
+            return response_id
+        import uuid as _uuid
+        suffix = f"{request_id[:8]}_" if request_id else ""
+        return f"resp_local_{suffix}{_uuid.uuid4().hex[:12]}"
+
+    def _emit_completed(
+        self,
+        requested_model: str,
+        output: list,
+        summary_started: set,
+        usage=None,
+        response_id: str = "",
+    ):
+        usage_obj = _normalize_response_usage(usage)
+        _usage_is_synthetic = not (
+            (usage_obj.get("input_tokens") or 0) > 0
+            or (usage_obj.get("output_tokens") or 0) > 0
+        )
         completed_payload = {
             "type": "response.completed",
             "response": {
-                "id": f"resp_local_{_now_ts()}",
+                "id": self._synthesize_response_id(response_id, self.request_id),
                 "object": "response",
                 "created_at": _now_ts(),
                 "status": "completed",
                 "model": requested_model,
                 "output": output,
-                "usage": _normalize_response_usage(usage),
+                "usage": usage_obj,
             },
         }
         for out_chunk in transform_sse_event(
@@ -853,6 +882,12 @@ class ResponsesStreamRuntime:
         ):
             self._write_chunk(out_chunk)
         self._write_chunk(b"data: [DONE]\n\n")
+        if _usage_is_synthetic:
+            self._emit("usage_synthetic", {
+                "model": requested_model,
+                "usage_source": "synthetic_empty",
+                "usage_unknown": True,
+            })
 
     def _stream_fallback_message(self, item: dict, public_index: int, sequence: int) -> int:
         """Stream a pre-built message item as proper SSE events before response.completed.
@@ -920,6 +955,7 @@ class ResponsesStreamRuntime:
         call_name: str = "",
         public_index: int = 0,
         sequence: int = 0,
+        response_id: str = "",
     ) -> tuple:
         text = (
             "I stopped a private tool-call loop before it could stall the stream. "
@@ -939,7 +975,7 @@ class ResponsesStreamRuntime:
             "tool_name": call_name or "",
         })
         sequence = self._stream_fallback_message(output_item, public_index, sequence)
-        self._emit_completed(requested_model, [output_item], summary_started, usage=final_usage)
+        self._emit_completed(requested_model, [output_item], summary_started, usage=final_usage, response_id=response_id)
         return [output_item], sequence
 
     def _emit_reasoning_only_aborted(
@@ -951,6 +987,7 @@ class ResponsesStreamRuntime:
         reasoning_chars: int,
         public_index: int = 0,
         sequence: int = 0,
+        response_id: str = "",
     ) -> tuple:
         if reason == "artifact_tool_payload":
             text = (
@@ -977,7 +1014,7 @@ class ResponsesStreamRuntime:
             "reasoning_chars": int(reasoning_chars),
         })
         sequence = self._stream_fallback_message(output_item, public_index, sequence)
-        self._emit_completed(requested_model, [output_item], summary_started, usage=final_usage)
+        self._emit_completed(requested_model, [output_item], summary_started, usage=final_usage, response_id=response_id)
         return [output_item], sequence
 
     def _emit_no_output_timeout_fallback(
@@ -990,6 +1027,7 @@ class ResponsesStreamRuntime:
         obs: "StreamObservation",
         public_index: int = 0,
         sequence: int = 0,
+        response_id: str = "",
     ) -> tuple:
         """Emit a fallback terminal when no visible output appeared before deadline.
 
@@ -1014,7 +1052,7 @@ class ResponsesStreamRuntime:
         )
         self._emit("stream_terminal_classified", payload)
         sequence = self._stream_fallback_message(output_item, public_index, sequence)
-        self._emit_completed(requested_model, [output_item], summary_started, usage=final_usage)
+        self._emit_completed(requested_model, [output_item], summary_started, usage=final_usage, response_id=response_id)
         return [output_item], sequence
 
     def _finish_no_output_timeout(
@@ -1036,6 +1074,7 @@ class ResponsesStreamRuntime:
         sent_done: bool,
         sequence: int,
         stream_obs_acc: dict | None = None,
+        response_id: str = "",
     ) -> dict:
         watchdog_state.triggered = True
         timeout_acc = dict(stream_obs_acc or {"request_id": self.request_id})
@@ -1059,6 +1098,7 @@ class ResponsesStreamRuntime:
             timeout_obs,
             public_index=len(public_trace),
             sequence=sequence,
+            response_id=response_id,
         )
         public_trace.extend(timeout_items)
         self._emit_stream_completed(
@@ -1084,9 +1124,10 @@ class ResponsesStreamRuntime:
         summary_started: set,
         final_usage,
         output: list,
+        response_id: str = "",
     ) -> None:
         """Close a partial visible-output stream without replaying the answer."""
-        self._emit_completed(requested_model, output, summary_started, usage=final_usage)
+        self._emit_completed(requested_model, output, summary_started, usage=final_usage, response_id=response_id)
 
     def _finish_terminal_timeout_after_output(
         self,
@@ -1107,6 +1148,7 @@ class ResponsesStreamRuntime:
         sent_done: bool,
         sequence: int,
         stream_obs_acc: dict | None = None,
+        response_id: str = "",
     ) -> dict:
         watchdog_state.triggered = True
         timeout_acc = dict(stream_obs_acc or {"request_id": self.request_id})
@@ -1132,6 +1174,7 @@ class ResponsesStreamRuntime:
             summary_started,
             final_usage,
             public_trace,
+            response_id=response_id,
         )
         self._emit_stream_completed(
             requested_model, len(public_trace), started_at, fallback=True
@@ -1302,6 +1345,7 @@ class ResponsesStreamRuntime:
         public_index: int = 0,
         sequence: int = 0,
         prefix_output: list | None = None,
+        response_id: str = "",
     ) -> tuple:
         text = (
             "The model completed a reasoning-only response without producing a "
@@ -1325,6 +1369,7 @@ class ResponsesStreamRuntime:
             list(prefix_output or []) + [output_item],
             summary_started,
             usage=final_usage,
+            response_id=response_id,
         )
         return [output_item], sequence
 
@@ -1441,6 +1486,7 @@ class ResponsesStreamRuntime:
                                     sent_done=rs.sent_done,
                                     sequence=sequence,
                                     stream_obs_acc=hs.stream_obs_acc,
+                                    response_id=rs.upstream_response_id,
                                 )
                             if timeout_kind == "terminal":
                                 return self._finish_terminal_timeout_after_output(
@@ -1460,6 +1506,7 @@ class ResponsesStreamRuntime:
                                     sent_done=rs.sent_done,
                                     sequence=sequence,
                                     stream_obs_acc=hs.stream_obs_acc,
+                                    response_id=rs.upstream_response_id,
                                 )
                             raise
                         if not chunk:
@@ -1538,6 +1585,7 @@ class ResponsesStreamRuntime:
                                 sent_done=rs.sent_done,
                                 sequence=sequence,
                                 stream_obs_acc=hs.stream_obs_acc,
+                                response_id=rs.upstream_response_id,
                             )
                         if timeout_kind == "terminal":
                             return self._finish_terminal_timeout_after_output(
@@ -1557,6 +1605,7 @@ class ResponsesStreamRuntime:
                                 sent_done=rs.sent_done,
                                 sequence=sequence,
                                 stream_obs_acc=hs.stream_obs_acc,
+                                response_id=rs.upstream_response_id,
                             )
                         sync_terminal_read_timeout(event_parsed_at)
 
@@ -1591,6 +1640,7 @@ class ResponsesStreamRuntime:
                                     hs.tool_call_state.call_name,
                                     public_index=len(public_trace),
                                     sequence=sequence,
+                                    response_id=rs.upstream_response_id,
                                 )
                                 public_trace.extend(abort_items)
                                 self._emit_stream_completed(requested_model, len(public_trace), rs.started_at, fallback=True)
@@ -1651,6 +1701,7 @@ class ResponsesStreamRuntime:
                                     hs.reasoning_only_chars,
                                     public_index=len(public_trace),
                                     sequence=sequence,
+                                    response_id=rs.upstream_response_id,
                                 )
                                 public_trace.extend(abort_items)
                                 self._emit_stream_completed(requested_model, len(public_trace), rs.started_at, fallback=True)
@@ -1809,7 +1860,7 @@ class ResponsesStreamRuntime:
                             )
                             self._emit_stream_completed(requested_model, len(public_trace), rs.started_at)
                             completed_at = time.time()
-                            self._emit_completed(requested_model, public_trace, summary_started, usage=rs.final_usage)
+                            self._emit_completed(requested_model, public_trace, summary_started, usage=rs.final_usage, response_id=rs.upstream_response_id)
                             return self._build_result(
                                 requested_model,
                                 rs.started_at,
@@ -1926,6 +1977,7 @@ class ResponsesStreamRuntime:
                                         public_index=len(public_trace),
                                         sequence=sequence,
                                         prefix_output=public_trace,
+                                        response_id=rs.upstream_response_id,
                                     )
                                     public_trace.extend(fallback_items)
                                     self._emit_stream_completed(
@@ -1968,6 +2020,14 @@ class ResponsesStreamRuntime:
                                 )
                                 hs.event_lines = []
                                 continue
+                            # Capture the logical response.id from the first non-suppressed
+                            # response.created for this client-visible response.
+                            if event_type == "response.created" and not rs.upstream_response_id:
+                                if isinstance(payload, dict):
+                                    _resp = payload.get("response") if isinstance(payload.get("response"), dict) else {}
+                                    _rid = str(_resp.get("id") or "")
+                                    if _rid:
+                                        rs.upstream_response_id = _rid
                             rs.sent_response_start = True
 
                         if is_terminal_stream_event(event_type, payload):
@@ -1986,7 +2046,7 @@ class ResponsesStreamRuntime:
                                 )
                                 self._emit_stream_completed(requested_model, len(public_trace), rs.started_at)
                                 completed_at = time.time()
-                                self._emit_completed(requested_model, public_trace, summary_started, usage=rs.final_usage)
+                                self._emit_completed(requested_model, public_trace, summary_started, usage=rs.final_usage, response_id=rs.upstream_response_id)
                                 rs.sent_terminal = True
                                 rs.sent_done = True
                                 hs.watchdog_state.mark_terminal(event_parsed_at)
@@ -2006,7 +2066,7 @@ class ResponsesStreamRuntime:
                                 )
                                 self._emit_stream_completed(requested_model, len(public_trace), rs.started_at)
                                 completed_at = time.time()
-                                self._emit_completed(requested_model, public_trace, summary_started, usage=rs.final_usage)
+                                self._emit_completed(requested_model, public_trace, summary_started, usage=rs.final_usage, response_id=rs.upstream_response_id)
                                 rs.sent_terminal = True
                                 rs.sent_done = True
                                 hs.watchdog_state.mark_terminal(event_parsed_at)
@@ -2020,6 +2080,7 @@ class ResponsesStreamRuntime:
                                 output_index_offset=rs.output_index_offset,
                                 prepend_output=public_trace,
                                 model=requested_model,
+                                response_id=rs.upstream_response_id,
                             ))
                             self._emit_stream_event_timing(
                                 event_type,
@@ -2044,6 +2105,7 @@ class ResponsesStreamRuntime:
                             summary_started,
                             output_index_offset=rs.output_index_offset,
                             model=requested_model,
+                            response_id=rs.upstream_response_id,
                         ))
                         self._emit_stream_event_timing(
                             event_type,
@@ -2126,7 +2188,7 @@ class ResponsesStreamRuntime:
                 if public_trace and not rs.sent_terminal and not rs.sent_done:
                     self._emit_stream_completed(requested_model, len(public_trace), rs.started_at)
                     completed_at = time.time()
-                    self._emit_completed(requested_model, public_trace, summary_started, usage=rs.final_usage)
+                    self._emit_completed(requested_model, public_trace, summary_started, usage=rs.final_usage, response_id=rs.upstream_response_id)
                     rs.sent_terminal = True
                     rs.sent_done = True
 
@@ -2179,7 +2241,7 @@ class ResponsesStreamRuntime:
                 }],
             }]
         self._emit_stream_completed(requested_model, len(fallback_output), rs.started_at, fallback=True)
-        self._emit_completed(requested_model, fallback_output, summary_started, usage=rs.final_usage)
+        self._emit_completed(requested_model, fallback_output, summary_started, usage=rs.final_usage, response_id=rs.upstream_response_id)
         return self._build_result(
             requested_model,
             rs.started_at,

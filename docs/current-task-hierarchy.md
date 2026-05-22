@@ -3,6 +3,43 @@
 Date: 2026-05-22
 Status: active control sheet — Slice B audit complete; Slice B2 fixes next.
 
+## Recently completed — Fix Pass I: response.id threading and fallback usage handling
+
+```text
+Status: COMPLETE
+
+Changes:
+1. StreamRunState.upstream_response_id: new field stores the response.id from the
+   first non-suppressed response.created for the logical client-visible response.
+   Populated when response.created is forwarded (not suppressed as duplicate).
+
+2. rewrite_sse_payload: new response_id parameter rewrites response.id in forwarded
+   response.completed payloads when rs.upstream_response_id is set.
+   _transformed_chunks threads response_id through from run().
+
+3. _emit_completed: new response_id parameter uses upstream response.id when known,
+   falls back to resp_local_{request_id_prefix}_{uuid12} (UUID avoids timestamp
+   collisions; request_id prefix aids correlation).
+   All 10 call sites in fallback/abort/timeout methods updated.
+
+4. usage_synthetic telemetry: _emit_completed emits "usage_synthetic" event with
+   usage_unknown=True and usage_source="synthetic_empty" when usage is all-zeros.
+   Normal upstream completions do not trigger this event.
+
+5. response.failed synthesis in proxy_json_api: synthetic id now uses
+   resp_failed_{request_id[:8]}_{timestamp} for correlation.
+
+Rules documented:
+- response.id in response.completed always matches response.created visible to Codex.
+- Duplicate response.created on later hops does not overwrite the canonical id.
+- Zero usage in synthesised terminals: protocol-valid object emitted + telemetry marker.
+- No invented non-zero token counts.
+
+9 new tests. 3167 total pass.
+
+Next: Fix Pass J — output_text tool artifact detection.
+```
+
 ## Recently completed — Fix Pass H: B2 tool schema/coercion/advice fixes
 
 ```text

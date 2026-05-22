@@ -140,7 +140,7 @@ def public_tool_item_events(item: dict, output_index: int, sequence_start: int =
     return started_chunks + done_chunks, seq
 
 
-def rewrite_sse_payload(event_type, payload, output_index_offset: int = 0, prepend_output=None, model=None):
+def rewrite_sse_payload(event_type, payload, output_index_offset: int = 0, prepend_output=None, model=None, response_id: str = ""):
     if not isinstance(payload, dict):
         return event_type, payload
 
@@ -150,11 +150,13 @@ def rewrite_sse_payload(event_type, payload, output_index_offset: int = 0, prepe
         rewritten["output_index"] += output_index_offset
 
     response = rewritten.get("response")
-    if isinstance(response, dict) and (model or prepend_output):
+    if isinstance(response, dict) and (model or prepend_output or response_id):
         response = dict(response)
         rewritten["response"] = response
         if model:
             response["model"] = model
+        if response_id and response.get("id") and response.get("id") != response_id:
+            response["id"] = response_id
         if prepend_output and isinstance(response.get("output"), list):
             response["output"] = list(prepend_output) + response["output"]
 

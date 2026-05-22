@@ -7,6 +7,16 @@ This document is a rolling point-in-time snapshot. For the live execution order,
 read `docs/current-task-hierarchy.md`. For architecture authority, read
 `docs/current-architecture-authority.md`.
 
+## Fix Pass I: response.id threading and fallback usage handling — COMPLETE
+
+StreamRunState.upstream_response_id captures response.id from first response.created.
+rewrite_sse_payload threads it through to forwarded response.completed. _emit_completed
+uses it for synthesised terminals. UUID fallback prevents timestamp collisions.
+usage_synthetic telemetry marks all-zero usage in fallback terminals. 9 new tests.
+3167 total pass.
+
+**Next: Fix Pass J** — output_text tool artifact detection.
+
 ## Fix Pass H: B2 tool schema/coercion/advice — COMPLETE
 
 ToolCoercionResult guard (both-set/neither-set/empty rejected). WebSearchProxyToolExecutor

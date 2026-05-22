@@ -3038,7 +3038,7 @@ class RequestRouter:
                         error_payload = {
                             "type": "response.failed",
                             "response": {
-                                "id": f"resp_local_{_now_ts()}",
+                                "id": f"resp_failed_{request_id[:8]}_{_now_ts()}",
                                 "object": "response",
                                 "created_at": _now_ts(),
                                 "status": "failed",
