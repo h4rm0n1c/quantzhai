@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Print detected QuantZhai agent infrastructure and feature flags."""
+"""Print detected QuantZhai agent infrastructure and feature-grade evidence."""
 import os
 import sys
+import json
+import urllib.request
+import urllib.error
 
 # Add proxy to path
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), "proxy"))
 
 try:
-    from qz_tools import CODEX_NATIVE_TOOL_NAMES
+    from qz_tools import CODEX_NATIVE_TOOL_NAMES, synthesize_tool_error_result
     from qz_proxy_tools import DEFAULT_TOOL_REGISTRY, make_proxy_local_tool_registry
-    from qz_feedback import FeedbackVisibility, FeedbackChannel
+    from qz_feedback import FeedbackVisibility, FeedbackChannel, render_coercion_error
     from qz_native_tool_output import CLASSIFIERS
     from qz_stream_watchdog import STREAM_NO_OUTPUT_TIMEOUT_S, STREAM_TERMINAL_TIMEOUT_S
 except ImportError as exc:
@@ -19,44 +22,105 @@ except ImportError as exc:
 def print_section(title):
     print(f"\n=== {title} ===")
 
+def report(label, status, msg=""):
+    color = {
+        "PASS": "\033[92m",
+        "WARN": "\033[93m",
+        "FAIL": "\033[91m",
+        "UNKNOWN": "\033[94m",
+    }.get(status, "")
+    reset = "\033[0m" if color else ""
+    print(f"{label:35} : {color}{status}{reset} {msg}")
+
+def check_file_contains(path, pattern):
+    if not os.path.exists(path):
+        return False
+    with open(path, 'r') as f:
+        return pattern in f.read()
+
 def main():
-    print("QuantZhai Agent Infrastructure Stocktake")
+    print("QuantZhai Agent Infrastructure Stocktake (Evidence-Grade)")
     
-    print_section("Feature Flags")
+    print_section("Feature Flags (Environment)")
     flags = [
         "QZ_BRAINCASE_TOOLS_ENABLED",
-        "QZ_REASONING_ONLY_TIMEOUT_S",
-        "QZ_PRIVATE_TOOL_CALL_TIMEOUT_S",
+        "QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED",
         "QZ_STREAM_NO_OUTPUT_TIMEOUT_S",
         "QZ_STREAM_TERMINAL_TIMEOUT_S",
-        "QZ_DOCKER_CMD",
-        "QZ_CAPTURE_MODE",
+        "SEARXNG_AGENT_API_BASE",
     ]
     for flag in flags:
         val = os.environ.get(flag, "(unset)")
-        print(f"{flag:30} : {val}")
+        print(f"{flag:35} : {val}")
 
-    print_section("Tool Registry")
-    print(f"Adapters in DEFAULT_TOOL_REGISTRY: {[a.upstream_name for a in DEFAULT_TOOL_REGISTRY.adapters]}")
+    print_section("Code Wiring Evidence")
     
-    # Check proxy-local tools
-    registry = make_proxy_local_tool_registry(None)
-    print(f"Proxy-local tool names: {list(registry.function_names)}")
+    # 1. Native Classifier Wiring
+    router_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "proxy", "qz_request_router.py")
+    uses_signals = check_file_contains(router_path, "classify_native_tool_output_signals")
+    if uses_signals:
+        report("Native Classifier (SignalDecision)", "PASS", "qz_request_router wires structured signals")
+    else:
+        report("Native Classifier (SignalDecision)", "WARN", "qz_request_router uses legacy tuples")
+
+    # 2. Tool Error Delegation
+    # We check if synthesize_tool_error_result calls render_coercion_error
+    # In reality it doesn't currently, it's a duplicate.
+    tools_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "proxy", "qz_tools.py")
+    delegates = check_file_contains(tools_path, "render_coercion_error")
+    if delegates:
+        report("Tool Error Delegation", "PASS", "qz_tools delegates to qz_feedback")
+    else:
+        report("Tool Error Delegation", "WARN", "qz_tools contains duplicate error logic")
+
+    # 3. Watchdog Defaults
+    if STREAM_NO_OUTPUT_TIMEOUT_S > 0:
+        report("Stream Watchdog (No-Output)", "PASS", f"Enabled ({STREAM_NO_OUTPUT_TIMEOUT_S}s)")
+    else:
+        report("Stream Watchdog (No-Output)", "WARN", "Disabled by default (0s)")
+
+    if STREAM_TERMINAL_TIMEOUT_S > 0:
+        report("Stream Watchdog (Terminal)", "PASS", f"Enabled ({STREAM_TERMINAL_TIMEOUT_S}s)")
+    else:
+        report("Stream Watchdog (Terminal)", "WARN", "Disabled by default (0s)")
+
+    # 4. BrainCase Gating
+    bc_enabled = os.environ.get("QZ_BRAINCASE_TOOLS_ENABLED", "0") == "1"
+    if bc_enabled:
+        report("BrainCase Tools", "PASS", "Active (Enabled via ENV)")
+    else:
+        report("BrainCase Tools", "PASS", "Inactive (Gated as expected)")
+
+    print_section("Live Capability Checks")
+    proxy_url = f"http://{os.environ.get('QZ_PROXY_HOST', '127.0.0.1')}:{os.environ.get('QZ_PROXY_PORT', '18180')}"
     
-    print_section("Codex-Native Tools")
-    print(f"Native tool names: {sorted(list(CODEX_NATIVE_TOOL_NAMES))}")
+    # Try web-search capabilities
+    try:
+        with urllib.request.urlopen(f"{proxy_url}/qz/web-search/capabilities", timeout=2) as r:
+            data = json.loads(r.read().decode('utf-8'))
+            if data.get("ok"):
+                has_guidance = "provider_guidance" in data
+                status = "PASS" if has_guidance else "WARN"
+                report("Web Search Capabilities", status, "Live and reachable" + (" (w/ guidance)" if has_guidance else " (no guidance)"))
+            else:
+                report("Web Search Capabilities", "FAIL", data.get("error", "Unknown error"))
+    except urllib.error.URLError:
+        report("Web Search Capabilities", "UNKNOWN", f"Proxy unreachable at {proxy_url}")
+    except Exception as e:
+        report("Web Search Capabilities", "FAIL", str(e))
 
-    print_section("Native Tool Classifiers")
-    for c in CLASSIFIERS:
-        print(f"- {c['id']:30} -> {c['event']} (triggers: {c['triggers']})")
-
-    print_section("Watchdog Configuration")
-    print(f"No-output timeout (S): {STREAM_NO_OUTPUT_TIMEOUT_S}")
-    print(f"Terminal timeout (S) : {STREAM_TERMINAL_TIMEOUT_S}")
-
-    print_section("Feedback Channels")
-    print(f"Visibilities: {[v.value for v in FeedbackVisibility]}")
-    print(f"Channels: {[c.value for c in FeedbackChannel]}")
+    # Try SearxNG guidance if configured
+    searx_base = os.environ.get("SEARXNG_AGENT_API_BASE")
+    if searx_base:
+        try:
+            with urllib.request.urlopen(f"{searx_base}/guidance", timeout=2) as r:
+                report("SearxNG Guidance Endpoint", "PASS", "Reachable")
+        except urllib.error.URLError:
+            report("SearxNG Guidance Endpoint", "FAIL", f"Unreachable at {searx_base}")
+        except Exception as e:
+            report("SearxNG Guidance Endpoint", "FAIL", str(e))
+    else:
+        report("SearxNG Guidance Endpoint", "UNKNOWN", "SEARXNG_AGENT_API_BASE not set")
 
     print("\nStocktake complete.")
 
