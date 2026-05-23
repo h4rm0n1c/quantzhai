@@ -400,6 +400,13 @@ class SignalWrapperTests(unittest.TestCase):
         self.assertIn("tool_sandbox_denied", event_types)
         self.assertIn("tool_connection_failed", event_types)
 
+    def test_connection_failed_confidence_is_medium(self):
+        from proxy.qz_native_tool_output import classify_native_tool_output_signals
+        items = [_fco("call_b", _CONN_REFUSED_OUTPUT)]
+        results = classify_native_tool_output_signals(items)
+        self.assertEqual(results[0].event_type, "tool_connection_failed")
+        self.assertEqual(results[0].confidence, "medium")
+
     def test_classify_signals_preserves_readonly_check(self):
         from proxy.qz_native_tool_output import classify_native_tool_output_signals
         # No mutation of input

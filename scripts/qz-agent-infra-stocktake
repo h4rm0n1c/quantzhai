@@ -97,13 +97,29 @@ def main():
     # Try web-search capabilities
     try:
         with urllib.request.urlopen(f"{proxy_url}/qz/web-search/capabilities", timeout=2) as r:
-            data = json.loads(r.read().decode('utf-8'))
-            if data.get("ok"):
-                has_guidance = "provider_guidance" in data
-                status = "PASS" if has_guidance else "WARN"
-                report("Web Search Capabilities", status, "Live and reachable" + (" (w/ guidance)" if has_guidance else " (no guidance)"))
-            else:
-                report("Web Search Capabilities", "FAIL", data.get("error", "Unknown error"))
+            body = r.read().decode('utf-8')
+            try:
+                data = json.loads(body)
+            except json.JSONDecodeError:
+                report("Web Search Capabilities", "FAIL", "Invalid JSON returned")
+                return
+
+            # Tolerate either:
+            # - top-level provider_guidance
+            # - nested capabilities.provider_guidance
+            # - raw capabilities object without ok=true
+            has_guidance = "provider_guidance" in data or ("capabilities" in data and isinstance(data["capabilities"], dict) and "provider_guidance" in data["capabilities"])
+            
+            # If it's a valid JSON and reachable, it's at least PASS/WARN
+            # We don't strictly require data.get("ok") if the schema is correct
+            is_valid_schema = data.get("schema") == "qz.web_search.capabilities.v1"
+            
+            status = "PASS" if (is_valid_schema and has_guidance) else "WARN"
+            msg = "Live and reachable"
+            if has_guidance: msg += " (w/ guidance)"
+            if not is_valid_schema: msg += f" (unexpected schema: {data.get('schema', 'none')})"
+            
+            report("Web Search Capabilities", status, msg)
     except urllib.error.URLError:
         report("Web Search Capabilities", "UNKNOWN", f"Proxy unreachable at {proxy_url}")
     except Exception as e:

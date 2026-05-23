@@ -235,5 +235,71 @@ class WebSearchCapabilitiesEndpointTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
 
 
+class SignalDecisionEmissionTests(unittest.TestCase):
+    """Tests for RequestRouter._emit_signal_decisions helper."""
+
+    def setUp(self):
+        from proxy.qz_feedback import FeedbackChannel, FeedbackVisibility, SignalDecision
+        self.FeedbackChannel = FeedbackChannel
+        self.FeedbackVisibility = FeedbackVisibility
+        self.SignalDecision = SignalDecision
+
+    class FakeTelemetry:
+        def __init__(self):
+            self.emitted = []
+
+        def emit(self, event_type, payload):
+            self.emitted.append((event_type, payload))
+
+    class FakeHandler:
+        def __init__(self):
+            self.telemetry = SignalDecisionEmissionTests.FakeTelemetry()
+
+    def test_emits_telemetry_for_telemetry_channel_signal(self):
+        handler = self.FakeHandler()
+        router = RequestRouter(handler)
+        signal = self.SignalDecision(
+            event_type="test_event",
+            payload={"key": "val"},
+            visibility=self.FeedbackVisibility.OPERATOR,
+            channel=self.FeedbackChannel.TELEMETRY,
+        )
+
+        router._emit_signal_decisions([signal], request_id="req_123")
+
+        self.assertEqual(len(handler.telemetry.emitted), 1)
+        event_type, payload = handler.telemetry.emitted[0]
+        self.assertEqual(event_type, "test_event")
+        self.assertEqual(payload["key"], "val")
+        self.assertEqual(payload["request_id"], "req_123")
+
+    def test_ignores_non_telemetry_channel_signals(self):
+        handler = self.FakeHandler()
+        router = RequestRouter(handler)
+        signal = self.SignalDecision(
+            event_type="ignored_event",
+            payload={},
+            visibility=self.FeedbackVisibility.MODEL,
+            channel=self.FeedbackChannel.FUNCTION_CALL_OUTPUT,
+        )
+
+        router._emit_signal_decisions([signal])
+
+        self.assertEqual(len(handler.telemetry.emitted), 0)
+
+    def test_handles_empty_signal_list(self):
+        handler = self.FakeHandler()
+        router = RequestRouter(handler)
+        router._emit_signal_decisions([])
+        self.assertEqual(len(handler.telemetry.emitted), 0)
+
+    def test_robust_to_malformed_signals(self):
+        handler = self.FakeHandler()
+        router = RequestRouter(handler)
+        # Should not crash on None or non-SignalDecision items
+        router._emit_signal_decisions([None, "not-a-signal", 42])
+        self.assertEqual(len(handler.telemetry.emitted), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

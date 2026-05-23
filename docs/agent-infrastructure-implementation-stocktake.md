@@ -58,9 +58,11 @@ For each major claim, this index links to the proof of implementation and valida
     - Source: `proxy/qz_native_tool_output.py`
     - Tests: `tests/test_qz_native_tool_output.py`
     - Smoke: `scripts/qz-live-smoke` (Check "denied native command" section)
-- **SignalDecision wrapper used**:
+- **SignalDecision native classifier path wired**:
     - Source: `proxy/qz_native_tool_output.py` (`classify_native_tool_output_signals`)
-    - Router: `proxy/qz_request_router.py` (Imports and uses `classify_native_tool_output_signals`)
+    - Router: `proxy/qz_request_router.py` (Imports and uses `classify_native_tool_output_signals` in `proxy_json_api`)
+    - Tests: `tests/test_qz_native_tool_output.py` (`SignalWrapperTests`), `tests/test_qz_request_router.py` (`SignalDecisionEmissionTests`)
+    - Proof of legacy compatibility: `tests/test_qz_native_tool_output.py` (`ClassifyNativeToolOutputsTests`) still uses legacy API.
 - **Web_search provider guidance**:
     - Source: `proxy/qz_tool_web.py` (`_fetch_provider_guidance_cached`)
     - Capabilities: `GET /qz/web-search/capabilities`
@@ -105,8 +107,7 @@ QuantZhai is evaluated against three major architectural patterns to identify ga
 ## D. Recommended Next Fix Passes (Evidence-Based)
 
 1. **Live validate provider_guidance**: Verify `qz-live-smoke` confirms guidance appearing in capabilities.
-2. **Wire SignalDecision**: Update `qz_request_router.py` to use `classify_native_tool_output_signals`.
+2. **Model-visible Sandbox Advisory**: Inject model-visible advisory results for `tool_sandbox_denied`. This is NOT yet implemented; the current wiring is telemetry-only for stability.
 3. **Enrich Coercion Telemetry**: Add specific `tool` and `call_id` fields to all coercion events.
-4. **Sandbox Advisory**: Inject model-visible advice for `tool_sandbox_denied` only after Pass 2 is stable.
-5. **Watchdog Smoke**: Add a dedicated timeout smoke test before enabling default timeouts.
-6. **BrainCase Isolation**: Maintain BrainCase as a feature-flagged experimental path.
+4. **Watchdog Smoke**: Add a dedicated timeout smoke test before enabling default timeouts.
+5. **BrainCase Isolation**: Maintain BrainCase as a feature-flagged experimental path.
