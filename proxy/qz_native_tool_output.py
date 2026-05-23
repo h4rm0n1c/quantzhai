@@ -90,7 +90,9 @@ def classify_native_tool_outputs(
 ) -> List[Tuple[str, Dict[str, Any]]]:
     """Scan incoming request input items for classifiable native tool output patterns.
 
-    Returns a list of (event_type, payload_dict) tuples.
+    Legacy/compatibility helper. Returns a list of (event_type, payload_dict) tuples.
+    Newer callers should prefer classify_native_tool_output_signals().
+
     Each payload includes: call_id, tool, classifier, matched_string,
     exit_code, output_preview, confidence.
 
@@ -145,13 +147,11 @@ def classify_native_tool_output_signals(
 ) -> List[Any]:
     """Classify native tool outputs as SignalDecision objects.
 
-    A structured alternative to classify_native_tool_outputs() that returns
-    SignalDecision instances instead of raw (event_type, payload) tuples.
+    Canonical router-facing helper. Returns a list of SignalDecision instances
+    instead of raw (event_type, payload) tuples.
+
     All current classifiers remain operator-visible / telemetry-only — no
     model injection is performed by this function.
-
-    classify_native_tool_outputs() is preserved unchanged for compatibility
-    with existing callers in qz_request_router.py.
     """
     try:
         from .qz_feedback import FeedbackChannel, FeedbackVisibility, SignalDecision

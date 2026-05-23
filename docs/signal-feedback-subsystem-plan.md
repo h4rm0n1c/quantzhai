@@ -75,19 +75,21 @@ render_coercion_error(call, message) -> dict
   same output shape as synthesize_tool_error_result()
 ```
 
-## Phase 1: Native tool-output classifier wrapped (done — #42)
+## Phase 1: Native tool-output classifier wired (done — #42, #71)
 
-`proxy/qz_native_tool_output.py` gains:
+`proxy/qz_native_tool_output.py` provides:
 
 ```python
 classify_native_tool_output_signals(input_items) -> list[SignalDecision]
 ```
 
-Delegates to the unchanged `classify_native_tool_outputs()` and wraps each
-result in a `SignalDecision` with `OPERATOR / TELEMETRY`. No model injection.
+Delegates to `classify_native_tool_outputs()` and wraps each result in a
+`SignalDecision` with `OPERATOR / TELEMETRY`. No model injection.
 
-`classify_native_tool_outputs()` preserved unchanged — `qz_request_router.py`
-still calls it and emits telemetry directly.
+`qz_request_router.py` now calls `classify_native_tool_output_signals()` in its
+hot path and emits telemetry via the structured signals.
+
+`classify_native_tool_outputs()` preserved for compatibility.
 
 ## Phase 2: Tool coercion compatibility note (done — #42)
 

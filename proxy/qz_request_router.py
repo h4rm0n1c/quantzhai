@@ -6,6 +6,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any, List
 
 RUNTIME_METRICS_SCHEMA = "qz.runtime.metrics.v1"
 PROMPT_CONTRACT_SCHEMA = "qz.prompt.contract.v1"
@@ -43,7 +44,7 @@ try:
     from .qz_sse import _normalize_response_usage, make_sse_block
     from .qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
     from .qz_codex_metadata import extract_codex_request_context
-    from .qz_native_tool_output import classify_native_tool_outputs
+    from .qz_native_tool_output import classify_native_tool_output_signals
     from .qz_file_signal import record_tool_call, seed_repeated_read_state
     from .qz_responses_error import build_responses_error_payload, is_deprecated_alias
     from .qz_control_plane import build_control_plane_status
@@ -98,7 +99,7 @@ except ImportError:
     from qz_sse import _normalize_response_usage, make_sse_block
     from qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
     from qz_codex_metadata import extract_codex_request_context
-    from qz_native_tool_output import classify_native_tool_outputs
+    from qz_native_tool_output import classify_native_tool_output_signals
     from qz_file_signal import record_tool_call, seed_repeated_read_state
     from qz_responses_error import build_responses_error_payload, is_deprecated_alias
     from qz_control_plane import build_control_plane_status
@@ -275,6 +276,30 @@ class _MultiRawLog:
 class RequestRouter:
     def __init__(self, handler):
         self.handler = handler
+
+    def _emit_signal_decisions(self, signals: List[Any], request_id: str = "") -> None:
+        """Emit telemetry for SignalDecision objects.
+
+        Only OPERATOR/TELEMETRY signals are processed in this pass.
+        No model-visible injection is performed.
+        """
+        try:
+            from .qz_feedback import FeedbackChannel
+        except ImportError:
+            from qz_feedback import FeedbackChannel
+
+        for signal in signals:
+            try:
+                # Visibility/Channel check
+                # For now we only support TELEMETRY in this pass.
+                # SignalDecision.channel is an Enum (FeedbackChannel).
+                if signal.channel == FeedbackChannel.TELEMETRY:
+                    payload = dict(signal.payload)
+                    if request_id:
+                        payload["request_id"] = request_id
+                    self.handler.telemetry.emit(signal.event_type, payload)
+            except Exception:
+                pass
 
     def _proxy_startup_ready(self) -> bool:
         ready_fn = getattr(self.handler, "_startup_ready", None)
@@ -2887,11 +2912,8 @@ class RequestRouter:
                 # output text that classifiers need. Read-only: no mutation.
                 _raw_input = body.get("input")
                 if isinstance(_raw_input, list):
-                    for _obs_event, _obs_payload in classify_native_tool_outputs(_raw_input):
-                        try:
-                            self.handler.telemetry.emit(_obs_event, {**_obs_payload, "request_id": request_id})
-                        except Exception:
-                            pass
+                    signals = classify_native_tool_output_signals(_raw_input)
+                    self._emit_signal_decisions(signals, request_id=request_id)
 
                 body = self.handler._model_router().inject_runtime_state(body, client_model)
                 ensure_apply_patch_tool_policy(body, overwrite=True)

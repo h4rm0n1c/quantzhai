@@ -31,7 +31,7 @@ This document provides a comprehensive inventory of the agent infrastructure imp
 | **native conn-refused** | unit_test | yes | none | tool_connection_failed | no model-visible advice | — |
 | **native telemetry wiring** | source | yes | none | telemetry | none | — |
 | **native model advice** | source | partial | turn harness (static) | none | not live-agent-validated | inject advisory result |
-| **SignalDecision types** | source | no | none | none | unused in main loop | wire into router |
+| **SignalDecision types** | source | yes | none | none | none | — |
 | **render_coercion_error** | unit_test | yes | function_call_output | none | none | — |
 | **render_advisory** | unit_test | yes | function_call_output | none | none | — |
 | **empty-answer repair** | live_smoke | yes | none (next hop) | repair telemetry | no model message | — |
@@ -58,9 +58,9 @@ For each major claim, this index links to the proof of implementation and valida
     - Source: `proxy/qz_native_tool_output.py`
     - Tests: `tests/test_qz_native_tool_output.py`
     - Smoke: `scripts/qz-live-smoke` (Check "denied native command" section)
-- **SignalDecision wrapper unused**:
+- **SignalDecision wrapper used**:
     - Source: `proxy/qz_native_tool_output.py` (`classify_native_tool_output_signals`)
-    - Router: `proxy/qz_request_router.py` (Still imports `classify_native_tool_outputs`)
+    - Router: `proxy/qz_request_router.py` (Imports and uses `classify_native_tool_output_signals`)
 - **Web_search provider guidance**:
     - Source: `proxy/qz_tool_web.py` (`_fetch_provider_guidance_cached`)
     - Capabilities: `GET /qz/web-search/capabilities`
