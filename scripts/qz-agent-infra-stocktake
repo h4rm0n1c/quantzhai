@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""Print detected QuantZhai agent infrastructure and feature flags."""
+import os
+import sys
+
+# Add proxy to path
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), "proxy"))
+
+try:
+    from qz_tools import CODEX_NATIVE_TOOL_NAMES
+    from qz_proxy_tools import DEFAULT_TOOL_REGISTRY, make_proxy_local_tool_registry
+    from qz_feedback import FeedbackVisibility, FeedbackChannel
+    from qz_native_tool_output import CLASSIFIERS
+    from qz_stream_watchdog import STREAM_NO_OUTPUT_TIMEOUT_S, STREAM_TERMINAL_TIMEOUT_S
+except ImportError as exc:
+    print(f"Error importing proxy modules: {exc}")
+    sys.exit(1)
+
+def print_section(title):
+    print(f"\n=== {title} ===")
+
+def main():
+    print("QuantZhai Agent Infrastructure Stocktake")
+    
+    print_section("Feature Flags")
+    flags = [
+        "QZ_BRAINCASE_TOOLS_ENABLED",
+        "QZ_REASONING_ONLY_TIMEOUT_S",
+        "QZ_PRIVATE_TOOL_CALL_TIMEOUT_S",
+        "QZ_STREAM_NO_OUTPUT_TIMEOUT_S",
+        "QZ_STREAM_TERMINAL_TIMEOUT_S",
+        "QZ_DOCKER_CMD",
+        "QZ_CAPTURE_MODE",
+    ]
+    for flag in flags:
+        val = os.environ.get(flag, "(unset)")
+        print(f"{flag:30} : {val}")
+
+    print_section("Tool Registry")
+    print(f"Adapters in DEFAULT_TOOL_REGISTRY: {[a.upstream_name for a in DEFAULT_TOOL_REGISTRY.adapters]}")
+    
+    # Check proxy-local tools
+    registry = make_proxy_local_tool_registry(None)
+    print(f"Proxy-local tool names: {list(registry.function_names)}")
+    
+    print_section("Codex-Native Tools")
+    print(f"Native tool names: {sorted(list(CODEX_NATIVE_TOOL_NAMES))}")
+
+    print_section("Native Tool Classifiers")
+    for c in CLASSIFIERS:
+        print(f"- {c['id']:30} -> {c['event']} (triggers: {c['triggers']})")
+
+    print_section("Watchdog Configuration")
+    print(f"No-output timeout (S): {STREAM_NO_OUTPUT_TIMEOUT_S}")
+    print(f"Terminal timeout (S) : {STREAM_TERMINAL_TIMEOUT_S}")
+
+    print_section("Feedback Channels")
+    print(f"Visibilities: {[v.value for v in FeedbackVisibility]}")
+    print(f"Channels: {[c.value for c in FeedbackChannel]}")
+
+    print("\nStocktake complete.")
+
+if __name__ == "__main__":
+    main()
