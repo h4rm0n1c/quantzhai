@@ -50,6 +50,7 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 8f3. [Search provider boundary audit](search-provider-boundary-audit.md) — QuantZhai/searchengines-private boundary: KEEP_GENERIC/KEEP_FALLBACK/MOVE_TO_PROVIDER_GUIDANCE/REMOVE_LEAK classification, /guidance schema, boundary rules.
 8g. [End-to-end smoke plan](end-to-end-smoke-plan.md) — Slice G: 37-test smoke matrix, command blocks, expected outputs, failure classification, fix-pass ordering H–M, result template.
 8h. [End-to-end smoke results](end-to-end-smoke-results.md) — Fix Pass M: automated smoke results (YELLOW). 14 PASS, 1 FAIL (stale proxy), 16 SKIP. Operator live run required for GREEN.
+8i. [Codex-visible tool lifecycle audit](codex-visible-tool-lifecycle-audit.md) — Source-grounded audit of which SSE events reach Codex per tool-call path, suppression inventory, gaps, risks, and recommended implementation slices.
 9. [Master stabilisation plan](master-stabilisation-plan.md) — broader stabilisation map; current authority and task hierarchy win for state/memory terms.
 10. [Progress snapshot](progress-snapshot.md) — short overall percentage/status view.
 11. [Codex/QuantZhai bidirectional signal map](codex-quantzhai-bidirectional-signal-map.md) — complete source-grounded map of signals in all directions, safety matrix, gaps, and next targets.
@@ -104,6 +105,7 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 | Benchmarking | [QuantZhai benchmark harness](quantzhai-benchmark-harness.md) | Running fixed prompts, collecting artifacts, and comparing profile compression/results. |
 | Runtime debugging | [Runtime observability notes](runtime-observability-notes.md) | Captures, logs, thoughts stream, telemetry, and runtime inspection. |
 | Telemetry pattern | [Provenance telemetry pattern](patterns/provenance-telemetry.md) | Doctrine for source/confidence/subtractive fields in telemetry and status components. Use for any new telemetry/status work. |
+| Tool lifecycle | [Codex-visible tool lifecycle audit](codex-visible-tool-lifecycle-audit.md) | Source-grounded audit of Codex-visible SSE events per tool-call path, suppression inventory, event shapes, gaps, risks, and implementation slices. |
 | Tool policy | [Tool policy audit](tool-policy-audit.md) | #59 Slice A-audit: coercion/advice policy map for all tool types, budget enforcement gaps, telemetry coverage, handoff to #60/#61/#62. |
 | Local search inventory | [Local SearXNG inventory](web-search-local-searxng-inventory.md) | #60 Slice D0: engine taxonomy, Agent API retrieval surface, profile gap analysis, Slice D annotation approach. |
 | Retrieve action design | [web_search retrieve action design](web-search-retrieve-action-design.md) | #63 Slice A: contract for retrieve action, two upstream response shapes, normalization, budget, telemetry, cache, test plan. |
@@ -381,6 +383,7 @@ docs/fixtures/braincase/source-refs/
 docs/fixtures/braincase/state-records/
 docs/fixtures/braincase/render-packets/
 docs/state-and-memory-architecture-plan.md
+docs/codex-visible-tool-lifecycle-audit.md
 ```
 
 ## Maintenance rule
