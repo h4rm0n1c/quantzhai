@@ -1,7 +1,61 @@
 # QuantZhai Current Task Hierarchy
 
-Date: 2026-05-22
-Status: active control sheet — web search provider boundary decoupling complete.
+Date: 2026-05-25
+Status: active control sheet — searchengines Agent API made canonical web_search backend.
+
+## Recently completed — Use searchengines Agent API facade as canonical web_search backend (2026-05-25)
+
+```text
+Status: COMPLETE
+
+Problem: web_search was hitting http://10.0.42.222:8085 (raw SearXNG, no /guidance)
+because SEARXNG_BASE_URL was set to raw SearXNG, and the proxy/smoke used only that var.
+
+Changes:
+1. proxy/qz_search_config.py: added QZ_SEARCHENGINES_DEFAULT_BASE_URL constant and
+   resolve_searchengines_base_url(env) helper.
+   Priority: QZ_SEARCHENGINES_BASE_URL > SEARXNG_AGENT_API_BASE > SEARXNG_BASE_URL
+   > http://127.0.0.1:8890. load_search_config() env-override block now uses same
+   priority chain.
+
+2. proxy/quantzhai_proxy.py: --searxng-base-url default now calls
+   _resolve_searchengines_base_url() (not plain SEARXNG_BASE_URL). Fallback in
+   _initialize_proxy_state also calls resolver.
+
+3. proxy/qz_tool_web.py: build_web_search_capabilities() providers key renamed
+   "searxng" → "searchengines_agent"; added guidance_available field.
+   provider_id changed from "searxng" to "searchengines-private" (consistent
+   with guidance response).
+
+4. scripts/qz-env: added QZ_SEARCHENGINES_BASE_URL and SEARXNG_AGENT_API_BASE to
+   _qz_env_names override array and default exports. SEARXNG_BASE_URL now defaults
+   to QZ_SEARCHENGINES_BASE_URL (8890) instead of being independently set.
+
+5. scripts/qz-web-search-lifecycle-smoke: AGENT_BASE now always resolved from
+   QZ_SEARCHENGINES_BASE_URL > SEARXNG_AGENT_API_BASE > 8890 default (never
+   SEARXNG_BASE_URL which may point to raw SearXNG). Removed unreachable
+   if [[ -z "$AGENT_BASE" ]] guard from Section B.
+
+6. scripts/qz-agent-infra-stocktake: guidance check now uses same 4-step priority
+   resolution; labeled "Searchengines Agent Guidance"; shows resolved URL. Feature
+   flag section now shows QZ_SEARCHENGINES_BASE_URL and SEARXNG_AGENT_API_BASE.
+
+7. tests/test_qz_tool_web.py: updated 3 tests asserting providers["searxng"] →
+   providers["searchengines_agent"].
+
+8. tests/test_qz_search_config.py: added SearchenginesBaseUrlResolutionTests (8 tests)
+   covering all resolution priority combinations and load_search_config integration.
+
+9. docs/web-search-provider-architecture-audit.md: updated Section 10 capabilities
+   schema to show searchengines_agent key (not searxng) with guidance_available field.
+
+241 tests pass. bash -n on smoke script: clean.
+
+Key invariant: QuantZhai never directly addresses raw SearXNG. All outbound
+search/guidance/retrieve calls go to the searchengines Agent API facade.
+SEARXNG_BASE_URL remains available for backward compat but is now treated as an
+alias for the Agent API facade, not raw SearXNG.
+```
 
 ## P0/P1: Web Search Provider Boundary Decoupling — COMPLETE
 

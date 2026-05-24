@@ -47,6 +47,8 @@ def main():
         "QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED",
         "QZ_STREAM_NO_OUTPUT_TIMEOUT_S",
         "QZ_STREAM_TERMINAL_TIMEOUT_S",
+        "QZ_SEARCHENGINES_BASE_URL",
+        "SEARXNG_AGENT_API_BASE",
         "SEARXNG_BASE_URL",
     ]
     for flag in flags:
@@ -183,19 +185,26 @@ def main():
     except Exception as e:
         report("Web Search Capabilities", "FAIL", str(e))
 
-    # Try SearxNG guidance if configured.
-    # Uses SEARXNG_BASE_URL (the canonical env var from qz-env / proxy config).
-    searx_base = os.environ.get("SEARXNG_BASE_URL") or os.environ.get("SEARXNG_AGENT_API_BASE")
-    if searx_base:
-        try:
-            with urllib.request.urlopen(f"{searx_base.rstrip('/')}/guidance", timeout=2) as r:
-                report("SearxNG Guidance Endpoint", "PASS", f"Reachable at {searx_base}")
-        except urllib.error.URLError:
-            report("SearxNG Guidance Endpoint", "FAIL", f"Unreachable at {searx_base}")
-        except Exception as e:
-            report("SearxNG Guidance Endpoint", "FAIL", str(e))
-    else:
-        report("SearxNG Guidance Endpoint", "UNKNOWN", "SEARXNG_BASE_URL not set")
+    # Try Searchengines Agent API /guidance.
+    # Resolution priority mirrors resolve_searchengines_base_url():
+    # QZ_SEARCHENGINES_BASE_URL > SEARXNG_AGENT_API_BASE > SEARXNG_BASE_URL > 127.0.0.1:8890.
+    # We do NOT report "not set" — qz-env always exports QZ_SEARCHENGINES_BASE_URL
+    # with the 8890 default, so a missing value means an import error upstream.
+    def _resolve_agent_api_base():
+        for key in ("QZ_SEARCHENGINES_BASE_URL", "SEARXNG_AGENT_API_BASE", "SEARXNG_BASE_URL"):
+            val = (os.environ.get(key) or "").strip()
+            if val:
+                return val.rstrip("/")
+        return "http://127.0.0.1:8890"
+
+    agent_base = _resolve_agent_api_base()
+    try:
+        with urllib.request.urlopen(f"{agent_base}/guidance", timeout=2) as r:
+            report("Searchengines Agent Guidance", "PASS", f"Reachable at {agent_base}")
+    except urllib.error.URLError:
+        report("Searchengines Agent Guidance", "FAIL", f"Unreachable at {agent_base}")
+    except Exception as e:
+        report("Searchengines Agent Guidance", "FAIL", str(e))
 
     print("\nStocktake complete.")
 

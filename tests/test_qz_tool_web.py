@@ -2420,7 +2420,7 @@ class WebSearchProviderDiagnosticsTests(unittest.TestCase):
         self.assertIn("providers", caps,
                       "capabilities must have a providers section")
         providers = caps["providers"]
-        self.assertIn("searxng", providers)
+        self.assertIn("searchengines_agent", providers)
         self.assertIn("agent_retrieve", providers)
         # fse_direct is searchengines-private — must not appear unless provider guidance adds it.
         self.assertNotIn("fse_direct", providers,
@@ -2440,16 +2440,16 @@ class WebSearchProviderDiagnosticsTests(unittest.TestCase):
 
         runtime_no_url = WebSearchRuntime(search_config_profiles={})
         caps_no_url = build_web_search_capabilities(runtime_no_url)
-        self.assertFalse(caps_no_url["providers"]["searxng"]["available"],
-                         "searxng.available must be False without a base URL")
+        self.assertFalse(caps_no_url["providers"]["searchengines_agent"]["available"],
+                         "searchengines_agent.available must be False without a base URL")
 
         runtime_with_url = WebSearchRuntime(
             base_url="http://127.0.0.1:8888",
             search_config_profiles={},
         )
         caps_with_url = build_web_search_capabilities(runtime_with_url)
-        self.assertTrue(caps_with_url["providers"]["searxng"]["available"],
-                        "searxng.available must be True with a base URL")
+        self.assertTrue(caps_with_url["providers"]["searchengines_agent"]["available"],
+                        "searchengines_agent.available must be True with a base URL")
 
     def test_capabilities_no_provider_preference_without_guidance(self):
         """furry_fse must NOT have hard-coded provider_preference without provider guidance."""

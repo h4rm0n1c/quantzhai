@@ -1020,11 +1020,12 @@ def build_web_search_capabilities(runtime) -> dict:
     config_path = _safe_config_path(getattr(runtime, "search_config_path", ""))
 
     providers_info: dict = {
-        "searxng": {
+        "searchengines_agent": {
             "available": base_url_configured,
-            "provider_id": "searxng",
+            "provider_id": (guidance.get("provider_id") or "searchengines-private") if guidance_available else "searchengines-private",
+            "guidance_available": guidance_available,
             "probe_status": "probed" if _engine_availability_known else "not_probed",
-            "note": "SearXNG local search instance. Engine-filtered web search.",
+            "note": "Agent API facade for search, guidance, and retrieval (searchengines-private).",
         },
         "agent_retrieve": {
             "available": base_url_configured,

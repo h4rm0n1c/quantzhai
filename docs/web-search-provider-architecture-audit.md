@@ -365,9 +365,8 @@ When/if `fse_direct` is implemented, it must:
 ```json
 {
   "providers": {
-    "searxng":       { "available": true/false, "provider_id": "searxng", "probe_status": "...", "note": "..." },
-    "fse_direct":    { "available": false, "provider_id": "fse_direct", "note": "..." },
-    "agent_retrieve":{ "available": true/false, "provider_id": "agent_retrieve", "note": "..." }
+    "searchengines_agent": { "available": true/false, "provider_id": "searchengines-private", "guidance_available": true/false, "probe_status": "...", "note": "..." },
+    "agent_retrieve":      { "available": true/false, "provider_id": "agent_retrieve", "note": "..." }
   },
   "profiles": {
     "furry_fse": {

@@ -30,6 +30,31 @@ SEARCH_CONFIG_SCHEMA = "qz.search.v1"
 
 QZ_SEARCH_CONFIG_PATH_ENV = "QZ_SEARCH_CONFIG_PATH"
 
+# Canonical default for the searchengines Agent API facade.
+QZ_SEARCHENGINES_DEFAULT_BASE_URL = "http://127.0.0.1:8890"
+
+
+def resolve_searchengines_base_url(env=None):
+    """Resolve the searchengines Agent API facade base URL.
+
+    Priority (highest to lowest):
+    1. QZ_SEARCHENGINES_BASE_URL  — canonical new env var
+    2. SEARXNG_AGENT_API_BASE     — accepted alias
+    3. SEARXNG_BASE_URL           — legacy alias (QuantZhai treats this as the
+                                    Agent API facade base, not raw SearXNG)
+    4. http://127.0.0.1:8890      — local default
+
+    Returns the first non-empty value found, or the local default.
+    Never returns an empty string.
+    """
+    if env is None:
+        env = os.environ
+    for key in ("QZ_SEARCHENGINES_BASE_URL", "SEARXNG_AGENT_API_BASE", "SEARXNG_BASE_URL"):
+        val = (env.get(key) or "").strip()
+        if val:
+            return val
+    return QZ_SEARCHENGINES_DEFAULT_BASE_URL
+
 
 def _qz_root(env: Optional[Dict[str, str]] = None) -> Path:
     source = os.environ if env is None else env
@@ -228,10 +253,18 @@ def load_search_config(
                 legacy_policy_path = candidate
 
     # --- Env overrides --------------------------------------------------
-    base_url_env = source_env.get("SEARXNG_BASE_URL")
-    if base_url_env is not None:
+    # Resolution priority for the Agent API facade base URL:
+    # QZ_SEARCHENGINES_BASE_URL > SEARXNG_AGENT_API_BASE > SEARXNG_BASE_URL.
+    # Any of these overrides searxng.base_url in the merged config.
+    _base_url_env = None
+    for _burl_key in ("QZ_SEARCHENGINES_BASE_URL", "SEARXNG_AGENT_API_BASE", "SEARXNG_BASE_URL"):
+        _candidate = (source_env.get(_burl_key) or "").strip()
+        if _candidate:
+            _base_url_env = _candidate
+            break
+    if _base_url_env is not None:
         searxng = dict(merged.get("searxng") or {})
-        searxng["base_url"] = base_url_env
+        searxng["base_url"] = _base_url_env
         merged["searxng"] = searxng
 
     timeout_env = source_env.get("SEARXNG_TIMEOUT")

@@ -10,8 +10,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from proxy.qz_search_config import (
     SEARCH_CONFIG_SCHEMA,
+    QZ_SEARCHENGINES_DEFAULT_BASE_URL,
     SearchConfigResult,
     load_search_config,
+    resolve_searchengines_base_url,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -379,6 +381,77 @@ class ResilienceTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # Gitignore check
 # ---------------------------------------------------------------------------
+
+
+class SearchenginesBaseUrlResolutionTests(unittest.TestCase):
+    """resolve_searchengines_base_url() priority and fallback behaviour."""
+
+    def test_default_when_all_unset(self):
+        """Returns 8890 default when no env vars are set."""
+        result = resolve_searchengines_base_url(env={})
+        self.assertEqual(result, QZ_SEARCHENGINES_DEFAULT_BASE_URL)
+
+    def test_canonical_var_wins(self):
+        """QZ_SEARCHENGINES_BASE_URL beats all others."""
+        env = {
+            "QZ_SEARCHENGINES_BASE_URL": "http://canonical:9000",
+            "SEARXNG_AGENT_API_BASE": "http://alias:9001",
+            "SEARXNG_BASE_URL": "http://legacy:9002",
+        }
+        self.assertEqual(resolve_searchengines_base_url(env), "http://canonical:9000")
+
+    def test_alias_beats_legacy(self):
+        """SEARXNG_AGENT_API_BASE wins over SEARXNG_BASE_URL."""
+        env = {
+            "SEARXNG_AGENT_API_BASE": "http://alias:9001",
+            "SEARXNG_BASE_URL": "http://legacy:9002",
+        }
+        self.assertEqual(resolve_searchengines_base_url(env), "http://alias:9001")
+
+    def test_legacy_beats_default(self):
+        """SEARXNG_BASE_URL is used when the two canonical vars are absent."""
+        env = {"SEARXNG_BASE_URL": "http://legacy:9002"}
+        self.assertEqual(resolve_searchengines_base_url(env), "http://legacy:9002")
+
+    def test_empty_canonical_falls_through(self):
+        """An empty QZ_SEARCHENGINES_BASE_URL is ignored; falls to SEARXNG_AGENT_API_BASE."""
+        env = {
+            "QZ_SEARCHENGINES_BASE_URL": "   ",
+            "SEARXNG_AGENT_API_BASE": "http://alias:9001",
+        }
+        self.assertEqual(resolve_searchengines_base_url(env), "http://alias:9001")
+
+    def test_empty_all_returns_default(self):
+        """All empty strings → default URL."""
+        env = {
+            "QZ_SEARCHENGINES_BASE_URL": "",
+            "SEARXNG_AGENT_API_BASE": "",
+            "SEARXNG_BASE_URL": "",
+        }
+        self.assertEqual(resolve_searchengines_base_url(env), QZ_SEARCHENGINES_DEFAULT_BASE_URL)
+
+    def test_never_returns_empty_string(self):
+        """Return value is never empty regardless of env."""
+        result = resolve_searchengines_base_url(env={})
+        self.assertTrue(result.strip(), "resolve_searchengines_base_url must never return empty")
+
+    def test_load_search_config_base_url_env_priority(self):
+        """load_search_config() env override uses same priority: canonical > alias > legacy."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_search_json(tmp, "config/default", {
+                "schema": SEARCH_CONFIG_SCHEMA,
+                "searxng": {"base_url": "http://from-file:7070"},
+            })
+            # Canonical overrides legacy even when both set.
+            result = load_search_config(
+                env={
+                    "QZ_SEARCHENGINES_BASE_URL": "http://canonical:9000",
+                    "SEARXNG_BASE_URL": "http://legacy:9002",
+                },
+                root=root,
+            )
+            self.assertEqual(result.config["searxng"]["base_url"], "http://canonical:9000")
 
 
 class GitignoreTests(unittest.TestCase):

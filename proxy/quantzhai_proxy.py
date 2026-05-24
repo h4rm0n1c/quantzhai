@@ -56,7 +56,7 @@ try:
     from .qz_recovery_jobs import RECOVERY_JOBS
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from .qz_runtime_io import append_capture, read_json, runtime_log, write_capture
-    from .qz_search_config import load_search_config as _load_search_config
+    from .qz_search_config import load_search_config as _load_search_config, resolve_searchengines_base_url as _resolve_searchengines_base_url
     from .qz_backend_manager import BackendManager, _parse_bool_env
 except ImportError:
     from qz_backend import BackendClient
@@ -105,7 +105,7 @@ except ImportError:
     from qz_recovery_jobs import RECOVERY_JOBS
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, _safe_json_file, _unique_sources
     from qz_runtime_io import append_capture, read_json, runtime_log, write_capture
-    from qz_search_config import load_search_config as _load_search_config
+    from qz_search_config import load_search_config as _load_search_config, resolve_searchengines_base_url as _resolve_searchengines_base_url
     from qz_backend_manager import BackendManager, _parse_bool_env
 
 class ProxyHandler(BaseHTTPRequestHandler):
@@ -585,7 +585,7 @@ def main():
     ap.add_argument("--upstream", default="http://127.0.0.1:18084")
     ap.add_argument("--model-load-timeout", type=float, default=float(os.environ.get("QZ_MODEL_LOAD_TIMEOUT", "120")))
     ap.add_argument("--reasoning-stream-format", choices=("raw", "summary", "hidden"), default="raw")
-    ap.add_argument("--searxng-base-url", default=os.environ.get("SEARXNG_BASE_URL"))
+    ap.add_argument("--searxng-base-url", default=_resolve_searchengines_base_url())
     ap.add_argument("--searxng-timeout", type=float, default=float(os.environ.get("SEARXNG_TIMEOUT", "15")))
     ap.add_argument("--searxng-policy", default=os.environ.get("SEARXNG_POLICY"))
     ap.add_argument("--searxng-capabilities", default=os.environ.get("SEARXNG_CAPABILITIES"))
@@ -719,7 +719,7 @@ def main():
             ProxyHandler.model_catalog_path = str(catalog.cache_path)
             ProxyHandler.searxng_policy = policy
             ProxyHandler.searxng_capabilities = capabilities
-            ProxyHandler.searxng_base_url = args.searxng_base_url or policy.get("searxng_base") or capabilities.get("base")
+            ProxyHandler.searxng_base_url = args.searxng_base_url or policy.get("searxng_base") or capabilities.get("base") or _resolve_searchengines_base_url()
             try:
                 ProxyHandler.search_config_result = _load_search_config(root=root)
             except Exception:

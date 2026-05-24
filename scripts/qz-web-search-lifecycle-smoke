@@ -1,26 +1,32 @@
 #!/usr/bin/env bash
 # qz-web-search-lifecycle-smoke: live smoke for web_search lifecycle events
-# and searchengines-private provider guidance integration.
+# and searchengines-private Agent API provider guidance integration.
 #
 # Usage:
 #   scripts/qz-web-search-lifecycle-smoke [--model MODEL] [--skip-live-search]
 #                                         [--telemetry-limit N]
 #
 # Run after qz-up. Checks:
-#   A. searchengines /guidance direct preflight (SEARXNG_BASE_URL/guidance)
+#   A. searchengines Agent API /guidance direct preflight
 #   B. QuantZhai /qz/web-search/capabilities — provider_guidance bridge
 #   C. Streaming web_search lifecycle SSE events (requires live model)
 #   D. FSE direct search — agent_api metadata, count_mismatch, result domains
 #   E. Operator telemetry visibility
 #
 # Exits 0 on all checks passed or skipped, 1 on any hard failure.
+#
+# Agent API base URL resolution (highest to lowest priority):
+#   QZ_SEARCHENGINES_BASE_URL > SEARXNG_AGENT_API_BASE > (not SEARXNG_BASE_URL,
+#   which may point to raw SearXNG) > http://127.0.0.1:8890
 
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
-SMOKE_MODEL="kuato"
+# Default model: QZ_MODEL_KEY if set, else the current Qwen3.6 production slug.
+_DEFAULT_MODEL="${QZ_MODEL_KEY:-Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf}"
+SMOKE_MODEL=""   # empty = use _DEFAULT_MODEL after env is sourced
 SKIP_LIVE_SEARCH=0
 TELEMETRY_LIMIT=200
 SEARCH_TIMEOUT=90
@@ -48,8 +54,33 @@ done
 # ---------------------------------------------------------------------------
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qz-env"
 
+# Apply model default now that qz-env is sourced (QZ_MODEL_KEY may have changed).
+if [[ -z "$SMOKE_MODEL" ]]; then
+  SMOKE_MODEL="${QZ_MODEL_KEY:-Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf}"
+fi
+
 PROXY_BASE="http://${QZ_PROXY_HOST}:${QZ_PROXY_PORT}"
-AGENT_BASE="${SEARXNG_BASE_URL:-}"
+
+# Resolve Agent API facade base URL.
+# Priority: QZ_SEARCHENGINES_BASE_URL > SEARXNG_AGENT_API_BASE.
+# Deliberately does NOT fall back to SEARXNG_BASE_URL — that variable may point
+# to raw SearXNG, which does not expose /guidance or fse_search agent metadata.
+# qz-env sets QZ_SEARCHENGINES_BASE_URL and SEARXNG_AGENT_API_BASE to the same
+# default (http://127.0.0.1:8890) so this will always have a value after sourcing.
+_resolve_agent_base() {
+  local val
+  for _var in QZ_SEARCHENGINES_BASE_URL SEARXNG_AGENT_API_BASE; do
+    val="${!_var:-}"
+    val="${val%/}"   # strip trailing slash
+    if [[ -n "$val" ]]; then
+      printf '%s' "$val"
+      return
+    fi
+  done
+  printf 'http://127.0.0.1:8890'
+}
+AGENT_BASE="$(_resolve_agent_base)"
+
 FAIL_LIST=()
 WARN_LIST=()
 SKIP_LIST=()
@@ -59,8 +90,10 @@ fail() { printf 'FAIL %s\n' "$*" >&2; FAIL_LIST+=("$*"); }
 warn() { printf 'WARN %s\n' "$*"; WARN_LIST+=("$*"); }
 skip() { printf 'SKIP %s\n' "$*"; SKIP_LIST+=("$*"); }
 
-printf '=== qz-web-search-lifecycle-smoke  model=%s  proxy=%s ===\n' \
-  "$SMOKE_MODEL" "$PROXY_BASE"
+printf '=== qz-web-search-lifecycle-smoke ===\n'
+printf '    proxy=%s\n' "$PROXY_BASE"
+printf '    searchengines=%s\n' "$AGENT_BASE"
+printf '    model=%s\n' "$SMOKE_MODEL"
 echo
 
 # ---------------------------------------------------------------------------
@@ -81,15 +114,12 @@ if [[ ${#FAIL_LIST[@]} -gt 0 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# A. searchengines /guidance — direct preflight
+# A. searchengines Agent API /guidance — direct preflight
 # ---------------------------------------------------------------------------
 echo
-echo "--- A. searchengines /guidance (direct) ---"
+echo "--- A. searchengines Agent API /guidance (direct, ${AGENT_BASE}) ---"
 
-if [[ -z "$AGENT_BASE" ]]; then
-  skip "SEARXNG_BASE_URL not set — cannot check searchengines guidance directly"
-else
-  GUIDANCE_URL="${AGENT_BASE%/}/guidance"
+  GUIDANCE_URL="${AGENT_BASE}/guidance"
 
   if GUIDANCE_RAW=$(curl -fsS --max-time 8 "$GUIDANCE_URL" 2>/dev/null); then
     G_SCHEMA=$(printf '%s' "$GUIDANCE_RAW" | python3 -c \
@@ -169,9 +199,8 @@ else
     fi
 
   else
-    fail "searchengines /guidance unreachable at $GUIDANCE_URL"
+    fail "searchengines Agent API /guidance unreachable at $GUIDANCE_URL"
   fi
-fi
 
 # ---------------------------------------------------------------------------
 # B. QuantZhai /qz/web-search/capabilities — provider_guidance bridge
@@ -224,11 +253,10 @@ if CAPS_RAW=$(curl -fsS --max-time 12 "${PROXY_BASE}/qz/web-search/capabilities"
       warn "capabilities.provider_guidance: furry_fse not in profiles_present (got: '$PG_PROFILES')"
     fi
   else
-    if [[ -z "$AGENT_BASE" ]]; then
-      skip "capabilities.provider_guidance: not available (SEARXNG_BASE_URL not set)"
-    else
-      fail "capabilities.provider_guidance: available=False (fetch_warnings: $PG_FETCH_WARNS)"
-    fi
+    # AGENT_BASE is always set (defaults to http://127.0.0.1:8890 from qz-env).
+    # provider_guidance unavailable means the Agent API /guidance endpoint is
+    # unreachable or returned an unexpected response — not a config-not-set case.
+    fail "capabilities.provider_guidance: available=False (fetch_warnings: $PG_FETCH_WARNS)"
   fi
 
   # furry_fse profile in capabilities.profiles (config-owned)
@@ -402,18 +430,16 @@ for k in sorted(d.get('checks', {})):
 fi
 
 # ---------------------------------------------------------------------------
-# D. FSE direct search smoke
+# D. FSE direct search smoke (Agent API facade)
 # ---------------------------------------------------------------------------
 echo
-echo "--- D. FSE direct search smoke ---"
+echo "--- D. FSE direct search smoke (${AGENT_BASE}/search) ---"
 
-if [[ -z "$AGENT_BASE" ]]; then
-  skip "FSE search: SEARXNG_BASE_URL not set"
-else
   # Source-strict search for dragon content on fse.anthro.fr.
   # max_pages=1, top_k=5 — bounded, safe to run in smoke.
   # count_mismatch may be True — this is expected by design and must not fail the smoke.
-  FSE_URL="${AGENT_BASE%/}/search"
+  # Agent API /search exposes agent_api.fse_search metadata; raw SearXNG does not.
+  FSE_URL="${AGENT_BASE}/search"
   FSE_FULL="${FSE_URL}?q=dragon%20rating%3As%20external%3Afalse&engines=fse&max_pages=1&top_k=5&format=json"
 
   if FSE_RAW=$(curl -fsS --max-time 25 "$FSE_FULL" 2>/dev/null); then
@@ -478,7 +504,6 @@ print(' '.join(domains) or 'none')
   else
     warn "FSE search: request to $FSE_URL failed or returned HTTP error (provider may be down)"
   fi
-fi
 
 # ---------------------------------------------------------------------------
 # E. Operator telemetry visibility
