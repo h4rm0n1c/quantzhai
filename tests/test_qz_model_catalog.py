@@ -143,8 +143,9 @@ class FakeLoadHandler:
         return self.backend
 
 
-class ModelCatalogProfileValidationTests(unittest.TestCase):
+class ModelCatalogProfileValidationTests(_IsolatedModelEnvMixin, unittest.TestCase):
     def setUp(self):
+        super().setUp()  # clears QZ_MODEL_OVERRIDES, QZ_MODEL_KEY, QZ_MODEL_STATE_PATH
         FakeLoadHandler.model_load_state = "idle"
         FakeLoadHandler.model_load_error = None
         FakeLoadHandler.model_load_started_at = None
@@ -585,6 +586,22 @@ class ModelCatalogProfileValidationTests(unittest.TestCase):
         self.assertEqual(payload["error"], "profile backend missing")
         self.assertEqual(payload["profile"], "prompt-compiler")
         self.assertIn("restore the missing target GGUF", payload["fix"])
+
+    def test_model_env_isolation_clears_contamination_before_each_test(self):
+        """Regression: _IsolatedModelEnvMixin via super().setUp() must clear model env vars.
+
+        This test fails if the mixin is removed from the class or if setUp() no longer
+        calls super().setUp(), confirming the isolation requirement for tests that call
+        load_manifest() / ModelCatalog() with a temp root without explicit env management.
+        """
+        for key in _MODEL_ENV_KEYS:
+            self.assertNotIn(
+                key, os.environ,
+                f"{key} must be cleared by _IsolatedModelEnvMixin.setUp() — "
+                "if this fails, model-routing env from a prior test can corrupt "
+                "catalog.selected results (e.g. catalog.selected becomes None "
+                "instead of the expected healthy fallback model).",
+            )
 
 
 class MemoryDomainCatalogTests(_IsolatedModelEnvMixin, unittest.TestCase):
