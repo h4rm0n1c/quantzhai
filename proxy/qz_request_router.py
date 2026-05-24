@@ -286,6 +286,32 @@ class RequestRouter:
     def __init__(self, handler):
         self.handler = handler
 
+    def _emit_schema_normalization_telemetry(self, report, request_id: str = "") -> None:
+        """Emit tool_schema_replaced telemetry when normalization changes the tool list.
+
+        Fires a single compact operator event per request when any of replaced,
+        translated, dropped, or deduped is non-empty.  Payload includes names and
+        counts only — no full schemas or user arguments.  source is always
+        "tool_schema_normalizer" for reliable operator filtering.
+
+        No-ops safely if telemetry is unavailable or the report has no changes.
+        """
+        if not (report.replaced or report.translated or report.dropped or report.deduped):
+            return
+        try:
+            self.handler.telemetry.emit("tool_schema_replaced", {
+                "replaced": list(report.replaced),
+                "translated": list(report.translated),
+                "dropped": list(report.dropped),
+                "dropped_count": len(report.dropped),
+                "deduped": list(report.deduped),
+                "tool_choice_forced_auto": report.tool_choice_forced_auto,
+                "source": "tool_schema_normalizer",
+                "request_id": request_id,
+            })
+        except Exception:
+            pass
+
     def _emit_signal_decisions(self, signals: List[Any], request_id: str = "") -> None:
         """Emit telemetry for SignalDecision objects.
 
@@ -3032,17 +3058,7 @@ class RequestRouter:
                             return
                 body = normalize_responses_input_for_qwen(body, selected_model=selected_model)
                 _tool_norm_report = _normalize_tool_request(body, write_captures=True)
-                if _tool_norm_report.replaced or _tool_norm_report.translated or _tool_norm_report.dropped:
-                    try:
-                        self.handler.telemetry.emit("tool_schema_replaced", {
-                            "replaced": list(_tool_norm_report.replaced),
-                            "translated": list(_tool_norm_report.translated),
-                            "dropped_count": len(_tool_norm_report.dropped),
-                            "tool_choice_forced_auto": _tool_norm_report.tool_choice_forced_auto,
-                            "request_id": request_id,
-                        })
-                    except Exception:
-                        pass
+                self._emit_schema_normalization_telemetry(_tool_norm_report, request_id)
 
                 prompt_contract = self._prompt_contract(
                     body,

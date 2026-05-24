@@ -12,6 +12,7 @@ try:
         normalize_responses_input_for_qwen,
         normalize_tools_for_llamacpp,
     )
+    from .qz_tool_request import normalize_tool_request_for_llamacpp as _normalize_tool_request_schema
     from .qz_runtime_io import capture_enabled, open_dual_capture_append, write_dual_capture
     from .qz_sse import _normalize_response_usage, make_sse_block, transform_sse_event
     from .qz_streaming import (
@@ -52,6 +53,7 @@ except ImportError:
         normalize_responses_input_for_qwen,
         normalize_tools_for_llamacpp,
     )
+    from qz_tool_request import normalize_tool_request_for_llamacpp as _normalize_tool_request_schema
     from qz_runtime_io import capture_enabled, open_dual_capture_append, write_dual_capture
     from qz_sse import _normalize_response_usage, make_sse_block, transform_sse_event
     from qz_streaming import (
@@ -1528,7 +1530,26 @@ class ResponsesStreamRuntime:
                 hop_body = json.loads(json.dumps(working_body))
                 hop_body["stream"] = True
                 hop_body = normalize_responses_input_for_qwen(hop_body, selected_model=self.selected_model)
-                hop_body = normalize_tools_for_llamacpp(hop_body)
+                if hop_index == 0:
+                    # On the first hop capture the normalization report so we can
+                    # emit a compact operator event when tools are replaced/deduped.
+                    _schema_report = _normalize_tool_request_schema(hop_body)
+                    if (_schema_report.replaced or _schema_report.translated
+                            or _schema_report.dropped or _schema_report.deduped):
+                        try:
+                            self._emit("tool_schema_replaced", {
+                                "replaced": list(_schema_report.replaced),
+                                "translated": list(_schema_report.translated),
+                                "dropped": list(_schema_report.dropped),
+                                "dropped_count": len(_schema_report.dropped),
+                                "deduped": list(_schema_report.deduped),
+                                "source": "tool_schema_normalizer",
+                                "request_id": self.request_id,
+                            })
+                        except Exception:
+                            pass
+                else:
+                    normalize_tools_for_llamacpp(hop_body)
                 resp = None
                 raw_log = None
                 read_timeout_handle = None

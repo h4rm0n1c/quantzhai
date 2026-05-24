@@ -107,6 +107,30 @@ def main():
     else:
         report("Coercion Telemetry", "WARN", "coercion telemetry missing source field")
 
+    # 2c. Tool Schema Telemetry
+    # tool_schema_replaced event must be emitted with source="tool_schema_normalizer"
+    # in the router (proxy_json_api path) and the streaming runtime (hop 0).
+    tool_request_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "proxy", "qz_tool_request.py")
+    test_tool_req_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tests", "test_qz_tool_request.py")
+    has_deduped_field = check_file_contains(tool_request_path, "deduped")
+    has_schema_helper = check_file_contains(router_path, "_emit_schema_normalization_telemetry")
+    has_schema_event_router = check_file_contains(router_path, '"tool_schema_normalizer"')
+    has_schema_event_stream = check_file_contains(stream_path, '"tool_schema_normalizer"')
+    has_schema_tests = (
+        check_file_contains(test_tool_req_path, "deduped") and
+        check_file_contains(test_stream_path, "ToolSchemaTelemetryStreamingTests")
+    )
+    if has_schema_helper and has_schema_event_router and has_schema_event_stream and has_schema_tests:
+        report("Tool Schema Telemetry", "PASS",
+               "tool_schema_replaced emitted (router + stream), deduped tracked, tests present")
+    elif has_schema_helper or has_schema_event_router or has_schema_event_stream:
+        report("Tool Schema Telemetry", "WARN",
+               "tool_schema_replaced partially wired (router={} stream={} tests={})".format(
+                   has_schema_event_router, has_schema_event_stream, has_schema_tests))
+    else:
+        report("Tool Schema Telemetry", "WARN",
+               "schema normalization exists but no tool_schema_replaced telemetry event")
+
     # 3. Watchdog Defaults
     if STREAM_NO_OUTPUT_TIMEOUT_S > 0:
         report("Stream Watchdog (No-Output)", "PASS", f"Enabled ({STREAM_NO_OUTPUT_TIMEOUT_S}s)")

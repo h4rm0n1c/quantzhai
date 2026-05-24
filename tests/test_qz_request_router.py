@@ -555,5 +555,109 @@ class SandboxAdvisoryInjectionTests(unittest.TestCase):
         self.assertEqual(input_items, original)
 
 
+class ToolSchemaTelemetryRouterTests(unittest.TestCase):
+    """Tests for RequestRouter._emit_schema_normalization_telemetry helper."""
+
+    class FakeTelemetry:
+        def __init__(self):
+            self.emitted = []
+
+        def emit(self, event_type, payload):
+            self.emitted.append((event_type, payload))
+
+    class FakeHandlerWithTelemetry:
+        def __init__(self):
+            self.telemetry = ToolSchemaTelemetryRouterTests.FakeTelemetry()
+
+    def _router(self):
+        return RequestRouter(self.FakeHandlerWithTelemetry())
+
+    def _make_report(self, **kwargs):
+        from proxy.qz_tool_request import ToolRequestNormalizationReport
+        return ToolRequestNormalizationReport(**kwargs)
+
+    def test_emits_event_when_replaced_nonempty(self):
+        router = self._router()
+        report = self._make_report(replaced=("web_search",))
+
+        router._emit_schema_normalization_telemetry(report, request_id="req_1")
+
+        self.assertEqual(len(router.handler.telemetry.emitted), 1)
+        event_type, payload = router.handler.telemetry.emitted[0]
+        self.assertEqual(event_type, "tool_schema_replaced")
+        self.assertIn("web_search", payload["replaced"])
+
+    def test_emits_event_when_translated_nonempty(self):
+        router = self._router()
+        report = self._make_report(translated=("web_search",))
+
+        router._emit_schema_normalization_telemetry(report, request_id="req_2")
+
+        event_type, payload = router.handler.telemetry.emitted[0]
+        self.assertEqual(event_type, "tool_schema_replaced")
+        self.assertIn("web_search", payload["translated"])
+
+    def test_emits_event_when_deduped_nonempty(self):
+        router = self._router()
+        report = self._make_report(deduped=("web_search",))
+
+        router._emit_schema_normalization_telemetry(report, request_id="req_3")
+
+        event_type, payload = router.handler.telemetry.emitted[0]
+        self.assertEqual(event_type, "tool_schema_replaced")
+        self.assertIn("web_search", payload["deduped"])
+
+    def test_payload_has_source_field(self):
+        router = self._router()
+        report = self._make_report(replaced=("web_search",))
+
+        router._emit_schema_normalization_telemetry(report, request_id="req_4")
+
+        _, payload = router.handler.telemetry.emitted[0]
+        self.assertEqual(payload["source"], "tool_schema_normalizer")
+
+    def test_payload_has_request_id(self):
+        router = self._router()
+        report = self._make_report(translated=("apply_patch",))
+
+        router._emit_schema_normalization_telemetry(report, request_id="req_xyz")
+
+        _, payload = router.handler.telemetry.emitted[0]
+        self.assertEqual(payload["request_id"], "req_xyz")
+
+    def test_payload_has_dropped_list_and_count(self):
+        router = self._router()
+        report = self._make_report(dropped=("write_stdin(no live exec session)",))
+
+        router._emit_schema_normalization_telemetry(report, request_id="req_5")
+
+        _, payload = router.handler.telemetry.emitted[0]
+        self.assertIsInstance(payload["dropped"], list)
+        self.assertIn("write_stdin(no live exec session)", payload["dropped"])
+        self.assertEqual(payload["dropped_count"], 1)
+
+    def test_no_emit_when_nothing_changed(self):
+        router = self._router()
+        report = self._make_report()  # all empty
+
+        router._emit_schema_normalization_telemetry(report, request_id="req_6")
+
+        self.assertEqual(len(router.handler.telemetry.emitted), 0)
+
+    def test_payload_does_not_include_full_schema(self):
+        """Only names/counts go into telemetry — not full schema dicts."""
+        router = self._router()
+        report = self._make_report(replaced=("web_search",))
+
+        router._emit_schema_normalization_telemetry(report, request_id="req_7")
+
+        _, payload = router.handler.telemetry.emitted[0]
+        # Values must all be scalars or lists of strings, not dicts
+        for val in payload.values():
+            if isinstance(val, list):
+                for item in val:
+                    self.assertIsInstance(item, str, f"non-string in payload list: {item}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -4747,5 +4747,150 @@ class OutputTextArtifactStreamingTests(unittest.TestCase):
         self.assertNotIn("output_text_artifact_aborted", stream_text)
 
 
+class ToolSchemaTelemetryStreamingTests(unittest.TestCase):
+    """Tests for tool_schema_replaced telemetry emitted by the streaming runtime."""
+
+    def _run(self, body, telemetry):
+        """Run the streaming runtime with a single-hop final-message stream."""
+        def opener(_b):
+            return FakeStream(_final_message_stream())
+
+        chunks = []
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=chunks.append,
+            stream_opener=opener,
+            capture_enabled=False,
+            telemetry=telemetry,
+        )
+        runtime.run(body, "test-model.gguf")
+        return b"".join(chunks).decode("utf-8")
+
+    def _schema_events(self, telemetry):
+        return [e for e in telemetry.recent() if e.get("type") == "tool_schema_replaced"]
+
+    def test_stale_function_typed_web_search_emits_schema_telemetry(self):
+        """Codex sends type=function name=web_search (stale) — proxy replaces schema."""
+        telemetry = TelemetryBus()
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "test"}]}],
+            "tools": [{
+                "type": "function",
+                "name": "web_search",
+                "description": "Stale Codex default web_search schema.",
+                "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+            }],
+        }
+
+        self._run(body, telemetry)
+
+        events = self._schema_events(telemetry)
+        self.assertEqual(len(events), 1, events)
+        payload = events[0].get("payload") or {}
+        self.assertIn("web_search", payload.get("replaced", []),
+                      "stale function-typed web_search must appear in replaced")
+        self.assertEqual(payload.get("source"), "tool_schema_normalizer")
+        self.assertEqual(payload.get("translated"), [])
+
+    def test_schema_event_does_not_contain_full_schema(self):
+        """Telemetry payload must not leak the full tool schema body."""
+        telemetry = TelemetryBus()
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "test"}]}],
+            "tools": [{
+                "type": "function",
+                "name": "web_search",
+                "description": "Stale Codex default web_search schema.",
+                "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+            }],
+        }
+
+        self._run(body, telemetry)
+
+        events = self._schema_events(telemetry)
+        payload_str = str(events[0].get("payload") or {})
+        self.assertNotIn("Stale Codex default", payload_str)
+        self.assertNotIn("parameters", payload_str)
+
+    def test_structured_web_search_emits_schema_telemetry_as_translated(self):
+        """Normal type=web_search is translated; operator telemetry reflects this."""
+        telemetry = TelemetryBus()
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "test"}]}],
+            "tools": [{"type": "web_search"}],
+        }
+
+        self._run(body, telemetry)
+
+        events = self._schema_events(telemetry)
+        self.assertEqual(len(events), 1, events)
+        payload = events[0].get("payload") or {}
+        self.assertIn("web_search", payload.get("translated", []))
+        self.assertEqual(payload.get("replaced"), [])
+        self.assertEqual(payload.get("source"), "tool_schema_normalizer")
+
+    def test_duplicate_web_search_tools_emit_deduped_in_schema_telemetry(self):
+        """Two web_search tools → one is deduped; telemetry reflects this."""
+        telemetry = TelemetryBus()
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "test"}]}],
+            "tools": [
+                {"type": "web_search"},
+                {"type": "function", "name": "web_search", "description": "Stale."},
+            ],
+        }
+
+        self._run(body, telemetry)
+
+        events = self._schema_events(telemetry)
+        self.assertEqual(len(events), 1, events)
+        payload = events[0].get("payload") or {}
+        self.assertIn("web_search", payload.get("deduped", []),
+                      "second web_search must appear in deduped")
+
+    def test_unchanged_tools_produce_no_schema_telemetry(self):
+        """A custom function tool that passes through unchanged fires no schema event."""
+        telemetry = TelemetryBus()
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "test"}]}],
+            "tools": [{"type": "function", "name": "my_custom_tool", "description": "Custom."}],
+        }
+
+        self._run(body, telemetry)
+
+        events = self._schema_events(telemetry)
+        self.assertEqual(len(events), 0,
+                         "no schema telemetry expected when tools pass through unchanged")
+
+    def test_schema_event_emitted_only_on_first_hop(self):
+        """Schema telemetry is emitted at most once per run, on the first hop."""
+        telemetry = TelemetryBus()
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "test"}]}],
+            "tools": [{"type": "web_search"}],
+        }
+
+        self._run(body, telemetry)
+
+        events = self._schema_events(telemetry)
+        self.assertEqual(len(events), 1,
+                         "schema telemetry must fire exactly once per streaming run")
+
+
 if __name__ == "__main__":
     unittest.main()

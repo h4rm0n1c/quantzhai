@@ -15,12 +15,19 @@ Related:
 Tool schema replacement (dedup and name-based substitution) is **fixed** as of
 commit `ebdf87b`. All other coercion/advice paths are **implemented** and
 **correct** for the streaming path. The non-streaming path has a narrow gap for
-non-proxy-local dropped/unknown tools. Coercion telemetry is now enriched:
-`coercion_succeeded` and `coercion_failed` events carry `source="tool_adapter"`,
-`upstream_name`, `call_id`, `correction_applied`, and `error_summary` in both the
-non-streaming and streaming paths (see Phase 3c in
-`docs/signal-feedback-subsystem-plan.md`). Schema replacement telemetry remains
-the outstanding observability gap.
+non-proxy-local dropped/unknown tools.
+
+Coercion telemetry enriched: `coercion_succeeded` and `coercion_failed` events
+carry `source="tool_adapter"`, `upstream_name`, `call_id`, `correction_applied`,
+and `error_summary` in both paths (see Phase 3c in
+`docs/signal-feedback-subsystem-plan.md`).
+
+Schema replacement/dedup telemetry added: `tool_schema_replaced` event is now
+emitted in both the non-streaming path (`proxy_json_api` via
+`_emit_schema_normalization_telemetry`) and the streaming runtime (hop 0).
+Payload includes `replaced`, `translated`, `dropped`, `deduped`,
+`source="tool_schema_normalizer"`. `ToolRequestNormalizationReport.deduped` is
+a new field; duplicates no longer pollute `qz_dropped_tool_names`.
 
 ---
 
@@ -262,8 +269,8 @@ Yes. The check `if name in CODEX_NATIVE_TOOL_NAMES` runs at step 4, after droppe
 
 | scenario | current behaviour | expected | Codex-visible? | model next-hop feedback? | qz-thoughts? | telemetry? | leak risk | test coverage | fix needed? |
 |---|---|---|---|---|---|---|---|---|---|
-| valid web_search `type=web_search` | translated to function schema; forwarded to upstream | ✓ | no (upstream) | n/a | no (replacement only in captures) | **none** | none | unit tests | add replacement telemetry (B2) |
-| valid web_search `type=function name=web_search` | **replaced** by proxy schema (ebdf87b) | ✓ | no | n/a | no | **none** | none | unit tests (ebdf87b) | add replacement telemetry (B2) |
+| valid web_search `type=web_search` | translated to function schema; forwarded to upstream | ✓ | no (upstream) | n/a | yes (`tool_schema_replaced`, translated) | `tool_schema_replaced` (router + stream, `source="tool_schema_normalizer"`) | none | unit tests + streaming tests | — |
+| valid web_search `type=function name=web_search` | **replaced** by proxy schema (ebdf87b) | ✓ | no | n/a | yes (`tool_schema_replaced`, replaced) | `tool_schema_replaced` (router + stream, `source="tool_schema_normalizer"`) | none | unit tests + streaming tests | — |
 | duplicate web_search (both typed) | first wins; second dropped | ✓ | no | n/a | no | none | none | unit tests (ebdf87b) | none |
 | stale Codex web_search schema | replaced; `action="capabilities"` in description | ✓ | no | n/a | no | none | none | unit tests | none |
 | malformed web_search JSON | coerce() → error result injected → model next hop | ✓ | no | yes (error string) | yes (tool_call_error streaming) | tool_call_error (streaming) | none | unit test (coerce), **no streaming fixture** | add streaming fixture (B2) |
@@ -320,7 +327,7 @@ Yes. The check `if name in CODEX_NATIVE_TOOL_NAMES` runs at step 4, after droppe
 
 8. **`test_write_stdin_dropped_then_called_generates_feedback`** — write_stdin dropped at normalisation (no live session); model then calls write_stdin; verify error result injected, error text mentions "not available".
 
-9. **`test_tool_schema_replaced_telemetry_event`** — when a function-typed web_search is replaced, a `tool_schema_replaced` telemetry event fires. (Will fail until B2 adds this event.)
+9. ~~**`test_tool_schema_replaced_telemetry_event`**~~ — **done**: `ToolSchemaTelemetryStreamingTests` in `test_qz_responses_stream.py` and `ToolSchemaTelemetryRouterTests` in `test_qz_request_router.py` cover the full payload, source field, and no-emit-on-unchanged case.
 
 10. ~~**`test_coercion_failed_telemetry_event`**~~ — **done**: `CoercionTelemetryStreamingTests` in `test_qz_responses_stream.py` covers both `coercion_succeeded` and `coercion_failed` events including `source="tool_adapter"` assertion.
 
@@ -328,15 +335,29 @@ Yes. The check `if name in CODEX_NATIVE_TOOL_NAMES` runs at step 4, after droppe
 
 ## F. Critical Gaps
 
-### Gap 1 — Zero telemetry for tool schema replacement
+### Gap 1 — Zero telemetry for tool schema replacement (**closed**)
 
-`ToolRequestNormalizationReport.replaced` is populated and written to captures, but
-no telemetry event is emitted. The operator cannot tell from qz-thoughts or the
-telemetry stream whether Codex sent a stale schema that was replaced.
+**Done**: `tool_schema_replaced` event is now emitted in both the non-streaming path
+(`qz_request_router.py` via `_emit_schema_normalization_telemetry` helper, called
+from `proxy_json_api`) and the streaming runtime hop 0 (`qz_responses_stream.py`).
 
-**Fix (B2)**: in `normalize_tool_request_for_llamacpp`, emit a `tool_schema_replaced`
-telemetry event when `replaced` is non-empty. Payload:
-`{"replaced": list(replaced), "translated": list(translated), "dropped_count": len(dropped)}`.
+Trigger: any non-empty `replaced`, `translated`, `dropped`, or `deduped` after
+`normalize_tool_request_for_llamacpp`.
+
+Payload: `replaced`, `translated`, `dropped`, `dropped_count`, `deduped`,
+`source="tool_schema_normalizer"`, `request_id`. Names only — no full schemas.
+
+Side-effect fix: `ToolRequestNormalizationReport.deduped` is now a distinct field
+that tracks duplicate tool names separately from genuine `dropped` entries.
+Previously, deduped generic-function tools were appended to `dropped` as
+`"name(duplicate)"`, causing them to appear in `qz_dropped_tool_names` and
+incorrectly triggering "not available" errors if the model called the tool.
+Deduped proxy-managed tools (web_search, apply_patch) were silently dropped with
+no record at all. Both cases are now tracked in `deduped` only.
+
+Tests: `tests/test_qz_tool_request.py` (deduped field, metadata correctness),
+`tests/test_qz_request_router.py` (`ToolSchemaTelemetryRouterTests`),
+`tests/test_qz_responses_stream.py` (`ToolSchemaTelemetryStreamingTests`).
 
 ### Gap 2 — Zero telemetry for coercion success/failure (**closed**)
 
@@ -389,18 +410,18 @@ tool call through the hop loop and verifies the error appears in the next-hop re
 
 Priority order (highest to lowest):
 
-1. **Guard `ToolCoercionResult` neither-set case** (`proxy/qz_tools.py`)
-   - Add `__post_init__` that asserts not both None OR raises if both None.
-   - Risk: very low. Change is additive.
+1. ~~**Guard `ToolCoercionResult` neither-set case**~~ (**done** — `__post_init__` validation present, see `ToolCoercionResultTests`).
+   - `ToolCoercionResult()` with neither field raises `ValueError` on construction.
+   - Risk: resolved.
 
 2. **Apply dropped/unknown errors in non-streaming hop loop for non-proxy-local items** (`proxy/qz_request_router.py`)
    - In `_run_responses_locally`, add `elif rr_decision.kind == "error": next_input.append(rr_decision.error_result)`.
    - Risk: low. Only fires when a tool is in `dropped_tool_names` AND appears in output with a web_search call.
 
-3. **Emit `tool_schema_replaced` telemetry** (`proxy/qz_tool_request.py`)
-   - In `normalize_tool_request_for_llamacpp`, if `replaced` is non-empty, emit via the handler telemetry (or accept a telemetry argument).
-   - Risk: low. Observability only.
-   - Note: `normalize_tool_request_for_llamacpp` has no telemetry reference currently; the telemetry can be emitted in `proxy_json_api` after normalisation since the report is available.
+3. ~~**Emit `tool_schema_replaced` telemetry**~~ (**done** — Gap 1 closed above)
+   - Emitted in `qz_request_router.py` (`_emit_schema_normalization_telemetry` helper) and `qz_responses_stream.py` (hop 0).
+   - Payload: `replaced`, `translated`, `dropped`, `dropped_count`, `deduped`, `source="tool_schema_normalizer"`.
+   - `deduped` field added to `ToolRequestNormalizationReport`; duplicate tools no longer pollute `qz_dropped_tool_names`.
 
 4. ~~**Emit `coercion_succeeded` / `coercion_failed` telemetry**~~ (**done** — Phase 3c)
    - Emitted in `qz_request_router.py` (non-streaming) and `qz_responses_stream.py` (streaming).

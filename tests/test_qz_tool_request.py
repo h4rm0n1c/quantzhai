@@ -185,6 +185,105 @@ class ToolDedupAndReplacementTests(unittest.TestCase):
 
         self.assertEqual(body["tools"], [custom])
 
+    def test_structured_then_function_typed_web_search_populates_deduped(self):
+        """type=web_search translated first; subsequent type=function name=web_search is deduped."""
+        body = {
+            "tools": [
+                {"type": "web_search"},
+                {"type": "function", "name": "web_search", "description": "Stale."},
+            ]
+        }
+
+        report = normalize_tool_request_for_llamacpp(body, write_captures=False)
+
+        self.assertEqual([t.get("name") for t in body["tools"]].count("web_search"), 1)
+        self.assertIn("web_search", report.translated)
+        self.assertIn("web_search", report.deduped)
+        self.assertEqual(report.replaced, ())
+
+    def test_function_typed_then_structured_web_search_populates_deduped(self):
+        """type=function name=web_search replaced first; subsequent type=web_search is deduped."""
+        body = {
+            "tools": [
+                {"type": "function", "name": "web_search", "description": "Stale."},
+                {"type": "web_search"},
+            ]
+        }
+
+        report = normalize_tool_request_for_llamacpp(body, write_captures=False)
+
+        self.assertEqual([t.get("name") for t in body["tools"]].count("web_search"), 1)
+        self.assertIn("web_search", report.replaced)
+        self.assertIn("web_search", report.deduped)
+        self.assertEqual(report.translated, ())
+
+    def test_duplicate_exec_command_populates_deduped_not_dropped(self):
+        """Duplicate exec_command goes to deduped, not to dropped or qz_dropped_tool_names."""
+        body = {
+            "tools": [
+                {"type": "function", "name": "exec_command", "description": "First."},
+                {"type": "function", "name": "exec_command", "description": "Second."},
+            ]
+        }
+
+        report = normalize_tool_request_for_llamacpp(body, write_captures=False)
+
+        self.assertEqual(len(body["tools"]), 1)
+        self.assertIn("exec_command", report.deduped)
+        self.assertNotIn("exec_command", report.dropped)
+        # exec_command still present — must NOT appear in dropped_tool_names
+        dropped_names = (body.get("metadata") or {}).get("qz_dropped_tool_names", [])
+        self.assertNotIn("exec_command", dropped_names)
+
+    def test_deduped_tools_not_in_qz_dropped_tool_names(self):
+        """Deduped proxy-managed tools (web_search) must not land in qz_dropped_tool_names.
+
+        The first occurrence is still in the tool list, so the model can call it.
+        If the deduped name appeared in dropped_tool_names, a model call would
+        incorrectly receive a 'not available' error injection.
+        """
+        body = {
+            "tools": [
+                {"type": "web_search"},
+                {"type": "function", "name": "web_search", "description": "Stale."},
+            ]
+        }
+
+        report = normalize_tool_request_for_llamacpp(body, write_captures=False)
+
+        self.assertIn("web_search", report.deduped)
+        dropped_names = (body.get("metadata") or {}).get("qz_dropped_tool_names", [])
+        self.assertNotIn("web_search", dropped_names)
+
+    def test_no_change_normalization_produces_empty_deduped_and_dropped(self):
+        """A single custom function tool that passes through produces an empty report."""
+        body = {
+            "tools": [
+                {"type": "function", "name": "my_custom_tool", "description": "Fine."},
+            ]
+        }
+
+        report = normalize_tool_request_for_llamacpp(body, write_captures=False)
+
+        self.assertEqual(report.translated, ())
+        self.assertEqual(report.replaced, ())
+        self.assertEqual(report.deduped, ())
+        self.assertEqual(report.dropped, ())
+
+    def test_deduped_appears_in_capture_notes(self):
+        """Deduplication is recorded in capture notes for operator visibility."""
+        body = {
+            "tools": [
+                {"type": "web_search"},
+                {"type": "function", "name": "web_search", "description": "Stale."},
+            ]
+        }
+
+        report = normalize_tool_request_for_llamacpp(body, write_captures=False)
+
+        notes = report.capture_notes()
+        self.assertIn("deduped: web_search", notes)
+
 
 if __name__ == "__main__":
     unittest.main()
