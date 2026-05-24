@@ -4356,6 +4356,342 @@ class CoercionTelemetryStreamingTests(unittest.TestCase):
         self.assertNotIn('"type": "message"', stream_text)
 
 
+class StreamingToolErrorFixtureTests(unittest.TestCase):
+    """
+    End-to-end streaming integration fixtures for the tool error injection paths.
+
+    Covers:
+      B. Malformed web_search coercion error (Gap 5 close)
+      C. Malformed apply_patch coercion error
+      D. Dropped write_stdin error injection
+      E. Unknown tool error injection
+
+    Each fixture drives a full ResponsesStreamRuntime run: hop 1 emits the
+    malformed/dropped/unknown function_call; hop 2 returns a clean final message.
+    Assertions verify error injection, call_id preservation, no raw-arg leaks, and
+    telemetry events — without touching streaming behaviour for valid calls.
+    """
+
+    def _run(self, stream_chunks, telemetry=None, body_overrides=None):
+        if telemetry is None:
+            telemetry = TelemetryBus()
+        calls = []
+
+        def opener(body):
+            calls.append(json.loads(json.dumps(body)))
+            if len(calls) == 1:
+                return FakeStream(stream_chunks)
+            return FakeStream(_final_message_stream())
+
+        chunks = []
+        from proxy.qz_responses_stream import ResponsesStreamRuntime
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=chunks.append,
+            stream_opener=opener,
+            capture_enabled=False,
+            telemetry=telemetry,
+        )
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "test"}]}],
+            "tools": [{"type": "web_search"}],
+        }
+        if body_overrides:
+            body.update(body_overrides)
+        runtime.run(body, "test-model.gguf")
+        return b"".join(chunks).decode("utf-8"), calls, telemetry
+
+    # ----- B. Malformed web_search coercion error -----
+
+    def test_malformed_web_search_no_lifecycle_events(self):
+        """No web_search_call lifecycle event is emitted to Codex for malformed call."""
+        bad_stream = _named_function_call_stream(
+            "fc_bad", "call_bad_web", "web_search", "{not valid json}"
+        )
+        stream_text, calls, _ = self._run(bad_stream)
+        self.assertNotIn("web_search_call", stream_text,
+                         "no web_search_call lifecycle event should appear in Codex stream "
+                         "when the web_search call was malformed")
+
+    def test_malformed_web_search_error_call_id_preserved(self):
+        """Error result in next hop has the original call_id from the malformed function_call."""
+        bad_stream = _named_function_call_stream(
+            "fc_bad", "call_bad_web", "web_search", "{not valid json}"
+        )
+        stream_text, calls, _ = self._run(bad_stream)
+
+        self.assertGreater(len(calls), 1, "expected a second hop after error injection")
+        next_input = calls[1].get("input") or []
+        error_items = [i for i in next_input
+                       if isinstance(i, dict) and i.get("type") == "function_call_output"]
+        self.assertTrue(error_items,
+                        f"expected error function_call_output in second hop input, got: {next_input}")
+        self.assertEqual(error_items[0].get("call_id"), "call_bad_web",
+                         "error result call_id must match the original malformed call's call_id")
+
+    def test_malformed_web_search_error_output_no_raw_args(self):
+        """Raw malformed argument string does not appear in the model-visible error output."""
+        raw_args = "{not valid json}"
+        bad_stream = _named_function_call_stream("fc_bad", "call_bad_web", "web_search", raw_args)
+        stream_text, calls, _ = self._run(bad_stream)
+
+        self.assertGreater(len(calls), 1)
+        for item in (calls[1].get("input") or []):
+            if isinstance(item, dict) and item.get("type") == "function_call_output":
+                self.assertNotIn(raw_args, item.get("output", ""),
+                                 "raw malformed args must not appear in model-visible error output")
+
+    def test_malformed_web_search_tool_call_error_telemetry(self):
+        """tool_call_error telemetry fires for the coercion error path (in addition to
+        coercion_failed which is already covered by CoercionTelemetryStreamingTests)."""
+        telemetry = TelemetryBus()
+        bad_stream = _named_function_call_stream(
+            "fc_bad", "call_bad_web", "web_search", "{not valid json}"
+        )
+        self._run(bad_stream, telemetry=telemetry)
+        telem_events = telemetry.recent()
+        self.assertTrue(
+            any(e.get("type") == "tool_call_error" for e in telem_events),
+            "tool_call_error telemetry must fire alongside coercion_failed for coercion error path",
+        )
+
+    # ----- C. Malformed apply_patch coercion error -----
+
+    _APPLY_PATCH_BODY_OVERRIDES = {
+        "tools": [{"type": "apply_patch"}],
+        "metadata": {
+            "qz_tool_policy": {
+                "schema": "qz.tool_policy.v1",
+                "apply_patch_declared": True,
+                "apply_patch_client_tool_type": "apply_patch",
+                "apply_patch_output_style": "native",
+            }
+        },
+    }
+
+    def test_malformed_apply_patch_coercion_failed_streaming(self):
+        """Malformed apply_patch args: coercion_failed emitted and error injected in next hop."""
+        telemetry = TelemetryBus()
+        raw_args = "{not valid json for patch}"
+        patch_stream = _named_function_call_stream(
+            "fc_patch", "call_bad_patch", "apply_patch", raw_args
+        )
+        stream_text, calls, _ = self._run(
+            patch_stream,
+            telemetry=telemetry,
+            body_overrides=self._APPLY_PATCH_BODY_OVERRIDES,
+        )
+        telem_events = telemetry.recent()
+        self.assertTrue(
+            any(e.get("type") == "coercion_failed" for e in telem_events),
+            "coercion_failed must be emitted for malformed apply_patch",
+        )
+        self.assertGreater(len(calls), 1, "expected a second hop after error injection")
+        next_input = calls[1].get("input") or []
+        error_items = [i for i in next_input
+                       if isinstance(i, dict) and i.get("type") == "function_call_output"]
+        self.assertTrue(error_items,
+                        "expected error function_call_output in next hop for malformed apply_patch")
+
+    def test_malformed_apply_patch_call_id_preserved(self):
+        """call_id is preserved in the error result for a malformed apply_patch call."""
+        patch_stream = _named_function_call_stream(
+            "fc_patch", "call_bad_patch", "apply_patch", "{}"
+        )
+        stream_text, calls, _ = self._run(
+            patch_stream,
+            body_overrides=self._APPLY_PATCH_BODY_OVERRIDES,
+        )
+        self.assertGreater(len(calls), 1)
+        next_input = calls[1].get("input") or []
+        error_items = [i for i in next_input
+                       if isinstance(i, dict) and i.get("type") == "function_call_output"]
+        self.assertTrue(error_items, "expected error function_call_output for malformed apply_patch")
+        self.assertEqual(error_items[0].get("call_id"), "call_bad_patch",
+                         "error result call_id must match original call_id")
+
+    def test_malformed_apply_patch_no_raw_args_in_error(self):
+        """Raw malformed apply_patch argument string does not appear in model-visible error."""
+        raw_args = "{not valid json for patch}"
+        patch_stream = _named_function_call_stream(
+            "fc_patch", "call_bad_patch", "apply_patch", raw_args
+        )
+        stream_text, calls, _ = self._run(
+            patch_stream,
+            body_overrides=self._APPLY_PATCH_BODY_OVERRIDES,
+        )
+        self.assertGreater(len(calls), 1)
+        for item in (calls[1].get("input") or []):
+            if isinstance(item, dict) and item.get("type") == "function_call_output":
+                self.assertNotIn(raw_args, item.get("output", ""),
+                                 "raw malformed apply_patch args must not appear in model-visible error")
+
+    def test_malformed_apply_patch_no_apply_patch_call_in_stream(self):
+        """No apply_patch_call public/lifecycle event emitted for a malformed apply_patch call."""
+        raw_args = "{not valid json for patch}"
+        patch_stream = _named_function_call_stream(
+            "fc_patch", "call_bad_patch", "apply_patch", raw_args
+        )
+        stream_text, calls, _ = self._run(
+            patch_stream,
+            body_overrides=self._APPLY_PATCH_BODY_OVERRIDES,
+        )
+        self.assertNotIn("apply_patch_call", stream_text,
+                         "no apply_patch_call event should appear in Codex stream for malformed call")
+
+    # ----- D. Dropped write_stdin error injection -----
+
+    _DROPPED_STDIN_BODY_OVERRIDES = {
+        "metadata": {"qz_dropped_tool_names": ["write_stdin"]},
+    }
+
+    def test_dropped_write_stdin_error_injected_streaming(self):
+        """write_stdin in dropped_tool_names: error result injected into next hop input."""
+        telemetry = TelemetryBus()
+        stdin_stream = _named_function_call_stream(
+            "fc_stdin", "call_dropped_stdin", "write_stdin", "{}"
+        )
+        stream_text, calls, _ = self._run(
+            stdin_stream,
+            telemetry=telemetry,
+            body_overrides=self._DROPPED_STDIN_BODY_OVERRIDES,
+        )
+        self.assertGreater(len(calls), 1, "expected second hop after dropped tool error injection")
+        next_input = calls[1].get("input") or []
+        error_items = [i for i in next_input
+                       if isinstance(i, dict) and i.get("type") == "function_call_output"]
+        self.assertTrue(error_items,
+                        "expected error function_call_output in next hop for dropped write_stdin")
+
+    def test_dropped_write_stdin_call_id_preserved(self):
+        """call_id is preserved in the error result for dropped write_stdin."""
+        stdin_stream = _named_function_call_stream(
+            "fc_stdin", "call_dropped_stdin", "write_stdin", "{}"
+        )
+        stream_text, calls, _ = self._run(
+            stdin_stream,
+            body_overrides=self._DROPPED_STDIN_BODY_OVERRIDES,
+        )
+        self.assertGreater(len(calls), 1)
+        next_input = calls[1].get("input") or []
+        error_items = [i for i in next_input
+                       if isinstance(i, dict) and i.get("type") == "function_call_output"]
+        self.assertTrue(error_items)
+        self.assertEqual(error_items[0].get("call_id"), "call_dropped_stdin",
+                         "error result call_id must match original call_id for dropped write_stdin")
+
+    def test_dropped_write_stdin_error_text_mentions_not_available(self):
+        """Dropped write_stdin error text includes 'not available' message."""
+        stdin_stream = _named_function_call_stream(
+            "fc_stdin", "call_dropped_stdin", "write_stdin", "{}"
+        )
+        stream_text, calls, _ = self._run(
+            stdin_stream,
+            body_overrides=self._DROPPED_STDIN_BODY_OVERRIDES,
+        )
+        self.assertGreater(len(calls), 1)
+        next_input = calls[1].get("input") or []
+        for item in next_input:
+            if isinstance(item, dict) and item.get("type") == "function_call_output":
+                self.assertIn("not available", item.get("output", ""),
+                              "dropped tool error must say 'not available' in its output")
+                return
+        self.fail("no function_call_output error item found in second hop input")
+
+    def test_dropped_write_stdin_no_native_passthrough(self):
+        """Dropped write_stdin does not produce a native-passthrough event in Codex stream."""
+        stdin_stream = _named_function_call_stream(
+            "fc_stdin", "call_dropped_stdin", "write_stdin", "{}"
+        )
+        stream_text, calls, _ = self._run(
+            stdin_stream,
+            body_overrides=self._DROPPED_STDIN_BODY_OVERRIDES,
+        )
+        # The function_call events are suppressed by the streaming path; the error
+        # is injected only into the next hop's upstream input, not into Codex output.
+        self.assertNotIn('"write_stdin"', stream_text,
+                         "dropped write_stdin must not produce a public event in Codex stream")
+
+    def test_dropped_write_stdin_tool_call_error_telemetry(self):
+        """tool_call_error telemetry is emitted for dropped write_stdin."""
+        telemetry = TelemetryBus()
+        stdin_stream = _named_function_call_stream(
+            "fc_stdin", "call_dropped_stdin", "write_stdin", "{}"
+        )
+        self._run(
+            stdin_stream,
+            telemetry=telemetry,
+            body_overrides=self._DROPPED_STDIN_BODY_OVERRIDES,
+        )
+        telem_events = telemetry.recent()
+        self.assertTrue(
+            any(e.get("type") == "tool_call_error" for e in telem_events),
+            "tool_call_error telemetry must fire for dropped write_stdin",
+        )
+
+    # ----- E. Unknown tool error injection -----
+
+    def test_unknown_tool_error_injected_streaming(self):
+        """Completely unknown tool: error injected in next hop with 'not recognised' text."""
+        telemetry = TelemetryBus()
+        unknown_stream = _named_function_call_stream(
+            "fc_unk", "call_unknown_xyz", "totally_unknown_tool_xyz", "{}"
+        )
+        stream_text, calls, _ = self._run(unknown_stream, telemetry=telemetry)
+        self.assertGreater(len(calls), 1, "expected second hop after unknown tool error injection")
+        next_input = calls[1].get("input") or []
+        error_items = [i for i in next_input
+                       if isinstance(i, dict) and i.get("type") == "function_call_output"]
+        self.assertTrue(error_items, "expected error function_call_output for unknown tool")
+        self.assertIn("not recognised", error_items[0].get("output", ""),
+                      "unknown tool error must say 'not recognised' in its output")
+
+    def test_unknown_tool_call_id_preserved(self):
+        """call_id is preserved in the error result for an unknown tool."""
+        unknown_stream = _named_function_call_stream(
+            "fc_unk", "call_unknown_xyz", "totally_unknown_tool_xyz", "{}"
+        )
+        stream_text, calls, _ = self._run(unknown_stream)
+        self.assertGreater(len(calls), 1)
+        next_input = calls[1].get("input") or []
+        error_items = [i for i in next_input
+                       if isinstance(i, dict) and i.get("type") == "function_call_output"]
+        self.assertTrue(error_items)
+        self.assertEqual(error_items[0].get("call_id"), "call_unknown_xyz",
+                         "error result call_id must match original call_id for unknown tool")
+
+    def test_unknown_tool_no_raw_args_in_error(self):
+        """Raw arguments string does not appear in model-visible error for unknown tool."""
+        raw_args = '{"secret_data": "should_not_leak"}'
+        unknown_stream = _named_function_call_stream(
+            "fc_unk", "call_unknown_xyz", "totally_unknown_tool_xyz", raw_args
+        )
+        stream_text, calls, _ = self._run(unknown_stream)
+        self.assertGreater(len(calls), 1)
+        for item in (calls[1].get("input") or []):
+            if isinstance(item, dict) and item.get("type") == "function_call_output":
+                self.assertNotIn(raw_args, item.get("output", ""),
+                                 "raw args must not appear in model-visible error for unknown tool")
+
+    def test_unknown_tool_call_error_telemetry(self):
+        """tool_call_error telemetry is emitted for an unknown tool."""
+        telemetry = TelemetryBus()
+        unknown_stream = _named_function_call_stream(
+            "fc_unk", "call_unknown_xyz", "totally_unknown_tool_xyz", "{}"
+        )
+        self._run(unknown_stream, telemetry=telemetry)
+        telem_events = telemetry.recent()
+        self.assertTrue(
+            any(e.get("type") == "tool_call_error" for e in telem_events),
+            "tool_call_error telemetry must fire for unknown tool",
+        )
+
+
 class NonStreamingDroppedToolGapTests(unittest.TestCase):
     """Tests that the non-streaming path applies dropped/unknown tool errors."""
 

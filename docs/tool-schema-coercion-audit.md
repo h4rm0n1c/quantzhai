@@ -13,9 +13,9 @@ Related:
 ## Summary
 
 Tool schema replacement (dedup and name-based substitution) is **fixed** as of
-commit `ebdf87b`. All other coercion/advice paths are **implemented** and
-**correct** for the streaming path. The non-streaming path has a narrow gap for
-non-proxy-local dropped/unknown tools.
+commit `ebdf87b`. All coercion/advice paths are **implemented**, **correct**, and
+**streaming-integration-tested**. The non-streaming gap (Gap 4) and streaming fixture
+gap (Gap 5) are both closed.
 
 Coercion telemetry enriched: `coercion_succeeded` and `coercion_failed` events
 carry `source="tool_adapter"`, `upstream_name`, `call_id`, `correction_applied`,
@@ -273,12 +273,12 @@ Yes. The check `if name in CODEX_NATIVE_TOOL_NAMES` runs at step 4, after droppe
 | valid web_search `type=function name=web_search` | **replaced** by proxy schema (ebdf87b) | ✓ | no | n/a | yes (`tool_schema_replaced`, replaced) | `tool_schema_replaced` (router + stream, `source="tool_schema_normalizer"`) | none | unit tests + streaming tests | — |
 | duplicate web_search (both typed) | first wins; second dropped | ✓ | no | n/a | no | none | none | unit tests (ebdf87b) | none |
 | stale Codex web_search schema | replaced; `action="capabilities"` in description | ✓ | no | n/a | no | none | none | unit tests | none |
-| malformed web_search JSON | coerce() → error result injected → model next hop | ✓ | no | yes (error string) | yes (tool_call_error streaming) | tool_call_error (streaming) | none | unit test (coerce), **no streaming fixture** | add streaming fixture (B2) |
+| malformed web_search JSON | coerce() → error result injected → model next hop | ✓ | no | yes (error string) | yes (tool_call_error + coercion_failed streaming) | tool_call_error, coercion_failed (streaming) | none | unit test (coerce) + `StreamingToolErrorFixtureTests` (4 streaming tests) | — |
 | valid-but-runtime-invalid web_search (e.g. missing query) | runtime returns `{"ok": false, "error": "Missing query"}` in function_call_output | ✓ | no | yes | yes (tool_call_completed) | tool_call_completed | none | unit tests (execute_web_search_call) | none |
 | valid apply_patch | coerce() → corrected args → output_to_codex → public item to Codex | ✓ | yes (apply_patch_call or custom_tool_call) | n/a | yes (output_item.done) | n/a | none | unit + golden tests | none |
-| malformed apply_patch | coerce() → error result injected (streaming) or partial envelope (public path) | ✓ | no (streaming error) or partial envelope (public) | yes (streaming: error; public: Codex verifier) | yes (tool_call_error streaming) | tool_call_error (streaming) | none | coerce unit tests; **no streaming fixture** | add streaming fixture (B2) |
-| unknown tool | completed_call_decision step 5 → error result injected in both streaming and non-streaming | ✓ | no | yes | yes (`tool_call_error` both paths) | `tool_call_error` (`source="tool_decision"` non-streaming; no source streaming) | none | unit tests + NonStreamingDroppedToolTests | — |
-| dropped write_stdin (no live session) | dropped at normalisation; if called → dropped-tool error injected | ✓ | no | yes | partial (tool_call_error streaming + non-streaming) | tool_call_error (both paths) | none | normalisation unit tests; **no streaming end-to-end fixture** | add streaming fixture (B2) |
+| malformed apply_patch | coerce() → error result injected | ✓ | no | yes (error string) | yes (coercion_failed + tool_call_error streaming) | coercion_failed, tool_call_error (streaming) | none | coerce unit tests + `StreamingToolErrorFixtureTests` (4 streaming tests) | — |
+| unknown tool | completed_call_decision step 5 → error result injected in both streaming and non-streaming | ✓ | no | yes | yes (`tool_call_error` both paths) | `tool_call_error` | none | unit tests + `NonStreamingDroppedToolTests` + `StreamingToolErrorFixtureTests` (4 streaming tests) | — |
+| dropped write_stdin (no live session) | dropped at normalisation; if called → dropped-tool error injected | ✓ | no | yes | yes (tool_call_error both paths) | tool_call_error (both paths) | none | normalisation unit tests + `StreamingToolErrorFixtureTests` (5 streaming tests) | — |
 | exec_command (Codex-native) | hint appended at normalisation; passes through via `kind="public"` | ✓ | yes | n/a | yes (output_item.done) | n/a | none | unit tests | none |
 | repeated-read/advisory signal | signal result injected; model sees advisory; hop continues | ✓ | no | yes | yes (repeated_read_signal telemetry) | repeated_read_signal | none | unit + proxy_tools tests | none |
 | coercion success (any tool) | corrected arguments used silently | ✓ | no | n/a | yes (`coercion_succeeded` telemetry) | `coercion_succeeded` (router + stream, `source="tool_adapter"`) | none | unit tests + streaming tests | — |
@@ -315,11 +315,11 @@ Yes. The check `if name in CODEX_NATIVE_TOOL_NAMES` runs at step 4, after droppe
 
 2. **`test_adapter_for_name_returns_correct_adapter`** — `ToolRegistry.adapter_for_name("web_search")` returns `WEB_SEARCH_TOOL_ADAPTER`; `adapter_for_name("apply_patch")` returns `APPLY_PATCH_TOOL_ADAPTER`; `adapter_for_name("unknown")` returns None.
 
-3. **`test_streaming_coerce_error_suppresses_lifecycle_event`** — using a `ResponsesStreamRuntime` fixture with a mock upstream that emits a malformed web_search call: verify no `response.web_search_call.*` lifecycle events appear in the Codex stream; verify error `function_call_output` is in the next hop input; verify `tool_call_error` telemetry fires.
+3. ~~**`test_streaming_coerce_error_suppresses_lifecycle_event`**~~ — **done**: `StreamingToolErrorFixtureTests.test_malformed_web_search_no_lifecycle_events` verifies no `web_search_call` lifecycle events appear in Codex stream for malformed web_search. `test_malformed_web_search_error_call_id_preserved` verifies error in next hop. `test_malformed_web_search_tool_call_error_telemetry` verifies `tool_call_error` fires.
 
-4. **`test_streaming_coerce_error_no_raw_args_leaked`** — in the coerce-failure scenario above: verify the error message in the injected `function_call_output` does not contain the raw arguments string.
+4. ~~**`test_streaming_coerce_error_no_raw_args_leaked`**~~ — **done**: `StreamingToolErrorFixtureTests.test_malformed_web_search_error_output_no_raw_args` verifies raw args do not appear in model-visible error. `test_malformed_apply_patch_no_raw_args_in_error` covers apply_patch path.
 
-5. **`test_streaming_dropped_tool_error_injected`** — via fixture: model calls a tool with a name that is in `dropped_tool_names`; verify error result in next_input, no lifecycle event to Codex.
+5. ~~**`test_streaming_dropped_tool_error_injected`**~~ — **done**: `StreamingToolErrorFixtureTests` covers dropped write_stdin in 5 tests: error injected, call_id preserved, "not available" text, no native passthrough, tool_call_error telemetry.
 
 6. ~~**`test_non_streaming_dropped_nonproxy_tool_applies_error`**~~ — **done**: `NonStreamingDroppedToolTests` in `test_qz_request_router.py` covers error injection (dropped and unknown tools), original item exclusion, and telemetry fields.
 
@@ -389,15 +389,23 @@ Tests: `tests/test_qz_request_router.py::NonStreamingDroppedToolTests` (8 tests 
 error injection, original item exclusion, telemetry fields: `tool`, `call_id`, `source`, `request_id`,
 and unknown-tool path).
 
-### Gap 5 — No streaming fixture for coercion error path
+### ~~Gap 5~~ — No streaming fixture for coercion error path (**CLOSED**)
 
-The coercion error path in `completed_call_decision` → streaming `kind=="error"` → 
-`hs.next_input.append(decision.error_result)` has no end-to-end streaming test. Only
-unit tests for `completed_call_decision` exist; the streaming hop loop integration is
-not covered.
+**Done.** `StreamingToolErrorFixtureTests` in `tests/test_qz_responses_stream.py` adds
+17 end-to-end streaming integration tests across four error paths:
 
-**Fix (B2)**: add a `ResponsesStreamRuntime` fixture test that drives a malformed
-tool call through the hop loop and verifies the error appears in the next-hop request.
+- **Malformed web_search** (4 tests): no lifecycle events, call_id preserved, no raw args in
+  model-visible error, tool_call_error telemetry fires.
+- **Malformed apply_patch** (4 tests): coercion_failed telemetry, error injected, call_id
+  preserved, no raw args, no apply_patch_call event in stream.
+- **Dropped write_stdin** (5 tests): error injected, call_id preserved, "not available" text,
+  no native passthrough in stream, tool_call_error telemetry.
+- **Unknown tool** (4 tests): error injected with "not recognised" text, call_id preserved,
+  no raw args, tool_call_error telemetry.
+
+All 17 tests pass. Together with the existing `CoercionTelemetryStreamingTests` (coercion
+telemetry, coercion_failed/succeeded events, no function_call in stream), the streaming
+error injection path is now fully covered at the integration level.
 
 ---
 
