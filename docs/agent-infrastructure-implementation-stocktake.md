@@ -27,10 +27,10 @@ This document provides a comprehensive inventory of the agent infrastructure imp
 | **retrieval action** | live_smoke | yes | function_call_output | telemetry | none | — |
 | **repeated-read parser** | unit_test | yes | none | none | none | — |
 | **repeated-read tool** | live_smoke | yes | function_call_output | repeated_read_signal | none | — |
-| **native sandbox classifier** | live_smoke | yes | none | tool_sandbox_denied | no model-visible advice | add model advice |
+| **native sandbox classifier** | live_smoke | yes | none | tool_sandbox_denied | — | — |
 | **native conn-refused** | unit_test | yes | none | tool_connection_failed | no model-visible advice | — |
 | **native telemetry wiring** | source | yes | none | telemetry | none | — |
-| **native model advice** | source | partial | turn harness (static) | none | not live-agent-validated | inject advisory result |
+| **native sandbox advisory** | unit_test | partial | function_call_output (advisory) | tool_sandbox_advisory_injected | not live-agent-validated | live-smoke advisory |
 | **SignalDecision types** | source | yes | none | none | none | — |
 | **render_coercion_error** | unit_test | yes | function_call_output | none | none | — |
 | **render_advisory** | unit_test | yes | function_call_output | none | none | — |
@@ -63,6 +63,12 @@ For each major claim, this index links to the proof of implementation and valida
     - Router: `proxy/qz_request_router.py` (Imports and uses `classify_native_tool_output_signals` in `proxy_json_api`)
     - Tests: `tests/test_qz_native_tool_output.py` (`SignalWrapperTests`), `tests/test_qz_request_router.py` (`SignalDecisionEmissionTests`)
     - Proof of legacy compatibility: `tests/test_qz_native_tool_output.py` (`ClassifyNativeToolOutputsTests`) still uses legacy API.
+- **Sandbox advisory (model-visible)**:
+    - Source: `proxy/qz_request_router.py` (`_model_visible_native_advisories`, `_SANDBOX_READONLY_ADVISORY_TEXT`)
+    - Router wiring: `proxy_json_api` appends advisory items to `body["input"]` for `sandbox_denied_readonly_fs` / `high` confidence signals, then emits `tool_sandbox_advisory_injected` telemetry.
+    - Advisory rendered via `qz_feedback.render_advisory_output()` — plain text, not a JSON error shape.
+    - Tests: `tests/test_qz_request_router.py` (`SandboxAdvisoryHelperTests`, `SandboxAdvisoryInjectionTests`)
+    - Bounds: only `sandbox_denied_readonly_fs`, only `high` confidence, deduped per call_id per request, no persistent state, no auto-retry.
 - **Web_search provider guidance**:
     - Source: `proxy/qz_tool_web.py` (`_fetch_provider_guidance_cached`)
     - Capabilities: `GET /qz/web-search/capabilities`
@@ -107,7 +113,7 @@ QuantZhai is evaluated against three major architectural patterns to identify ga
 ## D. Recommended Next Fix Passes (Evidence-Based)
 
 1. **Live validate provider_guidance**: Verify `qz-live-smoke` confirms guidance appearing in capabilities.
-2. **Model-visible Sandbox Advisory**: Inject model-visible advisory results for `tool_sandbox_denied`. This is NOT yet implemented; the current wiring is telemetry-only for stability.
+2. **Model-visible Sandbox Advisory**: ✓ Done — `_model_visible_native_advisories` wired in `proxy_json_api`. Sandbox `tool_sandbox_denied` (classifier `sandbox_denied_readonly_fs`, confidence `high`) now appends a plain-text advisory `function_call_output` item before forwarding. Telemetry: `tool_sandbox_denied` (existing) + `tool_sandbox_advisory_injected` (new). Next: live-smoke to confirm the model receives and acts on the advisory.
 3. **Enrich Coercion Telemetry**: Add specific `tool` and `call_id` fields to all coercion events.
 4. **Watchdog Smoke**: Add a dedicated timeout smoke test before enabling default timeouts.
 5. **BrainCase Isolation**: Maintain BrainCase as a feature-flagged experimental path.

@@ -301,5 +301,259 @@ class SignalDecisionEmissionTests(unittest.TestCase):
         self.assertEqual(len(handler.telemetry.emitted), 0)
 
 
+class SandboxAdvisoryHelperTests(unittest.TestCase):
+    """Unit tests for RequestRouter._model_visible_native_advisories()."""
+
+    class _FakeTelemetry:
+        def __init__(self):
+            self.emitted = []
+
+        def emit(self, event_type, payload):
+            self.emitted.append((event_type, payload))
+
+    def _make_router(self):
+        from proxy.qz_proxy_tools import ProxyLocalToolRegistry
+        handler = FakeHandler(ProxyLocalToolRegistry([]))
+        handler.telemetry = self._FakeTelemetry()
+        return RequestRouter(handler)
+
+    def _make_sandbox_signal(self, call_id="call_ro", confidence="high"):
+        from proxy.qz_feedback import FeedbackChannel, FeedbackVisibility, SignalDecision
+        return SignalDecision(
+            event_type="tool_sandbox_denied",
+            payload={
+                "call_id": call_id,
+                "tool": "exec_command",
+                "classifier": "sandbox_denied_readonly_fs",
+                "matched_string": "Read-only file system",
+                "exit_code": 1,
+                "output_preview": "...Read-only file system...",
+                "confidence": confidence,
+            },
+            visibility=FeedbackVisibility.OPERATOR,
+            channel=FeedbackChannel.TELEMETRY,
+            confidence=confidence,
+        )
+
+    def _make_connection_refused_signal(self, call_id="call_conn"):
+        from proxy.qz_feedback import FeedbackChannel, FeedbackVisibility, SignalDecision
+        return SignalDecision(
+            event_type="tool_connection_failed",
+            payload={
+                "call_id": call_id,
+                "tool": "exec_command",
+                "classifier": "native_tool_connection_refused",
+                "matched_string": "Connection refused",
+                "exit_code": 1,
+                "output_preview": "...Connection refused...",
+                "confidence": "medium",
+            },
+            visibility=FeedbackVisibility.OPERATOR,
+            channel=FeedbackChannel.TELEMETRY,
+            confidence="medium",
+        )
+
+    def test_sandbox_denied_high_confidence_produces_advisory(self):
+        router = self._make_router()
+        advisories = router._model_visible_native_advisories([self._make_sandbox_signal()])
+        self.assertEqual(len(advisories), 1)
+
+    def test_advisory_is_function_call_output(self):
+        router = self._make_router()
+        advisories = router._model_visible_native_advisories([self._make_sandbox_signal()])
+        self.assertEqual(advisories[0]["type"], "function_call_output")
+
+    def test_advisory_uses_original_call_id(self):
+        router = self._make_router()
+        advisories = router._model_visible_native_advisories([self._make_sandbox_signal("call_ro_original")])
+        self.assertEqual(advisories[0]["call_id"], "call_ro_original")
+
+    def test_advisory_text_mentions_readonly_filesystem(self):
+        router = self._make_router()
+        advisories = router._model_visible_native_advisories([self._make_sandbox_signal()])
+        self.assertIn("read-only filesystem", advisories[0]["output"].lower())
+
+    def test_advisory_text_mentions_not_retrying(self):
+        router = self._make_router()
+        advisories = router._model_visible_native_advisories([self._make_sandbox_signal()])
+        self.assertIn("retry", advisories[0]["output"].lower())
+
+    def test_advisory_is_plain_text_not_json_error(self):
+        router = self._make_router()
+        advisories = router._model_visible_native_advisories([self._make_sandbox_signal()])
+        output = advisories[0]["output"]
+        self.assertIsInstance(output, str)
+        # Must not be a JSON {"ok": false, ...} error payload
+        self.assertNotIn('"ok"', output)
+        try:
+            parsed = json.loads(output)
+            # If it somehow parses as JSON, it must not have "ok"
+            self.assertNotIn("ok", parsed)
+        except (ValueError, KeyError):
+            pass  # plain text is the expected form
+
+    def test_connection_refused_produces_no_advisory(self):
+        router = self._make_router()
+        advisories = router._model_visible_native_advisories([self._make_connection_refused_signal()])
+        self.assertEqual(advisories, [])
+
+    def test_non_high_confidence_sandbox_signal_produces_no_advisory(self):
+        router = self._make_router()
+        advisories = router._model_visible_native_advisories([self._make_sandbox_signal(confidence="medium")])
+        self.assertEqual(advisories, [])
+
+    def test_duplicate_call_id_produces_one_advisory(self):
+        router = self._make_router()
+        signals = [self._make_sandbox_signal("call_same"), self._make_sandbox_signal("call_same")]
+        advisories = router._model_visible_native_advisories(signals)
+        self.assertEqual(len(advisories), 1)
+
+    def test_empty_signals_produces_no_advisory(self):
+        router = self._make_router()
+        self.assertEqual(router._model_visible_native_advisories([]), [])
+
+    def test_malformed_signals_do_not_crash(self):
+        router = self._make_router()
+        advisories = router._model_visible_native_advisories([None, "bad", 42, {}])
+        self.assertEqual(advisories, [])
+
+    def test_multiple_different_call_ids_produce_multiple_advisories(self):
+        router = self._make_router()
+        signals = [self._make_sandbox_signal("call_a"), self._make_sandbox_signal("call_b")]
+        advisories = router._model_visible_native_advisories(signals)
+        self.assertEqual(len(advisories), 2)
+        call_ids = {a["call_id"] for a in advisories}
+        self.assertIn("call_a", call_ids)
+        self.assertIn("call_b", call_ids)
+
+    def test_connection_refused_mixed_with_sandbox_denied(self):
+        """Only sandbox_denied triggers advisory; connection_refused does not."""
+        router = self._make_router()
+        signals = [
+            self._make_sandbox_signal("call_ro"),
+            self._make_connection_refused_signal("call_conn"),
+        ]
+        advisories = router._model_visible_native_advisories(signals)
+        self.assertEqual(len(advisories), 1)
+        self.assertEqual(advisories[0]["call_id"], "call_ro")
+
+    def test_telemetry_is_not_suppressed_by_advisory(self):
+        """_emit_signal_decisions still emits tool_sandbox_denied even when advisory is added."""
+        from proxy.qz_feedback import FeedbackChannel, FeedbackVisibility, SignalDecision
+        handler = FakeHandler.__new__(FakeHandler)
+        handler.telemetry = self._FakeTelemetry()
+        handler.proxy_tool_registry_factory = None
+        router = RequestRouter(handler)
+
+        signal = self._make_sandbox_signal("call_tel")
+        router._emit_signal_decisions([signal], request_id="req_abc")
+        router._model_visible_native_advisories([signal])
+
+        # Telemetry emitted once by _emit_signal_decisions
+        emitted_events = [e[0] for e in handler.telemetry.emitted]
+        self.assertIn("tool_sandbox_denied", emitted_events)
+
+
+class SandboxAdvisoryInjectionTests(unittest.TestCase):
+    """Integration tests: advisory items are injected into body input for sandbox-denied signals."""
+
+    _READONLY_FS_OUTPUT = (
+        "Chunk ID: 0c3a9b\n"
+        "Wall time: 0.0000 seconds\n"
+        "Process exited with code 1\n"
+        "Original token count: 16\n"
+        "Output:\n"
+        "/bin/bash: line 1: /etc/qz-denied-test: Read-only file system\n"
+    )
+    _CONN_REFUSED_OUTPUT = (
+        "Chunk ID: ab12cd\n"
+        "Wall time: 0.0010 seconds\n"
+        "Process exited with code 1\n"
+        "Output:\n"
+        "curl: (7) Failed to connect to 127.0.0.1 port 18180: Connection refused\n"
+    )
+
+    def _classify_and_advise(self, input_items):
+        """Classify input_items and return the advisory items a router would produce."""
+        from proxy.qz_native_tool_output import classify_native_tool_output_signals
+        from proxy.qz_proxy_tools import ProxyLocalToolRegistry
+        handler = FakeHandler(ProxyLocalToolRegistry([]))
+        router = RequestRouter(handler)
+        signals = classify_native_tool_output_signals(input_items)
+        return router._model_visible_native_advisories(signals)
+
+    def test_sandbox_denied_input_produces_advisory(self):
+        input_items = [
+            {"type": "function_call", "call_id": "call_denied", "name": "exec_command",
+             "arguments": '{"cmd": "echo hi > /etc/test"}'},
+            {"type": "function_call_output", "call_id": "call_denied",
+             "output": self._READONLY_FS_OUTPUT},
+        ]
+        advisories = self._classify_and_advise(input_items)
+        self.assertEqual(len(advisories), 1)
+        advisory = advisories[0]
+        self.assertEqual(advisory["type"], "function_call_output")
+        self.assertEqual(advisory["call_id"], "call_denied")
+        self.assertIn("read-only filesystem", advisory["output"].lower())
+
+    def test_advisory_added_to_body_input(self):
+        """Advisory items are appended after the existing input items."""
+        from proxy.qz_native_tool_output import classify_native_tool_output_signals
+        from proxy.qz_proxy_tools import ProxyLocalToolRegistry
+        handler = FakeHandler(ProxyLocalToolRegistry([]))
+        router = RequestRouter(handler)
+
+        input_items = [
+            {"type": "function_call_output", "call_id": "call_ro",
+             "output": self._READONLY_FS_OUTPUT},
+        ]
+        body = {"input": list(input_items)}
+        signals = classify_native_tool_output_signals(input_items)
+        advisories = router._model_visible_native_advisories(signals)
+
+        self.assertEqual(len(advisories), 1)
+        # Simulate the injection (as done in proxy_json_api)
+        body["input"] = list(input_items) + advisories
+
+        self.assertEqual(len(body["input"]), 2)
+        self.assertEqual(body["input"][0]["type"], "function_call_output")
+        self.assertEqual(body["input"][1]["type"], "function_call_output")
+        self.assertEqual(body["input"][1]["call_id"], "call_ro")
+
+    def test_normal_output_produces_no_advisory(self):
+        input_items = [
+            {"type": "function_call_output", "call_id": "call_ok",
+             "output": "Process exited with code 0\nOutput:\nall good\n"},
+        ]
+        advisories = self._classify_and_advise(input_items)
+        self.assertEqual(advisories, [])
+
+    def test_permission_denied_does_not_add_advisory(self):
+        input_items = [
+            {"type": "function_call_output", "call_id": "call_perm",
+             "output": "Process exited with code 1\nOutput:\nbash: permission denied\n"},
+        ]
+        advisories = self._classify_and_advise(input_items)
+        self.assertEqual(advisories, [])
+
+    def test_connection_refused_produces_no_advisory(self):
+        input_items = [
+            {"type": "function_call_output", "call_id": "call_conn",
+             "output": self._CONN_REFUSED_OUTPUT},
+        ]
+        advisories = self._classify_and_advise(input_items)
+        self.assertEqual(advisories, [])
+
+    def test_original_input_items_not_mutated_by_advisory_path(self):
+        import copy
+        input_items = [
+            {"type": "function_call_output", "call_id": "call_ro",
+             "output": self._READONLY_FS_OUTPUT},
+        ]
+        original = copy.deepcopy(input_items)
+        self._classify_and_advise(input_items)
+        self.assertEqual(input_items, original)
+
+
 if __name__ == "__main__":
     unittest.main()

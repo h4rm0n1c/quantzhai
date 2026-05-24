@@ -251,7 +251,7 @@ for future storage.
 | tool-call count | counted per turn | turn | **partial** (telemetry events) | no |
 | repeated file reads | from `body["input"]` function_call history | request | **planned** (repeated-read v1) | advisory signal |
 | file read/write path history | from `body["input"]` | request | **planned** (v1) | advisory signal |
-| `tool_sandbox_denied` classification | `classify_native_tool_outputs()` on raw incoming body | request | **implemented** | no (telemetry only) |
+| `tool_sandbox_denied` classification | `classify_native_tool_outputs()` on raw incoming body | request | **implemented** | yes — advisory `function_call_output` injected for `sandbox_denied_readonly_fs` / `high` confidence |
 | `tool_escalation_requested` | `_check_sandbox_escalation()` on outgoing function_call SSE | request | **implemented** | no (telemetry only) |
 | `tool_connection_failed` | `classify_native_tool_outputs()` | request | **implemented** | no (telemetry only) |
 | proxy-local tool provenance | proxy-local executor tags | turn | **implemented** | visible in public items |
@@ -272,6 +272,7 @@ by channel and implementation status.
 | Signal | Classification | Channel | Status |
 |---|---|---|---|
 | "You already read this file earlier in this turn." | self-management | function_call_output advisory result | **planned** (repeated-read v1) |
+| "The previous native tool call failed because the sandbox reported a read-only filesystem. Do not retry the same write operation unchanged." | quality | `function_call_output` advisory result via `render_advisory_output()` | **implemented** — bounded to `sandbox_denied_readonly_fs` / `high` confidence only; telemetry: `tool_sandbox_advisory_injected` |
 | "This tool failed because the sandbox blocked it." | quality | harness guidance (`codex-core-qwenified.md`) | **implemented** (harness text only; not automatic per-failure injection) |
 | "This tool call was malformed: missing argument X." | quality | `function_call_output` error result via `synthesize_tool_error_result()` | **implemented** |
 | "You have made N tool calls this turn." | self-management | not yet implemented | speculative |

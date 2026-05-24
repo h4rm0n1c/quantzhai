@@ -63,6 +63,21 @@ def main():
     else:
         report("Native Classifier (SignalDecision)", "WARN", "qz_request_router uses legacy tuples")
 
+    # 1b. Sandbox Advisory (model-visible)
+    has_advisory_helper = check_file_contains(router_path, "_model_visible_native_advisories")
+    has_advisory_text = check_file_contains(router_path, "_SANDBOX_READONLY_ADVISORY_TEXT")
+    advisory_tests_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tests", "test_qz_request_router.py")
+    has_advisory_tests = check_file_contains(advisory_tests_path, "SandboxAdvisoryHelperTests")
+    if has_advisory_helper and has_advisory_text and has_advisory_tests:
+        report("Sandbox Advisory (model-visible)", "PASS",
+               "_model_visible_native_advisories wired + tests present")
+    elif has_advisory_helper:
+        report("Sandbox Advisory (model-visible)", "WARN",
+               "advisory helper present but tests or text constant missing")
+    else:
+        report("Sandbox Advisory (model-visible)", "WARN",
+               "native classifier is telemetry-only; model-visible advisory not yet wired")
+
     # 2. Tool Error Delegation
     # We check if synthesize_tool_error_result calls render_coercion_error
     # In reality it doesn't currently, it's a duplicate.

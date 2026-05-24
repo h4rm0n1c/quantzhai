@@ -137,6 +137,15 @@ IMPLEMENTED_TRIGGER_ACTIONS: frozenset = SAFE_TRIGGER_ACTIONS | DANGEROUS_TRIGGE
 UNIMPLEMENTED_TRIGGER_ACTIONS: frozenset = ALLOWED_RECOVERY_ACTIONS - IMPLEMENTED_TRIGGER_ACTIONS
 RECOVERY_TRIGGER_SCHEMA = "qz.recovery.trigger.v1"
 
+# Advisory text injected when a native tool call is blocked by a read-only filesystem.
+# Plain text — not a JSON error shape. The model may use or ignore the advisory.
+_SANDBOX_READONLY_ADVISORY_TEXT = (
+    "The previous native tool call failed because the sandbox reported a read-only filesystem. "
+    "Do not retry the same write operation unchanged. "
+    "Choose a writable path, request the required permission/escalation if available, "
+    "or explain the blocker."
+)
+
 _TRIGGER_WARNINGS: dict = {
     "refresh_catalog":      "Refreshing the catalog does not restart the backend.",
     "clear_failure":        "Clearing failure state does not start or restart the backend.",
@@ -300,6 +309,57 @@ class RequestRouter:
                     self.handler.telemetry.emit(signal.event_type, payload)
             except Exception:
                 pass
+
+    def _model_visible_native_advisories(self, signals: List[Any]) -> List[dict]:
+        """Build model-visible advisory function_call_output items for qualifying signals.
+
+        Currently only produces advisories for:
+        - event_type:   tool_sandbox_denied
+        - classifier:   sandbox_denied_readonly_fs
+        - confidence:   high
+
+        Deduplicates per call_id within a single request: if multiple signals match
+        for the same call_id, only one advisory is injected.
+
+        Does not produce advisories for:
+        - connection_refused (telemetry-only)
+        - non-high-confidence sandbox signals
+        - generic permission denied
+
+        Does not mutate signal objects or the input list.
+        Returns a list (possibly empty) of function_call_output dicts.
+        """
+        try:
+            from .qz_feedback import render_advisory_output
+        except ImportError:
+            from qz_feedback import render_advisory_output
+
+        seen_call_ids: set = set()
+        advisories: list = []
+
+        for signal in signals:
+            try:
+                if signal.event_type != "tool_sandbox_denied":
+                    continue
+                payload = signal.payload
+                if not isinstance(payload, dict):
+                    continue
+                if payload.get("classifier") != "sandbox_denied_readonly_fs":
+                    continue
+                if signal.confidence != "high":
+                    continue
+                call_id = payload.get("call_id") or ""
+                if call_id in seen_call_ids:
+                    continue
+                seen_call_ids.add(call_id)
+                advisories.append(render_advisory_output(
+                    {"call_id": call_id} if call_id else {},
+                    _SANDBOX_READONLY_ADVISORY_TEXT,
+                ))
+            except Exception:
+                pass
+
+        return advisories
 
     def _proxy_startup_ready(self) -> bool:
         ready_fn = getattr(self.handler, "_startup_ready", None)
@@ -2914,6 +2974,31 @@ class RequestRouter:
                 if isinstance(_raw_input, list):
                     signals = classify_native_tool_output_signals(_raw_input)
                     self._emit_signal_decisions(signals, request_id=request_id)
+                    # Inject model-visible advisories for high-confidence sandbox denials.
+                    # Advisory items are appended to body["input"] before any normalization
+                    # so the model receives corrective feedback alongside the original outputs.
+                    _advisory_items = self._model_visible_native_advisories(signals)
+                    if _advisory_items:
+                        body["input"] = list(_raw_input) + _advisory_items
+                        for _adv in _advisory_items:
+                            try:
+                                _adv_call_id = _adv.get("call_id") or ""
+                                _adv_tel: dict = {
+                                    "call_id": _adv_call_id,
+                                    "request_id": request_id,
+                                }
+                                for _sig in signals:
+                                    if (
+                                        _sig.event_type == "tool_sandbox_denied"
+                                        and isinstance(_sig.payload, dict)
+                                        and _sig.payload.get("call_id") == _adv_call_id
+                                    ):
+                                        _adv_tel["tool"] = _sig.payload.get("tool") or ""
+                                        _adv_tel["classifier"] = _sig.payload.get("classifier") or ""
+                                        break
+                                self.handler.telemetry.emit("tool_sandbox_advisory_injected", _adv_tel)
+                            except Exception:
+                                pass
 
                 body = self.handler._model_router().inject_runtime_state(body, client_model)
                 ensure_apply_patch_tool_policy(body, overwrite=True)

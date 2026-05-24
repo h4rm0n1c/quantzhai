@@ -110,6 +110,39 @@ visibility, channel, confidence, and empty input.
 
 ---
 
+## Phase 3b: Sandbox advisory model injection (done)
+
+`proxy/qz_request_router.py` adds:
+
+```python
+_SANDBOX_READONLY_ADVISORY_TEXT   # plain-text advisory string constant
+RequestRouter._model_visible_native_advisories(signals) -> list[dict]
+```
+
+When `classify_native_tool_output_signals()` returns a `tool_sandbox_denied`
+signal with `classifier=sandbox_denied_readonly_fs` and `confidence=high`, the
+router appends a `function_call_output` advisory item to `body["input"]` before
+forwarding to the upstream. The advisory uses `render_advisory_output()` from
+`qz_feedback.py` (plain text, not a JSON error shape).
+
+Telemetry separation:
+- `_emit_signal_decisions()` emits `tool_sandbox_denied` (unchanged).
+- `_model_visible_native_advisories()` renders advisory items only; no telemetry.
+- The injection site in `proxy_json_api` emits `tool_sandbox_advisory_injected`
+  for each advisory appended.
+
+Bounds:
+- Only `sandbox_denied_readonly_fs` / high-confidence triggers advisory.
+- `connection_refused` remains telemetry-only.
+- Deduplicated per call_id within a single request.
+- No persistent state, no SQLite, no BrainCase, no cooldown database.
+- No automatic retry or escalation.
+
+Tests: `tests/test_qz_request_router.py` — `SandboxAdvisoryHelperTests`
+(helper unit tests) and `SandboxAdvisoryInjectionTests` (classify→advise integration).
+
+---
+
 ## Phase 4 (deferred): Stream/runtime signals
 
 Port these when ready:
@@ -125,16 +158,18 @@ compaction/stream hang watchdog (#40)          TBD
 Migration path: emit telemetry via `SignalDecision` then wrap into the existing
 `REQUEST_LIFECYCLE_EVENT_TYPES` bus. No behaviour change on first pass.
 
-## Phase 5 (deferred): Model injection helpers
+## Phase 5 (deferred): Additional model injection helpers
 
-When repeated-read advisory or context pressure injection are ready, add:
+Connection refused and other signals remain telemetry-only. When broader
+model injection is ready:
 
 ```python
+# Example future shape — not yet implemented
 inject_advisory_signal(call_id, message) -> dict  # function_call_output shape
 ```
 
-The injection point is `qz_request_router.py` before forwarding. All injected
-items must be advisory (model may ignore them). No auto-escalation or retry.
+All injected items must be advisory (model may ignore them). No auto-escalation
+or retry. No changes to sandbox policy.
 
 ---
 
