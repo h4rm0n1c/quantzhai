@@ -14,6 +14,43 @@ from proxy.qz_model_router import ModelRouter, profile_backend_error_payload
 from proxy.qz_backend import BackendResponse
 
 
+# ---------------------------------------------------------------------------
+# Env isolation helpers
+# ---------------------------------------------------------------------------
+
+# Keys that, if leaked from a prior test, silently corrupt load_manifest() results:
+# - QZ_MODEL_OVERRIDES: skips the user-layer config scan entirely when set (even
+#   to a missing path), causing tests that write config/user/ files to see 0 models.
+# - QZ_MODEL_KEY / QZ_MODEL_STATE_PATH: affect model selection but not manifest loading.
+_MODEL_ENV_KEYS = ("QZ_MODEL_OVERRIDES", "QZ_MODEL_KEY", "QZ_MODEL_STATE_PATH")
+
+
+class _IsolatedModelEnvMixin:
+    """
+    setUp/tearDown mixin that saves and clears model-routing env vars before
+    each test method, then restores them afterward.
+
+    Apply to any TestCase subclass whose tests call load_manifest() with a
+    temp root and expect the user-layer config (config/user/) to be loaded.
+    Without isolation, a leaked QZ_MODEL_OVERRIDES from a prior test silently
+    causes load_manifest() to skip the user-layer scan.
+    """
+
+    _ISOLATED_ENV_KEYS = _MODEL_ENV_KEYS
+
+    def setUp(self):  # noqa: N802
+        self._model_env_saved = {k: os.environ.get(k) for k in self._ISOLATED_ENV_KEYS}
+        for k in self._ISOLATED_ENV_KEYS:
+            os.environ.pop(k, None)
+
+    def tearDown(self):  # noqa: N802
+        for k, v in self._model_env_saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 def _write_string(handle, value):
     data = value.encode("utf-8")
     handle.write(struct.pack("<Q", len(data)))
@@ -550,7 +587,7 @@ class ModelCatalogProfileValidationTests(unittest.TestCase):
         self.assertIn("restore the missing target GGUF", payload["fix"])
 
 
-class MemoryDomainCatalogTests(unittest.TestCase):
+class MemoryDomainCatalogTests(_IsolatedModelEnvMixin, unittest.TestCase):
     """Tests for memory_domain plumbing through model-overrides -> catalog entry."""
 
     def test_explicit_memory_domain_stored_on_entry(self):
@@ -727,7 +764,7 @@ class MemoryDomainCatalogTests(unittest.TestCase):
             self.assertEqual(broken["memory_domain"], "coding")
 
 
-class ProfilesV1LoaderTests(unittest.TestCase):
+class ProfilesV1LoaderTests(_IsolatedModelEnvMixin, unittest.TestCase):
     """Tests for the qz.profiles.v1 loader in qz_model_catalog."""
 
     def test_profiles_json_loads_profiles(self):
@@ -1123,6 +1160,43 @@ class ProfilesV1LoaderTests(unittest.TestCase):
             self.assertEqual(entry["label"], "My Model")
             self.assertEqual(entry["memory_domain"], "research")
             self.assertEqual(entry["runtime_context_length"], 65536)
+
+    def test_load_manifest_unaffected_by_stale_qz_model_overrides(self):
+        """
+        Regression: load_manifest(root) must read config/user/ when
+        QZ_MODEL_OVERRIDES is absent, even if a prior test leaked a stale
+        value pointing to a deleted path.
+
+        This test simulates the contamination by setting QZ_MODEL_OVERRIDES
+        to a missing path BEFORE the _IsolatedModelEnvMixin setUp runs
+        (i.e. in a nested block where we temporarily restore the contaminated
+        state), then confirms that the mixin clears it before load_manifest
+        is called.  Inside the mixin-guarded test body the env var is always
+        absent, so the user-layer scan must succeed.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            user_dir = root / "config" / "user"
+            user_dir.mkdir(parents=True)
+            (user_dir / "profiles.json").write_text(json.dumps({
+                "schema": "qz.profiles.v1",
+                "profiles": {
+                    "testmodel": {
+                        "backend": {"gguf": "testmodel.gguf"},
+                        "metadata": {"label": "test-label"},
+                    }
+                }
+            }), encoding="utf-8")
+
+            # Confirm the mixin cleared QZ_MODEL_OVERRIDES before this test ran.
+            self.assertNotIn("QZ_MODEL_OVERRIDES", os.environ,
+                             "mixin setUp must have cleared QZ_MODEL_OVERRIDES")
+
+            manifest = load_manifest(root)
+
+            self.assertIn("testmodel.gguf", manifest["models"],
+                          "user-layer profiles.json must be loaded when QZ_MODEL_OVERRIDES is absent")
+            self.assertEqual(manifest["models"]["testmodel.gguf"]["label"], "test-label")
 
 
 if __name__ == "__main__":

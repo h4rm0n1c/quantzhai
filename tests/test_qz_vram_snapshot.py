@@ -778,8 +778,16 @@ class BuildContextWithPropsSlots(unittest.TestCase):
         self.assertEqual(ctx["confidence"], "backend-confirmed")
 
     def test_slots_n_ctx_provides_limit(self):
+        # Guard: QZ_CONTEXT must not be set for this test.  A leaked value from
+        # a prior test would shadow the slots-based limit and cause both
+        # limit_tokens and confidence to be wrong.
         slots = [{"n_ctx": 131072, "is_processing": False}]
-        ctx = _build_context(handler=None, metrics={}, props={}, slots=slots)
+        _saved_ctx = os.environ.pop("QZ_CONTEXT", None)
+        try:
+            ctx = _build_context(handler=None, metrics={}, props={}, slots=slots)
+        finally:
+            if _saved_ctx is not None:
+                os.environ["QZ_CONTEXT"] = _saved_ctx
         self.assertEqual(ctx["limit_tokens"], 131072)
         self.assertEqual(ctx["confidence"], "backend-confirmed")
 
