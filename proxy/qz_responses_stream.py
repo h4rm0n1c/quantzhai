@@ -1877,11 +1877,14 @@ class ResponsesStreamRuntime:
 
                             if decision.coercion_applied:
                                 _coercion_event = "coercion_failed" if decision.coercion_error else "coercion_succeeded"
+                                _coerce_tool = hs.completed_call.get("name") or ""
                                 self._emit(_coercion_event, {
-                                    "tool": hs.completed_call.get("name") or "",
+                                    "tool": _coerce_tool,
+                                    "upstream_name": _coerce_tool,
                                     "call_id": hs.completed_call.get("call_id") or hs.completed_call.get("id") or "",
                                     "correction_applied": not bool(decision.coercion_error),
                                     "error_summary": decision.coercion_error[:200] if decision.coercion_error else "",
+                                    "source": "tool_adapter",
                                 })
 
                             if decision.kind == "signal":

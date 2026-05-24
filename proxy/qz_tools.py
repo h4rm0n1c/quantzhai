@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import json
-import time
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -76,18 +74,17 @@ def _coercion_error(name: str, reason: str = "") -> ToolCoercionResult:
 def synthesize_tool_error_result(call: dict, message: str) -> dict:
     """Build a function_call_output carrying an error message.
 
-    Used to inject a proxy-generated error back to the model when a tool
-    call cannot be executed or coerced into a valid form.
+    Compatibility wrapper — delegates to qz_feedback.render_coercion_error(),
+    which is the canonical implementation.  Do not remove this function;
+    qz_proxy_tools.py and other callers import it from here.
+
+    Output is byte-for-byte identical to render_coercion_error(call, message).
     """
-    call_id = (
-        call.get("call_id") or call.get("id")
-        if isinstance(call, dict) else None
-    ) or f"err_{int(time.time())}"
-    return {
-        "type": "function_call_output",
-        "call_id": call_id,
-        "output": json.dumps({"ok": False, "error": message}, ensure_ascii=False),
-    }
+    try:
+        from .qz_feedback import render_coercion_error
+    except ImportError:
+        from qz_feedback import render_coercion_error
+    return render_coercion_error(call, message)
 
 
 def function_tool(name: str, description: str, parameters: dict) -> dict:

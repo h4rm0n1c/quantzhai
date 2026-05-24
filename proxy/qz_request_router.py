@@ -2635,12 +2635,15 @@ class RequestRouter:
                 if decision.coercion_applied:
                     _coercion_event = "coercion_failed" if decision.coercion_error else "coercion_succeeded"
                     try:
+                        _tool_name = item.get("name") or ""
                         self.handler.telemetry.emit(_coercion_event, {
-                            "tool": item.get("name") or "",
+                            "tool": _tool_name,
+                            "upstream_name": _tool_name,
                             "call_id": item.get("call_id") or item.get("id") or "",
                             "correction_applied": not bool(decision.coercion_error),
                             "error_summary": decision.coercion_error[:200] if decision.coercion_error else "",
                             "request_id": request_id,
+                            "source": "tool_adapter",
                         })
                     except Exception:
                         pass

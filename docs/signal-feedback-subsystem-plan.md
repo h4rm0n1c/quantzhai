@@ -91,13 +91,19 @@ hot path and emits telemetry via the structured signals.
 
 `classify_native_tool_outputs()` preserved for compatibility.
 
-## Phase 2: Tool coercion compatibility note (done — #42)
+## Phase 2: Tool coercion unification (done — #42, then unified)
 
-`proxy/qz_tools.py` keeps `synthesize_tool_error_result()` unchanged.
-`proxy/qz_feedback.py` provides `render_coercion_error()` with the same
-implementation for callers using the new API. Both produce identical output.
+`proxy/qz_feedback.py` owns `render_coercion_error()` as the single canonical
+implementation of the coercion error `function_call_output` shape.
 
-No import changes required in existing callers or tests.
+`proxy/qz_tools.py` keeps `synthesize_tool_error_result()` as a compatibility
+wrapper that **delegates** to `render_coercion_error()`. Both produce byte-for-byte
+identical output. Callers in `qz_proxy_tools.py` are unchanged — they continue
+to import from `qz_tools`.
+
+Invariant: `synthesize_tool_error_result(call, msg) == render_coercion_error(call, msg)`.
+Tested in `tests/test_qz_tools.py::SynthesizeToolErrorResultTests::test_delegates_to_render_coercion_error`
+and `tests/test_qz_feedback.py::RenderCoercionErrorTests::test_output_shape_matches_synthesize_tool_error_result`.
 
 ## Phase 3: Tests (done — #42)
 
@@ -140,6 +146,30 @@ Bounds:
 
 Tests: `tests/test_qz_request_router.py` — `SandboxAdvisoryHelperTests`
 (helper unit tests) and `SandboxAdvisoryInjectionTests` (classify→advise integration).
+
+---
+
+## Phase 3c: Coercion telemetry enrichment (done)
+
+`coercion_succeeded` and `coercion_failed` telemetry events in both
+`proxy/qz_request_router.py` (non-streaming proxy path) and
+`proxy/qz_responses_stream.py` (streaming path) now carry enriched payloads:
+
+```text
+tool            tool/function name (unchanged)
+upstream_name   same as tool — the upstream function name
+call_id         call_id from the function_call item
+correction_applied  True when coerce() succeeded and reran
+error_summary   truncated error message (≤200 chars, failures only)
+request_id      scoped to the request (added by emitter)
+source          "tool_adapter" — identifies the coercion origin
+```
+
+`source = "tool_adapter"` is the key new field. It lets operators filter
+coercion events from other telemetry without tool name pattern matching.
+
+Tests: `tests/test_qz_responses_stream.py` (`CoercionTelemetryStreamingTests`)
+— updated to assert `source == "tool_adapter"` on both succeeded and failed events.
 
 ---
 

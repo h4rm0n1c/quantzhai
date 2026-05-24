@@ -17,10 +17,10 @@ This document provides a comprehensive inventory of the agent infrastructure imp
 |---|---|---|---|---|---|---|
 | **Tool registry** | source | yes | instructions/harness | telemetry, captures | none | — |
 | **Schema replacement** | source | unknown | none (upstream only) | capture file | no telemetry | add replacement telemetry |
-| **Coercion success** | source | yes | none (silent) | coercion_succeeded | limited fields | enrich telemetry |
-| **Coercion error** | source | yes | function_call_output | coercion_failed | limited fields | enrich telemetry |
-| **apply_patch coercion** | source | yes | function_call_output | coercion_failed | zero specific telemetry | add tool telemetry |
-| **web_search coercion** | source | yes | function_call_output | coercion_failed | zero specific telemetry | add tool telemetry |
+| **Coercion success** | unit_test | yes | none (silent) | coercion_succeeded | none | — |
+| **Coercion error** | unit_test | yes | function_call_output | coercion_failed | none | — |
+| **apply_patch coercion** | unit_test | yes | function_call_output | coercion_failed (source=tool_adapter) | none | — |
+| **web_search coercion** | unit_test | yes | function_call_output | coercion_failed (source=tool_adapter) | none | — |
 | **unknown/dropped tool** | source | yes | function_call_output | tool_call_error | no dedicated event | — |
 | **web_search lifecycle** | live_smoke | yes | public_item (SSE) | telemetry | none | — |
 | **provider guidance** | live_smoke | yes | capabilities (action) | telemetry | none | — |
@@ -77,6 +77,15 @@ For each major claim, this index links to the proof of implementation and valida
 - **BrainCase feature flags**:
     - Source: `proxy/qz_braincase_tools.py` (`QZ_BRAINCASE_TOOLS_ENABLED_ENV`)
     - Registry: `proxy/qz_proxy_tools.py` (`make_proxy_local_tool_registry` defaults to no BrainCase)
+- **Tool error rendering (unified)**:
+    - Owner: `proxy/qz_feedback.py` (`render_coercion_error()`)
+    - Wrapper: `proxy/qz_tools.py` (`synthesize_tool_error_result()` now delegates)
+    - Tests: `tests/test_qz_feedback.py` (`RenderCoercionErrorTests`), `tests/test_qz_tools.py` (`SynthesizeToolErrorResultTests::test_delegates_to_render_coercion_error`)
+    - Invariant: both produce byte-for-byte identical `{"type":"function_call_output","call_id":...,"output":"{\"ok\":false,...}"}`.
+- **Coercion telemetry enrichment**:
+    - Source: `proxy/qz_request_router.py` and `proxy/qz_responses_stream.py` (`coercion_succeeded`/`coercion_failed` emission sites)
+    - Fields: `tool`, `upstream_name`, `call_id`, `correction_applied`, `error_summary`, `request_id`, `source="tool_adapter"`
+    - Tests: `tests/test_qz_responses_stream.py` (`CoercionTelemetryStreamingTests`)
 
 ---
 
@@ -114,6 +123,7 @@ QuantZhai is evaluated against three major architectural patterns to identify ga
 
 1. **Live validate provider_guidance**: Verify `qz-live-smoke` confirms guidance appearing in capabilities.
 2. **Model-visible Sandbox Advisory**: ✓ Done — `_model_visible_native_advisories` wired in `proxy_json_api`. Sandbox `tool_sandbox_denied` (classifier `sandbox_denied_readonly_fs`, confidence `high`) now appends a plain-text advisory `function_call_output` item before forwarding. Telemetry: `tool_sandbox_denied` (existing) + `tool_sandbox_advisory_injected` (new). Next: live-smoke to confirm the model receives and acts on the advisory.
-3. **Enrich Coercion Telemetry**: Add specific `tool` and `call_id` fields to all coercion events.
-4. **Watchdog Smoke**: Add a dedicated timeout smoke test before enabling default timeouts.
-5. **BrainCase Isolation**: Maintain BrainCase as a feature-flagged experimental path.
+3. **Coercion Telemetry**: ✓ Done — `coercion_succeeded` and `coercion_failed` events now carry `source="tool_adapter"` and `upstream_name` in both `qz_request_router` and `qz_responses_stream` paths. Tested in `CoercionTelemetryStreamingTests`.
+4. **Tool Error Delegation**: ✓ Done — `synthesize_tool_error_result()` now delegates to `render_coercion_error()` from `qz_feedback`. `qz_feedback` is the single source of truth for coercion/error rendering. Tested in `SynthesizeToolErrorResultTests::test_delegates_to_render_coercion_error`.
+5. **Watchdog Smoke**: Add a dedicated timeout smoke test before enabling default timeouts.
+6. **BrainCase Isolation**: Maintain BrainCase as a feature-flagged experimental path.

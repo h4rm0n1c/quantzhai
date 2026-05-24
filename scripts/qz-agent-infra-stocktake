@@ -79,14 +79,33 @@ def main():
                "native classifier is telemetry-only; model-visible advisory not yet wired")
 
     # 2. Tool Error Delegation
-    # We check if synthesize_tool_error_result calls render_coercion_error
-    # In reality it doesn't currently, it's a duplicate.
+    # synthesize_tool_error_result() must import render_coercion_error from qz_feedback.
     tools_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "proxy", "qz_tools.py")
     delegates = check_file_contains(tools_path, "render_coercion_error")
     if delegates:
         report("Tool Error Delegation", "PASS", "qz_tools delegates to qz_feedback")
     else:
         report("Tool Error Delegation", "WARN", "qz_tools contains duplicate error logic")
+
+    # 2b. Coercion Telemetry Enrichment
+    # coercion_succeeded/coercion_failed events must carry source="tool_adapter".
+    router_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "proxy", "qz_request_router.py")
+    stream_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "proxy", "qz_responses_stream.py")
+    test_stream_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tests", "test_qz_responses_stream.py")
+    has_source_router = check_file_contains(router_path, '"source": "tool_adapter"')
+    has_source_stream = check_file_contains(stream_path, '"source": "tool_adapter"')
+    has_coercion_tests = check_file_contains(test_stream_path, "coercion_succeeded") and \
+                         check_file_contains(test_stream_path, "source.*tool_adapter") or \
+                         check_file_contains(test_stream_path, "\"source\"")
+    if has_source_router and has_source_stream:
+        report("Coercion Telemetry", "PASS",
+               "source=tool_adapter in coercion_succeeded/coercion_failed (router + stream)")
+    elif has_source_router or has_source_stream:
+        report("Coercion Telemetry", "WARN",
+               "source=tool_adapter in one path only (router={} stream={})".format(
+                   has_source_router, has_source_stream))
+    else:
+        report("Coercion Telemetry", "WARN", "coercion telemetry missing source field")
 
     # 3. Watchdog Defaults
     if STREAM_NO_OUTPUT_TIMEOUT_S > 0:

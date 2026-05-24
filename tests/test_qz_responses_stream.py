@@ -4234,7 +4234,10 @@ class CoercionTelemetryStreamingTests(unittest.TestCase):
             any(e.get("type") == "coercion_failed" for e in telem_events), telem_events
         )
         failed = next(e for e in telem_events if e.get("type") == "coercion_failed")
-        self.assertEqual((failed.get("payload") or {}).get("tool"), "web_search")
+        failed_payload = failed.get("payload") or {}
+        self.assertEqual(failed_payload.get("tool"), "web_search")
+        self.assertEqual(failed_payload.get("source"), "tool_adapter",
+                         "coercion_failed must carry source=tool_adapter for operator observability")
         # No raw arguments in telemetry
         self.assertNotIn("{not valid json}", str(failed))
 
@@ -4268,8 +4271,11 @@ class CoercionTelemetryStreamingTests(unittest.TestCase):
             any(e.get("type") == "coercion_succeeded" for e in telem_events), telem_events
         )
         succeeded = next(e for e in telem_events if e.get("type") == "coercion_succeeded")
-        self.assertEqual((succeeded.get("payload") or {}).get("tool"), "web_search")
-        self.assertTrue((succeeded.get("payload") or {}).get("correction_applied"))
+        succeeded_payload = succeeded.get("payload") or {}
+        self.assertEqual(succeeded_payload.get("tool"), "web_search")
+        self.assertTrue(succeeded_payload.get("correction_applied"))
+        self.assertEqual(succeeded_payload.get("source"), "tool_adapter",
+                         "coercion_succeeded must carry source=tool_adapter for operator observability")
 
     def test_dropped_tool_emits_tool_call_error_not_coercion_failed(self):
         telemetry = TelemetryBus()

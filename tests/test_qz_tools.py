@@ -97,6 +97,47 @@ class SynthesizeToolErrorResultTests(unittest.TestCase):
         result = synthesize_tool_error_result(call, "error")
         self.assertEqual(result["call_id"], "my_call_id")
 
+    def test_uses_id_field_when_call_id_absent(self):
+        """Falls back to 'id' key when 'call_id' is missing."""
+        from proxy.qz_tools import synthesize_tool_error_result
+        call = {"id": "fc_fallback"}
+        result = synthesize_tool_error_result(call, "error")
+        self.assertEqual(result["call_id"], "fc_fallback")
+
+    def test_null_call_uses_err_fallback_id(self):
+        """A None call dict does not raise; produces an err_<ts> fallback call_id."""
+        from proxy.qz_tools import synthesize_tool_error_result
+        result = synthesize_tool_error_result(None, "error")  # type: ignore[arg-type]
+        self.assertTrue(result["call_id"].startswith("err_"))
+        self.assertEqual(result["type"], "function_call_output")
+
+    def test_empty_call_dict_uses_err_fallback_id(self):
+        from proxy.qz_tools import synthesize_tool_error_result
+        result = synthesize_tool_error_result({}, "some error")
+        self.assertTrue(result["call_id"].startswith("err_"))
+
+    def test_delegates_to_render_coercion_error(self):
+        """synthesize_tool_error_result output must be identical to render_coercion_error."""
+        import json
+        from proxy.qz_tools import synthesize_tool_error_result
+        from proxy.qz_feedback import render_coercion_error
+        for call, msg in [
+            ({"call_id": "c1"}, "error text"),
+            ({"id": "fc_1"}, "another error"),
+            ({}, "fallback test"),
+        ]:
+            old = synthesize_tool_error_result(call, msg)
+            new = render_coercion_error(call, msg)
+            self.assertEqual(old["type"], new["type"],
+                             f"type mismatch for {call}")
+            self.assertEqual(old["call_id"], new["call_id"],
+                             f"call_id mismatch for {call}")
+            # Both outputs are JSON strings; compare parsed to avoid key-order issues
+            old_payload = json.loads(old["output"])
+            new_payload = json.loads(new["output"])
+            self.assertEqual(old_payload, new_payload,
+                             f"payload mismatch for {call}")
+
 
 class WebSearchCoerceTests(unittest.TestCase):
     def test_valid_json_passes_through(self):

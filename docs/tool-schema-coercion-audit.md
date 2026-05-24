@@ -15,9 +15,12 @@ Related:
 Tool schema replacement (dedup and name-based substitution) is **fixed** as of
 commit `ebdf87b`. All other coercion/advice paths are **implemented** and
 **correct** for the streaming path. The non-streaming path has a narrow gap for
-non-proxy-local dropped/unknown tools. Telemetry coverage is the primary
-outstanding gap: coercion success/failure and schema replacement are invisible
-to telemetry and qz-thoughts.
+non-proxy-local dropped/unknown tools. Coercion telemetry is now enriched:
+`coercion_succeeded` and `coercion_failed` events carry `source="tool_adapter"`,
+`upstream_name`, `call_id`, `correction_applied`, and `error_summary` in both the
+non-streaming and streaming paths (see Phase 3c in
+`docs/signal-feedback-subsystem-plan.md`). Schema replacement telemetry remains
+the outstanding observability gap.
 
 ---
 
@@ -271,8 +274,8 @@ Yes. The check `if name in CODEX_NATIVE_TOOL_NAMES` runs at step 4, after droppe
 | dropped write_stdin (no live session) | dropped at normalisation; if called → dropped-tool error injected | ✓ | no | yes | partial (tool_call_error streaming) | tool_call_error (streaming) | none | normalisation unit tests; **no streaming end-to-end fixture** | add streaming fixture (B2) |
 | exec_command (Codex-native) | hint appended at normalisation; passes through via `kind="public"` | ✓ | yes | n/a | yes (output_item.done) | n/a | none | unit tests | none |
 | repeated-read/advisory signal | signal result injected; model sees advisory; hop continues | ✓ | no | yes | yes (repeated_read_signal telemetry) | repeated_read_signal | none | unit + proxy_tools tests | none |
-| coercion success (any tool) | corrected arguments used silently | ✓ | no | n/a | **no** | **none** | none | unit tests | add coercion_success telemetry (B2) |
-| coercion failure (any tool) | error result injected | ✓ | no | yes | partial (tool_call_error streaming) | tool_call_error (streaming only) | none | unit tests; **no streaming fixture** | add coercion_failed telemetry (B2) |
+| coercion success (any tool) | corrected arguments used silently | ✓ | no | n/a | yes (`coercion_succeeded` telemetry) | `coercion_succeeded` (router + stream, `source="tool_adapter"`) | none | unit tests + streaming tests | — |
+| coercion failure (any tool) | error result injected | ✓ | no | yes | yes (`coercion_failed` telemetry) | `coercion_failed` (router + stream, `source="tool_adapter"`) | none | unit tests + streaming tests | — |
 | non-proxy-local dropped/unknown tool in non-streaming path (with web_search present) | completed_call_decision called, error computed, but `else` branch passes original item through | **gap** | original item (function_call) passed to Codex-facing output | no (item not error) | no | none | none | none | **fix in B2**: apply error injection for non-proxy-local items in non-streaming hop loop |
 | ToolCoercionResult neither-set | `coercion.succeeded()=False`, `error_message=""`, empty error injected | should raise or produce non-empty error | no | yes (but empty message) | no | none | none | none | guard ToolCoercionResult (B2) |
 
@@ -288,7 +291,7 @@ Yes. The check `if name in CODEX_NATIVE_TOOL_NAMES` runs at step 4, after droppe
 | schema replacement (type=function name=web_search) | test_qz_tool_request.py | `test_function_typed_web_search_is_replaced_by_proxy_schema` | ✓ (ebdf87b) |
 | duplicate tool names | test_qz_tool_request.py | `test_duplicate_tool_names_deduped`, `test_function_typed_web_search_deduped_when_structured_also_present` | ✓ (ebdf87b) |
 | ToolCoercionResult | test_qz_tools.py | `test_succeeded_when_corrected_arguments_set`, `test_not_succeeded_when_error_message_set` | ✓; neither-set case **not tested** |
-| synthesize_tool_error_result | test_qz_tools.py | `test_produces_function_call_output`, `test_uses_call_id_from_call` | ✓ |
+| synthesize_tool_error_result / render_coercion_error | test_qz_tools.py | `test_produces_function_call_output`, `test_uses_call_id_from_call`, `test_uses_id_field_when_call_id_absent`, `test_null_call_uses_err_fallback_id`, `test_empty_call_dict_uses_err_fallback_id`, `test_delegates_to_render_coercion_error` | ✓ |
 | unknown tool feedback | test_qz_tools.py, test_qz_proxy_tools.py | `test_unknown_tool_returns_error_decision` | ✓ |
 | dropped tool feedback | test_qz_tools.py, test_qz_proxy_tools.py | `test_dropped_tool_returns_error_decision` | ✓ |
 | web_search malformed args (coerce) | test_qz_tools.py | `test_bad_json_returns_error`, `test_non_dict_json_returns_error`, `test_valid_json_passes_through` | ✓ |
@@ -319,7 +322,7 @@ Yes. The check `if name in CODEX_NATIVE_TOOL_NAMES` runs at step 4, after droppe
 
 9. **`test_tool_schema_replaced_telemetry_event`** — when a function-typed web_search is replaced, a `tool_schema_replaced` telemetry event fires. (Will fail until B2 adds this event.)
 
-10. **`test_coercion_failed_telemetry_event`** — when coerce() returns an error, a `coercion_failed` telemetry event fires. (Will fail until B2.)
+10. ~~**`test_coercion_failed_telemetry_event`**~~ — **done**: `CoercionTelemetryStreamingTests` in `test_qz_responses_stream.py` covers both `coercion_succeeded` and `coercion_failed` events including `source="tool_adapter"` assertion.
 
 ---
 
@@ -335,15 +338,14 @@ telemetry stream whether Codex sent a stale schema that was replaced.
 telemetry event when `replaced` is non-empty. Payload:
 `{"replaced": list(replaced), "translated": list(translated), "dropped_count": len(dropped)}`.
 
-### Gap 2 — Zero telemetry for coercion success/failure
+### Gap 2 — Zero telemetry for coercion success/failure (**closed**)
 
-No `coercion_success` or `coercion_failed` event is emitted. If apply_patch or
-web_search calls need coercion, the operator sees nothing in qz-thoughts.
-
-**Fix (B2)**: emit `coercion_succeeded` (with tool name and call_id) and
-`coercion_failed` (with tool name, call_id, and error_message preview) in
-`completed_call_decision` at the point of each coerce() result. Do NOT include
-raw arguments in the payload.
+**Done**: `coercion_succeeded` and `coercion_failed` events are now emitted in
+both the non-streaming path (`qz_request_router.py`) and streaming path
+(`qz_responses_stream.py`). Enriched payload: `tool`, `upstream_name`, `call_id`,
+`correction_applied`, `error_summary` (≤200 chars), `source="tool_adapter"`.
+Raw arguments are excluded. See Phase 3c in `docs/signal-feedback-subsystem-plan.md`.
+Tested in `tests/test_qz_responses_stream.py::CoercionTelemetryStreamingTests`.
 
 ### Gap 3 — ToolCoercionResult neither-set case
 
@@ -400,10 +402,10 @@ Priority order (highest to lowest):
    - Risk: low. Observability only.
    - Note: `normalize_tool_request_for_llamacpp` has no telemetry reference currently; the telemetry can be emitted in `proxy_json_api` after normalisation since the report is available.
 
-4. **Emit `coercion_succeeded` / `coercion_failed` telemetry** (`proxy/qz_proxy_tools.py`)
-   - In `completed_call_decision`, after coerce() result, emit via a telemetry callback or store in the decision for the caller to emit.
-   - Simpler approach: emit in `ResponsesStreamRuntime.run()` and `_run_responses_locally` where decision.kind is inspected.
-   - Risk: low.
+4. ~~**Emit `coercion_succeeded` / `coercion_failed` telemetry**~~ (**done** — Phase 3c)
+   - Emitted in `qz_request_router.py` (non-streaming) and `qz_responses_stream.py` (streaming).
+   - Payload: `tool`, `upstream_name`, `call_id`, `correction_applied`, `error_summary`, `source="tool_adapter"`.
+   - Tested in `tests/test_qz_responses_stream.py::CoercionTelemetryStreamingTests`.
 
 5. **Add missing tests** (`tests/test_qz_tools.py`, `tests/test_qz_tool_request.py`, `tests/test_qz_proxy_tools.py`, `tests/test_qz_responses_stream.py`)
    - Tests 1–8 from Section E. Tests 9–10 depend on telemetry implementation.
