@@ -372,9 +372,16 @@ Add `lifecycle_event_prefix="response.apply_patch_call"`, `lifecycle_start_stage
 
 When a tool call fails (coercion/dropped/unknown), synthesise a `response.output_item.added` + `response.output_item.done` pair with a `tool_call_error` item type before the next-hop message. This would make the failure visible as a structured item rather than only through model text. Requires: defining a `tool_call_error` item type, ensuring Codex renders it gracefully, and verifying the Responses API spec allows unknown item types in the output. **Do not implement until the Responses API extension point is confirmed.**
 
-### Slice L3 — Test: apply_patch emits no sub-lifecycle events (low risk, documentation value)
+### Slice L3 — Test: apply_patch emits no sub-lifecycle events ✓ Done (superseded by AP1)
 
-Add a unit test that asserts `response.apply_patch_call.in_progress` is NOT in the Codex stream when apply_patch runs. This locks the current "no sub-events for apply_patch" contract explicitly, so any future accidental addition is caught. The `StreamingToolErrorFixtureTests` infrastructure can be reused. **Safe to implement now.**
+`docs/apply-patch-codex-lifecycle-audit.md` Slice AP1 supersedes this slice with broader coverage:
+- Asserts `response.apply_patch_call.in_progress/searching/completed` NOT emitted.
+- Asserts `response.web_search_call.*` NOT emitted.
+- Asserts `response.function_call_arguments.delta/done` NOT forwarded.
+- Covers both native and custom output styles.
+- Implemented in `tests/test_qz_responses_stream.py::ApplyPatchLifecycleContractTests`.
+
+See `docs/apply-patch-codex-lifecycle-audit.md` for the full apply_patch lifecycle audit.
 
 ### Slice L4 — Live smoke validation of web_search lifecycle events ✓ Done
 

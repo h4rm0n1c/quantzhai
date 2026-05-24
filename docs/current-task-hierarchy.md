@@ -1,7 +1,45 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-25
-Status: active control sheet — search backend smoke status clarified; 503 startup skip wired.
+Status: active control sheet — apply_patch Codex lifecycle audited; AP1/AP2 contract tests added.
+
+## Recently completed — Audit apply_patch Codex lifecycle (2026-05-25)
+
+```text
+Status: COMPLETE — audit only; no runtime behaviour changes.
+
+Output: docs/apply-patch-codex-lifecycle-audit.md
+
+Key findings:
+- apply_patch uses execution="protocol_adapter" (not proxy_local) — Codex applies
+  the patch locally; QuantZhai only translates the shape.
+- No official response.apply_patch_call.* event family exists in the Responses API.
+  QuantZhai must not invent these events without live Codex client proof.
+- Only response.output_item.added/done are emitted (item types: apply_patch_call or
+  custom_tool_call depending on output style). No sub-lifecycle stages.
+- No tool_call_started/tool_call_completed telemetry — those are proxy_local only.
+- coercion_succeeded/coercion_failed emitted via tool_adapter source.
+- Error messages are specific (bad JSON / unknown op / missing diff / missing dest);
+  no raw argument content echoed.
+- call_id preserved in function_call_output errors.
+- Partial native/custom envelope fallback is intentional (triggers Codex V4A error
+  rather than proxy silent drop).
+
+Slices added:
+- AP1: ApplyPatchLifecycleContractTests (13 tests) — locks that no sub-lifecycle
+  events are emitted; covers both native and custom modes.
+- AP2: ApplyPatchAP2CoercionSafetyTests (12 tests) — locks error specificity,
+  call_id preservation, and no raw arg leakage.
+
+Slice L3 from codex-visible-tool-lifecycle-audit.md marked done (superseded by AP1).
+
+Total new tests: 25. Full suite: 3458 passed.
+
+Deferred slices (require live Codex capture or non-trivial changes):
+- AP3: safe telemetry metadata fields (operation_type, path_present booleans).
+- AP4: live Codex capture to observe apply_patch_call rendering.
+- AP5: optional sub-lifecycle if AP4 proves benefit (requires protocol_adapter → proxy_local mode change).
+```
 
 ## Recently completed — Clarify search backend smoke status (2026-05-25)
 

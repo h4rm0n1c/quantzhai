@@ -738,3 +738,136 @@ class ApplyPatchCoerceTests(unittest.TestCase):
         result = APPLY_PATCH_TOOL_ADAPTER.coerce(call)
         self.assertFalse(result.succeeded())
         self.assertIsNotNone(result.error_message)
+
+
+class ApplyPatchAP2CoercionSafetyTests(unittest.TestCase):
+    """Slice AP2: Coercion error safety — call_id preserved, raw args not leaked.
+
+    Source: docs/apply-patch-codex-lifecycle-audit.md §6.2, §8 (G-AP2).
+    """
+
+    def _call(self, arguments: str, call_id: str = "ap2_call_99") -> dict:
+        return {"type": "function_call", "name": "apply_patch",
+                "call_id": call_id, "id": call_id, "arguments": arguments}
+
+    # --- Error message specificity ------------------------------------------
+
+    def test_ap2_bad_json_error_message_is_specific(self):
+        """Invalid JSON produces 'arguments are not valid JSON' (not generic 'could not coerce')."""
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(self._call("{bad json"))
+        self.assertFalse(result.succeeded())
+        self.assertIn("not valid JSON", result.error_message,
+                      "bad-JSON coercion error must be specific")
+
+    def test_ap2_non_object_json_error_message_is_specific(self):
+        """Non-object JSON (e.g. array) produces 'not a JSON object'."""
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(self._call(json.dumps([1, 2, 3])))
+        self.assertFalse(result.succeeded())
+        self.assertIn("not a JSON object", result.error_message,
+                      "non-object coercion error must be specific")
+
+    def test_ap2_unknown_operation_type_error_message_is_specific(self):
+        """Unknown operation type names the bad type in the error."""
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(
+            self._call(json.dumps({"operation": {"type": "invent_file", "path": "x.py"}}))
+        )
+        self.assertFalse(result.succeeded())
+        self.assertIn("unknown operation type", result.error_message)
+        self.assertIn("invent_file", result.error_message)
+
+    def test_ap2_missing_diff_error_message_is_specific(self):
+        """Missing diff on create_file/update_file names the operation type and 'diff'."""
+        for op_type in ("create_file", "update_file"):
+            with self.subTest(op_type=op_type):
+                result = APPLY_PATCH_TOOL_ADAPTER.coerce(
+                    self._call(json.dumps({"operation": {"type": op_type, "path": "x.py"}}))
+                )
+                self.assertFalse(result.succeeded())
+                self.assertIn("diff", result.error_message)
+                self.assertIn(op_type, result.error_message)
+
+    def test_ap2_missing_destination_error_message_is_specific(self):
+        """Missing destination on move_file names 'destination' in the error."""
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(
+            self._call(json.dumps({"operation": {"type": "move_file", "path": "a.py"}}))
+        )
+        self.assertFalse(result.succeeded())
+        self.assertIn("destination", result.error_message)
+
+    def test_ap2_missing_path_error_message_is_specific(self):
+        """Missing path names 'path' in the error."""
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(
+            self._call(json.dumps({"operation": {"type": "update_file"}}))
+        )
+        self.assertFalse(result.succeeded())
+        self.assertIn("path", result.error_message)
+
+    # --- Raw args not leaked in error messages ------------------------------
+
+    def test_ap2_bad_json_error_does_not_echo_raw_args(self):
+        """Bad-JSON error must not echo the raw argument string in the error message."""
+        raw_args = '{"broken": true, NOTJSON secret_content_xyz'
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(self._call(raw_args))
+        self.assertFalse(result.succeeded())
+        self.assertNotIn("secret_content_xyz", result.error_message,
+                         "raw argument content must not appear in coercion error message")
+        self.assertNotIn("NOTJSON", result.error_message,
+                         "raw argument content must not appear in coercion error message")
+
+    def test_ap2_missing_diff_error_does_not_echo_diff_content(self):
+        """Missing-diff error must not include diff content from sibling fields."""
+        # Provide a patch with potentially sensitive content in a wrong field.
+        raw_args = json.dumps({
+            "operation": {"type": "create_file", "path": "x.py"},
+            "extra_sensitive_field": "SECRET_PATCH_CONTENT_DO_NOT_LEAK",
+        })
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(self._call(raw_args))
+        # This should succeed via sibling patch logic... but extra_sensitive_field is not "patch".
+        # If it fails, the error must not include the sensitive content.
+        if not result.succeeded():
+            self.assertNotIn("SECRET_PATCH_CONTENT_DO_NOT_LEAK", result.error_message,
+                             "extra field values must not leak into error messages")
+
+    # --- call_id preservation -----------------------------------------------
+
+    def test_ap2_synthesize_tool_error_preserves_call_id(self):
+        """synthesize_tool_error_result must preserve the original call_id."""
+        from proxy.qz_tools import synthesize_tool_error_result
+        call = self._call(json.dumps({"operation": {"type": "create_file", "path": "x.py"}}),
+                          call_id="test_preserved_id_999")
+        error_item = synthesize_tool_error_result(call, "apply_patch: missing diff")
+        self.assertEqual(error_item.get("call_id"), "test_preserved_id_999",
+                         "function_call_output error must preserve the original call_id")
+
+    def test_ap2_error_output_is_function_call_output_type(self):
+        """synthesize_tool_error_result must produce a function_call_output item."""
+        from proxy.qz_tools import synthesize_tool_error_result
+        call = self._call("{bad json", call_id="call_type_check")
+        error_item = synthesize_tool_error_result(call, "apply_patch: arguments are not valid JSON")
+        self.assertEqual(error_item.get("type"), "function_call_output",
+                         "coercion error must be injected as function_call_output")
+
+    def test_ap2_error_output_contains_error_text(self):
+        """synthesize_tool_error_result output field must contain the error message."""
+        from proxy.qz_tools import synthesize_tool_error_result
+        call = self._call("{bad json", call_id="call_msg_check")
+        msg = "apply_patch: arguments are not valid JSON"
+        error_item = synthesize_tool_error_result(call, msg)
+        output_str = error_item.get("output", "")
+        self.assertIn("not valid JSON", output_str,
+                      "error message must appear in function_call_output.output field")
+
+    # --- No raw args in function_call_output --------------------------------
+
+    def test_ap2_error_output_does_not_echo_raw_arguments(self):
+        """The function_call_output error must not include the raw malformed arguments string."""
+        from proxy.qz_tools import synthesize_tool_error_result
+        raw_args = '{"type":"secret_op","secret_data":"VERY_SENSITIVE_PATCH_CONTENT"}'
+        call = {"type": "function_call", "name": "apply_patch",
+                "call_id": "call_raw_check", "arguments": raw_args}
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(call)
+        self.assertFalse(result.succeeded(), "unknown op type must not coerce")
+        error_item = synthesize_tool_error_result(call, result.error_message)
+        output_str = error_item.get("output", "")
+        self.assertNotIn("VERY_SENSITIVE_PATCH_CONTENT", output_str,
+                         "raw argument content must not appear in the injected error output")

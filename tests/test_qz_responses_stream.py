@@ -5228,5 +5228,173 @@ class ToolSchemaTelemetryStreamingTests(unittest.TestCase):
                          "schema telemetry must fire exactly once per streaming run")
 
 
+class ApplyPatchLifecycleContractTests(unittest.TestCase):
+    """Slice AP1: Lock the Codex-visible lifecycle contract for apply_patch.
+
+    apply_patch uses execution="protocol_adapter" and has no ToolLifecycleSpec
+    lifecycle_event_prefix. This means:
+    - Only response.output_item.added and response.output_item.done are emitted.
+    - No response.apply_patch_call.in_progress / .searching / .completed.
+    - No response.web_search_call.* events.
+    - No response.function_call_arguments.delta / .done forwarded to Codex.
+
+    These tests lock that contract. Any future accidental emission of sub-lifecycle
+    events for apply_patch would be caught here before it reaches Codex.
+
+    Source: docs/apply-patch-codex-lifecycle-audit.md §5.1, §8 (G-AP1).
+    """
+
+    def _run_apply_patch(self, apply_patch_output_style="native"):
+        """Run the streaming runtime against _apply_patch_call_stream."""
+        def opener(_b):
+            return FakeStream(_apply_patch_call_stream())
+
+        chunks = []
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=chunks.append,
+            stream_opener=opener,
+            capture_enabled=False,
+        )
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                        "content": [{"type": "input_text", "text": "test"}]}],
+            "tools": [{"type": "apply_patch"}],
+        }
+        runtime.run(body, "test-model.gguf", apply_patch_output_style)
+        stream_text = b"".join(chunks).decode("utf-8")
+        return _parse_sse_events(stream_text), stream_text
+
+    def test_ap1_native_emits_output_item_added(self):
+        """Valid native apply_patch must emit response.output_item.added."""
+        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        names = [et for et, _ in events]
+        self.assertIn("response.output_item.added", names,
+                      "apply_patch must emit response.output_item.added to Codex")
+
+    def test_ap1_native_emits_output_item_done(self):
+        """Valid native apply_patch must emit response.output_item.done."""
+        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        names = [et for et, _ in events]
+        self.assertIn("response.output_item.done", names,
+                      "apply_patch must emit response.output_item.done to Codex")
+
+    def test_ap1_native_item_type_is_apply_patch_call(self):
+        """The output_item.added/done item type must be 'apply_patch_call' in native mode."""
+        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        added_items = [
+            p.get("item", {})
+            for et, p in events
+            if et == "response.output_item.added" and isinstance(p, dict)
+        ]
+        self.assertTrue(
+            any(item.get("type") == "apply_patch_call" for item in added_items),
+            "output_item.added must carry an apply_patch_call item in native mode",
+        )
+
+    def test_ap1_no_sub_lifecycle_in_progress(self):
+        """apply_patch must NOT emit response.apply_patch_call.in_progress."""
+        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        names = [et for et, _ in events]
+        self.assertNotIn(
+            "response.apply_patch_call.in_progress", names,
+            "apply_patch must not emit response.apply_patch_call.in_progress — "
+            "no official event family exists; do not invent it without Codex client proof",
+        )
+
+    def test_ap1_no_sub_lifecycle_searching(self):
+        """apply_patch must NOT emit response.apply_patch_call.searching."""
+        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        names = [et for et, _ in events]
+        self.assertNotIn("response.apply_patch_call.searching", names,
+                         "apply_patch must not emit response.apply_patch_call.searching")
+
+    def test_ap1_no_sub_lifecycle_completed(self):
+        """apply_patch must NOT emit response.apply_patch_call.completed."""
+        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        names = [et for et, _ in events]
+        self.assertNotIn("response.apply_patch_call.completed", names,
+                         "apply_patch must not emit response.apply_patch_call.completed")
+
+    def test_ap1_no_web_search_call_events(self):
+        """apply_patch must NOT emit any response.web_search_call.* events."""
+        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        web_search_events = [et for et, _ in events if (et or "").startswith("response.web_search_call.")]
+        self.assertEqual(web_search_events, [],
+                         "apply_patch must not emit any response.web_search_call.* events")
+
+    def test_ap1_no_function_call_arguments_delta(self):
+        """apply_patch must NOT forward response.function_call_arguments.delta to Codex."""
+        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        names = [et for et, _ in events]
+        self.assertNotIn("response.function_call_arguments.delta", names,
+                         "function_call_arguments.delta must be suppressed; raw args could leak patch body")
+
+    def test_ap1_no_function_call_arguments_done(self):
+        """apply_patch must NOT forward response.function_call_arguments.done to Codex."""
+        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        names = [et for et, _ in events]
+        self.assertNotIn("response.function_call_arguments.done", names,
+                         "function_call_arguments.done must be suppressed")
+
+    def test_ap1_no_raw_function_call_item_type(self):
+        """Codex must not see output_item.* with type=function_call for apply_patch."""
+        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        raw_calls = [
+            p.get("item", {})
+            for et, p in events
+            if et in {"response.output_item.added", "response.output_item.done"} and isinstance(p, dict)
+            and p.get("item", {}).get("type") == "function_call"
+            and p.get("item", {}).get("name") == "apply_patch"
+        ]
+        self.assertEqual(raw_calls, [],
+                         "apply_patch must not appear as a raw function_call item to Codex")
+
+    def test_ap1_custom_mode_item_type_is_custom_tool_call(self):
+        """In custom mode, output_item.added must carry a custom_tool_call item for apply_patch."""
+        events, stream_text = self._run_apply_patch(apply_patch_output_style="custom")
+        added_items = [
+            p.get("item", {})
+            for et, p in events
+            if et == "response.output_item.added" and isinstance(p, dict)
+        ]
+        self.assertTrue(
+            any(
+                item.get("type") == "custom_tool_call" and item.get("name") == "apply_patch"
+                for item in added_items
+            ),
+            "custom mode apply_patch must emit a custom_tool_call item (not apply_patch_call)",
+        )
+        # Also confirm no apply_patch_call appears in custom mode
+        self.assertNotIn('"type": "apply_patch_call"', stream_text,
+                         "custom mode must not emit apply_patch_call items")
+
+    def test_ap1_custom_mode_no_sub_lifecycle_events(self):
+        """Custom mode apply_patch must also not emit any sub-lifecycle events."""
+        events, _ = self._run_apply_patch(apply_patch_output_style="custom")
+        names = [et for et, _ in events]
+        for forbidden in (
+            "response.apply_patch_call.in_progress",
+            "response.apply_patch_call.searching",
+            "response.apply_patch_call.completed",
+            "response.web_search_call.in_progress",
+            "response.web_search_call.searching",
+            "response.web_search_call.completed",
+        ):
+            self.assertNotIn(forbidden, names,
+                             f"custom mode apply_patch must not emit {forbidden}")
+
+    def test_ap1_response_completed_always_emitted(self):
+        """response.completed must always be the terminal event after apply_patch."""
+        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        names = [et for et, _ in events]
+        self.assertIn("response.completed", names,
+                      "response.completed must be emitted after apply_patch")
+
+
 if __name__ == "__main__":
     unittest.main()
