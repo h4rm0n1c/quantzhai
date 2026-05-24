@@ -1,7 +1,52 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-25
-Status: active control sheet — searchengines Agent API made canonical web_search backend.
+Status: active control sheet — search backend smoke status clarified; 503 startup skip wired.
+
+## Recently completed — Clarify search backend smoke status (2026-05-25)
+
+```text
+Status: COMPLETE
+
+Problem: stocktake printed SEARXNG_BASE_URL=http://10.0.42.222:8085 with no label,
+making it look equally authoritative. First post-qz-up smoke run failed with HTTP 503
+(backend still starting) but reported as a hard lifecycle failure.
+
+Changes:
+1. scripts/qz-agent-infra-stocktake:
+   - Feature flags section split: BrainCase/watchdog vars stay as simple list;
+     search backend vars shown in a separate block with resolution priority.
+   - SEARXNG_BASE_URL annotated as "(legacy/lower-priority; not used while
+     QZ_SEARCHENGINES_BASE_URL is set)" when it differs from resolved base.
+   - "Resolved Searchengines Agent Base" row shows the actual URL QuantZhai uses.
+   - _resolve_agent_api_base() moved to module level (no local duplicate).
+
+2. scripts/qz-web-search-lifecycle-smoke:
+   - Banner now shows "legacy_searxng=... (ignored for Agent API smoke)" only when
+     SEARXNG_BASE_URL is set and differs from resolved AGENT_BASE.
+   - Added --wait-backend SECONDS: polls /qz/model/status until ready, then runs C.
+   - Section C Python snippet: urllib.error.HTTPError 503 now handled separately.
+     Queries /qz/model/status (timeout=5) to classify:
+       not_ready                → model not ready → skip (startup timing, not failure)
+       error_503_despite_ready  → model ready but 503 → fail (admission bug)
+   - Bash case statement: added not_ready (skip) and error_503_despite_ready (fail)
+     cases. Existing partial/error/no_search behaviour unchanged.
+
+3. tests/test_qz_search_config.py: added StocktakeLabelTests (5 tests) and
+   Lifecycle503ClassificationTests (3 tests) covering:
+   - canonical var wins and shows correct legacy label
+   - alias var wins and shows correct legacy label
+   - same value → "same as resolved Agent API base"
+   - no legacy → "(unset)"
+   - 503 + model_ready=False/None → not_ready
+   - 503 + model_ready=True → error_503_despite_ready
+
+4. docs: updated codex-visible-tool-lifecycle-audit.md and
+   web-search-provider-architecture-audit.md with env var priority table,
+   503 classification logic, and --wait-backend documentation.
+
+All tests pass. bash -n on smoke: clean.
+```
 
 ## Recently completed — Use searchengines Agent API facade as canonical web_search backend (2026-05-25)
 

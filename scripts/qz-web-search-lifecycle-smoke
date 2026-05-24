@@ -30,10 +30,12 @@ SMOKE_MODEL=""   # empty = use _DEFAULT_MODEL after env is sourced
 SKIP_LIVE_SEARCH=0
 TELEMETRY_LIMIT=200
 SEARCH_TIMEOUT=90
+WAIT_BACKEND=0   # seconds to wait for backend to become ready before Section C (0=no wait)
 
 usage() {
   printf 'Usage: %s [--model MODEL] [--skip-live-search] [--telemetry-limit N]\n' \
     "$(basename "${BASH_SOURCE[0]}")" >&2
+  printf '          [--wait-backend SECONDS]\n' >&2
   exit 1
 }
 
@@ -44,6 +46,8 @@ while [[ $# -gt 0 ]]; do
     --skip-live-search)   SKIP_LIVE_SEARCH=1; shift ;;
     --telemetry-limit)    TELEMETRY_LIMIT="${2:?--telemetry-limit requires a value}"; shift 2 ;;
     --telemetry-limit=*)  TELEMETRY_LIMIT="${1#*=}"; shift ;;
+    --wait-backend)       WAIT_BACKEND="${2:?--wait-backend requires a value}"; shift 2 ;;
+    --wait-backend=*)     WAIT_BACKEND="${1#*=}"; shift ;;
     -h|--help)            usage ;;
     *)                    usage ;;
   esac
@@ -81,6 +85,11 @@ _resolve_agent_base() {
 }
 AGENT_BASE="$(_resolve_agent_base)"
 
+# Legacy raw-SearXNG value — may differ from AGENT_BASE if operator has
+# SEARXNG_BASE_URL pointing at raw SearXNG instead of the Agent API facade.
+LEGACY_SEARXNG="${SEARXNG_BASE_URL:-}"
+LEGACY_SEARXNG="${LEGACY_SEARXNG%/}"
+
 FAIL_LIST=()
 WARN_LIST=()
 SKIP_LIST=()
@@ -93,6 +102,9 @@ skip() { printf 'SKIP %s\n' "$*"; SKIP_LIST+=("$*"); }
 printf '=== qz-web-search-lifecycle-smoke ===\n'
 printf '    proxy=%s\n' "$PROXY_BASE"
 printf '    searchengines=%s\n' "$AGENT_BASE"
+if [[ -n "$LEGACY_SEARXNG" && "$LEGACY_SEARXNG" != "$AGENT_BASE" ]]; then
+  printf '    legacy_searxng=%s (ignored for Agent API smoke)\n' "$LEGACY_SEARXNG"
+fi
 printf '    model=%s\n' "$SMOKE_MODEL"
 echo
 
@@ -286,6 +298,28 @@ fi
 echo
 echo "--- C. Streaming web_search lifecycle SSE events ---"
 
+# Optional: wait for backend to become ready before attempting the live search.
+if [[ "$WAIT_BACKEND" -gt 0 ]]; then
+  printf '    waiting up to %ss for backend to become ready...\n' "$WAIT_BACKEND"
+  _wait_deadline=$(( $(date +%s) + WAIT_BACKEND ))
+  _backend_ready=0
+  while [[ $(date +%s) -lt $_wait_deadline ]]; do
+    if _ms_raw=$(curl -fsS --max-time 3 "${PROXY_BASE}/qz/model/status" 2>/dev/null); then
+      _ms_ready=$(printf '%s' "$_ms_raw" | python3 -c \
+        "import json,sys; d=json.load(sys.stdin); print(d.get('selected_model_ready',''))" 2>/dev/null || echo "")
+      if [[ "$_ms_ready" == "True" ]]; then
+        ok "backend ready (selected_model_ready=True)"
+        _backend_ready=1
+        break
+      fi
+    fi
+    sleep 5
+  done
+  if [[ "$_backend_ready" -eq 0 ]]; then
+    warn "backend not ready after ${WAIT_BACKEND}s — Section C will classify 503 as skip"
+  fi
+fi
+
 if [[ "$SKIP_LIVE_SEARCH" -eq 1 ]]; then
   skip "streaming lifecycle check skipped (--skip-live-search)"
 elif ! curl -sf --max-time 5 "${PROXY_BASE}/qz/control-plane" >/dev/null 2>&1; then
@@ -293,12 +327,16 @@ elif ! curl -sf --max-time 5 "${PROXY_BASE}/qz/control-plane" >/dev/null 2>&1; t
 else
   # Write Python script to temp file — avoids heredoc quoting complexity.
   # The script makes a streaming /v1/responses request, parses SSE event types,
-  # and returns JSON with pass/partial/no_search/error status.
+  # and returns JSON with pass/partial/no_search/not_ready/error status.
+  #
+  # not_ready: HTTP 503 + /qz/model/status says not ready → startup skip, not failure.
+  # error_503_despite_ready: HTTP 503 + model status says ready → possible admission bug → fail.
   _LIFECYCLE_PY=$(mktemp /tmp/qz-lifecycle-smoke-XXXXXX.py)
   trap 'rm -f "$_LIFECYCLE_PY"' EXIT
 
   cat > "$_LIFECYCLE_PY" << 'PYEOF'
 import urllib.request
+import urllib.error
 import json
 import sys
 import os
@@ -343,6 +381,39 @@ try:
             if line.startswith("event:"):
                 evt = line.split(":", 1)[1].strip()
                 events.append(evt)
+except urllib.error.HTTPError as exc:
+    if exc.code == 503:
+        # HTTP 503 = backend starting up or admission gate closed.
+        # Query /qz/model/status to distinguish startup delay from real bug.
+        model_ready = None
+        try:
+            with urllib.request.urlopen(
+                PROXY_BASE.rstrip("/") + "/qz/model/status", timeout=5
+            ) as ms:
+                ms_data = json.loads(ms.read().decode("utf-8"))
+                model_ready = ms_data.get("selected_model_ready")
+        except Exception:
+            pass  # If status endpoint is also down, treat as not ready
+        if model_ready is True:
+            # Backend says ready but returned 503 — real admission bug.
+            print(json.dumps({
+                "status": "error_503_despite_ready",
+                "error": str(exc),
+                "model_ready": model_ready,
+                "events": events,
+            }))
+        else:
+            # Not ready yet — startup delay, not a smoke failure.
+            print(json.dumps({
+                "status": "not_ready",
+                "error": str(exc),
+                "model_ready": model_ready,
+                "events": events,
+            }))
+        sys.exit(0)
+    else:
+        print(json.dumps({"status": "error", "error": str(exc), "events": events}))
+        sys.exit(0)
 except Exception as exc:
     print(json.dumps({"status": "error", "error": str(exc), "events": events}))
     sys.exit(0)
@@ -413,6 +484,21 @@ for k in sorted(d.get('checks', {})):
         "import json,sys; d=json.load(sys.stdin); print(' '.join(d.get('events_seen',[])[:8]))" 2>/dev/null || echo "")
       skip "streaming lifecycle: model did not call web_search on this run (prompt-dependent)"
       printf '     (first 8 event types seen: %s)\n' "$LC_EVENTS"
+      ;;
+    not_ready)
+      # HTTP 503 + model status says not ready → backend still starting up.
+      # This is a startup timing issue, not a lifecycle failure.
+      LC_MODEL_READY=$(printf '%s' "$LIFECYCLE_RESULT" | python3 -c \
+        "import json,sys; d=json.load(sys.stdin); print(d.get('model_ready','unknown'))" 2>/dev/null || echo "unknown")
+      skip "streaming lifecycle: backend/model not ready (HTTP 503; selected_model_ready=${LC_MODEL_READY}); retry after load"
+      ;;
+    error_503_despite_ready)
+      # HTTP 503 + model status says ready → real admission gate bug.
+      LC_ERR=$(printf '%s' "$LIFECYCLE_RESULT" | python3 -c \
+        "import json,sys; d=json.load(sys.stdin); print(d.get('error','unknown'))" 2>/dev/null || echo "unknown")
+      LC_MODEL_READY=$(printf '%s' "$LIFECYCLE_RESULT" | python3 -c \
+        "import json,sys; d=json.load(sys.stdin); print(d.get('model_ready','unknown'))" 2>/dev/null || echo "unknown")
+      fail "streaming lifecycle: HTTP 503 despite backend ready (selected_model_ready=${LC_MODEL_READY}) — possible admission bug"
       ;;
     error)
       LC_ERR=$(printf '%s' "$LIFECYCLE_RESULT" | python3 -c \

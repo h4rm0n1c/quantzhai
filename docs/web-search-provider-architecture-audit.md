@@ -1,14 +1,29 @@
 # Web Search Provider Architecture Audit
 
-Date: 2026-05-22 (updated 2026-05-25: live smoke added)
+Date: 2026-05-22 (updated 2026-05-25: live smoke added; search backend env clarified)
 Status: Post-decoupling — provider guidance active and live-smoked. See also: docs/search-provider-boundary-audit.md
 
 **Live smoke status (2026-05-25):** `scripts/qz-web-search-lifecycle-smoke` covers:
 - searchengines `/guidance` direct — schema, provider_id, furry_fse profile, fse engine flags
 - QuantZhai `/qz/web-search/capabilities` provider_guidance bridge
 - Streaming web_search SSE lifecycle events (`in_progress`, `searching`, `completed`)
+  - HTTP 503 immediately after `qz-up` is classified as `not_ready` (startup skip) when backend confirms not ready, not a lifecycle failure. `--wait-backend N` polls until ready before running Section C.
 - FSE direct search — agent_api.fse_search metadata; `count_mismatch` may be `True` by design (FSE count unreliable); smoke does not fail on count_mismatch
 - Operator telemetry: tool_call_started, tool_call_completed
+
+**Search backend env vars (2026-05-25):**
+
+| Var | Role | Priority |
+|---|---|---|
+| `QZ_SEARCHENGINES_BASE_URL` | Canonical Agent API facade base | 1 (highest) |
+| `SEARXNG_AGENT_API_BASE` | Accepted alias for canonical | 2 |
+| `SEARXNG_BASE_URL` | Legacy compat alias; may point to raw SearXNG | 3 (lowest) |
+| *(none set)* | Default: `http://127.0.0.1:8890` | fallback |
+
+QuantZhai always calls the resolved Agent API facade (never raw SearXNG directly). `SEARXNG_BASE_URL` is treated as a legacy alias — if it differs from the resolved base, the stocktake labels it `(legacy/lower-priority; not used while QZ_SEARCHENGINES_BASE_URL is set)` and the smoke banner shows `legacy_searxng=... (ignored for Agent API smoke)`.
+
+`qz-env` defaults: `QZ_SEARCHENGINES_BASE_URL=http://127.0.0.1:8890`, `SEARXNG_AGENT_API_BASE=\${QZ_SEARCHENGINES_BASE_URL}`, `SEARXNG_BASE_URL=\${QZ_SEARCHENGINES_BASE_URL}`.
+If `SEARXNG_BASE_URL` is overridden to point at raw SearXNG (e.g. `http://10.0.42.222:8085`), QuantZhai still routes all Agent API calls to `QZ_SEARCHENGINES_BASE_URL`.
 
 ---
 

@@ -38,22 +38,55 @@ def check_file_contains(path, pattern):
     with open(path, 'r') as f:
         return pattern in f.read()
 
+def _resolve_agent_api_base():
+    """Mirror resolve_searchengines_base_url() priority without importing the proxy."""
+    for key in ("QZ_SEARCHENGINES_BASE_URL", "SEARXNG_AGENT_API_BASE", "SEARXNG_BASE_URL"):
+        val = (os.environ.get(key) or "").strip()
+        if val:
+            return val.rstrip("/")
+    return "http://127.0.0.1:8890"
+
+
 def main():
     print("QuantZhai Agent Infrastructure Stocktake (Evidence-Grade)")
-    
+
     print_section("Feature Flags (Environment)")
-    flags = [
+    # Behavioral gating flags
+    for flag in (
         "QZ_BRAINCASE_TOOLS_ENABLED",
         "QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED",
         "QZ_STREAM_NO_OUTPUT_TIMEOUT_S",
         "QZ_STREAM_TERMINAL_TIMEOUT_S",
-        "QZ_SEARCHENGINES_BASE_URL",
-        "SEARXNG_AGENT_API_BASE",
-        "SEARXNG_BASE_URL",
-    ]
-    for flag in flags:
+    ):
         val = os.environ.get(flag, "(unset)")
         print(f"{flag:35} : {val}")
+
+    # Search backend env — show resolution priority clearly so operators can see
+    # which var QuantZhai actually uses vs what is set for legacy compat.
+    print()
+    _canonical = (os.environ.get("QZ_SEARCHENGINES_BASE_URL") or "").strip().rstrip("/")
+    _alias     = (os.environ.get("SEARXNG_AGENT_API_BASE") or "").strip().rstrip("/")
+    _legacy    = (os.environ.get("SEARXNG_BASE_URL") or "").strip().rstrip("/")
+    _resolved  = _resolve_agent_api_base()
+
+    print(f"{'QZ_SEARCHENGINES_BASE_URL':35} : {_canonical or '(unset)'}")
+    print(f"{'SEARXNG_AGENT_API_BASE':35} : {_alias or '(unset)'}")
+
+    # Label SEARXNG_BASE_URL clearly when it points somewhere different from the
+    # resolved Agent API base — it may be raw SearXNG, not the facade.
+    _legacy_display = _legacy or "(unset)"
+    if _legacy and _legacy != _resolved:
+        _winner = next(
+            (k for k in ("QZ_SEARCHENGINES_BASE_URL", "SEARXNG_AGENT_API_BASE")
+             if (os.environ.get(k) or "").strip()),
+            None,
+        )
+        _note = f"legacy/lower-priority; not used while {_winner} is set" if _winner else "lower-priority"
+        _legacy_display += f" ({_note})"
+    elif _legacy:
+        _legacy_display += " (same as resolved Agent API base)"
+    print(f"{'SEARXNG_BASE_URL':35} : {_legacy_display}")
+    print(f"{'Resolved Searchengines Agent Base':35} : {_resolved}")
 
     print_section("Code Wiring Evidence")
     
@@ -185,18 +218,7 @@ def main():
     except Exception as e:
         report("Web Search Capabilities", "FAIL", str(e))
 
-    # Try Searchengines Agent API /guidance.
-    # Resolution priority mirrors resolve_searchengines_base_url():
-    # QZ_SEARCHENGINES_BASE_URL > SEARXNG_AGENT_API_BASE > SEARXNG_BASE_URL > 127.0.0.1:8890.
-    # We do NOT report "not set" — qz-env always exports QZ_SEARCHENGINES_BASE_URL
-    # with the 8890 default, so a missing value means an import error upstream.
-    def _resolve_agent_api_base():
-        for key in ("QZ_SEARCHENGINES_BASE_URL", "SEARXNG_AGENT_API_BASE", "SEARXNG_BASE_URL"):
-            val = (os.environ.get(key) or "").strip()
-            if val:
-                return val.rstrip("/")
-        return "http://127.0.0.1:8890"
-
+    # Try Searchengines Agent API /guidance using the resolved Agent API base.
     agent_base = _resolve_agent_api_base()
     try:
         with urllib.request.urlopen(f"{agent_base}/guidance", timeout=2) as r:

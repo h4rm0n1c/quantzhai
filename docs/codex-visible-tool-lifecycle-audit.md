@@ -386,7 +386,9 @@ Add a unit test that asserts `response.apply_patch_call.in_progress` is NOT in t
 - **D** — FSE direct search (agent_api.fse_search metadata, count_mismatch expected-True handling, result domains)
 - **E** — Operator telemetry (tool_call_started, tool_call_completed, no tool_call_error)
 
-Section C skips gracefully if the model doesn't call web_search (prompt-dependent) or if the model is not loaded. All other sections run against static endpoints and are always checkable when the proxy and searchengines stack are up.
+Section C skips gracefully if the model doesn't call web_search (prompt-dependent) or if the model is not loaded. **HTTP 503 from the proxy is classified as a startup skip (`not_ready`) when `/qz/model/status` confirms the backend is not ready, so running the smoke immediately after `qz-up` does not produce a false failure. If the backend claims ready but returns 503, the smoke fails loudly (`error_503_despite_ready`) as a real admission bug.** Use `--wait-backend SECONDS` to poll until the backend is ready before Section C. All other sections run against static endpoints and are always checkable when the proxy and searchengines stack are up.
+
+**Search backend env reporting:** The smoke banner shows `searchengines=` (resolved Agent API facade base) and a `legacy_searxng=... (ignored for Agent API smoke)` line only when `SEARXNG_BASE_URL` differs from the resolved base. The stocktake labels `SEARXNG_BASE_URL` as `legacy/lower-priority; not used while QZ_SEARCHENGINES_BASE_URL is set` when it points to a different address (e.g., raw SearXNG). `QZ_SEARCHENGINES_BASE_URL` and `SEARXNG_AGENT_API_BASE` are the canonical Agent API facade vars.
 
 ---
 

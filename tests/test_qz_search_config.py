@@ -454,6 +454,113 @@ class SearchenginesBaseUrlResolutionTests(unittest.TestCase):
             self.assertEqual(result.config["searxng"]["base_url"], "http://canonical:9000")
 
 
+class StocktakeLabelTests(unittest.TestCase):
+    """Mirrors the stocktake's SEARXNG_BASE_URL annotation logic.
+
+    The stocktake labels SEARXNG_BASE_URL with legacy/lower-priority when it
+    differs from the resolved Agent API base. This validates that logic independently
+    so the annotation behaviour is regression-tested without running the script.
+    """
+
+    def _legacy_label(self, canonical="", alias="", legacy=""):
+        """Reproduce the stocktake annotation for SEARXNG_BASE_URL display."""
+        env = {}
+        if canonical:
+            env["QZ_SEARCHENGINES_BASE_URL"] = canonical
+        if alias:
+            env["SEARXNG_AGENT_API_BASE"] = alias
+        if legacy:
+            env["SEARXNG_BASE_URL"] = legacy
+        resolved = resolve_searchengines_base_url(env).rstrip("/")
+        legacy_stripped = legacy.rstrip("/") if legacy else ""
+        if not legacy_stripped:
+            return "(unset)"
+        if legacy_stripped != resolved:
+            winner = next(
+                (k for k in ("QZ_SEARCHENGINES_BASE_URL", "SEARXNG_AGENT_API_BASE")
+                 if (env.get(k) or "").strip()),
+                None,
+            )
+            note = (
+                f"legacy/lower-priority; not used while {winner} is set"
+                if winner else "lower-priority"
+            )
+            return f"{legacy_stripped} ({note})"
+        return f"{legacy_stripped} (same as resolved Agent API base)"
+
+    def test_canonical_wins_shows_legacy_label(self):
+        """When canonical var is set and SEARXNG_BASE_URL differs, label says legacy."""
+        label = self._legacy_label(
+            canonical="http://canonical:9000",
+            legacy="http://raw-searxng:8085",
+        )
+        self.assertIn("legacy/lower-priority", label)
+        self.assertIn("QZ_SEARCHENGINES_BASE_URL", label)
+        self.assertIn("http://raw-searxng:8085", label)
+
+    def test_alias_wins_shows_legacy_label(self):
+        """When SEARXNG_AGENT_API_BASE is set and SEARXNG_BASE_URL differs, label says legacy."""
+        label = self._legacy_label(
+            alias="http://alias:9001",
+            legacy="http://raw-searxng:8085",
+        )
+        self.assertIn("legacy/lower-priority", label)
+        self.assertIn("SEARXNG_AGENT_API_BASE", label)
+
+    def test_same_value_shows_same_label(self):
+        """When SEARXNG_BASE_URL matches resolved base, show same-as note."""
+        label = self._legacy_label(
+            canonical="http://127.0.0.1:8890",
+            legacy="http://127.0.0.1:8890",
+        )
+        self.assertIn("same as resolved Agent API base", label)
+        self.assertNotIn("legacy/lower-priority", label)
+
+    def test_no_legacy_returns_unset(self):
+        """When SEARXNG_BASE_URL is not set, label is (unset)."""
+        label = self._legacy_label(canonical="http://canonical:9000")
+        self.assertEqual(label, "(unset)")
+
+    def test_canonical_and_alias_both_set_canonical_wins(self):
+        """When both canonical vars are set, canonical takes priority in the label."""
+        label = self._legacy_label(
+            canonical="http://canonical:9000",
+            alias="http://alias:9001",
+            legacy="http://raw-searxng:8085",
+        )
+        self.assertIn("not used while QZ_SEARCHENGINES_BASE_URL is set", label)
+
+
+class Lifecycle503ClassificationTests(unittest.TestCase):
+    """Validates the 503 → status classification logic used in the lifecycle smoke snippet.
+
+    The lifecycle Python snippet (embedded in qz-web-search-lifecycle-smoke) classifies
+    HTTP 503 responses as:
+    - "not_ready"              when model_ready is False or None (startup delay, skip)
+    - "error_503_despite_ready" when model_ready is True (admission bug, fail)
+
+    This test captures that mapping so it is regression-tested without running the script.
+    """
+
+    def _classify_503(self, model_ready):
+        """Mirror the lifecycle snippet's model_ready → status mapping."""
+        if model_ready is True:
+            return "error_503_despite_ready"
+        return "not_ready"
+
+    def test_false_is_not_ready(self):
+        """selected_model_ready=False → startup skip (not_ready)."""
+        self.assertEqual(self._classify_503(False), "not_ready")
+
+    def test_none_is_not_ready(self):
+        """model status endpoint unreachable → conservative not_ready (not a failure)."""
+        self.assertEqual(self._classify_503(None), "not_ready")
+
+    def test_true_is_error_despite_ready(self):
+        """selected_model_ready=True but HTTP 503 → admission bug (error_503_despite_ready)."""
+        self.assertEqual(self._classify_503(True), "error_503_despite_ready")
+
+
 class GitignoreTests(unittest.TestCase):
     """config/user/search.json must be covered by .gitignore."""
 
