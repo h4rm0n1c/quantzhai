@@ -376,9 +376,17 @@ When a tool call fails (coercion/dropped/unknown), synthesise a `response.output
 
 Add a unit test that asserts `response.apply_patch_call.in_progress` is NOT in the Codex stream when apply_patch runs. This locks the current "no sub-events for apply_patch" contract explicitly, so any future accidental addition is caught. The `StreamingToolErrorFixtureTests` infrastructure can be reused. **Safe to implement now.**
 
-### Slice L4 — Live smoke validation of web_search lifecycle events
+### Slice L4 — Live smoke validation of web_search lifecycle events ✓ Done
 
-Extend `scripts/qz-live-smoke` with a check that verifies `response.web_search_call.in_progress`, `response.web_search_call.searching`, and `response.web_search_call.completed` all appear in the forwarded SSE stream during a real search. Currently `web_search lifecycle` in the stocktake is `live_smoke / yes`, but the smoke script does not assert the specific event types. **Low risk. Adds confidence.**
+`scripts/qz-web-search-lifecycle-smoke` asserts that `response.web_search_call.in_progress`, `response.web_search_call.searching`, and `response.web_search_call.completed` all appear in the forwarded SSE stream when a real search runs. Sections covered:
+
+- **A** — searchengines `/guidance` direct (schema, provider_id, furry_fse profile, fse engine flags)
+- **B** — QuantZhai `/qz/web-search/capabilities` provider_guidance bridge (available, schema, provider_id, profiles_present)
+- **C** — Streaming `/v1/responses` lifecycle events (`output_item.added`, `web_search_call.in_progress`, `web_search_call.searching`, `web_search_call.completed`, `output_item.done`, `response.completed`)
+- **D** — FSE direct search (agent_api.fse_search metadata, count_mismatch expected-True handling, result domains)
+- **E** — Operator telemetry (tool_call_started, tool_call_completed, no tool_call_error)
+
+Section C skips gracefully if the model doesn't call web_search (prompt-dependent) or if the model is not loaded. All other sections run against static endpoints and are always checkable when the proxy and searchengines stack are up.
 
 ---
 

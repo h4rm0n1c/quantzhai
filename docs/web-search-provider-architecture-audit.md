@@ -1,7 +1,14 @@
 # Web Search Provider Architecture Audit
 
-Date: 2026-05-22
-Status: Post-decoupling — provider guidance active. See also: docs/search-provider-boundary-audit.md
+Date: 2026-05-22 (updated 2026-05-25: live smoke added)
+Status: Post-decoupling — provider guidance active and live-smoked. See also: docs/search-provider-boundary-audit.md
+
+**Live smoke status (2026-05-25):** `scripts/qz-web-search-lifecycle-smoke` covers:
+- searchengines `/guidance` direct — schema, provider_id, furry_fse profile, fse engine flags
+- QuantZhai `/qz/web-search/capabilities` provider_guidance bridge
+- Streaming web_search SSE lifecycle events (`in_progress`, `searching`, `completed`)
+- FSE direct search — agent_api.fse_search metadata; `count_mismatch` may be `True` by design (FSE count unreliable); smoke does not fail on count_mismatch
+- Operator telemetry: tool_call_started, tool_call_completed
 
 ---
 

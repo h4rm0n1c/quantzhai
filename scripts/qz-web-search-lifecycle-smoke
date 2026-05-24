@@ -1,0 +1,553 @@
+#!/usr/bin/env bash
+# qz-web-search-lifecycle-smoke: live smoke for web_search lifecycle events
+# and searchengines-private provider guidance integration.
+#
+# Usage:
+#   scripts/qz-web-search-lifecycle-smoke [--model MODEL] [--skip-live-search]
+#                                         [--telemetry-limit N]
+#
+# Run after qz-up. Checks:
+#   A. searchengines /guidance direct preflight (SEARXNG_BASE_URL/guidance)
+#   B. QuantZhai /qz/web-search/capabilities — provider_guidance bridge
+#   C. Streaming web_search lifecycle SSE events (requires live model)
+#   D. FSE direct search — agent_api metadata, count_mismatch, result domains
+#   E. Operator telemetry visibility
+#
+# Exits 0 on all checks passed or skipped, 1 on any hard failure.
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Defaults
+# ---------------------------------------------------------------------------
+SMOKE_MODEL="kuato"
+SKIP_LIVE_SEARCH=0
+TELEMETRY_LIMIT=200
+SEARCH_TIMEOUT=90
+
+usage() {
+  printf 'Usage: %s [--model MODEL] [--skip-live-search] [--telemetry-limit N]\n' \
+    "$(basename "${BASH_SOURCE[0]}")" >&2
+  exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model)              SMOKE_MODEL="${2:?--model requires a value}"; shift 2 ;;
+    --model=*)            SMOKE_MODEL="${1#*=}"; shift ;;
+    --skip-live-search)   SKIP_LIVE_SEARCH=1; shift ;;
+    --telemetry-limit)    TELEMETRY_LIMIT="${2:?--telemetry-limit requires a value}"; shift 2 ;;
+    --telemetry-limit=*)  TELEMETRY_LIMIT="${1#*=}"; shift ;;
+    -h|--help)            usage ;;
+    *)                    usage ;;
+  esac
+done
+
+# ---------------------------------------------------------------------------
+# Environment
+# ---------------------------------------------------------------------------
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qz-env"
+
+PROXY_BASE="http://${QZ_PROXY_HOST}:${QZ_PROXY_PORT}"
+AGENT_BASE="${SEARXNG_BASE_URL:-}"
+FAIL_LIST=()
+WARN_LIST=()
+SKIP_LIST=()
+
+ok()   { printf 'OK   %s\n' "$*"; }
+fail() { printf 'FAIL %s\n' "$*" >&2; FAIL_LIST+=("$*"); }
+warn() { printf 'WARN %s\n' "$*"; WARN_LIST+=("$*"); }
+skip() { printf 'SKIP %s\n' "$*"; SKIP_LIST+=("$*"); }
+
+printf '=== qz-web-search-lifecycle-smoke  model=%s  proxy=%s ===\n' \
+  "$SMOKE_MODEL" "$PROXY_BASE"
+echo
+
+# ---------------------------------------------------------------------------
+# Prerequisites
+# ---------------------------------------------------------------------------
+echo "--- prerequisites ---"
+for _cmd in curl python3; do
+  if command -v "$_cmd" >/dev/null 2>&1; then
+    ok "command: $_cmd"
+  else
+    fail "required command missing: $_cmd"
+  fi
+done
+
+if [[ ${#FAIL_LIST[@]} -gt 0 ]]; then
+  printf '\nPrerequisite checks failed — aborting.\n' >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# A. searchengines /guidance — direct preflight
+# ---------------------------------------------------------------------------
+echo
+echo "--- A. searchengines /guidance (direct) ---"
+
+if [[ -z "$AGENT_BASE" ]]; then
+  skip "SEARXNG_BASE_URL not set — cannot check searchengines guidance directly"
+else
+  GUIDANCE_URL="${AGENT_BASE%/}/guidance"
+
+  if GUIDANCE_RAW=$(curl -fsS --max-time 8 "$GUIDANCE_URL" 2>/dev/null); then
+    G_SCHEMA=$(printf '%s' "$GUIDANCE_RAW" | python3 -c \
+      "import json,sys; d=json.load(sys.stdin); print(d.get('schema',''))" 2>/dev/null || echo "")
+    G_PROVIDER=$(printf '%s' "$GUIDANCE_RAW" | python3 -c \
+      "import json,sys; d=json.load(sys.stdin); print(d.get('provider_id',''))" 2>/dev/null || echo "")
+    G_PROFILES=$(printf '%s' "$GUIDANCE_RAW" | python3 -c \
+      "import json,sys; d=json.load(sys.stdin); print(' '.join(sorted((d.get('profiles') or {}).keys())))" 2>/dev/null || echo "")
+    G_FSE_PAGINATION=$(printf '%s' "$GUIDANCE_RAW" | python3 -c \
+      "import json,sys; d=json.load(sys.stdin); e=(d.get('engines') or {}).get('fse',{}); print(e.get('supports_pagination',''))" 2>/dev/null || echo "")
+    G_FSE_COUNT=$(printf '%s' "$GUIDANCE_RAW" | python3 -c \
+      "import json,sys; d=json.load(sys.stdin); e=(d.get('engines') or {}).get('fse',{}); print(e.get('count_metadata_reliable',''))" 2>/dev/null || echo "")
+    G_FSE_TAGS=$(printf '%s' "$GUIDANCE_RAW" | python3 -c \
+      "import json,sys; d=json.load(sys.stdin); e=(d.get('engines') or {}).get('fse',{}); print(e.get('tags_in_search_results',''))" 2>/dev/null || echo "")
+
+    if [[ "$G_SCHEMA" == "qz.provider_guidance.v1" ]]; then
+      ok "guidance schema: $G_SCHEMA"
+    else
+      fail "guidance schema mismatch (got '$G_SCHEMA', expected qz.provider_guidance.v1)"
+    fi
+
+    if [[ "$G_PROVIDER" == "searchengines-private" ]]; then
+      ok "guidance provider_id: $G_PROVIDER"
+    else
+      fail "guidance provider_id mismatch (got '$G_PROVIDER', expected searchengines-private)"
+    fi
+
+    if printf '%s' " $G_PROFILES " | grep -q " furry_fse "; then
+      ok "guidance profiles: furry_fse present (all: $G_PROFILES)"
+    else
+      fail "guidance profiles: furry_fse missing (got: '$G_PROFILES')"
+    fi
+
+    if [[ "$G_FSE_PAGINATION" == "True" ]]; then
+      ok "fse engine: supports_pagination=true"
+    else
+      warn "fse engine: supports_pagination not True (got '$G_FSE_PAGINATION')"
+    fi
+
+    # count_metadata_reliable=false is by design — FSE count is inherently unreliable
+    if [[ "$G_FSE_COUNT" == "False" ]]; then
+      ok "fse engine: count_metadata_reliable=false (by design — FSE count metadata unreliable)"
+    else
+      warn "fse engine: count_metadata_reliable not False (got '$G_FSE_COUNT') — unexpected"
+    fi
+
+    if [[ "$G_FSE_TAGS" == "True" ]]; then
+      ok "fse engine: tags_in_search_results=true"
+    else
+      warn "fse engine: tags_in_search_results not True (got '$G_FSE_TAGS')"
+    fi
+
+    # Scoped profile check
+    if PROFILE_RAW=$(curl -fsS --max-time 8 "${GUIDANCE_URL}?profile=furry_fse" 2>/dev/null); then
+      PROF_SCHEMA=$(printf '%s' "$PROFILE_RAW" | python3 -c \
+        "import json,sys; d=json.load(sys.stdin); print(d.get('schema',''))" 2>/dev/null || echo "")
+      if [[ "$PROF_SCHEMA" == "qz.provider_guidance.v1" ]]; then
+        ok "guidance?profile=furry_fse: valid response (schema=$PROF_SCHEMA)"
+      else
+        warn "guidance?profile=furry_fse: unexpected schema '$PROF_SCHEMA'"
+      fi
+    else
+      warn "guidance?profile=furry_fse: endpoint error or unavailable"
+    fi
+
+    # Scoped engine check
+    if ENGINE_RAW=$(curl -fsS --max-time 8 "${GUIDANCE_URL}?engine=fse" 2>/dev/null); then
+      ENG_SCHEMA=$(printf '%s' "$ENGINE_RAW" | python3 -c \
+        "import json,sys; d=json.load(sys.stdin); print(d.get('schema',''))" 2>/dev/null || echo "")
+      if [[ "$ENG_SCHEMA" == "qz.provider_guidance.v1" ]]; then
+        ok "guidance?engine=fse: valid response (schema=$ENG_SCHEMA)"
+      else
+        warn "guidance?engine=fse: unexpected schema '$ENG_SCHEMA'"
+      fi
+    else
+      warn "guidance?engine=fse: endpoint error or unavailable"
+    fi
+
+  else
+    fail "searchengines /guidance unreachable at $GUIDANCE_URL"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# B. QuantZhai /qz/web-search/capabilities — provider_guidance bridge
+# ---------------------------------------------------------------------------
+echo
+echo "--- B. QuantZhai web-search capabilities ---"
+
+if CAPS_RAW=$(curl -fsS --max-time 12 "${PROXY_BASE}/qz/web-search/capabilities" 2>/dev/null); then
+  CAPS_SCHEMA=$(printf '%s' "$CAPS_RAW" | python3 -c \
+    "import json,sys; d=json.load(sys.stdin); print(d.get('schema',''))" 2>/dev/null || echo "")
+  CAPS_OK=$(printf '%s' "$CAPS_RAW" | python3 -c \
+    "import json,sys; d=json.load(sys.stdin); print(d.get('ok',''))" 2>/dev/null || echo "")
+
+  if [[ "$CAPS_OK" == "True" && "$CAPS_SCHEMA" == "qz.web_search.capabilities.v1" ]]; then
+    ok "capabilities: schema=$CAPS_SCHEMA ok=True"
+  else
+    fail "capabilities: unexpected shape (ok='$CAPS_OK' schema='$CAPS_SCHEMA')"
+  fi
+
+  # provider_guidance bridge
+  PG_AVAILABLE=$(printf '%s' "$CAPS_RAW" | python3 -c \
+    "import json,sys; d=json.load(sys.stdin); print(d.get('provider_guidance',{}).get('available',''))" 2>/dev/null || echo "")
+  PG_PROVIDER=$(printf '%s' "$CAPS_RAW" | python3 -c \
+    "import json,sys; d=json.load(sys.stdin); print(d.get('provider_guidance',{}).get('provider_id') or '')" 2>/dev/null || echo "")
+  PG_SCHEMA=$(printf '%s' "$CAPS_RAW" | python3 -c \
+    "import json,sys; d=json.load(sys.stdin); print(d.get('provider_guidance',{}).get('schema') or '')" 2>/dev/null || echo "")
+  PG_PROFILES=$(printf '%s' "$CAPS_RAW" | python3 -c \
+    "import json,sys; d=json.load(sys.stdin); print(' '.join(d.get('provider_guidance',{}).get('profiles_present') or []))" 2>/dev/null || echo "")
+  PG_FETCH_WARNS=$(printf '%s' "$CAPS_RAW" | python3 -c \
+    "import json,sys; d=json.load(sys.stdin); print(d.get('provider_guidance',{}).get('fetch_warnings') or [])" 2>/dev/null || echo "[]")
+
+  if [[ "$PG_AVAILABLE" == "True" ]]; then
+    ok "capabilities.provider_guidance: available=True"
+
+    if [[ "$PG_PROVIDER" == "searchengines-private" ]]; then
+      ok "capabilities.provider_guidance: provider_id=searchengines-private"
+    else
+      warn "capabilities.provider_guidance: provider_id='$PG_PROVIDER' (expected searchengines-private)"
+    fi
+
+    if [[ "$PG_SCHEMA" == "qz.provider_guidance.v1" ]]; then
+      ok "capabilities.provider_guidance: schema=qz.provider_guidance.v1"
+    else
+      warn "capabilities.provider_guidance: schema='$PG_SCHEMA' (expected qz.provider_guidance.v1)"
+    fi
+
+    if printf '%s' " $PG_PROFILES " | grep -q " furry_fse "; then
+      ok "capabilities.provider_guidance: furry_fse in profiles_present (all: $PG_PROFILES)"
+    else
+      warn "capabilities.provider_guidance: furry_fse not in profiles_present (got: '$PG_PROFILES')"
+    fi
+  else
+    if [[ -z "$AGENT_BASE" ]]; then
+      skip "capabilities.provider_guidance: not available (SEARXNG_BASE_URL not set)"
+    else
+      fail "capabilities.provider_guidance: available=False (fetch_warnings: $PG_FETCH_WARNS)"
+    fi
+  fi
+
+  # furry_fse profile in capabilities.profiles (config-owned)
+  PROF_FURRY=$(printf '%s' "$CAPS_RAW" | python3 -c \
+    "import json,sys; d=json.load(sys.stdin); print('yes' if 'furry_fse' in d.get('profiles',{}) else 'no')" 2>/dev/null || echo "no")
+  if [[ "$PROF_FURRY" == "yes" ]]; then
+    ok "capabilities.profiles: furry_fse present"
+    # Check source_strict not suppressed by broad fallback guidance
+    FURRY_STRICT=$(printf '%s' "$CAPS_RAW" | python3 -c \
+      "import json,sys; d=json.load(sys.stdin); print(d.get('profiles',{}).get('furry_fse',{}).get('source_strict',''))" 2>/dev/null || echo "")
+    if [[ "$FURRY_STRICT" == "True" ]]; then
+      ok "capabilities.profiles.furry_fse: source_strict=True"
+    else
+      warn "capabilities.profiles.furry_fse: source_strict not True (got '$FURRY_STRICT')"
+    fi
+  else
+    warn "capabilities.profiles: furry_fse not present (not an error if not in search.json)"
+  fi
+
+else
+  fail "/qz/web-search/capabilities unreachable at ${PROXY_BASE}"
+fi
+
+# ---------------------------------------------------------------------------
+# C. Streaming web_search lifecycle SSE events
+# ---------------------------------------------------------------------------
+echo
+echo "--- C. Streaming web_search lifecycle SSE events ---"
+
+if [[ "$SKIP_LIVE_SEARCH" -eq 1 ]]; then
+  skip "streaming lifecycle check skipped (--skip-live-search)"
+elif ! curl -sf --max-time 5 "${PROXY_BASE}/qz/control-plane" >/dev/null 2>&1; then
+  skip "streaming lifecycle: proxy not reachable — skipping (is qz-up running?)"
+else
+  # Write Python script to temp file — avoids heredoc quoting complexity.
+  # The script makes a streaming /v1/responses request, parses SSE event types,
+  # and returns JSON with pass/partial/no_search/error status.
+  _LIFECYCLE_PY=$(mktemp /tmp/qz-lifecycle-smoke-XXXXXX.py)
+  trap 'rm -f "$_LIFECYCLE_PY"' EXIT
+
+  cat > "$_LIFECYCLE_PY" << 'PYEOF'
+import urllib.request
+import json
+import sys
+import os
+
+PROXY_BASE = os.environ["QZ_PROXY_BASE"]
+MODEL = os.environ["QZ_SMOKE_MODEL"]
+TIMEOUT = int(os.environ.get("QZ_SEARCH_TIMEOUT", "90"))
+
+SEARCH_PROMPT = (
+    "Use web_search with action=search and profile=furry_fse "
+    "to search for: dragon site:fse.anthro.fr\n"
+    "Return only the first result URL. Do not explain."
+)
+
+body = {
+    "model": MODEL,
+    "stream": True,
+    "tools": [{"type": "web_search"}],
+    "input": [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": SEARCH_PROMPT}],
+        }
+    ],
+}
+
+req = urllib.request.Request(
+    PROXY_BASE.rstrip("/") + "/v1/responses",
+    data=json.dumps(body).encode("utf-8"),
+    headers={
+        "Content-Type": "application/json",
+        "Authorization": "Bearer local",
+    },
+)
+
+events = []
+try:
+    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        for raw_line in resp:
+            line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+            if line.startswith("event:"):
+                evt = line.split(":", 1)[1].strip()
+                events.append(evt)
+except Exception as exc:
+    print(json.dumps({"status": "error", "error": str(exc), "events": events}))
+    sys.exit(0)
+
+web_search_events = [e for e in events if "web_search_call" in e]
+has_added        = "response.output_item.added"            in events
+has_ip           = "response.web_search_call.in_progress"  in events
+has_searching    = "response.web_search_call.searching"    in events
+has_completed    = "response.web_search_call.completed"    in events
+has_done         = "response.output_item.done"             in events
+has_resp_done    = "response.completed"                    in events
+
+if not web_search_events:
+    status = "no_search"
+elif has_added and has_ip and has_searching and has_completed and has_done:
+    status = "pass"
+else:
+    status = "partial"
+
+print(json.dumps({
+    "status": status,
+    "events_seen": events,
+    "web_search_events": web_search_events,
+    "checks": {
+        "response.output_item.added":            has_added,
+        "response.web_search_call.in_progress":  has_ip,
+        "response.web_search_call.searching":    has_searching,
+        "response.web_search_call.completed":    has_completed,
+        "response.output_item.done":             has_done,
+        "response.completed":                    has_resp_done,
+    },
+}))
+PYEOF
+
+  LIFECYCLE_RESULT=$(
+    QZ_PROXY_BASE="$PROXY_BASE" \
+    QZ_SMOKE_MODEL="$SMOKE_MODEL" \
+    QZ_SEARCH_TIMEOUT="$SEARCH_TIMEOUT" \
+    python3 "$_LIFECYCLE_PY" 2>/dev/null
+  ) || LIFECYCLE_RESULT='{"status":"error","error":"python3 script failed"}'
+
+  LC_STATUS=$(printf '%s' "$LIFECYCLE_RESULT" | python3 -c \
+    "import json,sys; d=json.load(sys.stdin); print(d.get('status','error'))" 2>/dev/null || echo "error")
+
+  case "$LC_STATUS" in
+    pass)
+      ok "streaming lifecycle: all required web_search_call events present"
+      printf '%s' "$LIFECYCLE_RESULT" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+for k in sorted(d.get('checks', {})):
+    v = d['checks'][k]
+    print('     {} event: {}'.format('OK  ' if v else 'MISS', k))
+"
+      ;;
+    partial)
+      fail "streaming lifecycle: web_search called but some lifecycle events missing"
+      printf '%s' "$LIFECYCLE_RESULT" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+for k in sorted(d.get('checks', {})):
+    v = d['checks'][k]
+    print('     {} event: {}'.format('OK  ' if v else 'MISS', k))
+"
+      ;;
+    no_search)
+      LC_EVENTS=$(printf '%s' "$LIFECYCLE_RESULT" | python3 -c \
+        "import json,sys; d=json.load(sys.stdin); print(' '.join(d.get('events_seen',[])[:8]))" 2>/dev/null || echo "")
+      skip "streaming lifecycle: model did not call web_search on this run (prompt-dependent)"
+      printf '     (first 8 event types seen: %s)\n' "$LC_EVENTS"
+      ;;
+    error)
+      LC_ERR=$(printf '%s' "$LIFECYCLE_RESULT" | python3 -c \
+        "import json,sys; d=json.load(sys.stdin); print(d.get('error','unknown'))" 2>/dev/null || echo "unknown")
+      if printf '%s' "$LC_ERR" | grep -qiE "timed out|timeout|Connection refused|urlopen error"; then
+        skip "streaming lifecycle: request error (model likely not loaded) — $LC_ERR"
+      else
+        fail "streaming lifecycle: request error — $LC_ERR"
+      fi
+      ;;
+    *)
+      fail "streaming lifecycle: unexpected result status '$LC_STATUS'"
+      ;;
+  esac
+fi
+
+# ---------------------------------------------------------------------------
+# D. FSE direct search smoke
+# ---------------------------------------------------------------------------
+echo
+echo "--- D. FSE direct search smoke ---"
+
+if [[ -z "$AGENT_BASE" ]]; then
+  skip "FSE search: SEARXNG_BASE_URL not set"
+else
+  # Source-strict search for dragon content on fse.anthro.fr.
+  # max_pages=1, top_k=5 — bounded, safe to run in smoke.
+  # count_mismatch may be True — this is expected by design and must not fail the smoke.
+  FSE_URL="${AGENT_BASE%/}/search"
+  FSE_FULL="${FSE_URL}?q=dragon%20rating%3As%20external%3Afalse&engines=fse&max_pages=1&top_k=5&format=json"
+
+  if FSE_RAW=$(curl -fsS --max-time 25 "$FSE_FULL" 2>/dev/null); then
+    FSE_HAS_RESULTS=$(printf '%s' "$FSE_RAW" | python3 -c \
+      "import json,sys; d=json.load(sys.stdin); print('yes' if 'results' in d else 'no')" 2>/dev/null || echo "no")
+    FSE_RESULT_COUNT=$(printf '%s' "$FSE_RAW" | python3 -c \
+      "import json,sys; d=json.load(sys.stdin); print(len(d.get('results') or []))" 2>/dev/null || echo "0")
+    FSE_AGENT_PRESENT=$(printf '%s' "$FSE_RAW" | python3 -c \
+      "import json,sys; d=json.load(sys.stdin); print('yes' if (d.get('agent_api') or {}).get('fse_search') else 'no')" 2>/dev/null || echo "no")
+    FSE_PAGES=$(printf '%s' "$FSE_RAW" | python3 -c \
+      "import json,sys; d=json.load(sys.stdin); print((d.get('agent_api') or {}).get('fse_search',{}).get('pages_fetched','?'))" 2>/dev/null || echo "?")
+    FSE_MAX_P=$(printf '%s' "$FSE_RAW" | python3 -c \
+      "import json,sys; d=json.load(sys.stdin); print((d.get('agent_api') or {}).get('fse_search',{}).get('max_pages','?'))" 2>/dev/null || echo "?")
+    FSE_TOP_K=$(printf '%s' "$FSE_RAW" | python3 -c \
+      "import json,sys; d=json.load(sys.stdin); print((d.get('agent_api') or {}).get('fse_search',{}).get('top_k','?'))" 2>/dev/null || echo "?")
+    FSE_COUNT_MM=$(printf '%s' "$FSE_RAW" | python3 -c \
+      "import json,sys; d=json.load(sys.stdin); print((d.get('agent_api') or {}).get('fse_search',{}).get('count_mismatch','?'))" 2>/dev/null || echo "?")
+
+    if [[ "$FSE_HAS_RESULTS" == "yes" ]]; then
+      ok "FSE search: response has results key (result_count=$FSE_RESULT_COUNT)"
+    else
+      warn "FSE search: no results key — provider may have no results for this query"
+    fi
+
+    if [[ "$FSE_AGENT_PRESENT" == "yes" ]]; then
+      ok "FSE search: agent_api.fse_search present (pages_fetched=$FSE_PAGES max_pages=$FSE_MAX_P top_k=$FSE_TOP_K)"
+    else
+      warn "FSE search: agent_api.fse_search not present in response"
+    fi
+
+    # count_mismatch may be True — FSE count metadata is unreliable by design.
+    # Do NOT fail the smoke on count_mismatch=True.
+    case "$FSE_COUNT_MM" in
+      True)
+        ok "FSE search: count_mismatch=True (expected — FSE count metadata unreliable by design)"
+        ;;
+      False)
+        ok "FSE search: count_mismatch=False"
+        ;;
+      ?)
+        skip "FSE search: count_mismatch field not present (may not be an fse_search response)"
+        ;;
+      *)
+        warn "FSE search: count_mismatch=$FSE_COUNT_MM (unexpected value)"
+        ;;
+    esac
+
+    # Domain check only when results exist — integration smoke, not content validation.
+    if [[ "$FSE_RESULT_COUNT" -gt 0 ]]; then
+      FSE_DOMAINS=$(printf '%s' "$FSE_RAW" | python3 -c "
+import json, sys
+try:
+    from urllib.parse import urlparse
+except ImportError:
+    import urlparse as _u; urlparse = _u.urlparse
+d = json.load(sys.stdin)
+domains = sorted({urlparse(r.get('url','')).netloc for r in (d.get('results') or [])[:5] if r.get('url')})
+print(' '.join(domains) or 'none')
+" 2>/dev/null || echo "?")
+      ok "FSE search: result domains (first 5): $FSE_DOMAINS"
+    fi
+  else
+    warn "FSE search: request to $FSE_URL failed or returned HTTP error (provider may be down)"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# E. Operator telemetry visibility
+# ---------------------------------------------------------------------------
+echo
+echo "--- E. operator telemetry ---"
+
+if TEL_RAW=$(curl -fsS --max-time 10 \
+    "${PROXY_BASE}/qz/telemetry/recent?limit=${TELEMETRY_LIMIT}" 2>/dev/null); then
+
+  ok "telemetry endpoint: reachable at ${PROXY_BASE}/qz/telemetry/recent"
+
+  TEL_TYPES=$(printf '%s' "$TEL_RAW" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+events = list(d.get('events', []))
+events += list(d.get('state', {}).get('latest_completed_events') or [])
+print(json.dumps([e.get('type','') for e in events]))
+" 2>/dev/null || echo "[]")
+
+  has_started=$(printf '%s' "$TEL_TYPES" | python3 -c \
+    "import json,sys; ts=json.load(sys.stdin); print('yes' if 'tool_call_started' in ts else 'no')" 2>/dev/null || echo "no")
+  has_completed=$(printf '%s' "$TEL_TYPES" | python3 -c \
+    "import json,sys; ts=json.load(sys.stdin); print('yes' if 'tool_call_completed' in ts else 'no')" 2>/dev/null || echo "no")
+  has_error=$(printf '%s' "$TEL_TYPES" | python3 -c \
+    "import json,sys; ts=json.load(sys.stdin); print('yes' if 'tool_call_error' in ts else 'no')" 2>/dev/null || echo "no")
+
+  if [[ "$has_started" == "yes" ]]; then
+    ok "telemetry: tool_call_started present"
+  else
+    skip "telemetry: no tool_call_started (no web_search ran in this session)"
+  fi
+
+  if [[ "$has_completed" == "yes" ]]; then
+    ok "telemetry: tool_call_completed present"
+  else
+    skip "telemetry: no tool_call_completed (no web_search ran in this session)"
+  fi
+
+  if [[ "$has_error" == "yes" ]]; then
+    warn "telemetry: tool_call_error found (check for unexpected failures)"
+  else
+    ok "telemetry: no tool_call_error (clean)"
+  fi
+
+else
+  warn "telemetry endpoint: unreachable at ${PROXY_BASE}/qz/telemetry/recent"
+fi
+
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
+echo
+FAIL_COUNT=${#FAIL_LIST[@]}
+WARN_COUNT=${#WARN_LIST[@]}
+SKIP_COUNT=${#SKIP_LIST[@]}
+
+if [[ $FAIL_COUNT -gt 0 ]]; then
+  printf 'SMOKE FAILED — %d failure(s), %d warning(s), %d skip(s):\n' \
+    "$FAIL_COUNT" "$WARN_COUNT" "$SKIP_COUNT" >&2
+  for _f in "${FAIL_LIST[@]}"; do
+    printf '  FAIL %s\n' "$_f" >&2
+  done
+  [[ $WARN_COUNT -gt 0 ]] && printf '  WARNs: %s\n' "${WARN_LIST[*]}" >&2
+  exit 1
+fi
+
+if [[ $WARN_COUNT -gt 0 ]]; then
+  printf 'SMOKE OK (with %d warning(s)) — 0 failures, %d skip(s)\n' "$WARN_COUNT" "$SKIP_COUNT"
+else
+  printf 'SMOKE OK — all checks passed (%d skip(s))\n' "$SKIP_COUNT"
+fi

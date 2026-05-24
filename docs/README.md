@@ -138,6 +138,7 @@ Useful scripts:
 scripts/qz-doctor
 scripts/qz-up
 scripts/qz-live-smoke    # validate live stack after startup
+scripts/qz-web-search-lifecycle-smoke          # validate web_search lifecycle SSE events and provider guidance
 scripts/qz-smoke-repeated-read --model MODEL   # validate repeated-read v1 signal end-to-end
 scripts/qz-smoke-recovery                      # validate recovery API (safe by default; --allow-restart/--allow-reload for dangerous)
 scripts/qz-codex high
