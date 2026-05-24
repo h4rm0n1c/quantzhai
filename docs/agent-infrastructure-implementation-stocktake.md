@@ -134,5 +134,11 @@ QuantZhai is evaluated against three major architectural patterns to identify ga
 3. **Coercion Telemetry**: ✓ Done — `coercion_succeeded` and `coercion_failed` events now carry `source="tool_adapter"` and `upstream_name` in both `qz_request_router` and `qz_responses_stream` paths. Tested in `CoercionTelemetryStreamingTests`.
 4. **Tool Error Delegation**: ✓ Done — `synthesize_tool_error_result()` now delegates to `render_coercion_error()` from `qz_feedback`. `qz_feedback` is the single source of truth for coercion/error rendering. Tested in `SynthesizeToolErrorResultTests::test_delegates_to_render_coercion_error`.
 5. **Tool Schema Normalization Telemetry**: ✓ Done — `tool_schema_replaced` event emitted in both `proxy_json_api` (router) and streaming runtime hop 0 when any normalization changes the tool list. Payload: `replaced`, `translated`, `dropped`, `deduped`, `source="tool_schema_normalizer"`. `ToolRequestNormalizationReport.deduped` is now a separate field; duplicate tools no longer pollute `qz_dropped_tool_names`. Tested in `ToolSchemaTelemetryRouterTests` and `ToolSchemaTelemetryStreamingTests`. Next: live-smoke to confirm event appears in qz-thoughts when Codex sends stale web_search schema.
-6. **Watchdog Smoke**: Add a dedicated timeout smoke test before enabling default timeouts.
+6. **Watchdog Calibration**: The stream watchdog is intentionally disabled by default
+   (`QZ_STREAM_NO_OUTPUT_TIMEOUT_S=0`, `QZ_STREAM_TERMINAL_TIMEOUT_S=0`). Bad
+   watchdog values are worse than no watchdog — large-context high-reasoning requests
+   can legitimately appear idle for a long time. A full calibration plan is at
+   `docs/stream-watchdog-calibration-plan.md`. The next step is Phase 1 (observe-only
+   timing telemetry), not default enablement. The stocktake will remain at WARN until
+   live P99 data exists and Phase 3 smoke tests pass.
 7. **BrainCase Isolation**: Maintain BrainCase as a feature-flagged experimental path.
