@@ -2642,7 +2642,9 @@ class RequestRouter:
                         try:
                             self.handler.telemetry.emit("tool_call_error", {
                                 "tool": item.get("name") or "",
+                                "call_id": item.get("call_id") or item.get("id") or "",
                                 "error": (rr_decision.error_result or {}).get("output", ""),
+                                "source": "tool_decision",
                                 "request_id": request_id,
                             })
                         except Exception:

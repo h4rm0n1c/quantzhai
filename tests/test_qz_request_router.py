@@ -659,5 +659,213 @@ class ToolSchemaTelemetryRouterTests(unittest.TestCase):
                     self.assertIsInstance(item, str, f"non-string in payload list: {item}")
 
 
+class NonStreamingDroppedToolTests(unittest.TestCase):
+    """
+    Non-streaming path: dropped/unknown tool errors injected for non-proxy-local
+    items in _run_responses_locally.
+
+    The loop condition requires at least one proxy-local call to keep running
+    (otherwise _run_responses_locally exits early with a clean final response).
+    We use the existing ProbeProxyToolExecutor as the proxy-local anchor.
+    """
+
+    class FakeTelemetry:
+        def __init__(self):
+            self.emitted: list[tuple[str, dict]] = []
+
+        def emit(self, event_type, payload):
+            self.emitted.append((event_type, dict(payload)))
+
+    class FakeHandlerWithTelemetry:
+        upstream = "http://127.0.0.1:1"
+
+        def __init__(self, registry):
+            self.proxy_tool_registry_factory = lambda _web_runtime: registry
+            self.telemetry = NonStreamingDroppedToolTests.FakeTelemetry()
+
+    def _make_router(self, responses):
+        executor = ProbeProxyToolExecutor()
+        registry = ProxyLocalToolRegistry([executor])
+        handler = self.FakeHandlerWithTelemetry(registry)
+        router = FakeRouter(handler, responses)
+        return router
+
+    def _dropped_and_probe_response(self, dropped_name="some_dropped_tool", call_id="call_dropped"):
+        """
+        Upstream returns a proxy-local qz_probe call AND a non-proxy-local call
+        whose name is in dropped_tool_names. The non-proxy-local item triggers
+        the elif-error branch; the probe item keeps the loop alive.
+        """
+        return [
+            {
+                "id": "resp_mixed",
+                "object": "response",
+                "output": [
+                    {
+                        "id": "fc_probe",
+                        "type": "function_call",
+                        "status": "completed",
+                        "call_id": "call_probe",
+                        "name": "qz_probe",
+                        "arguments": "{\"value\":1}",
+                    },
+                    {
+                        "id": "fc_dropped",
+                        "type": "function_call",
+                        "status": "completed",
+                        "call_id": call_id,
+                        "name": dropped_name,
+                        "arguments": "{}",
+                    },
+                ],
+                "usage": {},
+            },
+            {
+                "id": "resp_final",
+                "object": "response",
+                "output": [{
+                    "id": "msg_final",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "done", "annotations": []}],
+                }],
+                "usage": {},
+            },
+        ]
+
+    def _run(self, dropped_name="some_dropped_tool", call_id="call_dropped"):
+        router = self._make_router(self._dropped_and_probe_response(dropped_name, call_id))
+        router._run_responses_locally(
+            {
+                "model": "fake",
+                "input": [{"type": "message", "role": "user",
+                           "content": [{"type": "input_text", "text": "hi"}]}],
+                "tools": [{"type": "function", "name": "qz_probe"}],
+                "metadata": {"qz_dropped_tool_names": [dropped_name]},
+            },
+            "fake",
+            request_id="qz_req_drop_test",
+        )
+        return router
+
+    def test_dropped_tool_error_injected_not_original_item(self):
+        """Error result goes into next hop input; the original function_call is dropped."""
+        router = self._run()
+
+        second_request = router.request_bodies[1]
+        input_types = [item.get("type") for item in second_request["input"]]
+        # The error result is a function_call_output
+        self.assertIn("function_call_output", input_types,
+                      "expected error function_call_output in second hop input")
+
+    def test_dropped_tool_original_item_not_in_next_input(self):
+        """The original dropped function_call must not appear in next hop input."""
+        router = self._run(dropped_name="some_dropped_tool")
+
+        second_request = router.request_bodies[1]
+        for item in second_request["input"]:
+            if item.get("type") == "function_call" and item.get("name") == "some_dropped_tool":
+                self.fail("original dropped function_call should not be in next hop input")
+
+    def test_dropped_tool_emits_tool_call_error_event(self):
+        """telemetry.emit('tool_call_error', ...) fires for the dropped item."""
+        router = self._run()
+
+        telemetry_events = router.handler.telemetry.emitted
+        error_events = [e for e in telemetry_events if e[0] == "tool_call_error"]
+        self.assertTrue(error_events, "expected at least one tool_call_error telemetry event")
+
+    def test_dropped_tool_telemetry_has_tool_name(self):
+        router = self._run(dropped_name="some_dropped_tool")
+
+        error_events = [p for t, p in router.handler.telemetry.emitted if t == "tool_call_error"]
+        self.assertTrue(error_events)
+        self.assertEqual(error_events[0]["tool"], "some_dropped_tool")
+
+    def test_dropped_tool_telemetry_has_call_id(self):
+        router = self._run(dropped_name="some_dropped_tool", call_id="call_abc")
+
+        error_events = [p for t, p in router.handler.telemetry.emitted if t == "tool_call_error"]
+        self.assertTrue(error_events)
+        self.assertEqual(error_events[0]["call_id"], "call_abc")
+
+    def test_dropped_tool_telemetry_has_source(self):
+        router = self._run()
+
+        error_events = [p for t, p in router.handler.telemetry.emitted if t == "tool_call_error"]
+        self.assertTrue(error_events)
+        self.assertEqual(error_events[0]["source"], "tool_decision")
+
+    def test_dropped_tool_telemetry_has_request_id(self):
+        router = self._run()
+
+        error_events = [p for t, p in router.handler.telemetry.emitted if t == "tool_call_error"]
+        self.assertTrue(error_events)
+        self.assertEqual(error_events[0]["request_id"], "qz_req_drop_test")
+
+    def test_unknown_tool_error_injected(self):
+        """
+        A tool that is not in dropped_tool_names AND not known to the registry
+        (step 5 of completed_call_decision) also gets an error injected.
+        """
+        router = self._make_router([
+            {
+                "id": "resp_unknown",
+                "object": "response",
+                "output": [
+                    {
+                        "id": "fc_probe",
+                        "type": "function_call",
+                        "status": "completed",
+                        "call_id": "call_probe",
+                        "name": "qz_probe",
+                        "arguments": "{\"value\":1}",
+                    },
+                    {
+                        "id": "fc_unknown",
+                        "type": "function_call",
+                        "status": "completed",
+                        "call_id": "call_unknown_xyz",
+                        "name": "totally_unknown_tool",
+                        "arguments": "{}",
+                    },
+                ],
+                "usage": {},
+            },
+            {
+                "id": "resp_final",
+                "object": "response",
+                "output": [{
+                    "id": "msg_final",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "done", "annotations": []}],
+                }],
+                "usage": {},
+            },
+        ])
+        router._run_responses_locally(
+            {
+                "model": "fake",
+                "input": [{"type": "message", "role": "user",
+                           "content": [{"type": "input_text", "text": "hi"}]}],
+                "tools": [{"type": "function", "name": "qz_probe"}],
+                "metadata": {},
+            },
+            "fake",
+            request_id="qz_req_unknown_test",
+        )
+
+        second_request = router.request_bodies[1]
+        input_types = [item.get("type") for item in second_request["input"]]
+        self.assertIn("function_call_output", input_types,
+                      "unknown tool should have error function_call_output in next hop input")
+        error_events = [p for t, p in router.handler.telemetry.emitted if t == "tool_call_error"]
+        self.assertTrue(error_events, "unknown tool should emit tool_call_error telemetry")
+        self.assertEqual(error_events[0]["source"], "tool_decision")
+
+
 if __name__ == "__main__":
     unittest.main()

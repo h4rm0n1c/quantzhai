@@ -209,11 +209,11 @@ Trigger: `name in dropped_tool_names` (frozenset from `body.metadata.qz_dropped_
 Message: `"Tool '{name}' is not available in this session. It was removed from the tool list before this request. Use a different tool or approach."`
 
 - Streaming path: `decision.error_result` → `hs.next_input.append(decision.error_result)`, `hs.error_injected = True`, telemetry `tool_call_error`.
-- Non-streaming (proxy-local items only): `next_input.append(decision.error_result)`.
-- Non-streaming (non-proxy-local items): **dropped/unknown error NOT applied** — item passes through unchanged to next_input. See gap below.
+- Non-streaming (proxy-local items): `next_input.append(decision.error_result)`.
+- Non-streaming (non-proxy-local items): `next_input.append(rr_decision.error_result)`, telemetry `tool_call_error` with `source="tool_decision"`, `call_id`. **Fixed — Gap 4 closed.**
 - Codex client: not visible (injected as upstream input, not as output stream event).
 - Model: visible next hop.
-- qz-thoughts: YES — `tool_call_error` telemetry (streaming path only).
+- qz-thoughts: YES — `tool_call_error` telemetry in both streaming and non-streaming paths. Non-streaming payload: `tool`, `call_id`, `error`, `source="tool_decision"`, `request_id`.
 - Raw args: no.
 - Local paths: no.
 
@@ -222,7 +222,7 @@ Message: `"Tool '{name}' is not available in this session. It was removed from t
 Trigger: falls through all 4 known categories.
 Message: `"Tool '{name}' is not recognised by the proxy and cannot be executed. Check the available tools and retry with a supported tool name."`
 
-All visibility properties same as dropped tool feedback above.
+All visibility properties same as dropped tool feedback above (both streaming and non-streaming paths now apply error injection).
 
 ---
 
@@ -277,13 +277,13 @@ Yes. The check `if name in CODEX_NATIVE_TOOL_NAMES` runs at step 4, after droppe
 | valid-but-runtime-invalid web_search (e.g. missing query) | runtime returns `{"ok": false, "error": "Missing query"}` in function_call_output | ✓ | no | yes | yes (tool_call_completed) | tool_call_completed | none | unit tests (execute_web_search_call) | none |
 | valid apply_patch | coerce() → corrected args → output_to_codex → public item to Codex | ✓ | yes (apply_patch_call or custom_tool_call) | n/a | yes (output_item.done) | n/a | none | unit + golden tests | none |
 | malformed apply_patch | coerce() → error result injected (streaming) or partial envelope (public path) | ✓ | no (streaming error) or partial envelope (public) | yes (streaming: error; public: Codex verifier) | yes (tool_call_error streaming) | tool_call_error (streaming) | none | coerce unit tests; **no streaming fixture** | add streaming fixture (B2) |
-| unknown tool | completed_call_decision step 5 → error result | ✓ | no | yes | yes (tool_call_error streaming) | tool_call_error (streaming) | none | unit tests (test_qz_tools.py, test_qz_proxy_tools.py) | none |
-| dropped write_stdin (no live session) | dropped at normalisation; if called → dropped-tool error injected | ✓ | no | yes | partial (tool_call_error streaming) | tool_call_error (streaming) | none | normalisation unit tests; **no streaming end-to-end fixture** | add streaming fixture (B2) |
+| unknown tool | completed_call_decision step 5 → error result injected in both streaming and non-streaming | ✓ | no | yes | yes (`tool_call_error` both paths) | `tool_call_error` (`source="tool_decision"` non-streaming; no source streaming) | none | unit tests + NonStreamingDroppedToolTests | — |
+| dropped write_stdin (no live session) | dropped at normalisation; if called → dropped-tool error injected | ✓ | no | yes | partial (tool_call_error streaming + non-streaming) | tool_call_error (both paths) | none | normalisation unit tests; **no streaming end-to-end fixture** | add streaming fixture (B2) |
 | exec_command (Codex-native) | hint appended at normalisation; passes through via `kind="public"` | ✓ | yes | n/a | yes (output_item.done) | n/a | none | unit tests | none |
 | repeated-read/advisory signal | signal result injected; model sees advisory; hop continues | ✓ | no | yes | yes (repeated_read_signal telemetry) | repeated_read_signal | none | unit + proxy_tools tests | none |
 | coercion success (any tool) | corrected arguments used silently | ✓ | no | n/a | yes (`coercion_succeeded` telemetry) | `coercion_succeeded` (router + stream, `source="tool_adapter"`) | none | unit tests + streaming tests | — |
 | coercion failure (any tool) | error result injected | ✓ | no | yes | yes (`coercion_failed` telemetry) | `coercion_failed` (router + stream, `source="tool_adapter"`) | none | unit tests + streaming tests | — |
-| non-proxy-local dropped/unknown tool in non-streaming path (with web_search present) | completed_call_decision called, error computed, but `else` branch passes original item through | **gap** | original item (function_call) passed to Codex-facing output | no (item not error) | no | none | none | none | **fix in B2**: apply error injection for non-proxy-local items in non-streaming hop loop |
+| non-proxy-local dropped/unknown tool in non-streaming path | error result injected via `elif rr_decision.kind == "error"` branch | ✓ | no | yes (error function_call_output) | yes (`tool_call_error`, `source="tool_decision"`) | `tool_call_error` (non-streaming: `tool`, `call_id`, `error`, `source`, `request_id`) | none | `NonStreamingDroppedToolTests` (8 tests) | **Gap 4 closed** |
 | ToolCoercionResult neither-set | `coercion.succeeded()=False`, `error_message=""`, empty error injected | should raise or produce non-empty error | no | yes (but empty message) | no | none | none | none | guard ToolCoercionResult (B2) |
 
 ---
@@ -321,7 +321,7 @@ Yes. The check `if name in CODEX_NATIVE_TOOL_NAMES` runs at step 4, after droppe
 
 5. **`test_streaming_dropped_tool_error_injected`** — via fixture: model calls a tool with a name that is in `dropped_tool_names`; verify error result in next_input, no lifecycle event to Codex.
 
-6. **`test_non_streaming_dropped_nonproxy_tool_applies_error`** — non-streaming path: output_items contains web_search AND a dropped non-proxy-local tool; verify the dropped tool's error result is injected into next_input, not the original item. (Tests current gap — will fail until B2 fix.)
+6. ~~**`test_non_streaming_dropped_nonproxy_tool_applies_error`**~~ — **done**: `NonStreamingDroppedToolTests` in `test_qz_request_router.py` covers error injection (dropped and unknown tools), original item exclusion, and telemetry fields.
 
 7. **`test_coercion_success_no_raw_args_in_codex_output`** — apply_patch sibling-patch coercion succeeds; verify the corrected arguments are used; verify original malformed arguments do not appear in Codex-visible output.
 
@@ -377,22 +377,17 @@ Tested in `tests/test_qz_responses_stream.py::CoercionTelemetryStreamingTests`.
 `@classmethod failure(msg)` constructors. Quickest safe fix: assert in `__post_init__`
 that exactly one of the two fields is not None.
 
-### Gap 4 — Non-streaming path: dropped/unknown errors not applied for non-proxy-local items
+### ~~Gap 4~~ — Non-streaming path: dropped/unknown errors not applied for non-proxy-local items (**CLOSED**)
 
-In `_run_responses_locally`, the `for item in output_items` loop calls
-`completed_call_decision` for non-proxy-local items but only acts on `kind="signal"`.
-`kind="error"` (dropped/unknown) falls to the `else` branch, passing the original
-item unchanged to `next_input`.
+**Done.** In `_run_responses_locally`, the `elif rr_decision.kind == "error"` branch is
+now present for non-proxy-local items. Error result is injected into `next_input`;
+the original `function_call` is dropped. Telemetry `tool_call_error` is emitted with
+`tool`, `call_id`, `error`, `source="tool_decision"`, `request_id`.
 
-Impact: when web_search and a dropped non-proxy-local tool appear in the same
-upstream response, the model gets the dropped tool back in conversation history
-instead of an error. It may keep calling it.
-
-**Fix (B2)**: in the non-proxy-local item loop, add an `elif rr_decision.kind == "error"` branch:
-```python
-elif rr_decision.kind == "error":
-    next_input.append(rr_decision.error_result)
-```
+Source: `proxy/qz_request_router.py` (non-proxy-local elif branch in `_run_responses_locally`).
+Tests: `tests/test_qz_request_router.py::NonStreamingDroppedToolTests` (8 tests covering
+error injection, original item exclusion, telemetry fields: `tool`, `call_id`, `source`, `request_id`,
+and unknown-tool path).
 
 ### Gap 5 — No streaming fixture for coercion error path
 
@@ -414,9 +409,10 @@ Priority order (highest to lowest):
    - `ToolCoercionResult()` with neither field raises `ValueError` on construction.
    - Risk: resolved.
 
-2. **Apply dropped/unknown errors in non-streaming hop loop for non-proxy-local items** (`proxy/qz_request_router.py`)
-   - In `_run_responses_locally`, add `elif rr_decision.kind == "error": next_input.append(rr_decision.error_result)`.
-   - Risk: low. Only fires when a tool is in `dropped_tool_names` AND appears in output with a web_search call.
+2. ~~**Apply dropped/unknown errors in non-streaming hop loop for non-proxy-local items**~~ (**done** — Gap 4 closed)
+   - `elif rr_decision.kind == "error"` branch in `_run_responses_locally` injects error result.
+   - Telemetry: `tool_call_error` with `tool`, `call_id`, `error`, `source="tool_decision"`, `request_id`.
+   - Tests: `NonStreamingDroppedToolTests` (8 tests) in `test_qz_request_router.py`.
 
 3. ~~**Emit `tool_schema_replaced` telemetry**~~ (**done** — Gap 1 closed above)
    - Emitted in `qz_request_router.py` (`_emit_schema_normalization_telemetry` helper) and `qz_responses_stream.py` (hop 0).
