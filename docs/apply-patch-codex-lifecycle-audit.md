@@ -1,7 +1,17 @@
 # apply_patch Codex Lifecycle Audit
 
 Date: 2026-05-25
-Status: AP1/AP2/AP3 enforcement complete. No runtime behaviour changes.
+Status: AP1/AP2/AP3 enforcement complete; fake `apply_patch_call` contract removed 2026-05-25.
+
+**Contract note (2026-05-25):** An earlier QuantZhai design emitted an item type
+`apply_patch_call` for Codex. A source audit of the h4rm0n1c/codex fork confirmed
+that Codex does **not** parse or execute a `ResponseItem` named `apply_patch_call`.
+Codex applies patches as a freeform custom tool — it expects `custom_tool_call`
+with `name="apply_patch"` and `input = "*** Begin Patch\n..."`. QuantZhai now
+always emits `custom_tool_call` regardless of how apply_patch was declared.
+`PatchApplyBegin`/`PatchApplyUpdated`/`PatchApplyEnd` are Codex-internal UI events
+generated after the custom tool call is handled; they are NOT Responses SSE event
+names.
 
 This audit focuses exclusively on `apply_patch` visibility and feedback. It
 distinguishes:
@@ -41,7 +51,7 @@ This document answers:
 **Not covered here:** `web_search`, BrainCase, watchdog, schema normalisation
 (see `tool-schema-coercion-audit.md`), or the broader tool-policy audit (see
 `tool-policy-audit.md`). The non-streaming (`qz_sse.py`) path for `apply_patch`
-is covered in §5.4.
+is covered in §5.3.
 
 **Source files consulted:**
 
@@ -68,7 +78,7 @@ docs/responses-stream-tool-state-contract.md
 
 | Event family | Purpose | Relevant to apply_patch? |
 |---|---|---|
-| `response.output_item.added` | New output item started | ✅ Yes — wraps `apply_patch_call` / `custom_tool_call` |
+| `response.output_item.added` | New output item started | ✅ Yes — wraps `custom_tool_call` (name=apply_patch) |
 | `response.output_item.done` | Output item complete | ✅ Yes — closes the item pair |
 | `response.function_call_arguments.delta` | Streaming argument delta | ⚠️ Suppressed — never forwarded by QuantZhai |
 | `response.function_call_arguments.done` | Full arguments ready | ⚠️ Suppressed — never forwarded by QuantZhai |
@@ -97,13 +107,13 @@ or emit them without documented Codex client proof that they are rendered (not
 ignored or broken). See `docs/codex-visible-tool-lifecycle-audit.md §8 Slice L1`
 for the pre-conditions before any such change.
 
-The item type `apply_patch_call` (in `output_item.added/done` payloads) **is** a
-Codex-specific extension that Codex v0.130 understands. It is not an official
-Responses API item type. QuantZhai's use of it is correct for the Codex client
-but non-portable to other Responses API clients.
+The item type `apply_patch_call` was a mistaken/hallucinated contract in an earlier
+QuantZhai design. It has been **removed** (2026-05-25). Codex does not parse a
+`ResponseItem` named `apply_patch_call`. QuantZhai must never emit it.
 
-Similarly, `custom_tool_call` (for the custom apply_patch path) is a Codex
-extension used when the tool is declared as `{"type": "custom", "name": "apply_patch"}`.
+`custom_tool_call` with `name="apply_patch"` is the correct Codex wire type,
+used regardless of how the tool was declared (`apply_patch`, `custom`, etc.).
+The `input` field carries the full `*** Begin Patch` envelope.
 
 ---
 
@@ -117,7 +127,7 @@ From `proxy/qz_tool_apply_patch.py:568–609`:
 ApplyPatchToolAdapter.lifecycle = ToolLifecycleSpec(
     name="apply_patch",
     execution="protocol_adapter",   # Not proxy_local — Codex applies the patch
-    public_item_type="apply_patch_call",
+    public_item_type="custom_tool_call",  # always custom_tool_call; apply_patch_call was removed
     telemetry_name="apply_patch",
     # lifecycle_event_prefix: "" (empty — no sub-lifecycle stages)
     # lifecycle_start_stages: () (empty)
@@ -152,27 +162,26 @@ Both map to the same upstream `function` tool via `to_upstream_tool()`:
 
 | Codex input item type | Upstream (llama.cpp) type | Notes |
 |---|---|---|
-| `apply_patch_call` | `function_call` | Operation serialised into `arguments` JSON |
-| `apply_patch_call_output` | `function_call_output` | Status and output wrapped in JSON |
-| `custom_tool_call` with `name="apply_patch"` | `function_call` | `input` field serialised as `{"patch": "..."}` |
+| `custom_tool_call` with `name="apply_patch"` | `function_call` | `input` field parsed as `{"patch": "..."}` |
 | `custom_tool_call_output` | `function_call_output` | `output` field passed through |
 
-Source: `input_to_upstream()` at lines 600–611.
+**Removed (2026-05-25):** `apply_patch_call` and `apply_patch_call_output` were
+mistaken Codex history shapes that never existed. They have been removed from
+`input_to_upstream()`. History normalisation now only handles `custom_tool_call`.
+
+Source: `input_to_upstream()`, `_custom_apply_patch_call_to_function_call()`.
 
 ### 3.4 Output-to-Codex Conversions (llama.cpp → Codex)
 
-| Upstream item | Output style | Codex item type | Notes |
-|---|---|---|---|
-| `function_call apply_patch` | `native` | `apply_patch_call` | Operation extracted and normalised |
-| `function_call apply_patch` | `custom` | `custom_tool_call` | Patch text built via `_apply_patch_operation_to_patch_text` |
+| Upstream item | Codex item type | Notes |
+|---|---|---|
+| `function_call apply_patch` | `custom_tool_call` | Always; patch envelope built via `_function_call_to_custom_apply_patch_call` |
 
-Output style is determined by the tool policy inferred at request time:
+There is no longer a "native" vs "custom" output style. `apply_patch_output_style`
+has been removed from the tool policy and all call sites. The output is always
+`custom_tool_call` with `name="apply_patch"` and `input = "*** Begin Patch\n..."`.
 
-- `apply_patch_declared=True, apply_patch_client_tool_type="apply_patch"` → `output_style="native"`
-- `apply_patch_declared=True, apply_patch_client_tool_type="custom"` → `output_style="custom"`
-- `apply_patch_declared=False` → falls back to `"custom"` (default)
-
-Source: `_apply_patch_output_style()`, `_infer_apply_patch_tool_policy()`, lines 522–565.
+Source: `output_to_codex()`, `_function_call_to_custom_apply_patch_call()`.
 
 ---
 
@@ -255,8 +264,7 @@ the adapter returns an assistant `message` item:
 }
 ```
 
-This path is triggered by `_function_call_to_apply_patch_call` /
-`_function_call_to_custom_apply_patch_call` when the call is beyond salvage.
+This path is triggered by `_function_call_to_custom_apply_patch_call` when the call is beyond salvage.
 
 **Distinction:** `_invalid_apply_patch_call_message` returns a Codex-facing
 message item directly from the shape converter, whereas `coerce()` returning
@@ -268,7 +276,7 @@ These are two distinct error injection paths that apply at different levels.
 
 ## 5. Codex-Visible Lifecycle Inventory
 
-### 5.1 Streaming path — valid apply_patch (native mode)
+### 5.1 Streaming path — valid apply_patch (all declaration types)
 
 ```
 [upstream emits function_call — SUPPRESSED by is_function_call_stream_event]
@@ -278,35 +286,22 @@ These are two distinct error injection paths that apply at different levels.
 
 → QuantZhai assembles complete function_call, runs coerce(), gets corrected call
 → completed_call_decision returns kind="public"
-→ _emit_public_tool_item called with apply_patch_call item
+→ _emit_public_tool_item called with custom_tool_call item
 
-response.output_item.added   {"type": "apply_patch_call", "status": "in_progress", "call_id": "...", "operation": {}}
-response.output_item.done    {"type": "apply_patch_call", "status": "completed", "call_id": "...", "operation": {...}}
-response.completed
-data: [DONE]
-```
-
-**Not emitted:**
-- `response.apply_patch_call.in_progress`
-- `response.apply_patch_call.searching`
-- `response.apply_patch_call.completed`
-- `response.function_call_arguments.delta/done`
-- `tool_call_started` / `tool_call_completed` (those are proxy-local only)
-
-Sources: `qz_responses_stream.py:890 (_emit_public_tool_item)`, `qz_tool_apply_patch.py:568`.
-
-### 5.2 Streaming path — valid apply_patch (custom mode)
-
-Same pattern as §5.1, item type differs:
-
-```
-response.output_item.added   {"type": "custom_tool_call", "status": "in_progress", "name": "apply_patch", ...}
+response.output_item.added   {"type": "custom_tool_call", "status": "in_progress", "name": "apply_patch", "input": "*** Begin Patch\n..."}
 response.output_item.done    {"type": "custom_tool_call", "status": "completed", "name": "apply_patch", "input": "*** Begin Patch\n..."}
 response.completed
 data: [DONE]
 ```
 
-### 5.3 Streaming path — malformed apply_patch (coercion fails)
+**Not emitted:**
+- `response.apply_patch_call.*` (any stage — this was a mistaken contract, removed 2026-05-25)
+- `response.function_call_arguments.delta/done`
+- `tool_call_started` / `tool_call_completed` (those are proxy-local only)
+
+Sources: `qz_responses_stream.py (_emit_public_tool_item)`, `qz_tool_apply_patch.py`.
+
+### 5.2 Streaming path — malformed apply_patch (coercion fails)
 
 ```
 [upstream function_call events — SUPPRESSED]
@@ -334,43 +329,37 @@ Codex sees **no lifecycle events for the failed call**. The failure is invisible
 to Codex at the SSE level; only the model's natural-language recovery message
 arrives as structured output.
 
-### 5.4 Non-streaming path (qz_sse.py)
+### 5.3 Non-streaming path (qz_sse.py)
 
 The non-streaming path (`make_response_stream_events`) synthesises SSE from a
-complete response object. For `apply_patch_call` items (lines 448–468):
+complete response object. For `custom_tool_call` items:
 
 ```python
 yield ev("response.output_item.added", {"output_index": ..., "item": {..., "status": "in_progress"}})
 yield ev("response.output_item.done",  {"output_index": ..., "item": {..., "status": "completed"}})
 ```
 
-For `custom_tool_call` items (lines 471–488): same pattern, `custom_tool_call`
-type.
+**Not synthesised:** No `response.apply_patch_call.*` stages (removed 2026-05-25).
 
-**Not synthesised:** No `response.apply_patch_call.*` stages in the non-streaming
-path either.
-
-### 5.5 Lifecycle table by scenario
+### 5.4 Lifecycle table by scenario
 
 | Scenario | Codex SSE events | Model sees | Operator telemetry |
 |---|---|---|---|
-| Valid native update_file | `output_item.added/done` (apply_patch_call) | operation on next hop | `coercion_succeeded` |
-| Valid native create_file | `output_item.added/done` (apply_patch_call) | operation on next hop | `coercion_succeeded` |
-| Valid native delete_file | `output_item.added/done` (apply_patch_call) | operation on next hop | `coercion_succeeded` |
-| Valid native move_file | `output_item.added/done` (apply_patch_call) | operation on next hop | `coercion_succeeded` |
-| Valid custom envelope | `output_item.added/done` (custom_tool_call) | input patch text on next hop | `coercion_succeeded` |
-| Sibling patch promotion | `output_item.added/done` (patched) | operation on next hop | `coercion_succeeded` |
-| rename_file alias | `output_item.added/done` (normalised to move_file) | operation on next hop | `coercion_succeeded` |
-| Unified diff headers stripped | `output_item.added/done` (clean diff) | operation on next hop | `coercion_succeeded` |
+| Valid update_file | `output_item.added/done` (custom_tool_call) | patch envelope on next hop | `coercion_succeeded` |
+| Valid create_file | `output_item.added/done` (custom_tool_call) | patch envelope on next hop | `coercion_succeeded` |
+| Valid delete_file | `output_item.added/done` (custom_tool_call) | patch envelope on next hop | `coercion_succeeded` |
+| Valid move_file | `output_item.added/done` (custom_tool_call) | patch envelope on next hop | `coercion_succeeded` |
+| Sibling patch promotion | `output_item.added/done` (custom_tool_call) | patch envelope on next hop | `coercion_succeeded` |
+| rename_file alias | `output_item.added/done` (normalised to move_file) | patch envelope on next hop | `coercion_succeeded` |
+| Unified diff headers stripped | `output_item.added/done` (custom_tool_call) | clean envelope on next hop | `coercion_succeeded` |
+| `*** Begin Patch` envelope | `output_item.added/done` (custom_tool_call) | patch envelope on next hop | `coercion_succeeded` |
+| Partial (type+path, no diff) | `output_item.added/done` (partial envelope) | partial envelope on next hop | `coercion_succeeded` |
 | Invalid JSON args | none (error path) | `function_call_output` with error text | `coercion_failed`, `tool_call_error` |
 | Non-object JSON | none (error path) | `function_call_output` with error text | `coercion_failed`, `tool_call_error` |
 | Unknown operation type | none (error path) | `function_call_output` with error text | `coercion_failed`, `tool_call_error` |
 | Missing path | none (error path) | `function_call_output` with error text | `coercion_failed`, `tool_call_error` |
 | Missing diff (create/update) | none (error path) | `function_call_output` with error text | `coercion_failed`, `tool_call_error` |
 | Missing destination (move) | none (error path) | `function_call_output` with error text | `coercion_failed`, `tool_call_error` |
-| Partial native (type+path, no diff) | `output_item.added/done` (partial op) | partial operation on next hop | `coercion_succeeded` |
-| Partial custom (type+path, no diff) | `output_item.added/done` (partial envelope) | partial envelope on next hop | `coercion_succeeded` |
-| `*** Begin Patch` envelope | `output_item.added/done` (normalised) | operation on next hop | `coercion_succeeded` |
 | Dropped (in dropped_tool_names) | none | `function_call_output` with "not available" | `tool_call_error` |
 | Unknown tool (not registered) | none | `function_call_output` with "not recognised" | `tool_call_error` |
 
@@ -380,8 +369,8 @@ path either.
 
 ### 6.1 On coercion success
 
-The model receives its corrected `apply_patch_call` (or `custom_tool_call`) on
-the **next hop's input**. The item is surfaced as a structured item in
+The model receives its corrected `custom_tool_call apply_patch` on the
+**next hop's input**. The item is surfaced as a structured item in
 `output[]`, not as an error. No text advice is injected.
 
 ### 6.2 On coercion failure
@@ -669,21 +658,16 @@ checks `event_type` prefix and `payload["item"]["type"]`.
 **Mitigation:** Do not add new function-call-adjacent event types without updating
 `is_function_call_stream_event` and adding a suppression test.
 
-### R-AP4: Fake successful lifecycle for malformed patch
+### R-AP4: Partial envelope for malformed patch
 
-If `_function_call_to_apply_patch_call` returns a partial operation (via
-`_extract_partial_native_operation`) when full coercion fails, Codex receives
-an `apply_patch_call` item with an incomplete operation. Codex may then attempt
-to apply an empty or partial patch, producing a confusing file system error.
+When full coercion fails but `type+path` can be extracted,
+`_build_partial_custom_envelope()` emits a minimal `*** Begin Patch` envelope.
+Codex's own V4A verifier can then produce a specific error, rather than a blank
+proxy failure. This is intentional — the partial-op path only activates when
+`_parse_apply_patch_arguments` partially succeeds.
 
-**Current state:** partial operations are intentionally emitted when at least
-`type+path` can be extracted, so Codex's own V4A verifier can produce a
-specific error. The `coerce()` method in `ApplyPatchToolAdapter` runs before
-`output_to_codex`, and if it fails the error path fires — so the partial-op path
-only activates when `_parse_apply_patch_arguments` *succeeds* partially.
-
-**Mitigation:** AP2 tests confirm the boundary between full-coerce-success and
-the fallback assistant message path.
+**Mitigation:** AP2 tests confirm the boundary between full-coerce-success
+(custom_tool_call emitted) and the error path (function_call_output injected).
 
 ### R-AP5: Over-advising the model
 
@@ -697,7 +681,7 @@ These are two distinct paths:
 
 - `coerce()` fails → `synthesize_tool_error_result` → `function_call_output`
   injected into model's next-hop `input`.
-- `_function_call_to_apply_patch_call` fails → `_invalid_apply_patch_call_message`
+- `_function_call_to_custom_apply_patch_call` fails → `_invalid_apply_patch_call_message`
   → assistant `message` item returned as `public_item`.
 
 The second path produces a **Codex-visible assistant message**, not just a model

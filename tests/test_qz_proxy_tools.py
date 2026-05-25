@@ -233,18 +233,18 @@ class ProxyToolRegistryTests(unittest.TestCase):
             "call_id": "call_web",
             "name": "web_search",
             "arguments": "{\"query\":\"quantzhai\"}",
-        }, "native")
+        })
         patch_decision = registry.completed_call_decision({
             "id": "fc_patch",
             "type": "function_call",
             "call_id": "call_patch",
             "name": "apply_patch",
             "arguments": "{\"operation\":{\"type\":\"create_file\",\"path\":\"notes.md\",\"diff\":\"@@\\n+ok\\n\"}}",
-        }, "native")
+        })
 
         self.assertEqual(web_decision.kind, "proxy_local")
         self.assertEqual(patch_decision.kind, "public")
-        self.assertEqual(patch_decision.public_item["type"], "apply_patch_call")
+        self.assertEqual(patch_decision.public_item["type"], "custom_tool_call")
 
     def test_completed_call_decision_keeps_unknown_function_call_public(self):
         registry = make_proxy_local_tool_registry(FakeWebRuntime())
@@ -583,7 +583,7 @@ class CoercionInfoTests(unittest.TestCase):
             "call_id": "c1", "arguments": "{}",
         }
         decision = registry.completed_call_decision(
-            call, "native", dropped_tool_names=frozenset({"dropped_tool"})
+            call, dropped_tool_names=frozenset({"dropped_tool"})
         )
         self.assertEqual(decision.kind, "error")
         self.assertFalse(decision.coercion_applied)

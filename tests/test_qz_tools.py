@@ -28,10 +28,10 @@ class ToolRegistryTests(unittest.TestCase):
             "arguments": "{\"operation\":{\"type\":\"create_file\",\"path\":\"notes.md\",\"diff\":\"@@\\n+ok\\n\"}}",
         }
 
-        out = registry.output_items_to_codex([passthrough, patch_call], "native")
+        out = registry.output_items_to_codex([passthrough, patch_call])
 
         self.assertEqual(out[0], passthrough)
-        self.assertEqual(out[1]["type"], "apply_patch_call")
+        self.assertEqual(out[1]["type"], "custom_tool_call")
         self.assertEqual(out[1]["call_id"], "call_patch")
 
     def test_registry_adapts_web_search_tool_and_choice(self):
@@ -173,7 +173,7 @@ class DroppedToolFeedbackTests(unittest.TestCase):
         registry = self._make_registry()
         call = {"type": "function_call", "name": "secret_tool", "call_id": "c1", "arguments": "{}"}
         decision = registry.completed_call_decision(
-            call, "custom", dropped_tool_names=frozenset({"secret_tool"})
+            call, dropped_tool_names=frozenset({"secret_tool"})
         )
         self.assertEqual(decision.kind, "error")
         self.assertIsNotNone(decision.error_result)
@@ -183,12 +183,12 @@ class DroppedToolFeedbackTests(unittest.TestCase):
     def test_unknown_tool_returns_error_decision(self):
         registry = self._make_registry()
         call = {"type": "function_call", "name": "totally_unknown", "call_id": "c1", "arguments": "{}"}
-        decision = registry.completed_call_decision(call, "custom")
+        decision = registry.completed_call_decision(call)
         self.assertEqual(decision.kind, "error")
         self.assertIn("totally_unknown", decision.error_result["output"])
 
     def test_codex_native_tool_passes_through(self):
         registry = self._make_registry()
         call = {"type": "function_call", "name": "exec_command", "call_id": "c1", "arguments": "{}"}
-        decision = registry.completed_call_decision(call, "custom")
+        decision = registry.completed_call_decision(call)
         self.assertEqual(decision.kind, "public")

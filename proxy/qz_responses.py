@@ -16,9 +16,6 @@ try:
         recursive_clean,
     )
     from .qz_tool_apply_patch import (
-        _apply_patch_call_to_function_call,
-        _apply_patch_output_style,
-        _apply_patch_output_to_function_output,
         _custom_apply_patch_call_to_function_call,
         _custom_apply_patch_output_to_function_output,
         _parse_apply_patch_arguments,
@@ -41,9 +38,6 @@ except ImportError:
         recursive_clean,
     )
     from qz_tool_apply_patch import (
-        _apply_patch_call_to_function_call,
-        _apply_patch_output_style,
-        _apply_patch_output_to_function_output,
         _custom_apply_patch_call_to_function_call,
         _custom_apply_patch_output_to_function_output,
         _parse_apply_patch_arguments,
@@ -78,19 +72,18 @@ COMPACTION_CONFIG = {
     "target_output_tokens": 56000,
 }
 
-FUNCTION_CALL_TYPES = {"function_call", "computer_call", "code_interpreter_call", "apply_patch_call", "custom_tool_call"}
+FUNCTION_CALL_TYPES = {"function_call", "computer_call", "code_interpreter_call", "custom_tool_call"}
 FUNCTION_OUTPUT_TYPES = {
     "function_call_output",
     "computer_call_output",
-    "apply_patch_call_output",
     "custom_tool_call_output",
     "tool_result",
     "tool_output",
 }
 
 
-def normalize_tool_output_for_codex(output_items, output_style: str = "native"):
-    return DEFAULT_TOOL_REGISTRY.output_items_to_codex(output_items, output_style)
+def normalize_tool_output_for_codex(output_items):
+    return DEFAULT_TOOL_REGISTRY.output_items_to_codex(output_items)
 
 
 def extract_response_output_text(out: dict) -> str:

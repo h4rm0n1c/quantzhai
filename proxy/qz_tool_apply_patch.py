@@ -65,7 +65,7 @@ def _apply_patch_function_parameters() -> dict:
             },
             "patch": {
                 "type": "string",
-                "description": "Legacy full apply_patch envelope. Prefer operation for native Codex apply_patch.",
+                "description": "Legacy apply_patch patch envelope. Prefer the operation field.",
             },
         },
         "additionalProperties": False,
@@ -202,18 +202,6 @@ def _apply_patch_call_to_function_call(item: dict) -> dict:
     }
 
 
-def _apply_patch_output_to_function_output(item: dict) -> dict:
-    output = {
-        "status": item.get("status"),
-        "output": item.get("output") or "",
-    }
-    return {
-        "type": "function_call_output",
-        "call_id": item.get("call_id"),
-        "output": json.dumps(output, ensure_ascii=False),
-    }
-
-
 def _custom_apply_patch_call_to_function_call(item: dict) -> dict:
     return {
         "id": item.get("id") or item.get("call_id"),
@@ -317,26 +305,6 @@ def _is_unified_diff_metadata_line(line: str, path: str | None = None) -> bool:
     return False
 
 
-def _function_call_to_apply_patch_call(item: dict) -> dict:
-    arguments = item.get("arguments") or "{}"
-    operation = _parse_apply_patch_arguments(arguments)
-    if not operation:
-        operation = _extract_partial_native_operation(arguments)
-        if not operation:
-            return _invalid_apply_patch_call_message(item, _describe_args_failure(arguments))
-    operation = _normalize_apply_patch_operation_for_codex(operation)
-
-    call_id = item.get("call_id") or item.get("id") or f"call_apply_patch_{_now_ts()}"
-    item_id = item.get("id") or f"apc_local_{_now_ts()}"
-    return {
-        "id": item_id,
-        "type": "apply_patch_call",
-        "status": item.get("status", "completed"),
-        "call_id": call_id,
-        "operation": operation,
-    }
-
-
 def _function_call_to_custom_apply_patch_call(item: dict) -> dict:
     arguments = item.get("arguments") or "{}"
     operation = _parse_apply_patch_arguments(arguments)
@@ -408,18 +376,6 @@ def _extract_partial_custom_envelope_from_args(arguments: str) -> str | None:
     if not candidate:
         return None
     return _build_partial_custom_envelope(candidate)
-
-
-def _extract_partial_native_operation(arguments: str) -> dict | None:
-    """Native-mode counterpart: return whatever operation fields can be
-    salvaged so the call still surfaces to Codex with structured data."""
-    candidate = _extract_partial_operation(arguments)
-    if not candidate:
-        return None
-    op = {"type": candidate["type"], "path": candidate["path"]}
-    if isinstance(candidate.get("destination"), str) and candidate["destination"].strip():
-        op["destination"] = candidate["destination"].strip()
-    return op
 
 
 def _extract_partial_operation(arguments: str) -> dict | None:
@@ -683,20 +639,20 @@ def _infer_apply_patch_tool_policy(body: dict) -> dict:
                 "schema": TOOL_POLICY_SCHEMA,
                 "apply_patch_declared": True,
                 "apply_patch_client_tool_type": "custom",
-                "apply_patch_output_style": "custom",
             }
         if isinstance(tool, dict) and tool.get("type") == "apply_patch":
+            # Codex declares apply_patch as {"type":"apply_patch"}.  The only
+            # Codex-facing wire format is custom_tool_call — there is no native
+            # apply_patch_call item type in current Codex.
             return {
                 "schema": TOOL_POLICY_SCHEMA,
                 "apply_patch_declared": True,
                 "apply_patch_client_tool_type": "apply_patch",
-                "apply_patch_output_style": "native",
             }
     return {
         "schema": TOOL_POLICY_SCHEMA,
         "apply_patch_declared": False,
         "apply_patch_client_tool_type": "absent",
-        "apply_patch_output_style": "custom",
     }
 
 
@@ -712,22 +668,15 @@ def ensure_apply_patch_tool_policy(body: dict, overwrite: bool = False) -> dict:
     return policy
 
 
-def _apply_patch_output_style(body: dict) -> str:
-    metadata = body.get("metadata") if isinstance(body, dict) else None
-    policy = metadata.get("qz_tool_policy") if isinstance(metadata, dict) else None
-    if isinstance(policy, dict):
-        style = policy.get("apply_patch_output_style")
-        if style in {"native", "custom"}:
-            return style
-    return _infer_apply_patch_tool_policy(body).get("apply_patch_output_style", "custom")
-
-
 class ApplyPatchToolAdapter:
     upstream_name = "apply_patch"
     lifecycle = ToolLifecycleSpec(
         name="apply_patch",
         execution="protocol_adapter",
-        public_item_type="apply_patch_call",
+        # Current Codex routes apply_patch as a freeform custom tool.
+        # The only Codex-facing wire format is custom_tool_call (name=apply_patch).
+        # apply_patch_call was a mistaken contract and has been removed.
+        public_item_type="custom_tool_call",
         telemetry_name="apply_patch",
     )
 
@@ -757,10 +706,6 @@ class ApplyPatchToolAdapter:
     def input_to_upstream(self, item: dict):
         if not isinstance(item, dict):
             return None
-        if item.get("type") == "apply_patch_call":
-            return _apply_patch_call_to_function_call(item)
-        if item.get("type") == "apply_patch_call_output":
-            return _apply_patch_output_to_function_output(item)
         if item.get("type") == "custom_tool_call" and item.get("name") == "apply_patch":
             return _custom_apply_patch_call_to_function_call(item)
         if item.get("type") == "custom_tool_call_output":
@@ -785,23 +730,22 @@ class ApplyPatchToolAdapter:
             error_message=f"apply_patch: {reason}"
         )
 
-    def output_to_codex(self, item: dict, output_style: str = "native"):
+    def output_to_codex(self, item: dict, output_style: str = "custom"):
+        # output_style is ignored; Codex apply_patch is always custom_tool_call.
         if not (
             isinstance(item, dict)
             and item.get("type") == "function_call"
             and item.get("name") == "apply_patch"
         ):
             return None
-        if output_style == "custom":
-            return _function_call_to_custom_apply_patch_call(item)
-        return _function_call_to_apply_patch_call(item)
+        return _function_call_to_custom_apply_patch_call(item)
 
 
 APPLY_PATCH_TOOL_ADAPTER = ApplyPatchToolAdapter()
 
 
-def normalize_apply_patch_output_for_codex(output_items, output_style: str = "native"):
-    return ToolRegistry((APPLY_PATCH_TOOL_ADAPTER,)).output_items_to_codex(output_items, output_style)
+def normalize_apply_patch_output_for_codex(output_items):
+    return ToolRegistry((APPLY_PATCH_TOOL_ADAPTER,)).output_items_to_codex(output_items)
 
 
 def normalize_apply_patch_input_for_llamacpp(input_items):

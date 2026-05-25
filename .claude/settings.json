@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m unittest discover tests 2>&1 | tail -3)",
+      "Bash(python3 -m unittest discover -s tests 2>&1 | grep -E \"^Ran|^OK|^FAIL|^ERROR\")",
+      "Bash(python3 -m unittest discover -s tests 2>&1 | tail -4 && git diff --check && echo \"OK\")",
+      "Bash(python3 -m unittest discover -s tests 2>&1 | grep \"^Ran\")",
+      "Bash(python3 -m unittest discover -s tests 2>&1 | tail -3 && find proxy tests -name '*.py' -print0 | xargs -0 python3 -m py_compile && git diff --check && echo \"ALL OK\")",
+      "Bash(python3 -m unittest tests.test_qz_recovery_trigger 2>&1 | tail -6)",
+      "Bash(python3 -m unittest discover tests 2>&1 | tail -5)",
+      "Bash(python3 -m pytest tests/ -q --tb=no 2>&1 | tail -3)",
+      "Bash(python3 -m unittest discover -s tests 2>&1 | grep -E \"^Ran|^OK|^FAIL\")",
+      "Bash(python3 -m unittest discover -s tests 2>&1 | tail -5)",
+      "Bash(python3 -m unittest discover -s tests 2>&1 | tail -3 && git diff --check && echo \"OK\")",
+      "Bash(find proxy tests -name '*.py' -print0 | xargs -0 python3 -m py_compile && echo \"py_compile: OK\" && git diff --check && echo \"diff --check: OK\")",
+      "Bash(python3 -m unittest tests.test_qz_responses_stream 2>&1 | tail -4)",
+      "Bash(find proxy tests -name '*.py' -print0 | xargs -0 python3 -m py_compile && echo \"py_compile: OK\")"
+    ]
+  }
+}

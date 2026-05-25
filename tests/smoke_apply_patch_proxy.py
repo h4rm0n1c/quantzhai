@@ -222,16 +222,22 @@ def main():
         assert "application/json" in content_type, content_type
         response = json.loads(raw.decode("utf-8"))
         output = response.get("output") or []
-        patch_calls = [item for item in output if item.get("type") == "apply_patch_call"]
+
+        # Codex apply_patch is a custom tool — must produce custom_tool_call, never apply_patch_call.
+        apply_patch_call_items = [item for item in output if item.get("type") == "apply_patch_call"]
+        assert apply_patch_call_items == [], f"apply_patch_call must never appear: {apply_patch_call_items}"
+        patch_calls = [item for item in output if item.get("type") == "custom_tool_call"
+                       and item.get("name") == "apply_patch"]
         assert len(patch_calls) == 1, response
-        assert patch_calls[0]["operation"]["type"] == "create_file", patch_calls[0]
-        assert patch_calls[0]["operation"]["path"] == "tmp/quantzhai-smoke.txt", patch_calls[0]
+        assert patch_calls[0]["call_id"] == "call_fake_apply_patch", patch_calls[0]
+        assert "*** Add File: tmp/quantzhai-smoke.txt" in patch_calls[0]["input"], patch_calls[0]
 
         upstream_body = FakeUpstreamHandler.requests[-1]["body"]
         assert upstream_body["tools"][0]["type"] == "function", upstream_body["tools"]
         assert upstream_body["tools"][0]["name"] == "apply_patch", upstream_body["tools"]
         assert upstream_body["tool_choice"] == {"type": "function", "name": "apply_patch"}, upstream_body["tool_choice"]
 
+        # Streaming: must produce custom_tool_call, must NOT produce apply_patch_call.
         stream_payload = dict(payload)
         stream_payload["stream"] = True
         status, content_type, raw = _post_json_stream(
@@ -241,15 +247,17 @@ def main():
         stream_text = raw.decode("utf-8")
         assert status == 200, status
         assert "text/event-stream" in content_type, content_type
-        assert "apply_patch_call" in stream_text, stream_text
+        assert '"type": "custom_tool_call"' in stream_text, stream_text
+        assert '"type": "apply_patch_call"' not in stream_text, \
+            f"apply_patch_call must never appear in Codex stream: {stream_text}"
         assert "response.output_item.done" in stream_text, stream_text
 
+        # History replay: Codex sends custom_tool_call_output; proxy normalises to function_call_output.
         followup_payload = {
             "model": MODEL,
             "input": [{
-                "type": "apply_patch_call_output",
+                "type": "custom_tool_call_output",
                 "call_id": "call_fake_apply_patch",
-                "status": "completed",
                 "output": "Created tmp/quantzhai-smoke.txt",
             }],
             "tools": [{"type": "apply_patch"}],
@@ -259,6 +267,7 @@ def main():
         assert followup_body["input"][0]["type"] == "function_call_output", followup_body["input"]
         assert followup_body["input"][0]["call_id"] == "call_fake_apply_patch", followup_body["input"]
 
+        # Custom-declared apply_patch produces the same custom_tool_call output.
         custom_payload = {
             "model": MODEL,
             "stream": False,
@@ -309,7 +318,7 @@ def main():
         print("ok apply_patch proxy smoke")
         print(f"proxy_port={proxy.server_port}")
         print(f"upstream_port={upstream.server_port}")
-        print(f"patch_call={json.dumps(patch_calls[0], sort_keys=True)}")
+        print(f"custom_tool_call={json.dumps(patch_calls[0], sort_keys=True)}")
     finally:
         if proxy is not None:
             proxy.shutdown()

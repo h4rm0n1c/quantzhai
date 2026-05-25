@@ -21,7 +21,7 @@ class ToolLifecycleTests(unittest.TestCase):
         specs = {spec.name: spec for spec in registry.specs()}
 
         self.assertEqual(specs["apply_patch"].execution, "protocol_adapter")
-        self.assertEqual(specs["apply_patch"].public_item_type, "apply_patch_call")
+        self.assertEqual(specs["apply_patch"].public_item_type, "custom_tool_call")
         self.assertEqual(specs["web_search"].execution, "proxy_local")
         self.assertTrue(specs["web_search"].emits_continuation)
 
@@ -136,7 +136,7 @@ class ToolLifecycleTests(unittest.TestCase):
             "arguments": "{\"operation\":{\"type\":\"create_file\",\"path\":\"notes.md\",\"diff\":\"@@\\n+ok\\n\"}}",
         }, "native", registry)
 
-        self.assertEqual(item["type"], "apply_patch_call")
+        self.assertEqual(item["type"], "custom_tool_call")
         self.assertEqual(item["call_id"], "call_patch")
 
     def test_public_tool_item_from_function_call_leaves_public_function_calls(self):
@@ -229,7 +229,7 @@ class ToolLifecycleTests(unittest.TestCase):
         decision = completed_tool_call_decision(call, "native", frozenset(), registry)
         result = tool_continuation_result(decision)
 
-        self.assertEqual(result.public_item["type"], "apply_patch_call")
+        self.assertEqual(result.public_item["type"], "custom_tool_call")
         self.assertEqual(result.upstream_items, ())
         self.assertEqual(result.sources, ())
 

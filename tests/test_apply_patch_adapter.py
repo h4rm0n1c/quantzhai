@@ -4,9 +4,6 @@ from copy import deepcopy
 from pathlib import Path
 
 from proxy.quantzhai_proxy import (
-    _apply_patch_call_to_function_call,
-    _apply_patch_output_style,
-    _apply_patch_output_to_function_output,
     _custom_apply_patch_call_to_function_call,
     _custom_apply_patch_output_to_function_output,
     _parse_apply_patch_arguments,
@@ -27,6 +24,8 @@ FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "responses_input"
 
 class ApplyPatchAdapterTests(unittest.TestCase):
     def test_native_tool_declaration_becomes_function_tool(self):
+        """Codex declares apply_patch as {"type":"apply_patch"}.  Proxy accepts it and
+        records apply_patch_client_tool_type=apply_patch.  Output is always custom_tool_call."""
         body = {
             "tools": [{"type": "apply_patch"}],
             "tool_choice": {"type": "apply_patch"},
@@ -44,7 +43,8 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertEqual(out["metadata"]["qz_tool_policy"]["schema"], "qz.tool_policy.v1")
         self.assertTrue(out["metadata"]["qz_tool_policy"]["apply_patch_declared"])
         self.assertEqual(out["metadata"]["qz_tool_policy"]["apply_patch_client_tool_type"], "apply_patch")
-        self.assertEqual(out["metadata"]["qz_tool_policy"]["apply_patch_output_style"], "native")
+        # apply_patch_output_style has been removed — custom_tool_call is the only output format
+        self.assertNotIn("apply_patch_output_style", out["metadata"]["qz_tool_policy"])
 
     def test_custom_tool_declaration_records_client_tool_shape(self):
         body = {
@@ -60,7 +60,7 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         policy = out["metadata"]["qz_tool_policy"]
         self.assertTrue(policy["apply_patch_declared"])
         self.assertEqual(policy["apply_patch_client_tool_type"], "custom")
-        self.assertEqual(policy["apply_patch_output_style"], "custom")
+        self.assertNotIn("apply_patch_output_style", policy)
 
     def test_tool_policy_survives_second_normalization_pass(self):
         body = {
@@ -73,7 +73,7 @@ class ApplyPatchAdapterTests(unittest.TestCase):
 
         self.assertEqual(second["tools"][0]["type"], "function")
         self.assertEqual(second["metadata"]["qz_tool_policy"]["apply_patch_client_tool_type"], "custom")
-        self.assertEqual(second["metadata"]["qz_tool_policy"]["apply_patch_output_style"], "custom")
+        self.assertNotIn("apply_patch_output_style", second["metadata"]["qz_tool_policy"])
 
     def test_router_can_overwrite_stale_client_tool_policy(self):
         body = {
@@ -91,7 +91,7 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         policy = ensure_apply_patch_tool_policy(body, overwrite=True)
 
         self.assertEqual(policy["apply_patch_client_tool_type"], "apply_patch")
-        self.assertEqual(policy["apply_patch_output_style"], "native")
+        self.assertNotIn("apply_patch_output_style", policy)
 
     def test_write_stdin_is_dropped_without_live_exec_session(self):
         body = {
@@ -126,42 +126,8 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertEqual(out["tools"][0]["name"], "write_stdin")
         self.assertIn("Do not invent session ids", out["tools"][0]["description"])
 
-    def test_apply_patch_call_history_becomes_function_call_history(self):
-        item = {
-            "id": "apc_1",
-            "type": "apply_patch_call",
-            "status": "completed",
-            "call_id": "call_1",
-            "operation": {
-                "type": "update_file",
-                "path": "README.md",
-                "diff": "@@\n-old\n+new\n",
-            },
-        }
-
-        out = _apply_patch_call_to_function_call(item)
-        args = json.loads(out["arguments"])
-
-        self.assertEqual(out["type"], "function_call")
-        self.assertEqual(out["name"], "apply_patch")
-        self.assertEqual(args["operation"]["path"], "README.md")
-
-    def test_apply_patch_output_history_becomes_function_output_history(self):
-        item = {
-            "type": "apply_patch_call_output",
-            "call_id": "call_1",
-            "status": "completed",
-            "output": "Updated README.md",
-        }
-
-        out = _apply_patch_output_to_function_output(item)
-        payload = json.loads(out["output"])
-
-        self.assertEqual(out["type"], "function_call_output")
-        self.assertEqual(out["call_id"], "call_1")
-        self.assertEqual(payload["status"], "completed")
-
-    def test_model_function_call_becomes_native_apply_patch_call(self):
+    def test_model_function_call_becomes_custom_tool_call(self):
+        """apply_patch function_call from upstream always produces custom_tool_call output."""
         function_call = {
             "id": "fc_1",
             "type": "function_call",
@@ -179,14 +145,13 @@ class ApplyPatchAdapterTests(unittest.TestCase):
 
         out = normalize_apply_patch_output_for_codex([function_call])[0]
 
-        self.assertEqual(out["type"], "apply_patch_call")
+        self.assertEqual(out["type"], "custom_tool_call")
         self.assertEqual(out["call_id"], "call_1")
-        self.assertEqual(out["operation"]["type"], "create_file")
-        self.assertEqual(out["operation"]["path"], "notes.md")
+        self.assertEqual(out["name"], "apply_patch")
+        self.assertIn("*** Add File: notes.md", out["input"])
 
-    def test_missing_apply_patch_tool_declaration_defaults_to_custom_output(self):
-        self.assertEqual(_apply_patch_output_style({}), "custom")
-
+    def test_apply_patch_output_never_produces_apply_patch_call_type(self):
+        """normalize_apply_patch_output_for_codex must never produce apply_patch_call items."""
         function_call = {
             "id": "fc_1",
             "type": "function_call",
@@ -194,46 +159,16 @@ class ApplyPatchAdapterTests(unittest.TestCase):
             "call_id": "call_1",
             "name": "apply_patch",
             "arguments": json.dumps({
-                "operation": {
-                    "type": "create_file",
-                    "path": "notes.md",
-                    "diff": "@@\n+hello\n",
-                }
+                "operation": {"type": "delete_file", "path": "old.txt"},
             }),
         }
+        out = normalize_apply_patch_output_for_codex([function_call])
+        for item in out:
+            self.assertNotEqual(item.get("type"), "apply_patch_call",
+                                "apply_patch_call is a removed contract; custom_tool_call must be used")
 
-        out = normalize_apply_patch_output_for_codex([function_call], "custom")[0]
-
-        self.assertEqual(out["type"], "custom_tool_call")
-        self.assertEqual(out["call_id"], "call_1")
-        self.assertEqual(out["name"], "apply_patch")
-        self.assertIn("*** Add File: notes.md", out["input"])
-
-    def test_model_function_call_becomes_custom_apply_patch_call_when_requested(self):
-        function_call = {
-            "id": "fc_1",
-            "type": "function_call",
-            "status": "completed",
-            "call_id": "call_1",
-            "name": "apply_patch",
-            "arguments": json.dumps({
-                "operation": {
-                    "type": "create_file",
-                    "path": "notes.md",
-                    "diff": "@@\n+hello\n",
-                }
-            }),
-        }
-
-        out = normalize_apply_patch_output_for_codex([function_call], "custom")[0]
-
-        self.assertEqual(out["type"], "custom_tool_call")
-        self.assertEqual(out["call_id"], "call_1")
-        self.assertEqual(out["name"], "apply_patch")
-        self.assertIn("*** Add File: notes.md", out["input"])
-        self.assertIn("+hello", out["input"])
-
-    def test_model_function_call_becomes_native_move_apply_patch_call(self):
+    def test_model_function_call_move_becomes_custom_envelope(self):
+        """move_file function_call always produces a custom_tool_call with *** Move to: envelope."""
         function_call = {
             "id": "fc_1",
             "type": "function_call",
@@ -249,14 +184,11 @@ class ApplyPatchAdapterTests(unittest.TestCase):
             }),
         }
 
-        out = normalize_apply_patch_output_for_codex([function_call], "native")[0]
+        out = normalize_apply_patch_output_for_codex([function_call])[0]
 
-        self.assertEqual(out["type"], "apply_patch_call")
-        self.assertEqual(out["operation"], {
-            "type": "move_file",
-            "path": "old.md",
-            "destination": "new.md",
-        })
+        self.assertEqual(out["type"], "custom_tool_call")
+        self.assertIn("*** Update File: old.md", out["input"])
+        self.assertIn("*** Move to: new.md", out["input"])
 
     def test_rename_operation_alias_becomes_custom_move_patch(self):
         function_call = {
@@ -275,7 +207,7 @@ class ApplyPatchAdapterTests(unittest.TestCase):
             }),
         }
 
-        out = normalize_apply_patch_output_for_codex([function_call], "custom")[0]
+        out = normalize_apply_patch_output_for_codex([function_call])[0]
 
         self.assertEqual(out["type"], "custom_tool_call")
         self.assertIn("*** Update File: old.md", out["input"])
@@ -301,7 +233,7 @@ class ApplyPatchAdapterTests(unittest.TestCase):
             }),
         }
 
-        out = normalize_apply_patch_output_for_codex([function_call], "custom")[0]
+        out = normalize_apply_patch_output_for_codex([function_call])[0]
 
         self.assertEqual(out["type"], "custom_tool_call")
         self.assertIn("*** Update File: old.md", out["input"])
@@ -344,7 +276,8 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertNotIn("--- a/patch_target.txt", patch)
         self.assertNotIn("+++ b/patch_target.txt", patch)
 
-    def test_native_update_patch_strips_unified_diff_file_headers(self):
+    def test_update_patch_strips_unified_diff_file_headers(self):
+        """update_file always produces a custom_tool_call envelope with stripped unified diff headers."""
         function_call = {
             "id": "fc_1",
             "type": "function_call",
@@ -366,13 +299,13 @@ class ApplyPatchAdapterTests(unittest.TestCase):
             }),
         }
 
-        out = normalize_apply_patch_output_for_codex([function_call], "native")[0]
+        out = normalize_apply_patch_output_for_codex([function_call])[0]
 
-        self.assertEqual(out["type"], "apply_patch_call")
-        self.assertIn("@@\n-alpha\n+ALPHA", out["operation"]["diff"])
-        self.assertNotIn("@@ -1,5 +1,6 @@", out["operation"]["diff"])
-        self.assertNotIn("--- a/patch_target.txt", out["operation"]["diff"])
-        self.assertNotIn("+++ b/patch_target.txt", out["operation"]["diff"])
+        self.assertEqual(out["type"], "custom_tool_call")
+        self.assertIn("@@\n-alpha\n+ALPHA", out["input"])
+        self.assertNotIn("@@ -1,5 +1,6 @@", out["input"])
+        self.assertNotIn("--- a/patch_target.txt", out["input"])
+        self.assertNotIn("+++ b/patch_target.txt", out["input"])
 
     def test_invalid_patch_function_call_with_no_path_falls_back_to_message(self):
         """When the args have no salvageable path, no envelope can be built —
@@ -406,7 +339,7 @@ class ApplyPatchAdapterTests(unittest.TestCase):
             "arguments": json.dumps({"operation": {"type": "create_file", "path": "hello.py"}}),
         }
 
-        out = normalize_apply_patch_output_for_codex([function_call], "custom")[0]
+        out = normalize_apply_patch_output_for_codex([function_call])[0]
 
         self.assertEqual(out["type"], "custom_tool_call")
         self.assertIn("*** Add File: hello.py", out["input"])
@@ -422,7 +355,7 @@ class ApplyPatchAdapterTests(unittest.TestCase):
             "arguments": json.dumps({"operation": {"type": "update_file", "path": "greeting.py"}}),
         }
 
-        out = normalize_apply_patch_output_for_codex([function_call], "custom")[0]
+        out = normalize_apply_patch_output_for_codex([function_call])[0]
 
         self.assertEqual(out["type"], "custom_tool_call")
         self.assertIn("*** Update File: greeting.py", out["input"])
@@ -461,40 +394,20 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertEqual(operation["type"], "create_file")
         self.assertEqual(operation["path"], "new.py")
 
-    def test_qwen_bare_create_file_native_mode_emits_apply_patch_call(self):
-        """Native mode counterpart: best-effort apply_patch_call with
-        whatever fields are recoverable."""
-        function_call = {
-            "id": "fc_qwen_bare_create_native",
-            "type": "function_call",
-            "status": "completed",
-            "call_id": "call_qwen_bare_create_native",
-            "name": "apply_patch",
-            "arguments": json.dumps({"operation": {"type": "create_file", "path": "hello.py"}}),
-        }
-
-        out = normalize_apply_patch_output_for_codex([function_call], "native")[0]
-
-        self.assertEqual(out["type"], "apply_patch_call")
-        self.assertEqual(out["operation"]["type"], "create_file")
-        self.assertEqual(out["operation"]["path"], "hello.py")
-
-    def test_normalize_responses_input_converts_patch_items(self):
+    def test_normalize_responses_input_converts_custom_tool_call_items(self):
+        """custom_tool_call apply_patch history items are converted to function_call for upstream."""
         body = {
             "input": [
                 {
-                    "type": "apply_patch_call",
+                    "type": "custom_tool_call",
                     "call_id": "call_1",
-                    "operation": {
-                        "type": "delete_file",
-                        "path": "old.txt",
-                    },
+                    "name": "apply_patch",
+                    "input": "*** Begin Patch\n*** Delete File: old.txt\n*** End Patch\n",
                 },
                 {
-                    "type": "apply_patch_call_output",
+                    "type": "custom_tool_call_output",
                     "call_id": "call_1",
-                    "status": "completed",
-                    "output": "Deleted old.txt",
+                    "output": "{\"ok\": true}",
                 },
             ]
         }
@@ -665,19 +578,17 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertIsNotNone(operation)
         self.assertEqual(operation["diff"], "intentional diff\n")
 
-    def test_stream_synthesis_includes_apply_patch_call_item(self):
+    def test_stream_synthesis_includes_custom_tool_call_item(self):
+        """make_response_stream_events emits custom_tool_call for apply_patch, never apply_patch_call."""
         out = {
             "id": "resp_1",
             "model": "test-model.gguf",
             "output": [{
-                "id": "apc_1",
-                "type": "apply_patch_call",
+                "type": "custom_tool_call",
                 "status": "completed",
                 "call_id": "call_1",
-                "operation": {
-                    "type": "delete_file",
-                    "path": "old.txt",
-                },
+                "name": "apply_patch",
+                "input": "*** Begin Patch\n*** Delete File: old.txt\n*** End Patch\n",
             }],
         }
 
@@ -685,7 +596,8 @@ class ApplyPatchAdapterTests(unittest.TestCase):
 
         self.assertIn("response.output_item.added", stream)
         self.assertIn("response.output_item.done", stream)
-        self.assertIn("apply_patch_call", stream)
+        self.assertIn("custom_tool_call", stream)
+        self.assertNotIn("apply_patch_call", stream)
         self.assertIn('"input_tokens": 0', stream)
         self.assertIn('"output_tokens": 0', stream)
         self.assertIn('"total_tokens": 0', stream)
@@ -699,15 +611,11 @@ class ApplyPatchAdapterTests(unittest.TestCase):
             "id": "resp_ns_ap1",
             "model": "test-model.gguf",
             "output": [{
-                "id": "apc_ns_1",
-                "type": "apply_patch_call",
+                "type": "custom_tool_call",
                 "status": "completed",
                 "call_id": "call_ns_ap1",
-                "operation": {
-                    "type": "update_file",
-                    "path": "src/main.py",
-                    "diff": "@@\n-old\n+new\n",
-                },
+                "name": "apply_patch",
+                "input": "*** Begin Patch\n*** Update File: src/main.py\n@@\n-old\n+new\n*** End Patch\n",
             }],
         }
         stream = b"".join(make_response_stream_events(out)).decode("utf-8")

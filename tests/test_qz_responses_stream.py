@@ -924,7 +924,6 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         private_function_call_delta_limit=None,
         reasoning_only_timeout_s=None,
         reasoning_only_char_limit=None,
-        apply_patch_output_style="native",
         metadata=None,
         proxy_tool_registry=None,
         selected_model=None,
@@ -969,7 +968,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         }
         if metadata is not None:
             body["metadata"] = metadata
-        result = runtime.run(body, "test-model.gguf", apply_patch_output_style)
+        result = runtime.run(body, "test-model.gguf")
         stream_text = b"".join(chunks).decode("utf-8")
         if return_result:
             return result, stream_text
@@ -1048,19 +1047,6 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertEqual(completed["tool"], "qz_probe")
         self.assertEqual(completed["upstream_items"], 2)
 
-    def test_apply_patch_call_is_rewritten_as_public_tool_item(self):
-        requests = []
-
-        def opener(body):
-            requests.append(json.loads(json.dumps(body)))
-            return FakeStream(_apply_patch_call_stream())
-
-        stream_text = self._run_runtime(opener)
-
-        self.assertEqual(len(requests), 1)
-        self.assertIn('"type": "apply_patch_call"', stream_text)
-        self.assertNotIn('"type": "function_call"', stream_text)
-        self.assertIn("response.completed", stream_text)
 
     def test_public_function_call_is_buffered_until_arguments_are_complete(self):
         def opener(body):
@@ -1611,34 +1597,6 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertFalse(any(event.get("type") == "stream_failed" for event in events))
         self.assertNotIn(b"response.completed", b"".join(written))
 
-    def test_golden_apply_patch_stream_rewrites_to_apply_patch_call(self):
-        requests = []
-
-        def opener(body):
-            requests.append(json.loads(json.dumps(body)))
-            return FakeStream(_fixture_chunks("apply_patch_call.raw"))
-
-        stream_text = self._run_runtime(opener)
-        events = _parse_sse_events(stream_text)
-        names = [event_type for event_type, _payload in events]
-        patch_items = [
-            payload["item"]
-            for event_type, payload in events
-            if event_type in {"response.output_item.added", "response.output_item.done"}
-            and isinstance(payload, dict)
-            and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "apply_patch_call"
-        ]
-
-        self.assertEqual(len(requests), 1)
-        self.assertIn("response.completed", names)
-        self.assertTrue(stream_text.endswith("data: [DONE]\n\n"))
-        self.assertNotIn('"type": "function_call"', stream_text)
-        self.assertEqual(len(patch_items), 2)
-        self.assertEqual(patch_items[0]["status"], "in_progress")
-        self.assertEqual(patch_items[1]["status"], "completed")
-        self.assertEqual(patch_items[0]["call_id"], "call_fixture_patch")
-        self.assertEqual(patch_items[0]["operation"]["path"], "tmp/quantzhai-smoke.txt")
 
     def test_golden_custom_apply_patch_stream_rewrites_to_custom_tool_call(self):
         requests = []
@@ -1647,7 +1605,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
             requests.append(json.loads(json.dumps(body)))
             return FakeStream(_fixture_chunks("custom_apply_patch_call.raw"))
 
-        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        stream_text = self._run_runtime(opener)
         events = _parse_sse_events(stream_text)
         names = [event_type for event_type, _payload in events]
         custom_items = [
@@ -1672,53 +1630,13 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertIn("*** Add File: tmp/quantzhai-custom-smoke.txt", custom_items[0]["input"])
         self.assertIn("+quantzhai custom apply_patch smoke", custom_items[0]["input"])
 
-    def test_apply_patch_stream_uses_request_tool_policy_metadata(self):
-        def opener(body):
-            return FakeStream(_fixture_chunks("custom_apply_patch_call.raw"))
 
-        stream_text = self._run_runtime(
-            opener,
-            apply_patch_output_style="native",
-            metadata={
-                "qz_tool_policy": {
-                    "schema": "qz.tool_policy.v1",
-                    "apply_patch_declared": True,
-                    "apply_patch_client_tool_type": "custom",
-                    "apply_patch_output_style": "custom",
-                }
-            },
-        )
-
-        self.assertIn('"type": "custom_tool_call"', stream_text)
-        self.assertNotIn('"type": "apply_patch_call"', stream_text)
-
-    def test_golden_apply_patch_update_stream_rewrites_to_apply_patch_call(self):
-        def opener(body):
-            return FakeStream(_fixture_chunks("apply_patch_update_call.raw"))
-
-        stream_text = self._run_runtime(opener)
-        events = _parse_sse_events(stream_text)
-        patch_items = [
-            payload["item"]
-            for event_type, payload in events
-            if event_type in {"response.output_item.added", "response.output_item.done"}
-            and isinstance(payload, dict)
-            and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "apply_patch_call"
-        ]
-
-        self.assertNotIn('"type": "function_call"', stream_text)
-        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
-        self.assertEqual(len(patch_items), 2)
-        self.assertEqual(patch_items[0]["operation"]["type"], "update_file")
-        self.assertEqual(patch_items[0]["operation"]["path"], "tmp/quantzhai-update.txt")
-        self.assertIn("+new line", patch_items[0]["operation"]["diff"])
 
     def test_golden_custom_apply_patch_update_stream_rewrites_to_patch_envelope(self):
         def opener(body):
             return FakeStream(_fixture_chunks("custom_apply_patch_update_call.raw"))
 
-        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        stream_text = self._run_runtime(opener)
         events = _parse_sse_events(stream_text)
         custom_items = [
             payload["item"]
@@ -1736,98 +1654,14 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertIn("-old line", custom_items[0]["input"])
         self.assertIn("+new line", custom_items[0]["input"])
 
-    def test_golden_apply_patch_multihunk_update_stream_rewrites_to_apply_patch_call(self):
-        def opener(body):
-            return FakeStream(_fixture_chunks("apply_patch_multihunk_update_call.raw"))
 
-        stream_text = self._run_runtime(opener)
-        events = _parse_sse_events(stream_text)
-        patch_items = [
-            payload["item"]
-            for event_type, payload in events
-            if event_type in {"response.output_item.added", "response.output_item.done"}
-            and isinstance(payload, dict)
-            and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "apply_patch_call"
-        ]
 
-        self.assertNotIn('"type": "function_call"', stream_text)
-        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
-        self.assertEqual(len(patch_items), 2)
-        self.assertEqual(patch_items[0]["operation"]["type"], "update_file")
-        self.assertEqual(patch_items[0]["operation"]["path"], "tmp/quantzhai-multihunk.txt")
-        self.assertIn("-old alpha", patch_items[0]["operation"]["diff"])
-        self.assertIn("+new alpha", patch_items[0]["operation"]["diff"])
-        self.assertIn("-old beta", patch_items[0]["operation"]["diff"])
-        self.assertIn("+new beta", patch_items[0]["operation"]["diff"])
-
-    def test_golden_apply_patch_unified_diff_update_stream_strips_metadata(self):
-        def opener(body):
-            return FakeStream(_fixture_chunks("apply_patch_unified_diff_update_call.raw"))
-
-        stream_text = self._run_runtime(opener)
-        events = _parse_sse_events(stream_text)
-        patch_items = [
-            payload["item"]
-            for event_type, payload in events
-            if event_type in {"response.output_item.added", "response.output_item.done"}
-            and isinstance(payload, dict)
-            and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "apply_patch_call"
-        ]
-
-        self.assertNotIn('"type": "function_call"', stream_text)
-        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
-        self.assertEqual(len(patch_items), 2)
-        self.assertEqual(patch_items[0]["operation"]["type"], "update_file")
-        self.assertEqual(patch_items[0]["operation"]["path"], "tmp/quantzhai-unified.txt")
-        diff = patch_items[0]["operation"]["diff"]
-        self.assertIn("@@\n-old alpha\n+new alpha", diff)
-        self.assertIn("@@\n-old beta\n+new beta", diff)
-        self.assertIn("+new tail", diff)
-        self.assertNotIn("diff --git", diff)
-        self.assertNotIn("index 1111111", diff)
-        self.assertNotIn("--- a/tmp/quantzhai-unified.txt", diff)
-        self.assertNotIn("+++ b/tmp/quantzhai-unified.txt", diff)
-        self.assertNotIn("@@ -1,4 +1,4 @@", diff)
-        self.assertNotIn("@@ -8,3 +8,4 @@", diff)
-
-    def test_golden_apply_patch_large_multihunk_update_stream_strips_metadata(self):
-        def opener(body):
-            return FakeStream(_fixture_chunks("apply_patch_large_multihunk_update_call.raw"))
-
-        stream_text = self._run_runtime(opener)
-        events = _parse_sse_events(stream_text)
-        patch_items = [
-            payload["item"]
-            for event_type, payload in events
-            if event_type in {"response.output_item.added", "response.output_item.done"}
-            and isinstance(payload, dict)
-            and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "apply_patch_call"
-        ]
-
-        self.assertNotIn('"type": "function_call"', stream_text)
-        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
-        self.assertEqual(len(patch_items), 2)
-        self.assertEqual(patch_items[0]["operation"]["type"], "update_file")
-        self.assertEqual(patch_items[0]["operation"]["path"], "tmp/quantzhai-large-multihunk.txt")
-        diff = patch_items[0]["operation"]["diff"]
-        self.assertIn("@@\n context one\n-old alpha\n+new alpha", diff)
-        self.assertIn("@@\n context three\n-old beta\n+new beta\n+inserted beta detail", diff)
-        self.assertIn("@@\n-old gamma\n+new gamma", diff)
-        self.assertIn("@@\n context six\n-old delta\n+new delta\n+new epsilon tail", diff)
-        self.assertNotIn("diff --git", diff)
-        self.assertNotIn("index 1111111", diff)
-        self.assertNotIn("--- a/tmp/quantzhai-large-multihunk.txt", diff)
-        self.assertNotIn("+++ b/tmp/quantzhai-large-multihunk.txt", diff)
-        self.assertNotIn("@@ -14,6 +14,7 @@", diff)
 
     def test_golden_custom_apply_patch_multihunk_update_stream_rewrites_to_patch_envelope(self):
         def opener(body):
             return FakeStream(_fixture_chunks("custom_apply_patch_multihunk_update_call.raw"))
 
-        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        stream_text = self._run_runtime(opener)
         events = _parse_sse_events(stream_text)
         custom_items = [
             payload["item"]
@@ -1851,7 +1685,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         def opener(body):
             return FakeStream(_fixture_chunks("custom_apply_patch_unified_diff_update_call.raw"))
 
-        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        stream_text = self._run_runtime(opener)
         events = _parse_sse_events(stream_text)
         custom_items = [
             payload["item"]
@@ -1881,7 +1715,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         def opener(body):
             return FakeStream(_fixture_chunks("custom_apply_patch_large_multihunk_update_call.raw"))
 
-        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        stream_text = self._run_runtime(opener)
         events = _parse_sse_events(stream_text)
         custom_items = [
             payload["item"]
@@ -1907,32 +1741,12 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertNotIn("+++ b/tmp/quantzhai-large-multihunk.txt", patch)
         self.assertNotIn("@@ -14,6 +14,7 @@", patch)
 
-    def test_golden_apply_patch_delete_stream_rewrites_to_apply_patch_call(self):
-        def opener(body):
-            return FakeStream(_fixture_chunks("apply_patch_delete_call.raw"))
-
-        stream_text = self._run_runtime(opener)
-        events = _parse_sse_events(stream_text)
-        patch_items = [
-            payload["item"]
-            for event_type, payload in events
-            if event_type in {"response.output_item.added", "response.output_item.done"}
-            and isinstance(payload, dict)
-            and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "apply_patch_call"
-        ]
-
-        self.assertNotIn('"type": "function_call"', stream_text)
-        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
-        self.assertEqual(len(patch_items), 2)
-        self.assertEqual(patch_items[0]["operation"]["type"], "delete_file")
-        self.assertEqual(patch_items[0]["operation"]["path"], "tmp/quantzhai-delete.txt")
 
     def test_golden_custom_apply_patch_delete_stream_rewrites_to_patch_envelope(self):
         def opener(body):
             return FakeStream(_fixture_chunks("custom_apply_patch_delete_call.raw"))
 
-        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        stream_text = self._run_runtime(opener)
         events = _parse_sse_events(stream_text)
         custom_items = [
             payload["item"]
@@ -1948,65 +1762,13 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertEqual(len(custom_items), 2)
         self.assertIn("*** Delete File: tmp/quantzhai-delete.txt", custom_items[0]["input"])
 
-    def test_golden_apply_patch_move_stream_rewrites_to_apply_patch_call(self):
-        def opener(body):
-            return FakeStream(_fixture_chunks("apply_patch_move_call.raw"))
 
-        stream_text = self._run_runtime(opener)
-        events = _parse_sse_events(stream_text)
-        patch_items = [
-            payload["item"]
-            for event_type, payload in events
-            if event_type in {"response.output_item.added", "response.output_item.done"}
-            and isinstance(payload, dict)
-            and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "apply_patch_call"
-        ]
-
-        self.assertNotIn('"type": "function_call"', stream_text)
-        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
-        self.assertEqual(len(patch_items), 2)
-        self.assertEqual(patch_items[0]["operation"], {
-            "type": "move_file",
-            "path": "tmp/quantzhai-old-name.txt",
-            "destination": "tmp/quantzhai-new-name.txt",
-        })
-
-    def test_golden_apply_patch_rename_alias_stream_rewrites_to_move_call(self):
-        def opener(body):
-            return FakeStream(_fixture_chunks("apply_patch_rename_alias_move_call.raw"))
-
-        stream_text = self._run_runtime(opener)
-        events = _parse_sse_events(stream_text)
-        patch_items = [
-            payload["item"]
-            for event_type, payload in events
-            if event_type in {"response.output_item.added", "response.output_item.done"}
-            and isinstance(payload, dict)
-            and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "apply_patch_call"
-        ]
-
-        self.assertNotIn('"type": "function_call"', stream_text)
-        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
-        self.assertEqual(len(patch_items), 2)
-        operation = patch_items[0]["operation"]
-        self.assertEqual(operation["type"], "move_file")
-        self.assertEqual(operation["path"], "tmp/quantzhai-rename-old.txt")
-        self.assertEqual(operation["destination"], "tmp/quantzhai-rename-new.txt")
-        self.assertIn("@@\n stable heading\n-old rename body\n+new rename body", operation["diff"])
-        self.assertNotIn("similarity index", operation["diff"])
-        self.assertNotIn("rename from", operation["diff"])
-        self.assertNotIn("rename to", operation["diff"])
-        self.assertNotIn("--- a/tmp/quantzhai-rename-old.txt", operation["diff"])
-        self.assertNotIn("+++ b/tmp/quantzhai-rename-new.txt", operation["diff"])
-        self.assertNotIn("@@ -1,3 +1,3 @@", operation["diff"])
 
     def test_golden_custom_apply_patch_move_stream_rewrites_to_patch_envelope(self):
         def opener(body):
             return FakeStream(_fixture_chunks("custom_apply_patch_move_call.raw"))
 
-        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        stream_text = self._run_runtime(opener)
         events = _parse_sse_events(stream_text)
         custom_items = [
             payload["item"]
@@ -2027,7 +1789,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         def opener(body):
             return FakeStream(_fixture_chunks("custom_apply_patch_rename_alias_move_call.raw"))
 
-        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        stream_text = self._run_runtime(opener)
         events = _parse_sse_events(stream_text)
         custom_items = [
             payload["item"]
@@ -2052,36 +1814,13 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertNotIn("+++ b/tmp/quantzhai-rename-new.txt", patch)
         self.assertNotIn("@@ -1,3 +1,3 @@", patch)
 
-    def test_golden_qwen_create_file_sibling_patch_stream_is_coerced(self):
-        """Qwen-observed shape: operation lacks diff, sibling top-level patch carries the content."""
-        def opener(body):
-            return FakeStream(_fixture_chunks("qwen_create_file_sibling_patch.raw"))
-
-        stream_text = self._run_runtime(opener)
-        events = _parse_sse_events(stream_text)
-        patch_items = [
-            payload["item"]
-            for event_type, payload in events
-            if event_type in {"response.output_item.added", "response.output_item.done"}
-            and isinstance(payload, dict)
-            and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "apply_patch_call"
-        ]
-
-        self.assertNotIn('"type": "function_call"', stream_text)
-        self.assertNotIn("invalid patch arguments", stream_text)
-        self.assertEqual(stream_text.count("data: [DONE]\n\n"), 1)
-        self.assertEqual(len(patch_items), 2)
-        self.assertEqual(patch_items[0]["operation"]["type"], "create_file")
-        self.assertEqual(patch_items[0]["operation"]["path"], "tmp/qwen-sibling-patch.txt")
-        self.assertEqual(patch_items[0]["operation"]["diff"], "qwen sibling patch content\n")
 
     def test_golden_qwen_create_file_sibling_patch_custom_stream_is_coerced(self):
         """Same shape, custom output style — should produce a custom_tool_call envelope."""
         def opener(body):
             return FakeStream(_fixture_chunks("qwen_create_file_sibling_patch.raw"))
 
-        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        stream_text = self._run_runtime(opener)
         events = _parse_sse_events(stream_text)
         custom_items = [
             payload["item"]
@@ -2103,7 +1842,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         def opener(body):
             return FakeStream(_fixture_chunks("qwen_update_file_sibling_patch_with_unified_headers.raw"))
 
-        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        stream_text = self._run_runtime(opener)
         events = _parse_sse_events(stream_text)
         custom_items = [
             payload["item"]
@@ -2132,7 +1871,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         def opener(body):
             return FakeStream(_fixture_chunks("qwen_legacy_patch_missing_path.raw"))
 
-        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        stream_text = self._run_runtime(opener)
         events = _parse_sse_events(stream_text)
         custom_items = [
             payload["item"]
@@ -2159,7 +1898,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         def opener(body):
             return FakeStream(_fixture_chunks("qwen_rename_no_hunk.raw"))
 
-        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        stream_text = self._run_runtime(opener)
         events = _parse_sse_events(stream_text)
         custom_items = [
             payload["item"]
@@ -2191,7 +1930,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
                 return FakeStream(_fixture_chunks("qwen_create_file_bare_operation.raw"))
             return FakeStream(_fixture_chunks("basic_message.raw"))
 
-        stream_text = self._run_runtime(opener, apply_patch_output_style="custom", telemetry=telemetry)
+        stream_text = self._run_runtime(opener, telemetry=telemetry)
         events_list = [et for et, _ in _parse_sse_events(stream_text)]
 
         # Error is injected upstream, not forwarded as a Codex-facing tool call.
@@ -2217,7 +1956,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
                 return FakeStream(_fixture_chunks("qwen_update_file_bare_operation.raw"))
             return FakeStream(_fixture_chunks("basic_message.raw"))
 
-        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        stream_text = self._run_runtime(opener)
 
         self.assertNotIn("custom_tool_call", stream_text)
         self.assertNotIn("invalid patch arguments", stream_text)
@@ -2236,7 +1975,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
                 return FakeStream(_fixture_chunks("invalid_apply_patch_call.raw"))
             return FakeStream(_fixture_chunks("basic_message.raw"))
 
-        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        stream_text = self._run_runtime(opener)
 
         self.assertNotIn('"type": "function_call"', stream_text)
         self.assertNotIn("custom_tool_call", stream_text)
@@ -2263,7 +2002,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
                 return FakeStream(_fixture_chunks("invalid_apply_patch_move_call.raw"))
             return FakeStream(_fixture_chunks("basic_message.raw"))
 
-        stream_text = self._run_runtime(opener, apply_patch_output_style="custom")
+        stream_text = self._run_runtime(opener)
 
         # No proxy-generated error assistant message (old behavior).
         self.assertNotIn("invalid patch arguments", stream_text)
@@ -4192,7 +3931,7 @@ class ProxyLocalTerminalSuppressionHelperTests(unittest.TestCase):
 class CoercionTelemetryStreamingTests(unittest.TestCase):
     """Tests for coercion_succeeded/coercion_failed telemetry in the streaming path."""
 
-    def _run(self, stream_chunks, telemetry, apply_patch_output_style="native"):
+    def _run(self, stream_chunks, telemetry):
         calls = []
 
         def opener(body):
@@ -4219,7 +3958,7 @@ class CoercionTelemetryStreamingTests(unittest.TestCase):
                        "content": [{"type": "input_text", "text": "test"}]}],
             "tools": [{"type": "web_search"}],
         }
-        runtime.run(body, "test-model.gguf", apply_patch_output_style)
+        runtime.run(body, "test-model.gguf")
         return b"".join(chunks).decode("utf-8"), calls
 
     def test_malformed_web_search_emits_coercion_failed_telemetry(self):
@@ -4341,10 +4080,9 @@ class CoercionTelemetryStreamingTests(unittest.TestCase):
                 "schema": "qz.tool_policy.v1",
                 "apply_patch_declared": True,
                 "apply_patch_client_tool_type": "custom",
-                "apply_patch_output_style": "custom",
             }},
         }
-        runtime.run(body, "test-model.gguf", "custom")
+        runtime.run(body, "test-model.gguf")
         stream_text = b"".join(chunks).decode("utf-8")
 
         telem_events = telemetry.recent()
@@ -4469,7 +4207,6 @@ class StreamingToolErrorFixtureTests(unittest.TestCase):
                 "schema": "qz.tool_policy.v1",
                 "apply_patch_declared": True,
                 "apply_patch_client_tool_type": "apply_patch",
-                "apply_patch_output_style": "native",
             }
         },
     }
@@ -4713,7 +4450,7 @@ class NonStreamingDroppedToolGapTests(unittest.TestCase):
             "type": "function_call", "name": "apply_patch",
             "call_id": "call_ap", "arguments": "{}",
         }
-        decision = registry.completed_call_decision(call, "native", dropped_tool_names=dropped)
+        decision = registry.completed_call_decision(call, dropped_tool_names=dropped)
 
         self.assertEqual(decision.kind, "error")
         self.assertIsNotNone(decision.error_result)
@@ -5244,7 +4981,7 @@ class ApplyPatchLifecycleContractTests(unittest.TestCase):
     Source: docs/apply-patch-codex-lifecycle-audit.md §5.1, §8 (G-AP1).
     """
 
-    def _run_apply_patch(self, apply_patch_output_style="native"):
+    def _run_apply_patch(self):
         """Run the streaming runtime against _apply_patch_call_stream."""
         def opener(_b):
             return FakeStream(_apply_patch_call_stream())
@@ -5265,40 +5002,28 @@ class ApplyPatchLifecycleContractTests(unittest.TestCase):
                         "content": [{"type": "input_text", "text": "test"}]}],
             "tools": [{"type": "apply_patch"}],
         }
-        runtime.run(body, "test-model.gguf", apply_patch_output_style)
+        runtime.run(body, "test-model.gguf")
         stream_text = b"".join(chunks).decode("utf-8")
         return _parse_sse_events(stream_text), stream_text
 
-    def test_ap1_native_emits_output_item_added(self):
-        """Valid native apply_patch must emit response.output_item.added."""
-        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+    def test_ap1_emits_output_item_added(self):
+        """apply_patch must emit response.output_item.added."""
+        events, _ = self._run_apply_patch()
         names = [et for et, _ in events]
         self.assertIn("response.output_item.added", names,
                       "apply_patch must emit response.output_item.added to Codex")
 
-    def test_ap1_native_emits_output_item_done(self):
-        """Valid native apply_patch must emit response.output_item.done."""
-        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+    def test_ap1_emits_output_item_done(self):
+        """apply_patch must emit response.output_item.done."""
+        events, _ = self._run_apply_patch()
         names = [et for et, _ in events]
         self.assertIn("response.output_item.done", names,
                       "apply_patch must emit response.output_item.done to Codex")
 
-    def test_ap1_native_item_type_is_apply_patch_call(self):
-        """The output_item.added/done item type must be 'apply_patch_call' in native mode."""
-        events, _ = self._run_apply_patch(apply_patch_output_style="native")
-        added_items = [
-            p.get("item", {})
-            for et, p in events
-            if et == "response.output_item.added" and isinstance(p, dict)
-        ]
-        self.assertTrue(
-            any(item.get("type") == "apply_patch_call" for item in added_items),
-            "output_item.added must carry an apply_patch_call item in native mode",
-        )
 
     def test_ap1_no_sub_lifecycle_in_progress(self):
         """apply_patch must NOT emit response.apply_patch_call.in_progress."""
-        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        events, _ = self._run_apply_patch()
         names = [et for et, _ in events]
         self.assertNotIn(
             "response.apply_patch_call.in_progress", names,
@@ -5308,42 +5033,42 @@ class ApplyPatchLifecycleContractTests(unittest.TestCase):
 
     def test_ap1_no_sub_lifecycle_searching(self):
         """apply_patch must NOT emit response.apply_patch_call.searching."""
-        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        events, _ = self._run_apply_patch()
         names = [et for et, _ in events]
         self.assertNotIn("response.apply_patch_call.searching", names,
                          "apply_patch must not emit response.apply_patch_call.searching")
 
     def test_ap1_no_sub_lifecycle_completed(self):
         """apply_patch must NOT emit response.apply_patch_call.completed."""
-        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        events, _ = self._run_apply_patch()
         names = [et for et, _ in events]
         self.assertNotIn("response.apply_patch_call.completed", names,
                          "apply_patch must not emit response.apply_patch_call.completed")
 
     def test_ap1_no_web_search_call_events(self):
         """apply_patch must NOT emit any response.web_search_call.* events."""
-        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        events, _ = self._run_apply_patch()
         web_search_events = [et for et, _ in events if (et or "").startswith("response.web_search_call.")]
         self.assertEqual(web_search_events, [],
                          "apply_patch must not emit any response.web_search_call.* events")
 
     def test_ap1_no_function_call_arguments_delta(self):
         """apply_patch must NOT forward response.function_call_arguments.delta to Codex."""
-        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        events, _ = self._run_apply_patch()
         names = [et for et, _ in events]
         self.assertNotIn("response.function_call_arguments.delta", names,
                          "function_call_arguments.delta must be suppressed; raw args could leak patch body")
 
     def test_ap1_no_function_call_arguments_done(self):
         """apply_patch must NOT forward response.function_call_arguments.done to Codex."""
-        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        events, _ = self._run_apply_patch()
         names = [et for et, _ in events]
         self.assertNotIn("response.function_call_arguments.done", names,
                          "function_call_arguments.done must be suppressed")
 
     def test_ap1_no_raw_function_call_item_type(self):
         """Codex must not see output_item.* with type=function_call for apply_patch."""
-        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        events, _ = self._run_apply_patch()
         raw_calls = [
             p.get("item", {})
             for et, p in events
@@ -5354,9 +5079,9 @@ class ApplyPatchLifecycleContractTests(unittest.TestCase):
         self.assertEqual(raw_calls, [],
                          "apply_patch must not appear as a raw function_call item to Codex")
 
-    def test_ap1_custom_mode_item_type_is_custom_tool_call(self):
-        """In custom mode, output_item.added must carry a custom_tool_call item for apply_patch."""
-        events, stream_text = self._run_apply_patch(apply_patch_output_style="custom")
+    def test_ap1_item_type_is_custom_tool_call(self):
+        """output_item.added must carry a custom_tool_call item for apply_patch."""
+        events, stream_text = self._run_apply_patch()
         added_items = [
             p.get("item", {})
             for et, p in events
@@ -5367,15 +5092,14 @@ class ApplyPatchLifecycleContractTests(unittest.TestCase):
                 item.get("type") == "custom_tool_call" and item.get("name") == "apply_patch"
                 for item in added_items
             ),
-            "custom mode apply_patch must emit a custom_tool_call item (not apply_patch_call)",
+            "apply_patch must emit a custom_tool_call item",
         )
-        # Also confirm no apply_patch_call appears in custom mode
         self.assertNotIn('"type": "apply_patch_call"', stream_text,
-                         "custom mode must not emit apply_patch_call items")
+                         "apply_patch must never emit apply_patch_call items")
 
-    def test_ap1_custom_mode_no_sub_lifecycle_events(self):
-        """Custom mode apply_patch must also not emit any sub-lifecycle events."""
-        events, _ = self._run_apply_patch(apply_patch_output_style="custom")
+    def test_ap1_no_sub_lifecycle_events_comprehensive(self):
+        """apply_patch must not emit any sub-lifecycle events."""
+        events, _ = self._run_apply_patch()
         names = [et for et, _ in events]
         for forbidden in (
             "response.apply_patch_call.in_progress",
@@ -5386,28 +5110,29 @@ class ApplyPatchLifecycleContractTests(unittest.TestCase):
             "response.web_search_call.completed",
         ):
             self.assertNotIn(forbidden, names,
-                             f"custom mode apply_patch must not emit {forbidden}")
+                             f"apply_patch must not emit {forbidden}")
 
     def test_ap1_response_completed_always_emitted(self):
         """response.completed must always be the terminal event after apply_patch."""
-        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        events, _ = self._run_apply_patch()
         names = [et for et, _ in events]
         self.assertIn("response.completed", names,
                       "response.completed must be emitted after apply_patch")
 
-    def test_ap1_native_item_status_progression(self):
+    def test_ap1_item_status_progression(self):
         """output_item.added must carry status=in_progress; output_item.done must carry status=completed."""
-        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        events, _ = self._run_apply_patch()
         patch_items_by_event = [
             (et, payload["item"])
             for et, payload in events
             if et in {"response.output_item.added", "response.output_item.done"}
             and isinstance(payload, dict)
             and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "apply_patch_call"
+            and payload["item"].get("type") == "custom_tool_call"
+            and payload["item"].get("name") == "apply_patch"
         ]
         self.assertEqual(len(patch_items_by_event), 2,
-                         "must have one output_item.added and one output_item.done for apply_patch_call")
+                         "must have one output_item.added and one output_item.done for custom_tool_call apply_patch")
         added_et, added_item = patch_items_by_event[0]
         done_et, done_item = patch_items_by_event[1]
         self.assertEqual(added_et, "response.output_item.added")
@@ -5417,79 +5142,26 @@ class ApplyPatchLifecycleContractTests(unittest.TestCase):
         self.assertEqual(done_item["status"], "completed",
                          "output_item.done must carry status=completed")
 
-    def test_ap1_native_call_id_preserved(self):
-        """call_id from the upstream function_call must be preserved in the apply_patch_call item."""
-        events, _ = self._run_apply_patch(apply_patch_output_style="native")
-        patch_items = [
-            payload["item"]
-            for et, payload in events
-            if et in {"response.output_item.added", "response.output_item.done"}
-            and isinstance(payload, dict)
-            and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "apply_patch_call"
-        ]
-        self.assertEqual(len(patch_items), 2)
-        # _apply_patch_call_stream uses call_id="call_patch"
-        for item in patch_items:
-            self.assertEqual(item.get("call_id"), "call_patch",
-                             "call_id from upstream function_call must be preserved in apply_patch_call")
 
-    def test_ap1_native_operation_field_present(self):
-        """apply_patch_call items must carry an operation field with at least type and path."""
-        events, _ = self._run_apply_patch(apply_patch_output_style="native")
-        patch_items = [
-            payload["item"]
-            for et, payload in events
-            if et in {"response.output_item.added", "response.output_item.done"}
-            and isinstance(payload, dict)
-            and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "apply_patch_call"
-        ]
-        self.assertEqual(len(patch_items), 2)
-        for item in patch_items:
-            operation = item.get("operation")
-            self.assertIsInstance(operation, dict,
-                                  "apply_patch_call item must carry an operation dict")
-            self.assertIn("type", operation, "operation must have a 'type' field")
-            self.assertIn("path", operation, "operation must have a 'path' field")
 
-    def test_ap1_native_diff_no_unified_diff_headers(self):
-        """Unified diff file headers (--- a/..., +++ b/...) must not appear in operation.diff."""
-        events, _ = self._run_apply_patch(apply_patch_output_style="native")
-        patch_items = [
-            payload["item"]
-            for et, payload in events
-            if et == "response.output_item.added"
-            and isinstance(payload, dict)
-            and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "apply_patch_call"
-        ]
-        self.assertEqual(len(patch_items), 1)
-        diff = patch_items[0].get("operation", {}).get("diff", "")
-        self.assertNotIn("--- a/", diff,
-                         "unified diff '--- a/' header must be stripped from operation.diff")
-        self.assertNotIn("+++ b/", diff,
-                         "unified diff '+++ b/' header must be stripped from operation.diff")
-        self.assertNotIn("diff --git", diff,
-                         "unified diff 'diff --git' header must be stripped from operation.diff")
 
     def test_ap1_no_file_search_call_events(self):
         """apply_patch must NOT emit any response.file_search_call.* events."""
-        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        events, _ = self._run_apply_patch()
         file_search_events = [et for et, _ in events if (et or "").startswith("response.file_search_call.")]
         self.assertEqual(file_search_events, [],
                          "apply_patch must not emit any response.file_search_call.* events")
 
     def test_ap1_no_code_interpreter_call_events(self):
         """apply_patch must NOT emit any response.code_interpreter_call.* events."""
-        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        events, _ = self._run_apply_patch()
         ci_events = [et for et, _ in events if (et or "").startswith("response.code_interpreter_call.")]
         self.assertEqual(ci_events, [],
                          "apply_patch must not emit any response.code_interpreter_call.* events")
 
-    def test_ap1_custom_mode_begin_patch_in_input(self):
-        """Custom mode apply_patch item must carry a *** Begin Patch envelope in its input field."""
-        events, _ = self._run_apply_patch(apply_patch_output_style="custom")
+    def test_ap1_begin_patch_in_input(self):
+        """apply_patch custom_tool_call item must carry a *** Begin Patch envelope in its input field."""
+        events, _ = self._run_apply_patch()
         custom_items = [
             payload["item"]
             for et, payload in events
@@ -5503,9 +5175,9 @@ class ApplyPatchLifecycleContractTests(unittest.TestCase):
         self.assertIn("*** Begin Patch", custom_items[0].get("input", ""),
                       "custom_tool_call apply_patch input must contain a *** Begin Patch envelope")
 
-    def test_ap1_custom_mode_call_id_preserved(self):
+    def test_ap1_call_id_preserved(self):
         """call_id must be preserved in custom_tool_call apply_patch items."""
-        events, _ = self._run_apply_patch(apply_patch_output_style="custom")
+        events, _ = self._run_apply_patch()
         custom_items = [
             payload["item"]
             for et, payload in events
@@ -5531,7 +5203,7 @@ class ApplyPatchStreamingAP2Tests(unittest.TestCase):
     - Does NOT echo raw malformed argument content in model-visible output or telemetry.
     - Preserves call_id in the injected error item.
     - On success (sibling-patch promotion, legacy envelope): emits coercion_succeeded
-      and emits the apply_patch_call item without error injection.
+      and emits the custom_tool_call apply_patch item without error injection.
 
     Source: docs/apply-patch-codex-lifecycle-audit.md §5.3, §6.2, §7.2, §8 G-AP2.
     """
@@ -5620,12 +5292,11 @@ class ApplyPatchStreamingAP2Tests(unittest.TestCase):
                         "content": [{"type": "input_text", "text": "test"}]}],
             "tools": [{"type": "apply_patch"}],
         }
-        runtime.run(body, "test-model.gguf", "native")
+        runtime.run(body, "test-model.gguf")
         stream_text = b"".join(chunks).decode("utf-8")
         return requests, stream_text, telemetry.recent()
 
-    def _run_success_scenario(self, arguments: str, call_id: str = "call_ap2_ok",
-                               apply_patch_output_style: str = "native"):
+    def _run_success_scenario(self, arguments: str, call_id: str = "call_ap2_ok"):
         """Run the streaming runtime with a well-formed apply_patch call (success path)."""
         requests = []
         telemetry = TelemetryBus()
@@ -5652,7 +5323,7 @@ class ApplyPatchStreamingAP2Tests(unittest.TestCase):
                         "content": [{"type": "input_text", "text": "test"}]}],
             "tools": [{"type": "apply_patch"}],
         }
-        runtime.run(body, "test-model.gguf", apply_patch_output_style)
+        runtime.run(body, "test-model.gguf")
         stream_text = b"".join(chunks).decode("utf-8")
         return requests, stream_text, telemetry.recent()
 
@@ -5708,17 +5379,17 @@ class ApplyPatchStreamingAP2Tests(unittest.TestCase):
         requests, stream_text, _ = self._run_error_scenario(raw_args, call_id)
 
         events = _parse_sse_events(stream_text)
-        # No apply_patch_call item type should appear (the failed call never becomes public)
-        apply_patch_call_items = [
+        # No apply_patch output item should appear (the failed call never becomes public)
+        unexpected_items = [
             payload.get("item", {})
             for et, payload in events
             if et in {"response.output_item.added", "response.output_item.done"}
             and isinstance(payload, dict)
             and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "apply_patch_call"
+            and payload["item"].get("name") == "apply_patch"
         ]
-        self.assertEqual(apply_patch_call_items, [],
-                         "no apply_patch_call item must be emitted to Codex when coercion fails")
+        self.assertEqual(unexpected_items, [],
+                         "no apply_patch output item must be emitted to Codex when coercion fails")
 
     def test_ap2_missing_diff_injects_specific_repair_text(self):
         """Missing diff on update_file: error names 'diff' and 'update_file'; call_id preserved; path not echoed."""
@@ -5799,10 +5470,10 @@ class ApplyPatchStreamingAP2Tests(unittest.TestCase):
         self.assertTrue(len(coercion_failed) >= 1)
         self.assertEqual((coercion_failed[0].get("payload") or {}).get("source"), "tool_adapter")
 
-    # ── Tests 8-9: Success path (coercion succeeds → apply_patch_call emitted) ──
+    # ── Tests 8-9: Success path (coercion succeeds → custom_tool_call emitted) ──
 
     def test_ap2_sibling_patch_promotion_succeeds_no_coercion_failed(self):
-        """Sibling patch promotion: coercion_succeeded emitted; apply_patch_call item present; no error hop."""
+        """Sibling patch promotion: coercion_succeeded emitted; custom_tool_call item present; no error hop."""
         call_id = "call_sibling_promo"
         args = json.dumps({
             "operation": {"type": "create_file", "path": "hello.txt"},
@@ -5814,7 +5485,7 @@ class ApplyPatchStreamingAP2Tests(unittest.TestCase):
         self.assertEqual(len(requests), 1,
                          "sibling patch promotion must not trigger a second hop")
 
-        # apply_patch_call item present in stream
+        # custom_tool_call apply_patch item present in stream
         events = _parse_sse_events(stream_text)
         patch_items = [
             payload["item"]
@@ -5822,14 +5493,16 @@ class ApplyPatchStreamingAP2Tests(unittest.TestCase):
             if et in {"response.output_item.added", "response.output_item.done"}
             and isinstance(payload, dict)
             and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "apply_patch_call"
+            and payload["item"].get("type") == "custom_tool_call"
+            and payload["item"].get("name") == "apply_patch"
         ]
         self.assertEqual(len(patch_items), 2,
                          "sibling patch promotion must produce output_item.added + output_item.done")
-        # operation.diff comes from the sibling patch field
-        op = patch_items[0].get("operation", {})
-        self.assertEqual(op.get("diff"), "hello\n",
-                         "operation.diff must contain the promoted sibling patch content")
+        # patch envelope contains the promoted sibling patch content
+        self.assertIn("*** Begin Patch", patch_items[0].get("input", ""),
+                      "custom_tool_call apply_patch input must contain a *** Begin Patch envelope")
+        self.assertIn("hello", patch_items[0].get("input", ""),
+                      "custom_tool_call apply_patch input must contain the sibling patch content")
 
         # coercion_succeeded present; coercion_failed absent
         succeeded = [e for e in telemetry_events if e.get("type") == "coercion_succeeded"]
@@ -5841,7 +5514,7 @@ class ApplyPatchStreamingAP2Tests(unittest.TestCase):
         self.assertEqual((succeeded[0].get("payload") or {}).get("source"), "tool_adapter")
 
     def test_ap2_legacy_begin_patch_envelope_succeeds(self):
-        """Legacy *** Begin Patch envelope without top-level path: coercion_succeeded; operation extracted."""
+        """Legacy *** Begin Patch envelope: coercion_succeeded; custom_tool_call emitted."""
         call_id = "call_legacy_env"
         args = json.dumps({
             "patch": "*** Begin Patch\n*** Add File: hello.txt\n+hello\n*** End Patch\n",
@@ -5859,15 +5532,16 @@ class ApplyPatchStreamingAP2Tests(unittest.TestCase):
             if et in {"response.output_item.added", "response.output_item.done"}
             and isinstance(payload, dict)
             and isinstance(payload.get("item"), dict)
-            and payload["item"].get("type") == "apply_patch_call"
+            and payload["item"].get("type") == "custom_tool_call"
+            and payload["item"].get("name") == "apply_patch"
         ]
         self.assertEqual(len(patch_items), 2,
                          "legacy envelope must produce output_item.added + output_item.done")
-        op = patch_items[0].get("operation", {})
-        self.assertEqual(op.get("type"), "create_file",
-                         "operation.type must be create_file (extracted from *** Add File: header)")
-        self.assertEqual(op.get("path"), "hello.txt",
-                         "operation.path must be extracted from *** Add File: header")
+        # Patch envelope re-emits the full *** Begin Patch content
+        self.assertIn("*** Begin Patch", patch_items[0].get("input", ""),
+                      "custom_tool_call apply_patch input must contain *** Begin Patch")
+        self.assertIn("*** Add File: hello.txt", patch_items[0].get("input", ""),
+                      "custom_tool_call apply_patch input must contain *** Add File: header")
 
         # coercion_succeeded present; no coercion_failed
         succeeded = [e for e in telemetry_events if e.get("type") == "coercion_succeeded"]
@@ -6035,7 +5709,7 @@ class ApplyPatchStreamingAP3Tests(unittest.TestCase):
                         "content": [{"type": "input_text", "text": "test"}]}],
             "tools": [{"type": "apply_patch"}],
         }
-        runtime.run(body, "test-model.gguf", "native")
+        runtime.run(body, "test-model.gguf")
         return telemetry.recent()
 
     def _run_apply_patch_success(self, arguments: str, call_id: str = "call_ap3_ok"):
@@ -6065,7 +5739,7 @@ class ApplyPatchStreamingAP3Tests(unittest.TestCase):
                         "content": [{"type": "input_text", "text": "test"}]}],
             "tools": [{"type": "apply_patch"}],
         }
-        runtime.run(body, "test-model.gguf", "native")
+        runtime.run(body, "test-model.gguf")
         return telemetry.recent()
 
     def _run_web_search_scenario(self, call_id: str = "call_ap3_ws"):
@@ -6105,7 +5779,7 @@ class ApplyPatchStreamingAP3Tests(unittest.TestCase):
                         "content": [{"type": "input_text", "text": "test"}]}],
             "tools": [{"type": "web_search"}],
         }
-        runtime.run(body, "test-model.gguf", "native")
+        runtime.run(body, "test-model.gguf")
         return telemetry.recent()
 
     # ── AP3-A: coercion_failed includes "apply_patch" nested dict ─────────────

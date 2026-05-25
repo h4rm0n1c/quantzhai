@@ -1,0 +1,39 @@
+# .understandignore — patterns for files/dirs to exclude from analysis
+# Syntax: same as .gitignore (globs, # comments, ! negation, trailing / for dirs)
+# Use ! prefix to force-include something excluded by defaults.
+#
+# Built-in defaults (always excluded unless negated):
+#   node_modules/, .git/, dist/, build/, obj/, *.lock, *.min.js, etc.
+#
+
+# --- Excluded for focused proxy/ analysis ---
+docs/
+tests/
+scripts/
+config/
+prompts/
+AGENTS.md
+CLAUDE.md
+README.md
+.env.example
+.codex
+.claude/
+
+# --- From .gitignore ---
+.env
+var/
+logs/
+captures/
+run/
+*.pid
+*.sqlite
+*.sqlite-*
+.pytest_cache/
+*.pyc
+models/
+*.gguf
+*.safetensors
+latest-*.json
+latest-*.log
+latest-*.txt
+*.bak*

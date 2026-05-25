@@ -1,0 +1,4091 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "quantzhai",
+    "languages": [
+      "python",
+      "markdown"
+    ],
+    "frameworks": [],
+    "description": "A local Codex stack for running Qwen through a turboquant llama.cpp server with an OpenAI-compatible proxy that bridges Codex CLI to a local llama.cpp backend.",
+    "analyzedAt": "2026-05-23T16:40:36.340936Z",
+    "gitCommitHash": "b2ba14ed89478423c8458763c0a544b1099c2097"
+  },
+  "nodes": [
+    {
+      "id": "document:GEMINI.md",
+      "type": "document",
+      "name": "GEMINI.md",
+      "filePath": "GEMINI.md",
+      "summary": "Agent behaviour guide for the QuantZhai project covering development rules, git workflow, debugging doctrine, telemetry conventions, BrainCase memory constraints, and proxy policy authority. Mirrors CLAUDE.md and serves as the Gemini-targeted equivalent.",
+      "tags": [
+        "documentation",
+        "agent-rules",
+        "development",
+        "configuration"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:proxy/quantzhai_proxy.py",
+      "type": "file",
+      "name": "quantzhai_proxy.py",
+      "filePath": "proxy/quantzhai_proxy.py",
+      "summary": "Main proxy server entry point implementing an OpenAI-compatible HTTP handler (ProxyHandler) that bridges Codex CLI Responses API calls to a local llama.cpp backend, handling SSE streaming, telemetry emission, rate-limit headers, compaction, and model routing.",
+      "tags": [
+        "entry-point",
+        "api-handler",
+        "middleware",
+        "service"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Uses Python's built-in http.server.BaseHTTPRequestHandler for the HTTP layer; all proxy logic is class-level state on ProxyHandler with class-level singleton modules injected at startup."
+    },
+    {
+      "id": "class:proxy/quantzhai_proxy.py:ProxyHandler",
+      "type": "class",
+      "name": "ProxyHandler",
+      "filePath": "proxy/quantzhai_proxy.py",
+      "lineRange": [
+        111,
+        569
+      ],
+      "summary": "HTTP request handler bridging Codex CLI to the local llama.cpp backend; dispatches GET/POST to Ollama-compatible, Responses API, and telemetry SSE endpoints, and performs SSE stream transformation with telemetry injection.",
+      "tags": [
+        "api-handler",
+        "middleware",
+        "service",
+        "event-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/quantzhai_proxy.py:main",
+      "type": "function",
+      "name": "main",
+      "filePath": "proxy/quantzhai_proxy.py",
+      "lineRange": [
+        581,
+        794
+      ],
+      "summary": "Initialises all proxy subsystems (model catalog, router, backend, telemetry, request tracker, recovery jobs, braincase tools), configures the HTTP server with optional TLS, and runs the serve loop.",
+      "tags": [
+        "entry-point",
+        "service",
+        "singleton"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_active_requests.py",
+      "type": "file",
+      "name": "qz_active_requests.py",
+      "filePath": "proxy/qz_active_requests.py",
+      "summary": "Provides a thread-safe counter and snapshot tracker for in-flight proxy requests, used by the control plane and recovery subsystems to gate admission and monitor concurrency.",
+      "tags": [
+        "utility",
+        "middleware",
+        "service"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:proxy/qz_active_requests.py:ActiveRequestTracker",
+      "type": "class",
+      "name": "ActiveRequestTracker",
+      "filePath": "proxy/qz_active_requests.py",
+      "lineRange": [
+        23,
+        96
+      ],
+      "summary": "Thread-safe counter tracking in-flight HTTP requests with begin/finish lifecycle methods and a snapshot view for monitoring.",
+      "tags": [
+        "utility",
+        "middleware"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:proxy/qz_backend_manager.py",
+      "type": "file",
+      "name": "qz_backend_manager.py",
+      "filePath": "proxy/qz_backend_manager.py",
+      "summary": "Manages the lifecycle of the llama.cpp backend process (or Docker container), including start/stop/restart, GPU offload detection, autostart-with-delay, health checking, and Docker command construction.",
+      "tags": [
+        "service",
+        "middleware",
+        "infrastructure"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:proxy/qz_backend_manager.py:BackendManager",
+      "type": "class",
+      "name": "BackendManager",
+      "filePath": "proxy/qz_backend_manager.py",
+      "lineRange": [
+        172,
+        822
+      ],
+      "summary": "Manages start, stop, restart, and health monitoring of the llama.cpp backend process; builds Docker or native launch arguments and emits telemetry events on state transitions.",
+      "tags": [
+        "service",
+        "infrastructure",
+        "event-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:proxy/qz_backend_manager.py:BackendState",
+      "type": "class",
+      "name": "BackendState",
+      "filePath": "proxy/qz_backend_manager.py",
+      "lineRange": [
+        107,
+        165
+      ],
+      "summary": "Data container representing a backend process snapshot, including phase, PID, launch timestamps, model slug, and serialisation to dict.",
+      "tags": [
+        "data-model",
+        "service"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:proxy/qz_backend.py",
+      "type": "file",
+      "name": "qz_backend.py",
+      "filePath": "proxy/qz_backend.py",
+      "summary": "HTTP client for the llama.cpp backend API supporting model load/unload, health polling, JSON GET/POST helpers, Docker container control, and synchronous wait-for-ready polling.",
+      "tags": [
+        "service",
+        "api-handler",
+        "utility"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:proxy/qz_backend.py:BackendClient",
+      "type": "class",
+      "name": "BackendClient",
+      "filePath": "proxy/qz_backend.py",
+      "lineRange": [
+        20,
+        452
+      ],
+      "summary": "HTTP client for the llama.cpp server exposing model load, unload, health check, model listing, and Docker container management operations.",
+      "tags": [
+        "service",
+        "api-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_braincase_db.py",
+      "type": "file",
+      "name": "qz_braincase_db.py",
+      "filePath": "proxy/qz_braincase_db.py",
+      "summary": "Low-level SQLite storage layer for the BrainCase memory system, providing schema initialisation, CRUD operations for state records and source refs, full-text search via FTS5, and FTS index management.",
+      "tags": [
+        "data-model",
+        "service",
+        "database"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Uses SQLite FTS5 for full-text search with a fallback to exact/tag search when FTS is unavailable; schema versioning via SQLite user_version pragma."
+    },
+    {
+      "id": "class:proxy/qz_braincase_db.py:BrainCaseDB",
+      "type": "class",
+      "name": "BrainCaseDB",
+      "filePath": "proxy/qz_braincase_db.py",
+      "lineRange": [
+        64,
+        1077
+      ],
+      "summary": "SQLite-backed storage engine for BrainCase memory records: manages state record lifecycle (put, get, list, promote, retire, supersede), source ref provenance, FTS5 full-text search, and schema migrations.",
+      "tags": [
+        "data-model",
+        "database",
+        "service"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_braincase_render.py",
+      "type": "file",
+      "name": "qz_braincase_render.py",
+      "filePath": "proxy/qz_braincase_render.py",
+      "summary": "Renders BrainCase memory records into compact text packets for injection into LLM context, with budget-aware packing, eligibility filtering, and structured render-packet envelopes.",
+      "tags": [
+        "utility",
+        "serialization",
+        "service"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:proxy/qz_braincase_render.py:render_pack",
+      "type": "function",
+      "name": "render_pack",
+      "filePath": "proxy/qz_braincase_render.py",
+      "lineRange": [
+        155,
+        290
+      ],
+      "summary": "Packs eligible BrainCase records into a character-budget-limited render blob, ordering by tier priority and truncating to fit the context window.",
+      "tags": [
+        "utility",
+        "serialization"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_braincase_render.py:braincase_render_packet",
+      "type": "function",
+      "name": "braincase_render_packet",
+      "filePath": "proxy/qz_braincase_render.py",
+      "lineRange": [
+        297,
+        367
+      ],
+      "summary": "Assembles the full render packet dict that wraps the packed memory lines with metadata for injection into a tool result.",
+      "tags": [
+        "utility",
+        "serialization"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:proxy/qz_braincase_retention.py",
+      "type": "file",
+      "name": "qz_braincase_retention.py",
+      "filePath": "proxy/qz_braincase_retention.py",
+      "summary": "Implements retention policy evaluation for BrainCase records, including duration parsing, rule matching, and per-record retention decisions covering expiry, archival, and deletion.",
+      "tags": [
+        "service",
+        "utility",
+        "data-model"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:proxy/qz_braincase_retention.py:retention_decision_for_record",
+      "type": "function",
+      "name": "retention_decision_for_record",
+      "filePath": "proxy/qz_braincase_retention.py",
+      "lineRange": [
+        195,
+        378
+      ],
+      "summary": "Evaluates all retention rules against a state record and returns the final retention decision (keep, archive, delete) with the matching rule details.",
+      "tags": [
+        "utility",
+        "service"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_braincase_review.py",
+      "type": "file",
+      "name": "qz_braincase_review.py",
+      "filePath": "proxy/qz_braincase_review.py",
+      "summary": "Provides operator-facing review operations for BrainCase candidate records: listing, inspection, promotion, rejection, retention reporting, and pruning.",
+      "tags": [
+        "service",
+        "utility",
+        "api-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_braincase_review.py:promote_candidate_record",
+      "type": "function",
+      "name": "promote_candidate_record",
+      "filePath": "proxy/qz_braincase_review.py",
+      "lineRange": [
+        135,
+        257
+      ],
+      "summary": "Promotes a candidate BrainCase record to active status after running dedup, conflict, and retention checks.",
+      "tags": [
+        "service",
+        "utility"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_braincase_review.py:apply_retention_prune",
+      "type": "function",
+      "name": "apply_retention_prune",
+      "filePath": "proxy/qz_braincase_review.py",
+      "lineRange": [
+        438,
+        599
+      ],
+      "summary": "Applies retention policy decisions across all eligible BrainCase records, retiring or deleting records that have exceeded their configured retention window.",
+      "tags": [
+        "service",
+        "utility"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_braincase_tools.py",
+      "type": "file",
+      "name": "qz_braincase_tools.py",
+      "filePath": "proxy/qz_braincase_tools.py",
+      "summary": "Implements the BrainCase tool-plane: tool definitions, executor classes, render/recall/write-candidate tool handlers, and harness-injection logic for appending BrainCase tools to outgoing Codex request bodies.",
+      "tags": [
+        "service",
+        "api-handler",
+        "middleware",
+        "event-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_braincase_tools.py:braincase_recall_packet",
+      "type": "function",
+      "name": "braincase_recall_packet",
+      "filePath": "proxy/qz_braincase_tools.py",
+      "lineRange": [
+        575,
+        694
+      ],
+      "summary": "Executes a BrainCase recall query across configured memory tiers and assembles the result packet for the model.",
+      "tags": [
+        "service",
+        "utility"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_braincase_tools.py:braincase_write_candidate_tool",
+      "type": "function",
+      "name": "braincase_write_candidate_tool",
+      "filePath": "proxy/qz_braincase_tools.py",
+      "lineRange": [
+        838,
+        1003
+      ],
+      "summary": "Handles the write-candidate tool call: validates arguments, resolves scope, runs dedup/conflict checks, and writes or updates a candidate state record via braincase_write.",
+      "tags": [
+        "service",
+        "validation",
+        "api-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_braincase_tools.py:inject_braincase_tools_to_body",
+      "type": "function",
+      "name": "inject_braincase_tools_to_body",
+      "filePath": "proxy/qz_braincase_tools.py",
+      "lineRange": [
+        1209,
+        1232
+      ],
+      "summary": "Injects BrainCase tool definitions into an outgoing request body if BrainCase tools are enabled and the request lacks existing tool definitions.",
+      "tags": [
+        "middleware",
+        "api-handler"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:proxy/qz_braincase_tools.py:_BraincaseBaseExecutor",
+      "type": "class",
+      "name": "_BraincaseBaseExecutor",
+      "filePath": "proxy/qz_braincase_tools.py",
+      "lineRange": [
+        1010,
+        1100
+      ],
+      "summary": "Base class for BrainCase proxy tool executors, providing DB access, argument parsing, call-ID matching, and result packaging.",
+      "tags": [
+        "service",
+        "factory"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:proxy/qz_braincase_write.py",
+      "type": "file",
+      "name": "qz_braincase_write.py",
+      "filePath": "proxy/qz_braincase_write.py",
+      "summary": "Implements the write path for BrainCase state records: scope resolution, dedup checking, conflict detection, source linking, and the actual write and update operations against BrainCaseDB.",
+      "tags": [
+        "service",
+        "data-model",
+        "validation"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_braincase_write.py:braincase_write_state_record",
+      "type": "function",
+      "name": "braincase_write_state_record",
+      "filePath": "proxy/qz_braincase_write.py",
+      "lineRange": [
+        323,
+        416
+      ],
+      "summary": "Writes a new BrainCase state record to the DB after running scope resolution, dedup, and conflict checks.",
+      "tags": [
+        "service",
+        "data-model"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_braincase_write.py:braincase_update_state_record",
+      "type": "function",
+      "name": "braincase_update_state_record",
+      "filePath": "proxy/qz_braincase_write.py",
+      "lineRange": [
+        419,
+        511
+      ],
+      "summary": "Updates an existing BrainCase state record, re-running conflict and dedup checks and superseding the prior record.",
+      "tags": [
+        "service",
+        "data-model"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_codex_catalog.py",
+      "type": "file",
+      "name": "qz_codex_catalog.py",
+      "filePath": "proxy/qz_codex_catalog.py",
+      "summary": "Generates the Codex-visible model catalog JSON from the proxy's model catalog and prompt policy, translating internal profiles into the Codex-compatible model manifest format.",
+      "tags": [
+        "service",
+        "serialization",
+        "api-handler"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:proxy/qz_codex_catalog.py:build_live_model",
+      "type": "function",
+      "name": "build_live_model",
+      "filePath": "proxy/qz_codex_catalog.py",
+      "lineRange": [
+        209,
+        271
+      ],
+      "summary": "Builds a single Codex model entry dict from a catalog profile, applying overrides for context length, reasoning level, and other Codex-visible fields.",
+      "tags": [
+        "factory",
+        "serialization"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:proxy/qz_codex_catalog.py:generate",
+      "type": "function",
+      "name": "generate",
+      "filePath": "proxy/qz_codex_catalog.py",
+      "lineRange": [
+        278,
+        303
+      ],
+      "summary": "Generates the full Codex model catalog manifest by iterating all catalog profiles and writing the output JSON file.",
+      "tags": [
+        "entry-point",
+        "service"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:proxy/qz_codex_client_config.py",
+      "type": "file",
+      "name": "qz_codex_client_config.py",
+      "filePath": "proxy/qz_codex_client_config.py",
+      "summary": "Generates the Codex client configuration payload (base URL, catalog path, freshness metadata) served to Codex on startup.",
+      "tags": [
+        "service",
+        "configuration",
+        "api-handler"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:proxy/qz_codex_metadata.py",
+      "type": "file",
+      "name": "qz_codex_metadata.py",
+      "filePath": "proxy/qz_codex_metadata.py",
+      "summary": "Extracts and normalises request metadata from Codex HTTP headers and request bodies, including session/window identity, workspace resolution, turn metadata, memory domain config, and full request context assembly.",
+      "tags": [
+        "utility",
+        "middleware",
+        "data-model"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_codex_metadata.py:extract_codex_identity",
+      "type": "function",
+      "name": "extract_codex_identity",
+      "filePath": "proxy/qz_codex_metadata.py",
+      "lineRange": [
+        285,
+        402
+      ],
+      "summary": "Extracts a structured CodexIdentity from HTTP headers, resolving session, window, workspace, and remote URL fields.",
+      "tags": [
+        "utility",
+        "middleware"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_codex_metadata.py:extract_codex_request_context",
+      "type": "function",
+      "name": "extract_codex_request_context",
+      "filePath": "proxy/qz_codex_metadata.py",
+      "lineRange": [
+        551,
+        581
+      ],
+      "summary": "Assembles a complete CodexRequestContext by combining identity, turn metadata, body metadata, and memory domain resolution into a single context object.",
+      "tags": [
+        "utility",
+        "middleware"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:proxy/qz_config_report.py",
+      "type": "file",
+      "name": "qz_config_report.py",
+      "filePath": "proxy/qz_config_report.py",
+      "summary": "Produces a comprehensive effective configuration report for the proxy, covering prompt files, model overrides, memory domain config, search policy, and operational store health.",
+      "tags": [
+        "service",
+        "configuration",
+        "utility"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_config_report.py:effective_config_payload",
+      "type": "function",
+      "name": "effective_config_payload",
+      "filePath": "proxy/qz_config_report.py",
+      "lineRange": [
+        476,
+        709
+      ],
+      "summary": "Assembles the full effective configuration report dict including prompt stack, model overrides, memory domains, search policy, and operational store status.",
+      "tags": [
+        "service",
+        "configuration"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_control_plane.py",
+      "type": "file",
+      "name": "qz_control_plane.py",
+      "filePath": "proxy/qz_control_plane.py",
+      "summary": "Builds the proxy control-plane status payload aggregating backend state, model status, recovery state, active requests, VRAM snapshot, and model catalog into a unified /qz/status response.",
+      "tags": [
+        "service",
+        "api-handler",
+        "middleware"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_control_plane.py:build_control_plane_status",
+      "type": "function",
+      "name": "build_control_plane_status",
+      "filePath": "proxy/qz_control_plane.py",
+      "lineRange": [
+        125,
+        431
+      ],
+      "summary": "Aggregates backend manager, model status, recovery, VRAM, and catalog information into the full /qz/status JSON payload.",
+      "tags": [
+        "service",
+        "api-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_feedback.py",
+      "type": "file",
+      "name": "qz_feedback.py",
+      "filePath": "proxy/qz_feedback.py",
+      "summary": "Defines feedback visibility, channel, and signal-decision enums used to classify and render advisory messages and coercion errors back to the Codex client.",
+      "tags": [
+        "utility",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:proxy/qz_file_signal.py",
+      "type": "file",
+      "name": "qz_file_signal.py",
+      "filePath": "proxy/qz_file_signal.py",
+      "summary": "Detects repeated file-read patterns in tool call sequences and emits advisory signals when the same file is read multiple times without intervening writes, helping identify stuck loops.",
+      "tags": [
+        "utility",
+        "event-handler",
+        "middleware"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:proxy/qz_file_signal.py:repeated_read_signal",
+      "type": "function",
+      "name": "repeated_read_signal",
+      "filePath": "proxy/qz_file_signal.py",
+      "lineRange": [
+        224,
+        279
+      ],
+      "summary": "Evaluates accumulated tool call history against a repeated-read state and returns a RepeatedReadDecision indicating whether an advisory should be emitted.",
+      "tags": [
+        "utility",
+        "event-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_model_catalog.py",
+      "type": "file",
+      "name": "qz_model_catalog.py",
+      "filePath": "proxy/qz_model_catalog.py",
+      "summary": "Core model catalog: scans the var/models directory for GGUF symlinks, reads GGUF metadata headers, applies manifest/override layering, and exposes a ModelCatalog class for profile resolution, selection, and serialisation.",
+      "tags": [
+        "service",
+        "data-model",
+        "configuration"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Parses GGUF binary file headers directly in Python to extract model name, architecture, and context length without external dependencies."
+    },
+    {
+      "id": "class:proxy/qz_model_catalog.py:ModelCatalog",
+      "type": "class",
+      "name": "ModelCatalog",
+      "filePath": "proxy/qz_model_catalog.py",
+      "lineRange": [
+        829,
+        942
+      ],
+      "summary": "Central model catalog object managing profile scanning, refresh, selection, resolution, and serialisation to Codex/Ollama API formats.",
+      "tags": [
+        "service",
+        "data-model",
+        "singleton"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_model_catalog.py:build_entry",
+      "type": "function",
+      "name": "build_entry",
+      "filePath": "proxy/qz_model_catalog.py",
+      "lineRange": [
+        522,
+        591
+      ],
+      "summary": "Builds a fully-merged catalog entry for a model profile by combining GGUF metadata, manifest declarations, and runtime overrides.",
+      "tags": [
+        "factory",
+        "data-model"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_model_catalog.py:scan_models",
+      "type": "function",
+      "name": "scan_models",
+      "filePath": "proxy/qz_model_catalog.py",
+      "lineRange": [
+        683,
+        699
+      ],
+      "summary": "Scans the model inventory directory for valid GGUF symlinks and returns a list of discovered profile paths.",
+      "tags": [
+        "utility",
+        "service"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:proxy/qz_model_load_failure.py",
+      "type": "file",
+      "name": "qz_model_load_failure.py",
+      "filePath": "proxy/qz_model_load_failure.py",
+      "summary": "Classifies model load failures from backend log output into structured failure categories (OOM, timeout, corrupt file, etc.) for telemetry and error reporting.",
+      "tags": [
+        "utility",
+        "data-model",
+        "service"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:proxy/qz_model_router.py",
+      "type": "file",
+      "name": "qz_model_router.py",
+      "filePath": "proxy/qz_model_router.py",
+      "summary": "Central model routing layer: the ModelRouter class manages model selection, context length determination, backend model state reconciliation, load/unload orchestration, status snapshots, and Ollama-compatible API handler delegation.",
+      "tags": [
+        "service",
+        "middleware",
+        "api-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:proxy/qz_model_router.py:ModelRouter",
+      "type": "class",
+      "name": "ModelRouter",
+      "filePath": "proxy/qz_model_router.py",
+      "lineRange": [
+        83,
+        1418
+      ],
+      "summary": "Orchestrates model selection, context length resolution, backend model loading/unloading, runtime state persistence, and status reporting for the proxy.",
+      "tags": [
+        "service",
+        "middleware",
+        "singleton"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_model_state.py",
+      "type": "file",
+      "name": "qz_model_state.py",
+      "filePath": "proxy/qz_model_state.py",
+      "summary": "Persists and loads the model selection state (selected profile, context length, load success/failure timestamps) to/from a JSON file on disk, providing durable model state across proxy restarts.",
+      "tags": [
+        "data-model",
+        "service",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:proxy/qz_model_state.py:ModelState",
+      "type": "class",
+      "name": "ModelState",
+      "filePath": "proxy/qz_model_state.py",
+      "lineRange": [
+        65,
+        129
+      ],
+      "summary": "Data container for persisted model selection state, including profile identity, context length, and load success/failure history.",
+      "tags": [
+        "data-model"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:proxy/qz_model_status.py",
+      "type": "file",
+      "name": "qz_model_status.py",
+      "filePath": "proxy/qz_model_status.py",
+      "summary": "Derives and formats the model status block for the control plane, combining backend loaded-model state, backend manager phase, model selection state, and admission gating into a unified status payload with recommended recovery actions.",
+      "tags": [
+        "service",
+        "api-handler",
+        "utility"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_model_status.py:build_model_status",
+      "type": "function",
+      "name": "build_model_status",
+      "filePath": "proxy/qz_model_status.py",
+      "lineRange": [
+        278,
+        434
+      ],
+      "summary": "Assembles the full model status dict from backend, manager, and selection state, computing admission state and recommended recovery actions.",
+      "tags": [
+        "service",
+        "api-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_native_tool_output.py",
+      "type": "file",
+      "name": "qz_native_tool_output.py",
+      "filePath": "proxy/qz_native_tool_output.py",
+      "summary": "Classifies native Codex tool outputs by exit code and content, producing structured signal decisions and feedback for advisory rendering.",
+      "tags": [
+        "utility",
+        "middleware",
+        "event-handler"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:proxy/qz_operational_store.py",
+      "type": "file",
+      "name": "qz_operational_store.py",
+      "filePath": "proxy/qz_operational_store.py",
+      "summary": "SQLite-backed operational event and runtime-fact store for the proxy, recording startup events, runtime key-value facts, and providing a recent-events query for the config report.",
+      "tags": [
+        "service",
+        "database",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:proxy/qz_operational_store.py:OperationalStore",
+      "type": "class",
+      "name": "OperationalStore",
+      "filePath": "proxy/qz_operational_store.py",
+      "lineRange": [
+        85,
+        332
+      ],
+      "summary": "SQLite store for operational events and key-value runtime facts, with schema initialisation, safe-execute error handling, and a recent-events query.",
+      "tags": [
+        "service",
+        "database"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:proxy/qz_paths.py",
+      "type": "file",
+      "name": "qz_paths.py",
+      "filePath": "proxy/qz_paths.py",
+      "summary": "Central path resolver for the QuantZhai project, providing functions to locate the project root, var directory, model inventory, and Codex-generated config files.",
+      "tags": [
+        "utility",
+        "configuration"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:proxy/qz_prompt_policy.py",
+      "type": "file",
+      "name": "qz_prompt_policy.py",
+      "filePath": "proxy/qz_prompt_policy.py",
+      "summary": "Assembles the instruction stack sent to the LLM by loading base prompts, model overrides, turn harness definitions, and proxy-added instruction blocks according to manifest-driven prompt policy.",
+      "tags": [
+        "service",
+        "middleware",
+        "configuration"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_prompt_policy.py:assemble_instruction_stack",
+      "type": "function",
+      "name": "assemble_instruction_stack",
+      "filePath": "proxy/qz_prompt_policy.py",
+      "lineRange": [
+        405,
+        588
+      ],
+      "summary": "Builds the final ordered instruction list for an LLM request by merging base prompt blocks, profile overrides, and proxy-injected instruction blocks.",
+      "tags": [
+        "service",
+        "middleware"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_proxy_config.py",
+      "type": "file",
+      "name": "qz_proxy_config.py",
+      "filePath": "proxy/qz_proxy_config.py",
+      "summary": "Defines proxy API contract constants and helper data structures, including endpoint path constants and the api_contract_payload factory used to advertise supported API surface to Codex.",
+      "tags": [
+        "configuration",
+        "api-handler",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:proxy/qz_proxy_tools.py",
+      "type": "file",
+      "name": "qz_proxy_tools.py",
+      "filePath": "proxy/qz_proxy_tools.py",
+      "summary": "Implements the proxy-local tool registry and execution framework, providing ProxyLocalToolRegistry and associated executor classes that intercept, coerce, and execute tool calls (web search, braincase) before upstream or on behalf of Codex.",
+      "tags": [
+        "middleware",
+        "api-handler",
+        "service",
+        "event-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:proxy/qz_proxy_tools.py:ProxyLocalToolRegistry",
+      "type": "class",
+      "name": "ProxyLocalToolRegistry",
+      "filePath": "proxy/qz_proxy_tools.py",
+      "lineRange": [
+        83,
+        314
+      ],
+      "summary": "Central registry that routes and executes proxy-local tool calls, managing lifecycle events, continuation logic, and telemetry for all intercepted tools including web search and braincase.",
+      "tags": [
+        "middleware",
+        "service",
+        "event-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:proxy/qz_proxy_tools.py:WebSearchProxyToolExecutor",
+      "type": "class",
+      "name": "WebSearchProxyToolExecutor",
+      "filePath": "proxy/qz_proxy_tools.py",
+      "lineRange": [
+        50,
+        80
+      ],
+      "summary": "Proxy-local executor for web search tool calls, coercing arguments and dispatching to the WebSearchRuntime.",
+      "tags": [
+        "api-handler",
+        "service"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:proxy/qz_proxy_tools.py:ProxyLocalToolExecutor",
+      "type": "class",
+      "name": "ProxyLocalToolExecutor",
+      "filePath": "proxy/qz_proxy_tools.py",
+      "lineRange": [
+        32,
+        47
+      ],
+      "summary": "Abstract base for proxy-local tool executors defining the is_call, started_public_item, and execute interface.",
+      "tags": [
+        "middleware",
+        "api-handler"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:proxy/qz_proxy_tools.py:make_proxy_local_tool_registry",
+      "type": "function",
+      "name": "make_proxy_local_tool_registry",
+      "filePath": "proxy/qz_proxy_tools.py",
+      "lineRange": [
+        317,
+        334
+      ],
+      "summary": "Factory function that assembles a ProxyLocalToolRegistry from web_runtime and braincase db dependencies.",
+      "tags": [
+        "factory",
+        "service"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:proxy/qz_reasoning_policy.py",
+      "type": "file",
+      "name": "qz_reasoning_policy.py",
+      "filePath": "proxy/qz_reasoning_policy.py",
+      "summary": "Defines the reasoning policy layer for Qwen, mapping reasoning level strings (low/medium/high) to sampling parameters and thinking token budgets, and applying them to outgoing request bodies.",
+      "tags": [
+        "middleware",
+        "configuration",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:proxy/qz_reasoning_policy.py:apply_reasoning_policy",
+      "type": "function",
+      "name": "apply_reasoning_policy",
+      "filePath": "proxy/qz_reasoning_policy.py",
+      "lineRange": [
+        117,
+        148
+      ],
+      "summary": "Applies the resolved reasoning policy to a request body, setting sampling parameters and the thinking budget prefix.",
+      "tags": [
+        "middleware",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:proxy/qz_recovery_jobs.py",
+      "type": "file",
+      "name": "qz_recovery_jobs.py",
+      "filePath": "proxy/qz_recovery_jobs.py",
+      "summary": "Provides RecoveryJobStore, a thread-safe bounded in-memory store for tracking recovery job lifecycle states (pending, running, completed, failed) with timestamps.",
+      "tags": [
+        "service",
+        "utility",
+        "event-handler"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:proxy/qz_recovery_jobs.py:RecoveryJobStore",
+      "type": "class",
+      "name": "RecoveryJobStore",
+      "filePath": "proxy/qz_recovery_jobs.py",
+      "lineRange": [
+        25,
+        134
+      ],
+      "summary": "Thread-safe bounded store for recovery job records supporting create, mark_running, mark_completed, mark_failed, and snapshot operations.",
+      "tags": [
+        "service",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:proxy/qz_recovery_plan.py",
+      "type": "file",
+      "name": "qz_recovery_plan.py",
+      "filePath": "proxy/qz_recovery_plan.py",
+      "summary": "Implements the recovery plan builder that analyses current service status and operator action to produce an actionable plan dict with flags for catalog refresh, model selection, backend start/restart, and failure clearing.",
+      "tags": [
+        "service",
+        "middleware",
+        "utility"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_recovery_plan.py:build_recovery_plan",
+      "type": "function",
+      "name": "build_recovery_plan",
+      "filePath": "proxy/qz_recovery_plan.py",
+      "lineRange": [
+        221,
+        367
+      ],
+      "summary": "Evaluates service status, active requests, backoff state, and operator-requested action to produce a complete recovery plan dict with step flags and human-readable notes.",
+      "tags": [
+        "service",
+        "utility"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_recovery_state.py",
+      "type": "file",
+      "name": "qz_recovery_state.py",
+      "filePath": "proxy/qz_recovery_state.py",
+      "summary": "Defines RecoveryRuntimeState, which tracks per-action attempt counts, exponential backoff schedules, and manual hold flags for the backend recovery system.",
+      "tags": [
+        "service",
+        "utility",
+        "event-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:proxy/qz_recovery_state.py:RecoveryRuntimeState",
+      "type": "class",
+      "name": "RecoveryRuntimeState",
+      "filePath": "proxy/qz_recovery_state.py",
+      "lineRange": [
+        50,
+        241
+      ],
+      "summary": "Thread-safe runtime state manager for backend recovery tracking attempt counters, backoff windows, manual hold flags, and last-error records per recovery action.",
+      "tags": [
+        "service",
+        "utility"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_recovery_status.py",
+      "type": "file",
+      "name": "qz_recovery_status.py",
+      "filePath": "proxy/qz_recovery_status.py",
+      "summary": "Builds the recovery status payload from service status, runtime state, active requests, and job store for use in the /qz/status and recovery API responses.",
+      "tags": [
+        "service",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:proxy/qz_recovery_status.py:build_recovery_status",
+      "type": "function",
+      "name": "build_recovery_status",
+      "filePath": "proxy/qz_recovery_status.py",
+      "lineRange": [
+        46,
+        155
+      ],
+      "summary": "Assembles a structured recovery status dict from service_status, runtime_state, active_requests, and recovery_jobs, mapping action codes to human labels.",
+      "tags": [
+        "service",
+        "utility"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_request_normalization.py",
+      "type": "file",
+      "name": "qz_request_normalization.py",
+      "filePath": "proxy/qz_request_normalization.py",
+      "summary": "Transforms and normalizes OpenAI Responses API request bodies for Qwen/llama.cpp consumption, including content cleaning, think-tag stripping, turn-harness injection, message canonicalization, and braincase tool injection.",
+      "tags": [
+        "middleware",
+        "serialization",
+        "utility"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_request_normalization.py:normalize_responses_input_for_qwen",
+      "type": "function",
+      "name": "normalize_responses_input_for_qwen",
+      "filePath": "proxy/qz_request_normalization.py",
+      "lineRange": [
+        291,
+        397
+      ],
+      "summary": "Top-level normalization entry point that cleans input items, applies tool history replay filtering, strips/injects turn harnesses, and injects braincase tools into the request body.",
+      "tags": [
+        "middleware",
+        "serialization"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_request_normalization.py:clean_content",
+      "type": "function",
+      "name": "clean_content",
+      "filePath": "proxy/qz_request_normalization.py",
+      "lineRange": [
+        50,
+        89
+      ],
+      "summary": "Strips reasoning think-tags, redundant numbered starts, and stale output markers from text content to reduce context noise for the model.",
+      "tags": [
+        "utility",
+        "serialization"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:proxy/qz_request_normalization.py:_canonicalize_message",
+      "type": "function",
+      "name": "_canonicalize_message",
+      "filePath": "proxy/qz_request_normalization.py",
+      "lineRange": [
+        168,
+        220
+      ],
+      "summary": "Converts a Responses API message item into a normalized flat text representation, handling multi-part content blocks, function outputs, and refusals.",
+      "tags": [
+        "serialization",
+        "utility"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_request_router.py",
+      "type": "file",
+      "name": "qz_request_router.py",
+      "filePath": "proxy/qz_request_router.py",
+      "summary": "Core HTTP request router that handles all proxy endpoints including Responses API streaming and JSON calls, model management, recovery triggering, Codex catalog refresh, VRAM status, and telemetry; the central orchestration layer of the proxy.",
+      "tags": [
+        "api-handler",
+        "middleware",
+        "service",
+        "entry-point"
+      ],
+      "complexity": "complex",
+      "languageNotes": "RequestRouter is a 3000+ line mega-class handling the full proxy surface; consider the recovery, model, and streaming sections as distinct sub-concerns."
+    },
+    {
+      "id": "class:proxy/qz_request_router.py:RequestRouter",
+      "type": "class",
+      "name": "RequestRouter",
+      "filePath": "proxy/qz_request_router.py",
+      "lineRange": [
+        275,
+        3363
+      ],
+      "summary": "Main orchestration class implementing handle_get and handle_post routing for all proxy endpoints, including Responses API, recovery, model select/reload, VRAM snapshots, and Codex catalog management.",
+      "tags": [
+        "api-handler",
+        "service",
+        "middleware"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_responses_error.py",
+      "type": "file",
+      "name": "qz_responses_error.py",
+      "filePath": "proxy/qz_responses_error.py",
+      "summary": "Provides error payload builders for the OpenAI Responses API, normalizing error codes, detecting deprecated aliases, and constructing standards-compliant error response dicts.",
+      "tags": [
+        "api-handler",
+        "utility",
+        "serialization"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:proxy/qz_responses_error.py:build_responses_error_payload",
+      "type": "function",
+      "name": "build_responses_error_payload",
+      "filePath": "proxy/qz_responses_error.py",
+      "lineRange": [
+        43,
+        140
+      ],
+      "summary": "Constructs a complete Responses API error payload dict from error code, message, and optional metadata, handling normalization and nested error structure.",
+      "tags": [
+        "api-handler",
+        "serialization"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_responses_stream.py",
+      "type": "file",
+      "name": "qz_responses_stream.py",
+      "filePath": "proxy/qz_responses_stream.py",
+      "summary": "Implements ResponsesStreamRuntime, the central SSE streaming engine that reads upstream llama.cpp streams, transforms events, manages hop state, executes proxy-local tools, handles timeouts/watchdog, and delivers correctly-formed Codex-visible SSE output.",
+      "tags": [
+        "middleware",
+        "service",
+        "event-handler",
+        "api-handler"
+      ],
+      "complexity": "complex",
+      "languageNotes": "ResponsesStreamRuntime is the most critical runtime class in the proxy; it coordinates tool execution, stream repair, and telemetry within a single streaming session."
+    },
+    {
+      "id": "class:proxy/qz_responses_stream.py:ResponsesStreamRuntime",
+      "type": "class",
+      "name": "ResponsesStreamRuntime",
+      "filePath": "proxy/qz_responses_stream.py",
+      "lineRange": [
+        592,
+        2433
+      ],
+      "summary": "Stateful SSE streaming runtime that transforms upstream llama.cpp events into Responses API-compatible chunks, dispatches proxy-local tool calls, manages hop budgets, triggers watchdog timeouts, and emits telemetry.",
+      "tags": [
+        "middleware",
+        "event-handler",
+        "service"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:proxy/qz_responses_stream.py:StreamHopState",
+      "type": "class",
+      "name": "StreamHopState",
+      "filePath": "proxy/qz_responses_stream.py",
+      "lineRange": [
+        92,
+        172
+      ],
+      "summary": "Tracks per-hop streaming state including output text accumulation, tool call buffers, reasoning token counts, and public item visibility flags.",
+      "tags": [
+        "event-handler",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:proxy/qz_responses_stream.py:StreamRunState",
+      "type": "class",
+      "name": "StreamRunState",
+      "filePath": "proxy/qz_responses_stream.py",
+      "lineRange": [
+        219,
+        251
+      ],
+      "summary": "Tracks cross-hop run-level streaming state including total hops, visible output presence, and aggregate reasoning character count.",
+      "tags": [
+        "event-handler",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:proxy/qz_responses.py",
+      "type": "file",
+      "name": "qz_responses.py",
+      "filePath": "proxy/qz_responses.py",
+      "summary": "Implements the non-streaming Responses API path including local compaction logic, tool output normalization, and the _build_local_compaction_response builder for context-window-safe conversation compaction.",
+      "tags": [
+        "api-handler",
+        "middleware",
+        "serialization"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_responses.py:_build_local_compaction_response",
+      "type": "function",
+      "name": "_build_local_compaction_response",
+      "filePath": "proxy/qz_responses.py",
+      "lineRange": [
+        349,
+        444
+      ],
+      "summary": "Builds a synthetic Responses API response that compacts prior conversation items into a single summary message when the context window is approaching capacity.",
+      "tags": [
+        "utility",
+        "serialization"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_runtime_io.py",
+      "type": "file",
+      "name": "qz_runtime_io.py",
+      "filePath": "proxy/qz_runtime_io.py",
+      "summary": "Provides capture I/O helpers for writing request/response payloads to var/captures/, managing capture modes (off/latest/full/request-scoped), and reading runtime state files.",
+      "tags": [
+        "utility",
+        "service"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:proxy/qz_runtime_io.py:CapturePolicy",
+      "type": "class",
+      "name": "CapturePolicy",
+      "filePath": "proxy/qz_runtime_io.py",
+      "lineRange": [
+        29,
+        45
+      ],
+      "summary": "Dataclass holding resolved capture configuration flags (enabled, scoped, latest, full) with an as_dict serializer.",
+      "tags": [
+        "configuration",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:proxy/qz_search_config.py",
+      "type": "file",
+      "name": "qz_search_config.py",
+      "filePath": "proxy/qz_search_config.py",
+      "summary": "Loads and merges web search configuration from JSON files (base config + host config), providing a SearchConfigResult with effective settings for search providers, budgets, and profiles.",
+      "tags": [
+        "configuration",
+        "service"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:proxy/qz_search_config.py:SearchConfigResult",
+      "type": "class",
+      "name": "SearchConfigResult",
+      "filePath": "proxy/qz_search_config.py",
+      "lineRange": [
+        68,
+        104
+      ],
+      "summary": "Holds the merged search configuration with accessor for effective_summary string representation.",
+      "tags": [
+        "configuration",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:proxy/qz_search_config.py:load_search_config",
+      "type": "function",
+      "name": "load_search_config",
+      "filePath": "proxy/qz_search_config.py",
+      "lineRange": [
+        130,
+        261
+      ],
+      "summary": "Loads base and host-specific search config JSON files, deep-merges them, and returns a SearchConfigResult with all resolved settings.",
+      "tags": [
+        "configuration",
+        "utility"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_search_policy.py",
+      "type": "file",
+      "name": "qz_search_policy.py",
+      "filePath": "proxy/qz_search_policy.py",
+      "summary": "Resolves the active web search policy profile from config overrides and policy files, returning a SearchPolicySelection with the effective provider path and metadata.",
+      "tags": [
+        "configuration",
+        "middleware",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:proxy/qz_search_policy.py:SearchPolicySelection",
+      "type": "class",
+      "name": "SearchPolicySelection",
+      "filePath": "proxy/qz_search_policy.py",
+      "lineRange": [
+        8,
+        26
+      ],
+      "summary": "Dataclass holding the resolved search policy selection including provider path, profile name, and metadata dict.",
+      "tags": [
+        "configuration",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:proxy/qz_service_status.py",
+      "type": "file",
+      "name": "qz_service_status.py",
+      "filePath": "proxy/qz_service_status.py",
+      "summary": "Builds the comprehensive service status dict from proxy state, catalog, backend, model, admission, recovery, and operator action components, used by the /qz/status endpoint.",
+      "tags": [
+        "service",
+        "utility",
+        "api-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_service_status.py:build_service_status",
+      "type": "function",
+      "name": "build_service_status",
+      "filePath": "proxy/qz_service_status.py",
+      "lineRange": [
+        175,
+        222
+      ],
+      "summary": "Assembles the full service status payload by combining proxy, catalog, backend, model, admission, recovery, operator action, and reasoning stream format components.",
+      "tags": [
+        "service",
+        "utility"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_sse.py",
+      "type": "file",
+      "name": "qz_sse.py",
+      "filePath": "proxy/qz_sse.py",
+      "summary": "Transforms raw llama.cpp SSE events into OpenAI Responses API-compatible SSE blocks, normalizing usage fields, stripping or converting reasoning items, and generating response stream events.",
+      "tags": [
+        "middleware",
+        "serialization",
+        "event-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_sse.py:transform_sse_event",
+      "type": "function",
+      "name": "transform_sse_event",
+      "filePath": "proxy/qz_sse.py",
+      "lineRange": [
+        108,
+        200
+      ],
+      "summary": "Transforms a single upstream SSE event dict into one or more Responses API-compatible event dicts, handling reasoning visibility, tool call state, and usage normalization.",
+      "tags": [
+        "middleware",
+        "serialization"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_sse.py:make_response_stream_events",
+      "type": "function",
+      "name": "make_response_stream_events",
+      "filePath": "proxy/qz_sse.py",
+      "lineRange": [
+        203,
+        546
+      ],
+      "summary": "Generates the complete sequence of Responses API SSE events for a streaming response including response.created, output item events, deltas, and completion events.",
+      "tags": [
+        "api-handler",
+        "serialization"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_stream_terminal.py",
+      "type": "file",
+      "name": "qz_stream_terminal.py",
+      "filePath": "proxy/qz_stream_terminal.py",
+      "summary": "Classifies stream terminal events and accumulates stream observations, providing classify_stream_terminal to determine finish reason, stop reason, and health from a terminal SSE event.",
+      "tags": [
+        "middleware",
+        "event-handler",
+        "utility"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_stream_terminal.py:classify_stream_terminal",
+      "type": "function",
+      "name": "classify_stream_terminal",
+      "filePath": "proxy/qz_stream_terminal.py",
+      "lineRange": [
+        52,
+        200
+      ],
+      "summary": "Classifies a stream terminal event into finish reason, stop reason, content filter, and reasoning/output flags for telemetry and decision-making.",
+      "tags": [
+        "middleware",
+        "utility"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:proxy/qz_stream_terminal.py:StreamObservation",
+      "type": "class",
+      "name": "StreamObservation",
+      "filePath": "proxy/qz_stream_terminal.py",
+      "lineRange": [
+        22,
+        49
+      ],
+      "summary": "Dataclass holding a classified stream observation with finish reason, stop reason, health, output text presence, and reasoning presence flags.",
+      "tags": [
+        "utility",
+        "event-handler"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:proxy/qz_stream_watchdog.py",
+      "type": "file",
+      "name": "qz_stream_watchdog.py",
+      "filePath": "proxy/qz_stream_watchdog.py",
+      "summary": "Implements stream timeout watchdog logic, providing StreamWatchdogState to track event timing and functions to decide when no-output or terminal timeouts should fire.",
+      "tags": [
+        "middleware",
+        "event-handler",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:proxy/qz_stream_watchdog.py:StreamWatchdogState",
+      "type": "class",
+      "name": "StreamWatchdogState",
+      "filePath": "proxy/qz_stream_watchdog.py",
+      "lineRange": [
+        35,
+        79
+      ],
+      "summary": "Tracks stream timing checkpoints (first event, visible output, terminal) to support no-output and terminal timeout decisions.",
+      "tags": [
+        "event-handler",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:proxy/qz_streaming.py",
+      "type": "file",
+      "name": "qz_streaming.py",
+      "filePath": "proxy/qz_streaming.py",
+      "summary": "Low-level SSE parsing and tool-call streaming primitives including parse_sse_event_lines, StreamedFunctionCallAssembler for accumulating partial function call chunks, and lifecycle event builders.",
+      "tags": [
+        "middleware",
+        "utility",
+        "event-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:proxy/qz_streaming.py:StreamedFunctionCallAssembler",
+      "type": "class",
+      "name": "StreamedFunctionCallAssembler",
+      "filePath": "proxy/qz_streaming.py",
+      "lineRange": [
+        166,
+        264
+      ],
+      "summary": "Accumulates streaming function call delta events into complete tool call objects, keyed by call ID and index.",
+      "tags": [
+        "utility",
+        "event-handler"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:proxy/qz_telemetry.py",
+      "type": "file",
+      "name": "qz_telemetry.py",
+      "filePath": "proxy/qz_telemetry.py",
+      "summary": "Implements TelemetryBus, a thread-safe in-process event bus for request telemetry, stream event timing, subscriber fan-out, and runtime state reporting used by monitors and status endpoints.",
+      "tags": [
+        "service",
+        "utility",
+        "event-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:proxy/qz_telemetry.py:TelemetryBus",
+      "type": "class",
+      "name": "TelemetryBus",
+      "filePath": "proxy/qz_telemetry.py",
+      "lineRange": [
+        98,
+        361
+      ],
+      "summary": "Central telemetry event bus with emit, subscribe, recent events ring buffer, and runtime payload assembly for stream timing and request summaries.",
+      "tags": [
+        "service",
+        "event-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:proxy/qz_telemetry.py:RequestTelemetryEmitter",
+      "type": "class",
+      "name": "RequestTelemetryEmitter",
+      "filePath": "proxy/qz_telemetry.py",
+      "lineRange": [
+        53,
+        95
+      ],
+      "summary": "Per-request telemetry emitter that scopes events to a request_id and delegates to TelemetryBus.",
+      "tags": [
+        "service",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:proxy/qz_tool_apply_patch.py",
+      "type": "file",
+      "name": "qz_tool_apply_patch.py",
+      "filePath": "proxy/qz_tool_apply_patch.py",
+      "summary": "Implements the apply_patch tool adapter and normalization pipeline, translating between Codex apply_patch calls and llama.cpp function_call format, including patch parsing, coercion, and output normalization.",
+      "tags": [
+        "middleware",
+        "serialization",
+        "api-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:proxy/qz_tool_apply_patch.py:ApplyPatchToolAdapter",
+      "type": "class",
+      "name": "ApplyPatchToolAdapter",
+      "filePath": "proxy/qz_tool_apply_patch.py",
+      "lineRange": [
+        568,
+        640
+      ],
+      "summary": "Tool adapter that translates apply_patch Codex calls to and from llama.cpp function call format, including coercion validation and output normalization.",
+      "tags": [
+        "middleware",
+        "serialization"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:proxy/qz_tool_apply_patch.py:_parse_apply_patch_arguments",
+      "type": "function",
+      "name": "_parse_apply_patch_arguments",
+      "filePath": "proxy/qz_tool_apply_patch.py",
+      "lineRange": [
+        119,
+        171
+      ],
+      "summary": "Parses apply_patch tool argument JSON, handling both native and custom envelope formats and extracting the patch operation.",
+      "tags": [
+        "utility",
+        "serialization"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_tool_apply_patch.py:normalize_apply_patch_output_for_codex",
+      "type": "function",
+      "name": "normalize_apply_patch_output_for_codex",
+      "filePath": "proxy/qz_tool_apply_patch.py",
+      "lineRange": [
+        646,
+        647
+      ],
+      "summary": "Top-level entry point for normalizing apply_patch tool output for Codex consumption.",
+      "tags": [
+        "utility",
+        "serialization"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:proxy/qz_tool_lifecycle.py",
+      "type": "file",
+      "name": "qz_tool_lifecycle.py",
+      "filePath": "proxy/qz_tool_lifecycle.py",
+      "summary": "Defines tool call lifecycle data structures (CompletedToolCallDecision, ToolContinuationResult, ToolHistoryReplayFilter, StreamToolCallState) and helpers for managing tool call state across streaming hops.",
+      "tags": [
+        "middleware",
+        "event-handler",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:proxy/qz_tool_lifecycle.py:StreamToolCallState",
+      "type": "class",
+      "name": "StreamToolCallState",
+      "filePath": "proxy/qz_tool_lifecycle.py",
+      "lineRange": [
+        125,
+        160
+      ],
+      "summary": "Tracks in-progress streaming tool call state for a single hop, observing events and detecting abort conditions.",
+      "tags": [
+        "event-handler",
+        "middleware"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:proxy/qz_tool_lifecycle.py:ToolHistoryReplayFilter",
+      "type": "class",
+      "name": "ToolHistoryReplayFilter",
+      "filePath": "proxy/qz_tool_lifecycle.py",
+      "lineRange": [
+        29,
+        61
+      ],
+      "summary": "Filters tool call history replay items to prevent duplicate tool outputs from being sent to the model on continuation hops.",
+      "tags": [
+        "middleware",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:proxy/qz_tool_request.py",
+      "type": "file",
+      "name": "qz_tool_request.py",
+      "filePath": "proxy/qz_tool_request.py",
+      "summary": "Normalizes tool request schemas for llama.cpp, including converting Codex tool definitions to function-call format and appending tool hints to system prompts.",
+      "tags": [
+        "middleware",
+        "serialization",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:proxy/qz_tool_request.py:normalize_tool_request_for_llamacpp",
+      "type": "function",
+      "name": "normalize_tool_request_for_llamacpp",
+      "filePath": "proxy/qz_tool_request.py",
+      "lineRange": [
+        74,
+        180
+      ],
+      "summary": "Converts Codex Responses API tool definitions and tool_choice into llama.cpp function-call format, handling apply_patch special cases and producing a normalization report.",
+      "tags": [
+        "middleware",
+        "serialization"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_tool_web.py",
+      "type": "file",
+      "name": "qz_tool_web.py",
+      "filePath": "proxy/qz_tool_web.py",
+      "summary": "Implements WebSearchRuntime and WebSearchToolAdapter, providing the full web search execution engine including SearXNG querying, page fetching, source trust scoring, result formatting, provider guidance, and budget management.",
+      "tags": [
+        "service",
+        "api-handler",
+        "middleware"
+      ],
+      "complexity": "complex",
+      "languageNotes": "WebSearchRuntime is the largest single class in the proxy layer; it owns provider routing, result annotation, and search profile enforcement including strict source enforcement."
+    },
+    {
+      "id": "class:proxy/qz_tool_web.py:WebSearchRuntime",
+      "type": "class",
+      "name": "WebSearchRuntime",
+      "filePath": "proxy/qz_tool_web.py",
+      "lineRange": [
+        1133,
+        2326
+      ],
+      "summary": "Full web search execution runtime that queries SearXNG, fetches pages, annotates sources, enforces search profiles and budget constraints, and formats results for Codex consumption.",
+      "tags": [
+        "service",
+        "api-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:proxy/qz_tool_web.py:WebSearchToolAdapter",
+      "type": "class",
+      "name": "WebSearchToolAdapter",
+      "filePath": "proxy/qz_tool_web.py",
+      "lineRange": [
+        37,
+        174
+      ],
+      "summary": "Tool adapter bridging the Codex web_search tool schema to the WebSearchRuntime, handling coercion, upstream tool definition, and output formatting.",
+      "tags": [
+        "middleware",
+        "serialization"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:proxy/qz_tool_web.py:build_web_search_capabilities",
+      "type": "function",
+      "name": "build_web_search_capabilities",
+      "filePath": "proxy/qz_tool_web.py",
+      "lineRange": [
+        850,
+        1130
+      ],
+      "summary": "Builds the web search capabilities descriptor for the status endpoint, describing available engines, profiles, budgets, and source trust configuration.",
+      "tags": [
+        "service",
+        "utility"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:proxy/qz_tools.py",
+      "type": "file",
+      "name": "qz_tools.py",
+      "filePath": "proxy/qz_tools.py",
+      "summary": "Defines the core tool infrastructure types (ToolLifecycleSpec, ToolCoercionResult, ToolAdapter, ToolRegistry) and synthesis helpers used across all tool adapters in the proxy.",
+      "tags": [
+        "middleware",
+        "type-definition",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:proxy/qz_tools.py:ToolRegistry",
+      "type": "class",
+      "name": "ToolRegistry",
+      "filePath": "proxy/qz_tools.py",
+      "lineRange": [
+        134,
+        210
+      ],
+      "summary": "Manages a set of ToolAdapters providing lookup by name, normalization, coercion, input translation, and output translation for all registered tools.",
+      "tags": [
+        "middleware",
+        "service"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:proxy/qz_tools.py:ToolAdapter",
+      "type": "class",
+      "name": "ToolAdapter",
+      "filePath": "proxy/qz_tools.py",
+      "lineRange": [
+        102,
+        130
+      ],
+      "summary": "Abstract base class defining the tool adapter interface: accepts_tool, to_upstream_tool, normalize_tool_choice, input_to_upstream, output_to_codex, and coerce.",
+      "tags": [
+        "middleware",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:proxy/qz_vram_snapshot.py",
+      "type": "file",
+      "name": "qz_vram_snapshot.py",
+      "filePath": "proxy/qz_vram_snapshot.py",
+      "summary": "Implements the VRAM and backend metrics snapshot system, probing llama.cpp slots/props endpoints, nvidia-smi GPU metrics, process-level memory, KV cache estimation, and assembling a comprehensive runtime snapshot for telemetry and status.",
+      "tags": [
+        "service",
+        "utility",
+        "monitoring"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Implements sophisticated KV cache byte estimation including quant dtype handling and formula_safe gating per the telemetry provenance doctrine."
+    },
+    {
+      "id": "function:proxy/qz_vram_snapshot.py:build_vram_snapshot",
+      "type": "function",
+      "name": "build_vram_snapshot",
+      "filePath": "proxy/qz_vram_snapshot.py",
+      "lineRange": [
+        1671,
+        1731
+      ],
+      "summary": "Public entry point that assembles a complete VRAM and backend metrics snapshot, coordinating GPU probing, llama.cpp metrics, and KV cache estimation.",
+      "tags": [
+        "service",
+        "utility"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_vram_snapshot.py:_assemble_snapshot",
+      "type": "function",
+      "name": "_assemble_snapshot",
+      "filePath": "proxy/qz_vram_snapshot.py",
+      "lineRange": [
+        1197,
+        1664
+      ],
+      "summary": "Internal snapshot assembly function that integrates all collected metrics into a structured snapshot dict with provenance fields.",
+      "tags": [
+        "service",
+        "utility"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:proxy/qz_vram_snapshot.py:_estimate_kv_cache_bytes",
+      "type": "function",
+      "name": "_estimate_kv_cache_bytes",
+      "filePath": "proxy/qz_vram_snapshot.py",
+      "lineRange": [
+        1048,
+        1194
+      ],
+      "summary": "Estimates KV cache memory consumption from model architecture, quant dtype, context length, and layer counts; gates formula_safe on known dtype resolution.",
+      "tags": [
+        "utility",
+        "monitoring"
+      ],
+      "complexity": "complex"
+    }
+  ],
+  "edges": [
+    {
+      "source": "document:GEMINI.md",
+      "target": "file:proxy/quantzhai_proxy.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "class:proxy/quantzhai_proxy.py:ProxyHandler",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "class:proxy/quantzhai_proxy.py:ProxyHandler",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "function:proxy/quantzhai_proxy.py:main",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "function:proxy/quantzhai_proxy.py:main",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "file:proxy/qz_backend.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "file:proxy/qz_proxy_config.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "file:proxy/qz_model_catalog.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "file:proxy/qz_model_router.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "file:proxy/qz_request_router.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "file:proxy/qz_responses.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "file:proxy/qz_responses_stream.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "file:proxy/qz_sse.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "file:proxy/qz_streaming.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "file:proxy/qz_telemetry.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "file:proxy/qz_recovery_state.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "file:proxy/qz_active_requests.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "file:proxy/qz_recovery_jobs.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "file:proxy/qz_tool_web.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "file:proxy/qz_runtime_io.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "file:proxy/qz_search_config.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "file:proxy/qz_backend_manager.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/quantzhai_proxy.py",
+      "target": "file:proxy/qz_model_state.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_active_requests.py",
+      "target": "class:proxy/qz_active_requests.py:ActiveRequestTracker",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_active_requests.py",
+      "target": "class:proxy/qz_active_requests.py:ActiveRequestTracker",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_backend_manager.py",
+      "target": "class:proxy/qz_backend_manager.py:BackendManager",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_backend_manager.py",
+      "target": "class:proxy/qz_backend_manager.py:BackendManager",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_backend_manager.py",
+      "target": "class:proxy/qz_backend_manager.py:BackendState",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_backend_manager.py",
+      "target": "class:proxy/qz_backend_manager.py:BackendState",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_backend.py",
+      "target": "class:proxy/qz_backend.py:BackendClient",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_backend.py",
+      "target": "class:proxy/qz_backend.py:BackendClient",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_braincase_db.py",
+      "target": "class:proxy/qz_braincase_db.py:BrainCaseDB",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_braincase_db.py",
+      "target": "class:proxy/qz_braincase_db.py:BrainCaseDB",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_braincase_render.py",
+      "target": "function:proxy/qz_braincase_render.py:render_pack",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_braincase_render.py",
+      "target": "function:proxy/qz_braincase_render.py:render_pack",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_braincase_render.py",
+      "target": "function:proxy/qz_braincase_render.py:braincase_render_packet",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_braincase_render.py",
+      "target": "function:proxy/qz_braincase_render.py:braincase_render_packet",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_braincase_retention.py",
+      "target": "function:proxy/qz_braincase_retention.py:retention_decision_for_record",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_braincase_retention.py",
+      "target": "function:proxy/qz_braincase_retention.py:retention_decision_for_record",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_braincase_review.py",
+      "target": "function:proxy/qz_braincase_review.py:promote_candidate_record",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_braincase_review.py",
+      "target": "function:proxy/qz_braincase_review.py:promote_candidate_record",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_braincase_review.py",
+      "target": "function:proxy/qz_braincase_review.py:apply_retention_prune",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_braincase_review.py",
+      "target": "function:proxy/qz_braincase_review.py:apply_retention_prune",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_braincase_review.py",
+      "target": "file:proxy/qz_braincase_write.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_braincase_review.py",
+      "target": "file:proxy/qz_braincase_retention.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_braincase_tools.py",
+      "target": "function:proxy/qz_braincase_tools.py:braincase_recall_packet",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_braincase_tools.py",
+      "target": "function:proxy/qz_braincase_tools.py:braincase_recall_packet",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_braincase_tools.py",
+      "target": "function:proxy/qz_braincase_tools.py:braincase_write_candidate_tool",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_braincase_tools.py",
+      "target": "function:proxy/qz_braincase_tools.py:braincase_write_candidate_tool",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_braincase_tools.py",
+      "target": "function:proxy/qz_braincase_tools.py:inject_braincase_tools_to_body",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_braincase_tools.py",
+      "target": "function:proxy/qz_braincase_tools.py:inject_braincase_tools_to_body",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_braincase_tools.py",
+      "target": "class:proxy/qz_braincase_tools.py:_BraincaseBaseExecutor",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_braincase_tools.py",
+      "target": "file:proxy/qz_tools.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_braincase_tools.py",
+      "target": "file:proxy/qz_tool_lifecycle.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_braincase_tools.py",
+      "target": "file:proxy/qz_braincase_render.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_braincase_tools.py",
+      "target": "file:proxy/qz_braincase_write.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_braincase_tools.py",
+      "target": "file:proxy/qz_braincase_db.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_braincase_write.py",
+      "target": "function:proxy/qz_braincase_write.py:braincase_write_state_record",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_braincase_write.py",
+      "target": "function:proxy/qz_braincase_write.py:braincase_write_state_record",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_braincase_write.py",
+      "target": "function:proxy/qz_braincase_write.py:braincase_update_state_record",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_braincase_write.py",
+      "target": "function:proxy/qz_braincase_write.py:braincase_update_state_record",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_braincase_write.py",
+      "target": "file:proxy/qz_braincase_db.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_codex_catalog.py",
+      "target": "function:proxy/qz_codex_catalog.py:build_live_model",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_codex_catalog.py",
+      "target": "function:proxy/qz_codex_catalog.py:build_live_model",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_codex_catalog.py",
+      "target": "function:proxy/qz_codex_catalog.py:generate",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_codex_catalog.py",
+      "target": "function:proxy/qz_codex_catalog.py:generate",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_codex_catalog.py",
+      "target": "file:proxy/qz_model_catalog.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_codex_catalog.py",
+      "target": "file:proxy/qz_prompt_policy.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_codex_client_config.py",
+      "target": "file:proxy/qz_paths.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_codex_metadata.py",
+      "target": "function:proxy/qz_codex_metadata.py:extract_codex_identity",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_codex_metadata.py",
+      "target": "function:proxy/qz_codex_metadata.py:extract_codex_identity",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_codex_metadata.py",
+      "target": "function:proxy/qz_codex_metadata.py:extract_codex_request_context",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_codex_metadata.py",
+      "target": "function:proxy/qz_codex_metadata.py:extract_codex_request_context",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_config_report.py",
+      "target": "function:proxy/qz_config_report.py:effective_config_payload",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_config_report.py",
+      "target": "function:proxy/qz_config_report.py:effective_config_payload",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_config_report.py",
+      "target": "file:proxy/qz_paths.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_config_report.py",
+      "target": "file:proxy/qz_runtime_io.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_config_report.py",
+      "target": "file:proxy/qz_operational_store.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_config_report.py",
+      "target": "file:proxy/qz_search_config.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_control_plane.py",
+      "target": "function:proxy/qz_control_plane.py:build_control_plane_status",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_control_plane.py",
+      "target": "function:proxy/qz_control_plane.py:build_control_plane_status",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_control_plane.py",
+      "target": "file:proxy/qz_paths.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_control_plane.py",
+      "target": "file:proxy/qz_service_status.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_control_plane.py",
+      "target": "file:proxy/qz_recovery_status.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_control_plane.py",
+      "target": "file:proxy/qz_recovery_state.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_control_plane.py",
+      "target": "file:proxy/qz_active_requests.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_control_plane.py",
+      "target": "file:proxy/qz_recovery_jobs.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_control_plane.py",
+      "target": "file:proxy/qz_vram_snapshot.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_control_plane.py",
+      "target": "file:proxy/qz_model_status.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_control_plane.py",
+      "target": "file:proxy/qz_model_catalog.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_model_catalog.py",
+      "target": "class:proxy/qz_model_catalog.py:ModelCatalog",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_model_catalog.py",
+      "target": "class:proxy/qz_model_catalog.py:ModelCatalog",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_model_catalog.py",
+      "target": "function:proxy/qz_model_catalog.py:build_entry",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_model_catalog.py",
+      "target": "function:proxy/qz_model_catalog.py:build_entry",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_model_catalog.py",
+      "target": "function:proxy/qz_model_catalog.py:scan_models",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_model_catalog.py",
+      "target": "function:proxy/qz_model_catalog.py:scan_models",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_model_catalog.py",
+      "target": "file:proxy/qz_paths.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_model_catalog.py",
+      "target": "file:proxy/qz_reasoning_policy.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_model_catalog.py",
+      "target": "file:proxy/qz_model_state.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_model_router.py",
+      "target": "class:proxy/qz_model_router.py:ModelRouter",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_model_router.py",
+      "target": "class:proxy/qz_model_router.py:ModelRouter",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_model_router.py",
+      "target": "file:proxy/qz_reasoning_policy.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_model_router.py",
+      "target": "file:proxy/qz_prompt_policy.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_model_router.py",
+      "target": "file:proxy/qz_runtime_io.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_model_router.py",
+      "target": "file:proxy/qz_vram_snapshot.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_model_router.py",
+      "target": "file:proxy/qz_model_state.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_model_state.py",
+      "target": "class:proxy/qz_model_state.py:ModelState",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_model_state.py",
+      "target": "class:proxy/qz_model_state.py:ModelState",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_model_status.py",
+      "target": "function:proxy/qz_model_status.py:build_model_status",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_model_status.py",
+      "target": "function:proxy/qz_model_status.py:build_model_status",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_model_status.py",
+      "target": "file:proxy/qz_model_state.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_model_status.py",
+      "target": "file:proxy/qz_model_catalog.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_native_tool_output.py",
+      "target": "file:proxy/qz_feedback.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_operational_store.py",
+      "target": "class:proxy/qz_operational_store.py:OperationalStore",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_operational_store.py",
+      "target": "class:proxy/qz_operational_store.py:OperationalStore",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_prompt_policy.py",
+      "target": "function:proxy/qz_prompt_policy.py:assemble_instruction_stack",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_prompt_policy.py",
+      "target": "function:proxy/qz_prompt_policy.py:assemble_instruction_stack",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_prompt_policy.py",
+      "target": "file:proxy/qz_runtime_io.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_proxy_tools.py",
+      "target": "class:proxy/qz_proxy_tools.py:ProxyLocalToolRegistry",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_proxy_tools.py",
+      "target": "class:proxy/qz_proxy_tools.py:WebSearchProxyToolExecutor",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_proxy_tools.py",
+      "target": "class:proxy/qz_proxy_tools.py:ProxyLocalToolExecutor",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_proxy_tools.py",
+      "target": "function:proxy/qz_proxy_tools.py:make_proxy_local_tool_registry",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_proxy_tools.py",
+      "target": "class:proxy/qz_proxy_tools.py:ProxyLocalToolRegistry",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_proxy_tools.py",
+      "target": "class:proxy/qz_proxy_tools.py:WebSearchProxyToolExecutor",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_proxy_tools.py",
+      "target": "function:proxy/qz_proxy_tools.py:make_proxy_local_tool_registry",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_proxy_tools.py",
+      "target": "file:proxy/qz_tool_apply_patch.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_proxy_tools.py",
+      "target": "file:proxy/qz_tool_web.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_proxy_tools.py",
+      "target": "file:proxy/qz_tool_lifecycle.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_proxy_tools.py",
+      "target": "file:proxy/qz_streaming.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_proxy_tools.py",
+      "target": "file:proxy/qz_tools.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_proxy_tools.py",
+      "target": "file:proxy/qz_feedback.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_proxy_tools.py",
+      "target": "file:proxy/qz_file_signal.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_proxy_tools.py",
+      "target": "file:proxy/qz_braincase_tools.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_reasoning_policy.py",
+      "target": "function:proxy/qz_reasoning_policy.py:apply_reasoning_policy",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_reasoning_policy.py",
+      "target": "function:proxy/qz_reasoning_policy.py:apply_reasoning_policy",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_recovery_jobs.py",
+      "target": "class:proxy/qz_recovery_jobs.py:RecoveryJobStore",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_recovery_jobs.py",
+      "target": "class:proxy/qz_recovery_jobs.py:RecoveryJobStore",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_recovery_plan.py",
+      "target": "function:proxy/qz_recovery_plan.py:build_recovery_plan",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_recovery_plan.py",
+      "target": "function:proxy/qz_recovery_plan.py:build_recovery_plan",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_recovery_state.py",
+      "target": "class:proxy/qz_recovery_state.py:RecoveryRuntimeState",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_recovery_state.py",
+      "target": "class:proxy/qz_recovery_state.py:RecoveryRuntimeState",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_recovery_status.py",
+      "target": "function:proxy/qz_recovery_status.py:build_recovery_status",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_recovery_status.py",
+      "target": "function:proxy/qz_recovery_status.py:build_recovery_status",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_request_normalization.py",
+      "target": "function:proxy/qz_request_normalization.py:normalize_responses_input_for_qwen",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_request_normalization.py",
+      "target": "function:proxy/qz_request_normalization.py:clean_content",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_request_normalization.py",
+      "target": "function:proxy/qz_request_normalization.py:_canonicalize_message",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_request_normalization.py",
+      "target": "function:proxy/qz_request_normalization.py:normalize_responses_input_for_qwen",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_request_normalization.py",
+      "target": "function:proxy/qz_request_normalization.py:clean_content",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_request_normalization.py",
+      "target": "file:proxy/qz_prompt_policy.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_normalization.py",
+      "target": "file:proxy/qz_proxy_tools.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_normalization.py",
+      "target": "file:proxy/qz_tool_lifecycle.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_normalization.py",
+      "target": "file:proxy/qz_braincase_tools.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "class:proxy/qz_request_router.py:RequestRouter",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "class:proxy/qz_request_router.py:RequestRouter",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_codex_client_config.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_config_report.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_paths.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_telemetry.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_proxy_config.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_responses.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_tool_request.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_responses_stream.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_sse.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_proxy_tools.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_codex_metadata.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_native_tool_output.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_file_signal.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_responses_error.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_control_plane.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_service_status.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_recovery_status.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_recovery_plan.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_recovery_state.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_active_requests.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_recovery_jobs.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_vram_snapshot.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_search_policy.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_tool_web.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_runtime_io.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_model_status.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_model_state.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_model_catalog.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_model_load_failure.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_request_router.py",
+      "target": "file:proxy/qz_model_router.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_responses_error.py",
+      "target": "function:proxy/qz_responses_error.py:build_responses_error_payload",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_responses_error.py",
+      "target": "function:proxy/qz_responses_error.py:build_responses_error_payload",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_responses_stream.py",
+      "target": "class:proxy/qz_responses_stream.py:ResponsesStreamRuntime",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_responses_stream.py",
+      "target": "class:proxy/qz_responses_stream.py:StreamHopState",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_responses_stream.py",
+      "target": "class:proxy/qz_responses_stream.py:StreamRunState",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_responses_stream.py",
+      "target": "class:proxy/qz_responses_stream.py:ResponsesStreamRuntime",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_responses_stream.py",
+      "target": "file:proxy/qz_responses.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_responses_stream.py",
+      "target": "file:proxy/qz_runtime_io.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_responses_stream.py",
+      "target": "file:proxy/qz_sse.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_responses_stream.py",
+      "target": "file:proxy/qz_streaming.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_responses_stream.py",
+      "target": "file:proxy/qz_proxy_tools.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_responses_stream.py",
+      "target": "file:proxy/qz_tool_lifecycle.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_responses_stream.py",
+      "target": "file:proxy/qz_tool_web.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_responses_stream.py",
+      "target": "file:proxy/qz_telemetry.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_responses_stream.py",
+      "target": "file:proxy/qz_file_signal.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_responses_stream.py",
+      "target": "file:proxy/qz_stream_terminal.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_responses_stream.py",
+      "target": "file:proxy/qz_stream_watchdog.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_responses.py",
+      "target": "function:proxy/qz_responses.py:_build_local_compaction_response",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_responses.py",
+      "target": "function:proxy/qz_responses.py:_build_local_compaction_response",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_responses.py",
+      "target": "file:proxy/qz_request_normalization.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_responses.py",
+      "target": "file:proxy/qz_tool_apply_patch.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_responses.py",
+      "target": "file:proxy/qz_proxy_tools.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_responses.py",
+      "target": "file:proxy/qz_tool_request.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_runtime_io.py",
+      "target": "class:proxy/qz_runtime_io.py:CapturePolicy",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_runtime_io.py",
+      "target": "class:proxy/qz_runtime_io.py:CapturePolicy",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_search_config.py",
+      "target": "class:proxy/qz_search_config.py:SearchConfigResult",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_search_config.py",
+      "target": "function:proxy/qz_search_config.py:load_search_config",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_search_config.py",
+      "target": "class:proxy/qz_search_config.py:SearchConfigResult",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_search_config.py",
+      "target": "function:proxy/qz_search_config.py:load_search_config",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_search_policy.py",
+      "target": "class:proxy/qz_search_policy.py:SearchPolicySelection",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_search_policy.py",
+      "target": "class:proxy/qz_search_policy.py:SearchPolicySelection",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_service_status.py",
+      "target": "function:proxy/qz_service_status.py:build_service_status",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_service_status.py",
+      "target": "function:proxy/qz_service_status.py:build_service_status",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_sse.py",
+      "target": "function:proxy/qz_sse.py:transform_sse_event",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_sse.py",
+      "target": "function:proxy/qz_sse.py:make_response_stream_events",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_sse.py",
+      "target": "function:proxy/qz_sse.py:transform_sse_event",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_sse.py",
+      "target": "function:proxy/qz_sse.py:make_response_stream_events",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_stream_terminal.py",
+      "target": "function:proxy/qz_stream_terminal.py:classify_stream_terminal",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_stream_terminal.py",
+      "target": "class:proxy/qz_stream_terminal.py:StreamObservation",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_stream_terminal.py",
+      "target": "function:proxy/qz_stream_terminal.py:classify_stream_terminal",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_stream_terminal.py",
+      "target": "class:proxy/qz_stream_terminal.py:StreamObservation",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_stream_watchdog.py",
+      "target": "class:proxy/qz_stream_watchdog.py:StreamWatchdogState",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_stream_watchdog.py",
+      "target": "class:proxy/qz_stream_watchdog.py:StreamWatchdogState",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_streaming.py",
+      "target": "class:proxy/qz_streaming.py:StreamedFunctionCallAssembler",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_streaming.py",
+      "target": "class:proxy/qz_streaming.py:StreamedFunctionCallAssembler",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_telemetry.py",
+      "target": "class:proxy/qz_telemetry.py:TelemetryBus",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_telemetry.py",
+      "target": "class:proxy/qz_telemetry.py:RequestTelemetryEmitter",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_telemetry.py",
+      "target": "class:proxy/qz_telemetry.py:TelemetryBus",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_telemetry.py",
+      "target": "class:proxy/qz_telemetry.py:RequestTelemetryEmitter",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_tool_apply_patch.py",
+      "target": "class:proxy/qz_tool_apply_patch.py:ApplyPatchToolAdapter",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_tool_apply_patch.py",
+      "target": "function:proxy/qz_tool_apply_patch.py:_parse_apply_patch_arguments",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_tool_apply_patch.py",
+      "target": "function:proxy/qz_tool_apply_patch.py:normalize_apply_patch_output_for_codex",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_tool_apply_patch.py",
+      "target": "class:proxy/qz_tool_apply_patch.py:ApplyPatchToolAdapter",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_tool_apply_patch.py",
+      "target": "function:proxy/qz_tool_apply_patch.py:normalize_apply_patch_output_for_codex",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_tool_apply_patch.py",
+      "target": "file:proxy/qz_tools.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_tool_lifecycle.py",
+      "target": "class:proxy/qz_tool_lifecycle.py:StreamToolCallState",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_tool_lifecycle.py",
+      "target": "class:proxy/qz_tool_lifecycle.py:ToolHistoryReplayFilter",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_tool_lifecycle.py",
+      "target": "class:proxy/qz_tool_lifecycle.py:StreamToolCallState",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_tool_lifecycle.py",
+      "target": "class:proxy/qz_tool_lifecycle.py:ToolHistoryReplayFilter",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_tool_lifecycle.py",
+      "target": "file:proxy/qz_streaming.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_tool_request.py",
+      "target": "function:proxy/qz_tool_request.py:normalize_tool_request_for_llamacpp",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_tool_request.py",
+      "target": "function:proxy/qz_tool_request.py:normalize_tool_request_for_llamacpp",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_tool_request.py",
+      "target": "file:proxy/qz_proxy_tools.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_tool_request.py",
+      "target": "file:proxy/qz_runtime_io.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_tool_request.py",
+      "target": "file:proxy/qz_tool_apply_patch.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_tool_web.py",
+      "target": "class:proxy/qz_tool_web.py:WebSearchRuntime",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_tool_web.py",
+      "target": "class:proxy/qz_tool_web.py:WebSearchToolAdapter",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_tool_web.py",
+      "target": "function:proxy/qz_tool_web.py:build_web_search_capabilities",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_tool_web.py",
+      "target": "class:proxy/qz_tool_web.py:WebSearchRuntime",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_tool_web.py",
+      "target": "class:proxy/qz_tool_web.py:WebSearchToolAdapter",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_tool_web.py",
+      "target": "function:proxy/qz_tool_web.py:build_web_search_capabilities",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_tool_web.py",
+      "target": "file:proxy/qz_runtime_io.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_tool_web.py",
+      "target": "file:proxy/qz_tools.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:proxy/qz_tools.py",
+      "target": "class:proxy/qz_tools.py:ToolRegistry",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_tools.py",
+      "target": "class:proxy/qz_tools.py:ToolAdapter",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_tools.py",
+      "target": "class:proxy/qz_tools.py:ToolRegistry",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_tools.py",
+      "target": "class:proxy/qz_tools.py:ToolAdapter",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:proxy/qz_vram_snapshot.py",
+      "target": "function:proxy/qz_vram_snapshot.py:build_vram_snapshot",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_vram_snapshot.py",
+      "target": "function:proxy/qz_vram_snapshot.py:_assemble_snapshot",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_vram_snapshot.py",
+      "target": "function:proxy/qz_vram_snapshot.py:_estimate_kv_cache_bytes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:proxy/qz_vram_snapshot.py",
+      "target": "function:proxy/qz_vram_snapshot.py:build_vram_snapshot",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    }
+  ],
+  "layers": [
+    {
+      "id": "layer:server-entry",
+      "name": "Server Entry",
+      "description": "Top-level ASGI application and request routing dispatcher that receive all inbound OpenAI-compatible HTTP traffic and fan out to specialised handlers.",
+      "nodeIds": [
+        "file:proxy/quantzhai_proxy.py",
+        "file:proxy/qz_request_router.py"
+      ]
+    },
+    {
+      "id": "layer:responses-api",
+      "name": "Responses API",
+      "description": "Handlers for the OpenAI Responses endpoint \u2014 request normalisation, response assembly, and error shaping that translate between Codex wire format and the internal llama.cpp backend protocol.",
+      "nodeIds": [
+        "file:proxy/qz_responses.py",
+        "file:proxy/qz_responses_stream.py",
+        "file:proxy/qz_responses_error.py",
+        "file:proxy/qz_request_normalization.py"
+      ]
+    },
+    {
+      "id": "layer:streaming-sse",
+      "name": "Streaming & SSE",
+      "description": "Server-Sent Event framing, stream lifecycle management, watchdog supervision, and telemetry collection for all streaming response paths through the proxy.",
+      "nodeIds": [
+        "file:proxy/qz_sse.py",
+        "file:proxy/qz_streaming.py",
+        "file:proxy/qz_stream_terminal.py",
+        "file:proxy/qz_stream_watchdog.py",
+        "file:proxy/qz_telemetry.py"
+      ]
+    },
+    {
+      "id": "layer:tool-execution",
+      "name": "Tool Execution",
+      "description": "Tool dispatch, lifecycle tracking, native output formatting, and concrete tool implementations \u2014 patch application, web search, file signals, feedback collection \u2014 that the proxy executes on behalf of the Codex agent.",
+      "nodeIds": [
+        "file:proxy/qz_tools.py",
+        "file:proxy/qz_tool_lifecycle.py",
+        "file:proxy/qz_tool_request.py",
+        "file:proxy/qz_tool_apply_patch.py",
+        "file:proxy/qz_tool_web.py",
+        "file:proxy/qz_proxy_tools.py",
+        "file:proxy/qz_feedback.py",
+        "file:proxy/qz_file_signal.py",
+        "file:proxy/qz_native_tool_output.py"
+      ]
+    },
+    {
+      "id": "layer:model-management",
+      "name": "Model Management",
+      "description": "Model catalog, routing selection, runtime state tracking, load-failure recording, and prompt/reasoning policy enforcement that govern which Qwen backend variant handles each request.",
+      "nodeIds": [
+        "file:proxy/qz_model_catalog.py",
+        "file:proxy/qz_model_router.py",
+        "file:proxy/qz_model_state.py",
+        "file:proxy/qz_model_status.py",
+        "file:proxy/qz_model_load_failure.py",
+        "file:proxy/qz_reasoning_policy.py",
+        "file:proxy/qz_prompt_policy.py"
+      ]
+    },
+    {
+      "id": "layer:backend-infrastructure",
+      "name": "Backend Infrastructure",
+      "description": "llama.cpp backend lifecycle, backend manager, VRAM introspection, runtime I/O helpers, filesystem paths, and the operational state store that underpin all backend communication.",
+      "nodeIds": [
+        "file:proxy/qz_backend.py",
+        "file:proxy/qz_backend_manager.py",
+        "file:proxy/qz_vram_snapshot.py",
+        "file:proxy/qz_runtime_io.py",
+        "file:proxy/qz_paths.py",
+        "file:proxy/qz_operational_store.py"
+      ]
+    },
+    {
+      "id": "layer:control-plane",
+      "name": "Control Plane & Recovery",
+      "description": "Health monitoring, service status reporting, config diagnostics, in-flight request tracking, and the multi-stage recovery job/plan/state machine that keeps the proxy resilient under backend faults.",
+      "nodeIds": [
+        "file:proxy/qz_control_plane.py",
+        "file:proxy/qz_service_status.py",
+        "file:proxy/qz_recovery_jobs.py",
+        "file:proxy/qz_recovery_plan.py",
+        "file:proxy/qz_recovery_state.py",
+        "file:proxy/qz_recovery_status.py",
+        "file:proxy/qz_active_requests.py",
+        "file:proxy/qz_config_report.py"
+      ]
+    },
+    {
+      "id": "layer:braincase-memory",
+      "name": "BrainCase Memory",
+      "description": "SQLite-backed memory storage (BrainCaseDB), retention policy, write paths, review tooling, tool-plane API, and rendering \u2014 the agent's explicit long-term memory subsystem.",
+      "nodeIds": [
+        "file:proxy/qz_braincase_db.py",
+        "file:proxy/qz_braincase_render.py",
+        "file:proxy/qz_braincase_retention.py",
+        "file:proxy/qz_braincase_review.py",
+        "file:proxy/qz_braincase_tools.py",
+        "file:proxy/qz_braincase_write.py"
+      ]
+    },
+    {
+      "id": "layer:codex-interface",
+      "name": "Codex Interface & Search",
+      "description": "Codex-facing catalog generation, client configuration, session metadata, web-search config and routing policy, and proxy configuration surface that shape the Codex agent's view of the local stack.",
+      "nodeIds": [
+        "file:proxy/qz_codex_catalog.py",
+        "file:proxy/qz_codex_client_config.py",
+        "file:proxy/qz_codex_metadata.py",
+        "file:proxy/qz_search_config.py",
+        "file:proxy/qz_search_policy.py",
+        "file:proxy/qz_proxy_config.py"
+      ]
+    },
+    {
+      "id": "layer:documentation",
+      "name": "Documentation",
+      "description": "Project-level guidance and notes for AI collaborators working on the QuantZhai stack.",
+      "nodeIds": [
+        "document:GEMINI.md"
+      ]
+    }
+  ],
+  "tour": [
+    {
+      "order": 1,
+      "title": "Start Here: Agent Rules & Architecture Overview",
+      "description": "GEMINI.md is the agent behaviour guide that explains the entire project's development rules, debugging doctrine, BrainCase constraints, and proxy policy authority. Read this first to understand the mental model: the proxy is the single source of truth, runtime state lives in var/, and agents must follow evidence-first debugging. It mirrors CLAUDE.md and tells you what every subsystem owns.",
+      "nodeIds": [
+        "document:GEMINI.md"
+      ]
+    },
+    {
+      "order": 2,
+      "title": "The Proxy Entry Point",
+      "description": "quantzhai_proxy.py is where it all begins. It implements ProxyHandler (a Python BaseHTTPRequestHandler subclass) and the main() function that starts the HTTP server on 127.0.0.1:18180. On startup it wires together the model catalog, backend manager, model router, telemetry bus, search config, and recovery state \u2014 all the singletons that live for the lifetime of the process. Every Codex request arrives here first.",
+      "nodeIds": [
+        "file:proxy/quantzhai_proxy.py"
+      ]
+    },
+    {
+      "order": 3,
+      "title": "HTTP Request Routing: The Central Orchestrator",
+      "description": "qz_request_router.py (3,363 lines, fan-out 30) is the central orchestration hub. RequestRouter dispatches every HTTP path: /v1/responses for Codex requests, /qz/status for control-plane reads, /qz/recover for operator-triggered recovery, /v1/models for catalog, and a dozen more. It validates headers, gates admission, triggers streaming or JSON paths, and coordinates recovery actions. Understanding this file reveals the full API surface of the proxy.",
+      "nodeIds": [
+        "file:proxy/qz_request_router.py",
+        "file:proxy/qz_proxy_config.py"
+      ]
+    },
+    {
+      "order": 4,
+      "title": "Request Normalization: Translating Codex \u2192 Qwen",
+      "description": "Before any request reaches llama.cpp, qz_request_normalization.py transforms it: stripping think-tags from prior turns, injecting turn harnesses, canonicalizing message format, cleaning content, and injecting BrainCase tools into the tool list. qz_codex_metadata.py extracts the session identity, workspace, memory domain config, and full request context from Codex headers. Together these two files define the Codex\u2192Qwen translation layer.",
+      "nodeIds": [
+        "file:proxy/qz_request_normalization.py",
+        "file:proxy/qz_codex_metadata.py",
+        "file:proxy/qz_prompt_policy.py"
+      ]
+    },
+    {
+      "order": 5,
+      "title": "SSE Streaming Engine",
+      "description": "qz_responses_stream.py (2,433 lines) implements ResponsesStreamRuntime \u2014 the heart of the proxy. It reads raw llama.cpp SSE chunks, calls qz_sse.py to transform them into OpenAI Responses API events, manages multi-hop tool execution state, fires proxy-local tools (web search, braincase), handles watchdog timeouts via qz_stream_watchdog.py, and classifies terminal events via qz_stream_terminal.py. Most proxy bugs live in this file.",
+      "nodeIds": [
+        "file:proxy/qz_responses_stream.py",
+        "file:proxy/qz_sse.py",
+        "file:proxy/qz_streaming.py",
+        "file:proxy/qz_stream_terminal.py",
+        "file:proxy/qz_stream_watchdog.py"
+      ]
+    },
+    {
+      "order": 6,
+      "title": "Tool Execution Framework",
+      "description": "The tool layer intercepts Codex tool calls before forwarding upstream. qz_tools.py defines the base types (ToolLifecycleSpec, ToolAdapter, ToolRegistry). qz_proxy_tools.py holds ProxyLocalToolRegistry, which decides whether each tool call should be executed locally or forwarded. qz_tool_lifecycle.py tracks tool call state across streaming hops. qz_tool_request.py normalises tool schemas for llama.cpp's function_call format. qz_tool_apply_patch.py handles the critical apply_patch adapter.",
+      "nodeIds": [
+        "file:proxy/qz_tools.py",
+        "file:proxy/qz_proxy_tools.py",
+        "file:proxy/qz_tool_lifecycle.py",
+        "file:proxy/qz_tool_request.py",
+        "file:proxy/qz_tool_apply_patch.py"
+      ]
+    },
+    {
+      "order": 7,
+      "title": "Web Search Tool",
+      "description": "qz_tool_web.py (2,326 lines) implements WebSearchRuntime and WebSearchToolAdapter \u2014 the full SearXNG-backed web search engine. It handles search querying, page fetching and content extraction, source trust scoring, result formatting, provider guidance injection, strict profile enforcement, and budget management. The search config (qz_search_config.py) and search policy (qz_search_policy.py) control which provider profile is active.",
+      "nodeIds": [
+        "file:proxy/qz_tool_web.py",
+        "file:proxy/qz_search_config.py",
+        "file:proxy/qz_search_policy.py"
+      ]
+    },
+    {
+      "order": 8,
+      "title": "Model Management Layer",
+      "description": "qz_model_catalog.py scans var/models/ for GGUF symlinks, reads GGUF metadata headers, and applies manifest/override layering to build the profile registry. qz_model_router.py (ModelRouter, 1,418 lines) selects the active profile, determines context length, reconciles loaded backend state, and orchestrates model load/unload. qz_model_state.py persists the selection to disk so it survives proxy restarts. qz_reasoning_policy.py maps reasoning level strings to Qwen sampling params.",
+      "nodeIds": [
+        "file:proxy/qz_model_catalog.py",
+        "file:proxy/qz_model_router.py",
+        "file:proxy/qz_model_state.py",
+        "file:proxy/qz_model_status.py",
+        "file:proxy/qz_reasoning_policy.py"
+      ]
+    },
+    {
+      "order": 9,
+      "title": "Backend Infrastructure: llama.cpp Lifecycle",
+      "description": "qz_backend.py is the HTTP client for the llama.cpp API \u2014 it handles model load/unload requests, health polling, and synchronous wait-for-ready. qz_backend_manager.py manages the OS-level process or Docker container lifecycle: start, stop, restart, GPU offload detection, autostart-with-delay. qz_vram_snapshot.py (1,742 lines) probes llama.cpp slots/props endpoints and nvidia-smi to build the VRAM telemetry snapshot with KV cache estimation.",
+      "nodeIds": [
+        "file:proxy/qz_backend.py",
+        "file:proxy/qz_backend_manager.py",
+        "file:proxy/qz_vram_snapshot.py",
+        "file:proxy/qz_runtime_io.py",
+        "file:proxy/qz_paths.py"
+      ]
+    },
+    {
+      "order": 10,
+      "title": "BrainCase Memory Subsystem",
+      "description": "BrainCase is the tool-mediated LLM memory layer. qz_braincase_db.py is the SQLite storage substrate (CRUD, FTS5 search). qz_braincase_tools.py is the tool-plane entry point \u2014 it defines the braincase_render, braincase_recall, and braincase_write_candidate tools and injects them into outgoing request bodies. qz_braincase_render.py packs records into LLM-context-sized packets. qz_braincase_write.py handles scope resolution and dedup on the write path. Remember: BrainCaseDB is storage only, never automatic ingestion.",
+      "nodeIds": [
+        "file:proxy/qz_braincase_tools.py",
+        "file:proxy/qz_braincase_db.py",
+        "file:proxy/qz_braincase_render.py",
+        "file:proxy/qz_braincase_write.py",
+        "file:proxy/qz_braincase_retention.py",
+        "file:proxy/qz_braincase_review.py"
+      ]
+    },
+    {
+      "order": 11,
+      "title": "Control Plane, Telemetry & Recovery",
+      "description": "qz_control_plane.py assembles the /qz/status payload from all subsystems. qz_service_status.py builds the comprehensive service status dict. The recovery subsystem (qz_recovery_state.py, qz_recovery_plan.py, qz_recovery_jobs.py, qz_recovery_status.py) implements exponential-backoff retry logic and operator-triggered recovery actions. qz_telemetry.py provides TelemetryBus, the thread-safe in-process event bus used by monitors and the qz-top dashboard.",
+      "nodeIds": [
+        "file:proxy/qz_control_plane.py",
+        "file:proxy/qz_service_status.py",
+        "file:proxy/qz_telemetry.py",
+        "file:proxy/qz_recovery_state.py",
+        "file:proxy/qz_recovery_plan.py",
+        "file:proxy/qz_recovery_jobs.py",
+        "file:proxy/qz_recovery_status.py",
+        "file:proxy/qz_active_requests.py"
+      ]
+    }
+  ]
+}

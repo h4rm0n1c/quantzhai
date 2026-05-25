@@ -186,7 +186,6 @@ class ProxyLocalToolRegistry:
     def completed_call_decision(
         self,
         call: dict,
-        apply_patch_output_style: str,
         dropped_tool_names: frozenset[str] = frozenset(),
         repeated_read_state: "RepeatedReadState | None" = None,
     ) -> CompletedToolCallDecision:
@@ -234,7 +233,7 @@ class ProxyLocalToolRegistry:
                     coercion_error=(coercion.error_message or "")[:200],
                 )
             corrected = call if not coercion.corrected_arguments else dict(call, arguments=coercion.corrected_arguments)
-            public_item = self.tool_registry.output_to_codex(corrected, apply_patch_output_style)
+            public_item = self.tool_registry.output_to_codex(corrected)
             return CompletedToolCallDecision(
                 kind="public",
                 call=corrected,
@@ -265,7 +264,7 @@ class ProxyLocalToolRegistry:
                         signal_result=advisory,
                         signal_metadata=metadata,
                     )
-            public_item = self.tool_registry.output_to_codex(call, apply_patch_output_style)
+            public_item = self.tool_registry.output_to_codex(call)
             return CompletedToolCallDecision(
                 kind="public",
                 call=call,

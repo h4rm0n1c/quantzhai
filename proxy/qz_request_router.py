@@ -25,7 +25,6 @@ try:
     from .qz_telemetry import TELEMETRY_RECENT_SCHEMA, TELEMETRY_REQUEST_SCHEMA
     from .qz_proxy_config import CURRENT_API_ENDPOINTS, LEGACY_API_ENDPOINTS, api_contract_payload
     from .qz_responses import (
-        _apply_patch_output_style,
         _build_local_compaction_response,
         _decode_local_compaction_blob,
         _estimate_items_tokens,
@@ -80,7 +79,6 @@ except ImportError:
     from qz_telemetry import TELEMETRY_RECENT_SCHEMA, TELEMETRY_REQUEST_SCHEMA
     from qz_proxy_config import CURRENT_API_ENDPOINTS, LEGACY_API_ENDPOINTS, api_contract_payload
     from qz_responses import (
-        _apply_patch_output_style,
         _build_local_compaction_response,
         _decode_local_compaction_blob,
         _estimate_items_tokens,
@@ -2541,7 +2539,6 @@ class RequestRouter:
         self,
         body: dict,
         requested_model: str,
-        apply_patch_output_style: str = "native",
         request_id: str = "",
         selected_model=None,
         reasoning_stream_format: str | None = None,
@@ -2564,13 +2561,12 @@ class RequestRouter:
             hop_budget_signal_threshold=int(os.environ.get("QZ_HOP_BUDGET_SIGNAL_THRESHOLD", "3")),
             context_pressure_signal_threshold=float(os.environ.get("QZ_CONTEXT_PRESSURE_SIGNAL_THRESHOLD", "0.8")),
         )
-        return runtime.run(body, requested_model, apply_patch_output_style)
+        return runtime.run(body, requested_model)
 
     def _run_responses_locally(
         self,
         body: dict,
         requested_model: str,
-        apply_patch_output_style: str = "native",
         selected_model=None,
         request_id: str = "",
     ):
@@ -2605,7 +2601,6 @@ class RequestRouter:
                 final_out = dict(out)
                 final_out["output"] = public_trace + normalize_tool_output_for_codex(
                     output_items,
-                    apply_patch_output_style,
                 )
                 final_out["usage"] = _normalize_response_usage(final_out.get("usage"))
                 self._annotate_output_with_url_citations(final_out, gathered_sources)
@@ -2622,7 +2617,6 @@ class RequestRouter:
                     # before passing them through.
                     rr_decision = proxy_tool_registry.completed_call_decision(
                         item,
-                        apply_patch_output_style,
                         dropped_tool_names=dropped_tool_names,
                         repeated_read_state=repeated_read_state,
                     )
@@ -2656,7 +2650,6 @@ class RequestRouter:
 
                 decision = proxy_tool_registry.completed_call_decision(
                     item,
-                    apply_patch_output_style,
                     dropped_tool_names=dropped_tool_names,
                     repeated_read_state=repeated_read_state,
                 )
@@ -3033,7 +3026,6 @@ class RequestRouter:
 
                 body = self.handler._model_router().inject_runtime_state(body, client_model)
                 ensure_apply_patch_tool_policy(body, overwrite=True)
-                apply_patch_output_style = _apply_patch_output_style(body)
                 input_items = body.get("input")
                 if isinstance(input_items, list):
                     body["input"] = _microcompact_old_tool_results(
@@ -3111,7 +3103,6 @@ class RequestRouter:
                         stream_result = self._run_responses_streaming_locally(
                             body,
                             client_model,
-                            apply_patch_output_style,
                             request_id=request_id,
                             selected_model=selected_model,
                             reasoning_stream_format=effective_reasoning_stream_format,
@@ -3186,7 +3177,6 @@ class RequestRouter:
                     status, content_type, out = self._run_responses_locally(
                         body,
                         client_model,
-                        apply_patch_output_style,
                         selected_model=selected_model,
                         request_id=request_id,
                     )

@@ -34,7 +34,7 @@ class ToolRequestNormalizationTests(unittest.TestCase):
         self.assertTrue(report.tool_choice_normalized)
         self.assertFalse(report.tool_choice_forced_auto)
         self.assertEqual(body["tool_choice"], {"type": "function", "name": "apply_patch"})
-        self.assertEqual(body["metadata"]["qz_tool_policy"]["apply_patch_output_style"], "native")
+        self.assertNotIn("apply_patch_output_style", body["metadata"]["qz_tool_policy"])
         self.assertIn("use apply_patch", body["tools"][0]["description"])
 
     def test_write_stdin_kept_when_history_contains_live_session(self):

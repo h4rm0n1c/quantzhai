@@ -1488,15 +1488,10 @@ class ResponsesStreamRuntime:
         )
         return [output_item], sequence
 
-    def run(self, body: dict, requested_model: str, apply_patch_output_style: str = "native"):
+    def run(self, body: dict, requested_model: str):
         working_body = json.loads(json.dumps(body))
         working_body["stream"] = True
         metadata = working_body.get("metadata")
-        tool_policy = metadata.get("qz_tool_policy") if isinstance(metadata, dict) else None
-        if isinstance(tool_policy, dict):
-            policy_style = tool_policy.get("apply_patch_output_style")
-            if policy_style in {"native", "custom"}:
-                apply_patch_output_style = policy_style
         dropped_tool_names = frozenset(
             metadata.get("qz_dropped_tool_names") or []
             if isinstance(metadata, dict) else []
@@ -1516,7 +1511,6 @@ class ResponsesStreamRuntime:
         self._start_capture()
         self._emit("stream_started", {
             "model": requested_model,
-            "apply_patch_output_style": apply_patch_output_style,
             "tool_hops_max": self.proxy_tool_registry.max_continuation_hops or WEB_SEARCH_MAX_HOPS,
         })
 
@@ -1893,7 +1887,6 @@ class ResponsesStreamRuntime:
 
                             decision = self.proxy_tool_registry.completed_call_decision(
                                 hs.completed_call,
-                                apply_patch_output_style,
                                 dropped_tool_names=dropped_tool_names,
                                 repeated_read_state=repeated_read_state,
                             )

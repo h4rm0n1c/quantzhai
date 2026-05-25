@@ -445,29 +445,6 @@ def make_response_stream_events(out: dict):
             completed_output.append(done_item)
             continue
 
-        if item_type == "apply_patch_call":
-            item_id = item.get("id") or f"apc_local_{output_index}"
-            call_id = item.get("call_id") or f"call_apply_patch_{output_index}"
-            done_item = {
-                "id": item_id,
-                "type": "apply_patch_call",
-                "status": item.get("status", "completed"),
-                "call_id": call_id,
-                "operation": item.get("operation") or {},
-            }
-
-            yield ev("response.output_item.added", {
-                "output_index": output_index,
-                "item": dict(done_item, status="in_progress"),
-            })
-            yield ev("response.output_item.done", {
-                "output_index": output_index,
-                "item": done_item,
-            })
-
-            completed_output.append(done_item)
-            continue
-
         if item_type == "custom_tool_call":
             call_id = item.get("call_id") or f"call_custom_{output_index}"
             done_item = {

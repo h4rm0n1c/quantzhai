@@ -62,23 +62,6 @@
         ]
       },
       {
-        "type": "apply_patch_call",
-        "id": "apc_1",
-        "status": "completed",
-        "call_id": "call_patch_native",
-        "operation": {
-          "type": "update_file",
-          "path": "notes.md",
-          "diff": "@@\n-old\n+new\n"
-        }
-      },
-      {
-        "type": "apply_patch_call_output",
-        "call_id": "call_patch_native",
-        "status": "completed",
-        "output": "Updated notes.md"
-      },
-      {
         "type": "custom_tool_call",
         "id": "ctc_1",
         "call_id": "call_patch_custom",
@@ -134,19 +117,6 @@
           "annotations": []
         }
       ]
-    },
-    {
-      "id": "apc_1",
-      "type": "function_call",
-      "status": "completed",
-      "call_id": "call_patch_native",
-      "name": "apply_patch",
-      "arguments": "{\"operation\": {\"type\": \"update_file\", \"path\": \"notes.md\", \"diff\": \"@@\\n-old\\n+new\\n\"}}"
-    },
-    {
-      "type": "function_call_output",
-      "call_id": "call_patch_native",
-      "output": "{\"status\": \"completed\", \"output\": \"Updated notes.md\"}"
     },
     {
       "id": "ctc_1",

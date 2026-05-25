@@ -1,7 +1,40 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-25
-Status: active control sheet — apply_patch Codex lifecycle audited; AP1/AP2/AP3 contract tests enforced (streaming integration + non-streaming).
+Status: active control sheet — apply_patch fake contract removed; AP1/AP2/AP3 contract tests updated; all 3484 tests pass.
+
+## Recently completed — Remove fake apply_patch_call contract (2026-05-25)
+
+```text
+Status: COMPLETE — proxy + tests + smoke + docs updated; 3484 tests pass.
+
+Output:
+  proxy/qz_tool_apply_patch.py — removed _apply_patch_output_style, _apply_patch_output_to_function_output,
+    _function_call_to_apply_patch_call, _extract_partial_native_operation;
+    output_to_codex() always returns custom_tool_call; apply_patch_output_style removed from policy
+  proxy/qz_proxy_tools.py — removed apply_patch_output_style param from completed_call_decision
+  proxy/qz_responses_stream.py — removed apply_patch_output_style param from run() and completed_call_decision
+  proxy/qz_request_router.py — removed _apply_patch_output_style import and all call sites
+  proxy/qz_sse.py — removed apply_patch_call branch from make_response_stream_events
+  proxy/qz_responses.py — removed apply_patch_call / apply_patch_call_output from FUNCTION_CALL_TYPES / FUNCTION_OUTPUT_TYPES
+  tests/test_apply_patch_adapter.py — removed native-mode tests, updated all assertions to custom_tool_call
+  tests/test_qz_responses_stream.py — removed native-mode tests, removed apply_patch_output_style from helpers
+  tests/test_qz_proxy_tools.py — updated apply_patch_call → custom_tool_call assertion
+  tests/test_qz_tools.py — removed apply_patch_output_style arg, updated assertion
+  tests/test_qz_tool_lifecycle.py — updated three apply_patch_call → custom_tool_call assertions
+  tests/test_qz_tool_request.py — removed apply_patch_output_style assertion
+  tests/smoke_apply_patch_proxy.py — check custom_tool_call, fail on apply_patch_call
+  tests/fixtures/responses_input/*.json — removed apply_patch_output_style from expected_policy
+  docs/apply-patch-codex-lifecycle-audit.md — contract history note, updated all sections
+
+Why: Codex source audit confirmed Codex expects custom_tool_call with name=apply_patch
+and input="*** Begin Patch...". apply_patch_call was a mistaken/hallucinated contract.
+PatchApplyBegin/Updated/End are Codex-internal UI events, NOT Responses SSE event names.
+Zero users of the native path. No legacy preservation.
+
+Contract change: apply_patch always emits custom_tool_call. apply_patch_output_style
+removed from policy. History normalisation uses custom_tool_call_output (not apply_patch_call_output).
+```
 
 ## Recently completed — Add safe apply_patch telemetry metadata (2026-05-25)
 

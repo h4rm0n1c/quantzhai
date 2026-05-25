@@ -21,9 +21,6 @@ try:
     from .qz_model_router import ModelRouter
     from .qz_request_router import RequestRouter
     from .qz_responses import (
-        _apply_patch_call_to_function_call,
-        _apply_patch_output_style,
-        _apply_patch_output_to_function_output,
         _build_local_compaction_response,
         _custom_apply_patch_call_to_function_call,
         _custom_apply_patch_output_to_function_output,
@@ -70,9 +67,6 @@ except ImportError:
     from qz_model_router import ModelRouter
     from qz_request_router import RequestRouter
     from qz_responses import (
-        _apply_patch_call_to_function_call,
-        _apply_patch_output_style,
-        _apply_patch_output_to_function_output,
         _build_local_compaction_response,
         _custom_apply_patch_call_to_function_call,
         _custom_apply_patch_output_to_function_output,

@@ -39,7 +39,6 @@
   "expected_policy": {
     "schema": "qz.tool_policy.v1",
     "apply_patch_declared": true,
-    "apply_patch_client_tool_type": "apply_patch",
-    "apply_patch_output_style": "native"
+    "apply_patch_client_tool_type": "apply_patch"
   }
 }
