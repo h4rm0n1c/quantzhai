@@ -232,10 +232,21 @@ class NativeToolListContractTests(unittest.TestCase):
         )
 
     def test_image_generation_not_in_native_tool_names(self):
-        """image_generation uses ImageGenerationCall item — document only."""
+        """image_generation is a hosted server-side tool, NOT a function_call handler.
+
+        Source audit (issue #70, SHA 46f30d0):
+          - Spec: ToolSpec::ImageGeneration { output_format } via create_image_generation_tool()
+            in codex-rs/core/src/tools/hosted_spec.rs — NOT ToolSpec::Function
+          - No ToolHandler in codex-rs/core/src/tools/handlers/
+          - ResponseItem: ImageGenerationCall { id, status, revised_prompt, result } — separate wire type
+          - Gated by image_gen_tool = image_generation_tool_auth_allowed
+            && Feature::ImageGeneration && supports_image_generation(model_info)
+          - QuantZhai uses local llama.cpp (Qwen) — no image generation capability
+        Verdict: document-only / out of scope. Must NOT be in CODEX_NATIVE_TOOL_NAMES.
+        """
         self.assertNotIn(
             "image_generation", CODEX_NATIVE_TOOL_NAMES,
-            "'image_generation' is ImageGenerationCall — must not be in CODEX_NATIVE_TOOL_NAMES",
+            "'image_generation' is a hosted ImageGenerationCall item — must not be in CODEX_NATIVE_TOOL_NAMES",
         )
 
     def test_native_tool_names_contains_exactly_proven_tools(self):
@@ -247,6 +258,11 @@ class NativeToolListContractTests(unittest.TestCase):
         Confirmed unchanged in issue #69: local_shell and tool_search audited and excluded.
         Both use separate item types (LocalShell / ToolSearchCall) — not function_call
         pass-throughs. CODEX_NATIVE_TOOL_NAMES remains at 12 tools.
+
+        Confirmed unchanged in issue #70: image_generation, MCP tools, multi-agent tools,
+        agent_jobs, and request_plugin_install all audited and excluded. All are either
+        hosted tools, infrastructure-gated, or out of scope for QuantZhai's single-model
+        local stack. CODEX_NATIVE_TOOL_NAMES remains at 12 tools.
         """
         expected = {
             # Pre-existing (issue #66 baseline)
@@ -341,6 +357,186 @@ class LocalShellToolSearchItemContractTests(unittest.TestCase):
             decision.kind, "error",
             "tool_search arriving as function_call must not be silently passed through",
         )
+
+
+class OutOfScopeToolContractTests(unittest.TestCase):
+    """Enforce that document-only and out-of-scope Codex tools are absent from CODEX_NATIVE_TOOL_NAMES.
+
+    Source audit at SHA 46f30d02828bd4c52827e5f0482a6f2a982cce5b (issue #70).
+
+    image_generation
+      Spec: ToolSpec::ImageGeneration (hosted, not ToolSpec::Function)
+      No ToolHandler. ResponseItem: ImageGenerationCall. Gated by image_gen_tool config flag +
+      Feature::ImageGeneration + model support. QuantZhai uses local llama.cpp — out of scope.
+      Source: codex-rs/core/src/tools/hosted_spec.rs::create_image_generation_tool()
+
+    MCP resource tools  (list_mcp_resources, list_mcp_resource_templates, read_mcp_resource)
+      Spec: ToolSpec::Function; ToolPayload::Function — ARE function_call handlers in Codex.
+      Registered only when params.mcp_tools.is_some() — requires MCP server infrastructure.
+      QuantZhai has no MCP servers — these tools are never registered. Out of scope.
+      Source: codex-rs/core/src/tools/handlers/mcp_resource_spec.rs; spec_plan.rs:189-191
+
+    General MCP tools  (mcp__<server>__<tool_name> namespace pattern)
+      McpHandler: ToolPayload::Function. Tool names are DYNAMIC — cannot be fixed in CODEX_NATIVE_TOOL_NAMES.
+      Registered when MCP servers are configured. QuantZhai has no MCP servers. Out of scope.
+      Source: codex-rs/core/src/tools/handlers/mcp.rs::McpHandler
+
+    multi-agent v2  (spawn_agent, send_message, followup_task, wait_agent, close_agent, list_agents)
+      All ToolPayload::Function — ARE function_call handlers in Codex.
+      Gated by config.collab_tools && config.multi_agent_v2.
+      QuantZhai is a single-model local stack — collab_tools not enabled. Out of scope.
+      Source: codex-rs/core/src/tools/handlers/multi_agents_v2/
+
+    multi-agent v1  (spawn_agent, send_input, resume_agent, wait_agent, close_agent)
+      All ToolPayload::Function — ARE function_call handlers in Codex.
+      Gated by config.collab_tools && !config.multi_agent_v2.
+      Source: codex-rs/core/src/tools/handlers/multi_agents/
+
+    agent_jobs  (spawn_agents_on_csv, report_agent_job_result)
+      ToolPayload::Function — ARE function_call handlers.
+      Gated by config.agent_jobs_tools / config.agent_jobs_worker_tools.
+      QuantZhai has no agent jobs infrastructure. Out of scope.
+      Source: codex-rs/core/src/tools/handlers/agent_jobs/
+
+    request_plugin_install
+      ToolName::plain(REQUEST_PLUGIN_INSTALL_TOOL_NAME) = "request_plugin_install"
+      ToolPayload::Function — IS a function_call handler.
+      Gated by config.tool_suggest && !discoverable_tools.is_empty().
+      Requires ChatGPT auth, MCP connection manager, plugin marketplace. Out of scope.
+      Source: codex-rs/core/src/tools/handlers/request_plugin_install.rs
+    """
+
+    # --- image_generation ---
+
+    def test_image_generation_not_in_native_names(self):
+        """image_generation is a hosted server-side tool, not a function_call handler."""
+        self.assertNotIn("image_generation", CODEX_NATIVE_TOOL_NAMES)
+
+    # --- MCP resource tools (fixed names, function_call, but MCP infra not in QuantZhai) ---
+
+    def test_list_mcp_resources_not_in_native_names(self):
+        """list_mcp_resources: function_call handler but gated on MCP server config — not in QuantZhai."""
+        self.assertNotIn("list_mcp_resources", CODEX_NATIVE_TOOL_NAMES)
+
+    def test_list_mcp_resource_templates_not_in_native_names(self):
+        """list_mcp_resource_templates: function_call handler but gated on MCP server config."""
+        self.assertNotIn("list_mcp_resource_templates", CODEX_NATIVE_TOOL_NAMES)
+
+    def test_read_mcp_resource_not_in_native_names(self):
+        """read_mcp_resource: function_call handler but gated on MCP server config."""
+        self.assertNotIn("read_mcp_resource", CODEX_NATIVE_TOOL_NAMES)
+
+    # --- multi-agent v2 fixed tool names ---
+
+    def test_spawn_agent_not_in_native_names(self):
+        """spawn_agent: function_call handler gated by config.collab_tools — not in QuantZhai."""
+        self.assertNotIn("spawn_agent", CODEX_NATIVE_TOOL_NAMES)
+
+    def test_send_message_not_in_native_names(self):
+        """send_message: function_call handler (multi_agents_v2) gated by config.collab_tools."""
+        self.assertNotIn("send_message", CODEX_NATIVE_TOOL_NAMES)
+
+    def test_close_agent_not_in_native_names(self):
+        """close_agent: function_call handler (multi_agents_v2) gated by config.collab_tools."""
+        self.assertNotIn("close_agent", CODEX_NATIVE_TOOL_NAMES)
+
+    def test_wait_agent_not_in_native_names(self):
+        """wait_agent: function_call handler (multi_agents_v2) gated by config.collab_tools."""
+        self.assertNotIn("wait_agent", CODEX_NATIVE_TOOL_NAMES)
+
+    def test_list_agents_not_in_native_names(self):
+        """list_agents: function_call handler (multi_agents_v2) gated by config.collab_tools."""
+        self.assertNotIn("list_agents", CODEX_NATIVE_TOOL_NAMES)
+
+    # --- agent_jobs ---
+
+    def test_spawn_agents_on_csv_not_in_native_names(self):
+        """spawn_agents_on_csv: function_call handler gated by config.agent_jobs_tools."""
+        self.assertNotIn("spawn_agents_on_csv", CODEX_NATIVE_TOOL_NAMES)
+
+    def test_report_agent_job_result_not_in_native_names(self):
+        """report_agent_job_result: function_call handler gated by config.agent_jobs_worker_tools."""
+        self.assertNotIn("report_agent_job_result", CODEX_NATIVE_TOOL_NAMES)
+
+    # --- request_plugin_install ---
+
+    def test_request_plugin_install_not_in_native_names(self):
+        """request_plugin_install: function_call handler but requires plugin/auth infrastructure."""
+        self.assertNotIn("request_plugin_install", CODEX_NATIVE_TOOL_NAMES)
+
+    # --- combined subTest: all out-of-scope tool names must be absent ---
+
+    def test_all_out_of_scope_tools_absent_from_native_names(self):
+        """All document-only and out-of-scope tool names must be absent from CODEX_NATIVE_TOOL_NAMES.
+
+        This combined subTest catches any future accidental addition.
+        See class docstring for source evidence for each tool.
+        """
+        out_of_scope = [
+            # image_generation — hosted tool, no function_call handler
+            "image_generation",
+            # MCP resource tools — function_call but MCP infra not in QuantZhai
+            "list_mcp_resources",
+            "list_mcp_resource_templates",
+            "read_mcp_resource",
+            # multi-agent v2 — function_call but collab_tools not enabled
+            "spawn_agent",
+            "send_message",
+            "followup_task",
+            "wait_agent",
+            "close_agent",
+            "list_agents",
+            # multi-agent v1 additional names
+            "send_input",
+            "resume_agent",
+            # agent_jobs — function_call but agent_jobs_tools not enabled
+            "spawn_agents_on_csv",
+            "report_agent_job_result",
+            # request_plugin_install — function_call but plugin/auth infra required
+            "request_plugin_install",
+        ]
+        for name in out_of_scope:
+            with self.subTest(tool=name):
+                self.assertNotIn(
+                    name, CODEX_NATIVE_TOOL_NAMES,
+                    f"'{name}' is out of scope for QuantZhai — must not be in CODEX_NATIVE_TOOL_NAMES",
+                )
+
+    # --- proxy registry: out-of-scope arriving as function_call returns error ---
+
+    def test_out_of_scope_tools_return_error_from_proxy_registry(self):
+        """Out-of-scope tools arriving as function_call must receive unsupported-tool errors.
+
+        These tools are not registered in QuantZhai's Codex config so the model should never
+        call them. If they arrive anyway, the proxy must not silently pass them through.
+        """
+        from proxy.qz_proxy_tools import make_proxy_local_tool_registry
+
+        class FakeWebRt:
+            def execute_web_search_call(self, call, counters, seen_signatures, request_id=""):
+                return type('R', (), {'public_item': {}, 'upstream_items': (), 'sources': ()})()
+
+        registry = make_proxy_local_tool_registry(FakeWebRt())
+        out_of_scope = [
+            "image_generation",
+            "list_mcp_resources",
+            "list_mcp_resource_templates",
+            "read_mcp_resource",
+            "spawn_agent",
+            "send_message",
+            "close_agent",
+            "spawn_agents_on_csv",
+            "report_agent_job_result",
+            "request_plugin_install",
+        ]
+        for name in out_of_scope:
+            with self.subTest(tool=name):
+                call = {"type": "function_call", "name": name, "call_id": "c1", "arguments": "{}"}
+                decision = registry.completed_call_decision(call)
+                self.assertEqual(
+                    decision.kind, "error",
+                    f"'{name}' arriving as function_call must return error from proxy registry",
+                )
 
 
 class ToolLifecycleSpecContractTests(unittest.TestCase):

@@ -348,4 +348,21 @@ class NativeToolNamesMembershipTests(unittest.TestCase):
         self.assertNotIn("local_shell", self._names())
 
     def test_image_generation_absent(self):
+        """image_generation: hosted ToolSpec::ImageGeneration, no function_call handler. (issue #70)"""
         self.assertNotIn("image_generation", self._names())
+
+    def test_list_mcp_resources_absent(self):
+        """list_mcp_resources: function_call handler but gated on MCP infra QuantZhai lacks. (issue #70)"""
+        self.assertNotIn("list_mcp_resources", self._names())
+
+    def test_spawn_agent_absent(self):
+        """spawn_agent: function_call handler gated by collab_tools — not in QuantZhai. (issue #70)"""
+        self.assertNotIn("spawn_agent", self._names())
+
+    def test_request_plugin_install_absent(self):
+        """request_plugin_install: function_call handler gated on plugin/auth infra. (issue #70)"""
+        self.assertNotIn("request_plugin_install", self._names())
+
+    def test_spawn_agents_on_csv_absent(self):
+        """spawn_agents_on_csv: function_call handler gated by agent_jobs_tools flag. (issue #70)"""
+        self.assertNotIn("spawn_agents_on_csv", self._names())
