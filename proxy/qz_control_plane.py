@@ -181,6 +181,8 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
     profile_backend_context_length: int = 0
     profile_prompt_files: list = []
     profile_symlink: bool = False
+    profile_thinking_mode: str | None = None
+    profile_thinking_budget_tokens: int | None = None
 
     if proxy_ready:
         try:
@@ -192,19 +194,23 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
             loaded_model = summary.get("loaded_model") or ""
             loaded_count = int(summary.get("loaded_count") or 0)
             restart_required = bool(summary.get("restart_required", False))
-            # Extract profile fields from the rich status_summary dict.
-            _sb = summary.get("backend") or {}
-            profile_reasoning_level = str(_sb.get("selected_reasoning_level") or "")
-            profile_reasoning_policy = str(_sb.get("selected_reasoning_policy") or "")
-            _samp = _sb.get("selected_sampling_params")
+            # Extract profile fields from the flat status_summary dict.
+            # Note: status_summary() returns a flat dict; there is no nested "backend" key.
+            profile_reasoning_level = str(summary.get("selected_reasoning_level") or "")
+            profile_reasoning_policy = str(summary.get("reasoning_policy") or "")
+            _samp = summary.get("sampling")
             if isinstance(_samp, dict):
                 profile_sampling = _samp
-            _ctx = _sb.get("selected_context_length")
+            _ctx = summary.get("selected_context_length")
             if isinstance(_ctx, int) and _ctx > 0:
                 profile_context_length = _ctx
-            _bctx = _sb.get("backend_context_length")
+            _bctx = summary.get("backend_context_length")
             if isinstance(_bctx, int) and _bctx > 0:
                 profile_backend_context_length = _bctx
+            profile_thinking_mode = summary.get("selected_thinking_mode")
+            _tbt = summary.get("thinking_budget_tokens")
+            if isinstance(_tbt, int):
+                profile_thinking_budget_tokens = _tbt
             _prompt = summary.get("prompt") or {}
             _files = _prompt.get("files_loaded")
             if isinstance(_files, list):
@@ -376,6 +382,8 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
             "prompt_files": profile_prompt_files,
             "reasoning_level": profile_reasoning_level,
             "reasoning_policy": profile_reasoning_policy,
+            "thinking_mode": profile_thinking_mode,
+            "thinking_budget_tokens": profile_thinking_budget_tokens,
             "sampling": profile_sampling,
             "selected_context_length": profile_context_length,
             "backend_context_length": profile_backend_context_length,

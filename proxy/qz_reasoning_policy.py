@@ -1,9 +1,24 @@
 #!/usr/bin/env python3
 from copy import deepcopy
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 DEFAULT_REASONING_POLICY_MODE = "prompt"
+
+# Token budget per reasoning block for each effort level (thinking-mode models only).
+# These are per-block budgets, not total run caps.
+THINKING_MODE_BUDGET_TOKENS: Dict[str, int] = {
+    "low":    16384,
+    "medium": 24576,
+    "high":   32768,
+    "xhigh":  49152,
+}
+
+# Injected into the request as reasoning_budget_message when thinking_mode=thinking.
+# Encourages the model to exit its reasoning block rather than loop indefinitely.
+REASONING_BUDGET_MESSAGE = (
+    "You are repeating yourself. Stop reasoning now and provide the answer."
+)
 
 _SHARED_SAMPLING = {
     "temperature": 0.6,
@@ -68,6 +83,25 @@ REASONING_POLICIES: Dict[str, Dict[str, Any]] = {
 }
 
 
+def normalize_thinking_mode(value: Optional[str]) -> str:
+    """Normalise a raw thinking_mode string to one of 'thinking', 'non_thinking', or 'auto'.
+
+    Aliases accepted:
+      thinking   : "think", "thinking", "on", "true", "1"
+      non_thinking: "non_thinking", "nonthinking", "non-thinking",
+                    "instruct", "off", "false", "0", "none", "no"
+      auto       : None / empty / unrecognised
+    """
+    if not isinstance(value, str) or not value.strip():
+        return "auto"
+    v = value.strip().lower().replace("-", "_")
+    if v in {"think", "thinking", "on", "true", "1"}:
+        return "thinking"
+    if v in {"non_thinking", "nonthinking", "instruct", "off", "false", "0", "none", "no"}:
+        return "non_thinking"
+    return "auto"
+
+
 def normalize_reasoning_level(level: str | None) -> str:
     if not isinstance(level, str):
         return "medium"
@@ -114,17 +148,46 @@ def requested_reasoning_level(body: Dict[str, Any] | None, default_level: str | 
     return normalize_reasoning_level(default_level)
 
 
-def apply_reasoning_policy(body: Dict[str, Any], level: str | None, mode: str | None = None) -> Dict[str, Any]:
+def apply_reasoning_policy(
+    body: Dict[str, Any],
+    level: str | None,
+    mode: str | None = None,
+    thinking_mode: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Apply reasoning policy to a request body.
+
+    Args:
+        body:          The mutable request body dict (modified in place and returned).
+        level:         Reasoning effort level ('low', 'medium', 'high', 'xhigh').
+        mode:          Policy mode string (default: DEFAULT_REASONING_POLICY_MODE).
+        thinking_mode: Resolved thinking mode ('thinking', 'non_thinking', or 'auto'/None).
+                       'thinking'     → injects reasoning_budget_tokens + reasoning_budget_message.
+                       'non_thinking' → removes any budget fields.
+                       'auto'/None    → no budget injection (safe fallback).
+    """
     if not isinstance(body, dict):
         return body
 
     policy = reasoning_policy_for_level(level)
     mode = mode or reasoning_policy_mode()
+    resolved_level = normalize_reasoning_level(level)
+    tm = normalize_thinking_mode(thinking_mode)
 
     body.pop("thinking_budget_tokens", None)
 
     for key, value in policy["sampling"].items():
         body.setdefault(key, value)
+
+    # Apply per-block reasoning budget for thinking-mode models.
+    thinking_budget_tokens: Optional[int] = None
+    if tm == "thinking":
+        thinking_budget_tokens = THINKING_MODE_BUDGET_TOKENS[resolved_level]
+        body.setdefault("reasoning_budget_tokens", thinking_budget_tokens)
+        body.setdefault("reasoning_budget_message", REASONING_BUDGET_MESSAGE)
+    elif tm == "non_thinking":
+        body.pop("reasoning_budget_tokens", None)
+        body.pop("reasoning_budget_message", None)
+    # tm == "auto": no injection — caller did not resolve model type; safe fallback.
 
     block = policy["prompt"]
     existing = body.get("instructions")
@@ -142,7 +205,8 @@ def apply_reasoning_policy(body: Dict[str, Any], level: str | None, mode: str | 
         "policy": mode,
         "prompt": policy["prompt"],
         "sampling": policy["sampling"],
-        "thinking_budget_tokens": None,
+        "thinking_mode": tm,
+        "thinking_budget_tokens": thinking_budget_tokens,
     }
     body["metadata"] = metadata
     return body

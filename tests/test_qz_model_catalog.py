@@ -757,6 +757,209 @@ class StatusSnapshotBackendManagerFallbackTests(_IsolatedModelEnvMixin, unittest
                 self.fail(f"status_snapshot() raised unexpectedly: {exc}")
 
 
+class ThinkingModeRouterTests(_IsolatedModelEnvMixin, unittest.TestCase):
+    """Tests for selected_thinking_mode() and selected_thinking_budget_tokens()
+    on ModelRouter.  Covers profile override, model-name heuristic, and budget
+    table values.
+    """
+
+    def _router_for_entry(self, entry_overrides: dict):
+        """Build a minimal ModelRouter whose selected model has the given overrides."""
+        class FakeEntry:
+            pass
+
+        class FakeCatalog:
+            def selected(self):
+                return {"overrides": entry_overrides}
+
+        class FakeHandler2:
+            catalog = FakeCatalog()
+            telemetry = None
+
+            def _model_catalog(self):
+                return self.catalog
+
+            def _backend(self):
+                raise AssertionError("backend should not be called in thinking-mode tests")
+
+        from proxy.qz_model_router import ModelRouter
+        return ModelRouter(FakeHandler2())
+
+    def _router_for_backend_id(self, backend_id: str):
+        """Build a router whose selected entry has the given backend_id (no explicit thinking_mode)."""
+        return self._router_for_entry({"backend_id": backend_id})
+
+    # --- normalize_thinking_mode import check ---
+
+    def test_normalize_thinking_mode_importable_from_router_module(self):
+        from proxy.qz_model_router import normalize_thinking_mode
+        self.assertEqual(normalize_thinking_mode("thinking"), "thinking")
+        self.assertEqual(normalize_thinking_mode("instruct"), "non_thinking")
+        self.assertEqual(normalize_thinking_mode(None), "auto")
+
+    # --- explicit profile override wins ---
+
+    def test_explicit_thinking_mode_thinking(self):
+        r = self._router_for_entry({"thinking_mode": "thinking"})
+        self.assertEqual(r.selected_thinking_mode({"overrides": {"thinking_mode": "thinking"}}), "thinking")
+
+    def test_explicit_thinking_mode_non_thinking(self):
+        r = self._router_for_entry({"thinking_mode": "non_thinking"})
+        self.assertEqual(r.selected_thinking_mode({"overrides": {"thinking_mode": "non_thinking"}}), "non_thinking")
+
+    def test_explicit_reasoning_mode_alias(self):
+        entry = {"overrides": {"reasoning_mode": "thinking"}}
+        from proxy.qz_model_router import ModelRouter
+        r = self._router_for_entry({})
+        self.assertEqual(r.selected_thinking_mode(entry), "thinking")
+
+    def test_explicit_default_thinking_mode_alias(self):
+        entry = {"overrides": {"default_thinking_mode": "non_thinking"}}
+        from proxy.qz_model_router import ModelRouter
+        r = self._router_for_entry({})
+        self.assertEqual(r.selected_thinking_mode(entry), "non_thinking")
+
+    # --- model-name heuristics ---
+
+    def test_coder_name_defaults_non_thinking(self):
+        entry = {"overrides": {}, "backend_id": "Qwen3-Coder-30B-A3B-Instruct.gguf"}
+        r = self._router_for_entry({})
+        self.assertEqual(r.selected_thinking_mode(entry), "non_thinking")
+
+    def test_instruct_name_defaults_non_thinking(self):
+        entry = {"overrides": {}, "backend_id": "Qwen3-30B-Instruct.gguf"}
+        r = self._router_for_entry({})
+        self.assertEqual(r.selected_thinking_mode(entry), "non_thinking")
+
+    def test_qwen36_name_defaults_thinking(self):
+        entry = {"overrides": {}, "backend_id": "Qwen3.6-27B-NEO-CODE.gguf"}
+        r = self._router_for_entry({})
+        self.assertEqual(r.selected_thinking_mode(entry), "thinking")
+
+    def test_a3b_name_defaults_thinking(self):
+        entry = {"overrides": {}, "backend_id": "Qwen3-235B-A3B-Thinking.gguf"}
+        r = self._router_for_entry({})
+        self.assertEqual(r.selected_thinking_mode(entry), "thinking")
+
+    def test_unknown_model_name_returns_auto(self):
+        entry = {"overrides": {}, "backend_id": "some-unknown-model.gguf"}
+        r = self._router_for_entry({})
+        self.assertEqual(r.selected_thinking_mode(entry), "auto")
+
+    def test_explicit_override_wins_over_coder_name(self):
+        """Explicit thinking_mode=thinking must beat Coder name heuristic."""
+        entry = {"overrides": {"thinking_mode": "thinking"}, "backend_id": "Qwen3-Coder-30B.gguf"}
+        r = self._router_for_entry({})
+        self.assertEqual(r.selected_thinking_mode(entry), "thinking")
+
+    # --- budget table via selected_thinking_budget_tokens ---
+
+    def test_thinking_model_low_budget(self):
+        # default_reasoning_level is hoisted to top-level by build_entry()
+        entry = {"overrides": {}, "backend_id": "Qwen3.6-27B.gguf", "default_reasoning_level": "low"}
+        r = self._router_for_entry({})
+        budget = r.selected_thinking_budget_tokens(entry)
+        self.assertEqual(budget, 16384)
+
+    def test_thinking_model_medium_budget(self):
+        entry = {"overrides": {}, "backend_id": "Qwen3.6-27B.gguf", "default_reasoning_level": "medium"}
+        r = self._router_for_entry({})
+        budget = r.selected_thinking_budget_tokens(entry)
+        self.assertEqual(budget, 24576)
+
+    def test_thinking_model_high_budget(self):
+        entry = {"overrides": {}, "backend_id": "Qwen3.6-27B.gguf", "default_reasoning_level": "high"}
+        r = self._router_for_entry({})
+        budget = r.selected_thinking_budget_tokens(entry)
+        self.assertEqual(budget, 32768)
+
+    def test_thinking_model_xhigh_budget(self):
+        entry = {"overrides": {}, "backend_id": "Qwen3.6-27B.gguf", "default_reasoning_level": "xhigh"}
+        r = self._router_for_entry({})
+        budget = r.selected_thinking_budget_tokens(entry)
+        self.assertEqual(budget, 49152)
+
+    def test_non_thinking_model_budget_is_none(self):
+        entry = {"overrides": {}, "backend_id": "Qwen3-Coder-30B-Instruct.gguf"}
+        r = self._router_for_entry({})
+        self.assertIsNone(r.selected_thinking_budget_tokens(entry))
+
+    def test_auto_model_budget_is_none(self):
+        entry = {"overrides": {}, "backend_id": "some-unknown-model.gguf"}
+        r = self._router_for_entry({})
+        self.assertIsNone(r.selected_thinking_budget_tokens(entry))
+
+    # --- selected_reasoning_policy includes thinking_mode and budget ---
+
+    def test_reasoning_policy_includes_thinking_mode_for_thinking_model(self):
+        entry = {"overrides": {}, "backend_id": "Qwen3.6-27B.gguf"}
+        r = self._router_for_entry({})
+        policy = r.selected_reasoning_policy(entry)
+        self.assertEqual(policy["thinking_mode"], "thinking")
+        self.assertIsNotNone(policy["thinking_budget_tokens"])
+
+    def test_reasoning_policy_thinking_budget_none_for_non_thinking(self):
+        entry = {"overrides": {}, "backend_id": "Qwen3-Coder-30B-Instruct.gguf"}
+        r = self._router_for_entry({})
+        policy = r.selected_reasoning_policy(entry)
+        self.assertEqual(policy["thinking_mode"], "non_thinking")
+        self.assertIsNone(policy["thinking_budget_tokens"])
+
+    # --- catalog profile thinking_mode key plumbing ---
+
+    def test_profile_thinking_mode_stored_in_overrides(self):
+        """thinking_mode from profile runtime section flows into entry overrides."""
+        import json
+        import tempfile
+        from proxy.qz_model_catalog import ModelCatalog, load_manifest
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            _write_gguf(model_dir / "mymodel.gguf", name="mymodel")
+            overrides_dir = root / "config" / "user"
+            overrides_dir.mkdir(parents=True, exist_ok=True)
+            (overrides_dir / "profiles.json").write_text(json.dumps({
+                "schema": "qz.profiles.v1",
+                "profiles": {
+                    "mymodel": {
+                        "backend": {"gguf": "mymodel.gguf"},
+                        "runtime": {"thinking_mode": "non_thinking"},
+                    }
+                }
+            }))
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+            entry, _ = catalog.resolve(query="mymodel.gguf")
+            self.assertIsNotNone(entry)
+            overrides = entry.get("overrides") or {}
+            self.assertEqual(overrides.get("thinking_mode"), "non_thinking")
+
+    def test_profile_reasoning_mode_alias_stored_in_overrides(self):
+        """reasoning_mode alias from profile runtime section flows into thinking_mode override."""
+        import json
+        import tempfile
+        from proxy.qz_model_catalog import ModelCatalog, load_manifest
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "var" / "models"
+            _write_gguf(model_dir / "mymodel.gguf", name="mymodel")
+            overrides_dir = root / "config" / "user"
+            overrides_dir.mkdir(parents=True, exist_ok=True)
+            (overrides_dir / "profiles.json").write_text(json.dumps({
+                "schema": "qz.profiles.v1",
+                "profiles": {
+                    "mymodel": {
+                        "backend": {"gguf": "mymodel.gguf"},
+                        "runtime": {"reasoning_mode": "thinking"},
+                    }
+                }
+            }))
+            catalog = ModelCatalog(root, model_dir, load_manifest(root))
+            entry, _ = catalog.resolve(query="mymodel.gguf")
+            self.assertIsNotNone(entry)
+            overrides = entry.get("overrides") or {}
+            self.assertEqual(overrides.get("thinking_mode"), "thinking")
+
+
 class MemoryDomainCatalogTests(_IsolatedModelEnvMixin, unittest.TestCase):
     """Tests for memory_domain plumbing through model-overrides -> catalog entry."""
 

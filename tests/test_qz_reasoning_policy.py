@@ -4,7 +4,12 @@ import unittest
 sys.path.insert(0, str(__file__).rsplit("/tests/", 1)[0])
 
 from proxy import qz_reasoning_policy
-from proxy.qz_reasoning_policy import REASONING_POLICIES
+from proxy.qz_reasoning_policy import (
+    REASONING_POLICIES,
+    THINKING_MODE_BUDGET_TOKENS,
+    REASONING_BUDGET_MESSAGE,
+    normalize_thinking_mode,
+)
 
 
 class ReasoningPolicyTests(unittest.TestCase):
@@ -136,6 +141,151 @@ class ReasoningPolicyTests(unittest.TestCase):
         out2 = qz_reasoning_policy.apply_reasoning_policy(out, "medium")
         count_after = out2["instructions"].count(REASONING_POLICIES["medium"]["prompt"])
         self.assertEqual(count_before, count_after)
+
+
+class NormalizeThinkingModeTests(unittest.TestCase):
+    """normalize_thinking_mode() alias coverage."""
+
+    def _n(self, value):
+        return normalize_thinking_mode(value)
+
+    def test_thinking_aliases(self):
+        for alias in ("think", "thinking", "on", "true", "1", "THINKING", "Think"):
+            self.assertEqual(self._n(alias), "thinking", f"alias {alias!r} should be 'thinking'")
+
+    def test_non_thinking_aliases(self):
+        for alias in ("non_thinking", "nonthinking", "non-thinking",
+                      "instruct", "off", "false", "0", "none", "no",
+                      "NON_THINKING", "Instruct"):
+            self.assertEqual(self._n(alias), "non_thinking", f"alias {alias!r} should be 'non_thinking'")
+
+    def test_auto_for_none(self):
+        self.assertEqual(self._n(None), "auto")
+
+    def test_auto_for_empty(self):
+        self.assertEqual(self._n(""), "auto")
+        self.assertEqual(self._n("   "), "auto")
+
+    def test_auto_for_unknown(self):
+        self.assertEqual(self._n("banana"), "auto")
+        self.assertEqual(self._n("auto"), "auto")
+
+
+class ThinkingModeBudgetTableTests(unittest.TestCase):
+    """THINKING_MODE_BUDGET_TOKENS covers all effort levels with correct values."""
+
+    def test_all_effort_levels_present(self):
+        for level in ("low", "medium", "high", "xhigh"):
+            self.assertIn(level, THINKING_MODE_BUDGET_TOKENS)
+
+    def test_low_budget(self):
+        self.assertEqual(THINKING_MODE_BUDGET_TOKENS["low"], 16384)
+
+    def test_medium_budget(self):
+        self.assertEqual(THINKING_MODE_BUDGET_TOKENS["medium"], 24576)
+
+    def test_high_budget(self):
+        self.assertEqual(THINKING_MODE_BUDGET_TOKENS["high"], 32768)
+
+    def test_xhigh_budget(self):
+        self.assertEqual(THINKING_MODE_BUDGET_TOKENS["xhigh"], 49152)
+
+    def test_budgets_strictly_increasing(self):
+        vals = [THINKING_MODE_BUDGET_TOKENS[l] for l in ("low", "medium", "high", "xhigh")]
+        self.assertEqual(vals, sorted(vals))
+
+    def test_reasoning_budget_message_non_empty(self):
+        self.assertIsInstance(REASONING_BUDGET_MESSAGE, str)
+        self.assertTrue(REASONING_BUDGET_MESSAGE.strip())
+
+
+class ApplyReasoningPolicyThinkingModeTests(unittest.TestCase):
+    """apply_reasoning_policy() behaviour with thinking_mode argument."""
+
+    def _apply(self, level="medium", thinking_mode=None, body=None):
+        b = body if body is not None else {"instructions": "Do the task."}
+        return qz_reasoning_policy.apply_reasoning_policy(b, level, thinking_mode=thinking_mode)
+
+    # --- thinking mode ---
+
+    def test_thinking_mode_injects_budget_tokens(self):
+        out = self._apply("medium", "thinking")
+        self.assertEqual(out["reasoning_budget_tokens"], THINKING_MODE_BUDGET_TOKENS["medium"])
+
+    def test_thinking_mode_injects_budget_message(self):
+        out = self._apply("medium", "thinking")
+        self.assertEqual(out["reasoning_budget_message"], REASONING_BUDGET_MESSAGE)
+
+    def test_thinking_mode_does_not_overwrite_explicit_budget(self):
+        """Caller-supplied reasoning_budget_tokens must not be overwritten."""
+        out = self._apply("high", "thinking", body={"reasoning_budget_tokens": 999})
+        self.assertEqual(out["reasoning_budget_tokens"], 999)
+
+    def test_thinking_budget_in_metadata_for_thinking_mode(self):
+        out = self._apply("high", "thinking")
+        self.assertEqual(
+            out["metadata"]["qz_reasoning"]["thinking_budget_tokens"],
+            THINKING_MODE_BUDGET_TOKENS["high"],
+        )
+
+    def test_thinking_mode_in_metadata(self):
+        out = self._apply("medium", "thinking")
+        self.assertEqual(out["metadata"]["qz_reasoning"]["thinking_mode"], "thinking")
+
+    def test_low_effort_thinking_budget(self):
+        out = self._apply("low", "thinking")
+        self.assertEqual(out["reasoning_budget_tokens"], 16384)
+
+    def test_xhigh_effort_thinking_budget(self):
+        out = self._apply("xhigh", "thinking")
+        self.assertEqual(out["reasoning_budget_tokens"], 49152)
+
+    # --- non_thinking mode ---
+
+    def test_non_thinking_omits_budget_tokens(self):
+        out = self._apply("high", "non_thinking")
+        self.assertNotIn("reasoning_budget_tokens", out)
+
+    def test_non_thinking_omits_budget_message(self):
+        out = self._apply("high", "non_thinking")
+        self.assertNotIn("reasoning_budget_message", out)
+
+    def test_non_thinking_removes_existing_budget_tokens(self):
+        out = self._apply("high", "non_thinking", body={"reasoning_budget_tokens": 32768})
+        self.assertNotIn("reasoning_budget_tokens", out)
+
+    def test_non_thinking_metadata_budget_is_none(self):
+        out = self._apply("high", "non_thinking")
+        self.assertIsNone(out["metadata"]["qz_reasoning"]["thinking_budget_tokens"])
+
+    def test_non_thinking_mode_in_metadata(self):
+        out = self._apply("medium", "non_thinking")
+        self.assertEqual(out["metadata"]["qz_reasoning"]["thinking_mode"], "non_thinking")
+
+    # --- auto / None (safe fallback) ---
+
+    def test_auto_mode_no_budget_injected(self):
+        out = self._apply("high", "auto")
+        self.assertNotIn("reasoning_budget_tokens", out)
+
+    def test_none_thinking_mode_no_budget_injected(self):
+        out = self._apply("high", None)
+        self.assertNotIn("reasoning_budget_tokens", out)
+
+    def test_auto_mode_in_metadata(self):
+        out = self._apply("medium", "auto")
+        self.assertEqual(out["metadata"]["qz_reasoning"]["thinking_mode"], "auto")
+
+    # --- backward compat: existing tests that must still pass ---
+
+    def test_thinking_budget_tokens_key_still_removed_from_body(self):
+        """thinking_budget_tokens (old key) must always be removed from body."""
+        out = self._apply("medium", "thinking", body={"thinking_budget_tokens": 512})
+        self.assertNotIn("thinking_budget_tokens", out)
+
+    def test_non_thinking_thinking_budget_tokens_still_removed(self):
+        out = self._apply("medium", "non_thinking", body={"thinking_budget_tokens": 512})
+        self.assertNotIn("thinking_budget_tokens", out)
 
 
 if __name__ == "__main__":

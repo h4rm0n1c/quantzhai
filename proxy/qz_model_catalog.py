@@ -299,6 +299,15 @@ def _profiles_v1_to_manifest(data: Dict[str, Any]) -> Dict[str, Any]:
         fdrl = runtime.get("force_default_reasoning_level")
         if fdrl is not None:
             overrides["force_default_reasoning_level"] = fdrl
+        # thinking_mode: profile can specify "thinking", "non_thinking", or "auto".
+        # Aliases: reasoning_mode, default_thinking_mode.
+        tm = (
+            runtime.get("thinking_mode")
+            or runtime.get("reasoning_mode")
+            or runtime.get("default_thinking_mode")
+        )
+        if isinstance(tm, str) and tm.strip():
+            overrides["thinking_mode"] = tm.strip()
         la = runtime.get("launch_args")
         if la:
             overrides["launch_args"] = la

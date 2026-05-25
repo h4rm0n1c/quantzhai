@@ -8,8 +8,10 @@ try:
     from .qz_reasoning_policy import (
         apply_reasoning_policy,
         normalize_reasoning_level,
+        normalize_thinking_mode,
         reasoning_policy_for_level,
         reasoning_policy_mode,
+        THINKING_MODE_BUDGET_TOKENS,
     )
     from .qz_prompt_policy import assemble_instruction_stack
     from .qz_runtime_io import read_json, runtime_state_path, write_json
@@ -18,8 +20,10 @@ except ImportError:
     from qz_reasoning_policy import (
         apply_reasoning_policy,
         normalize_reasoning_level,
+        normalize_thinking_mode,
         reasoning_policy_for_level,
         reasoning_policy_mode,
+        THINKING_MODE_BUDGET_TOKENS,
     )
     from qz_prompt_policy import assemble_instruction_stack
     from qz_runtime_io import read_json, runtime_state_path, write_json
@@ -126,6 +130,7 @@ class ModelRouter:
                 "selected_reasoning_policy": reasoning_policy_mode(),
                 "selected_reasoning_prompt": None,
                 "selected_sampling_params": {},
+                "selected_thinking_mode": None,
                 "selected_thinking_budget_tokens": None,
                 "backend_reasoning_budget": backend_reasoning_budget(),
                 "selected_context_length": None,
@@ -663,7 +668,50 @@ class ModelRouter:
             return "low"
         return "medium"
 
-    def selected_thinking_budget_tokens(self, selected: dict | None = None):
+    def selected_thinking_mode(self, selected: dict | None = None) -> str:
+        """Return the resolved thinking mode for the selected model/profile.
+
+        Source priority:
+          1. Explicit profile override (thinking_mode / reasoning_mode / default_thinking_mode)
+          2. Model-name heuristic (Coder/Instruct → non_thinking; Qwen3.6/A3B → thinking)
+          3. Fallback: 'auto' (unknown — no budget injected)
+        """
+        selected = selected if isinstance(selected, dict) else self.selected_model_entry()
+        if not isinstance(selected, dict):
+            return "auto"
+        overrides = selected.get("overrides") if isinstance(selected, dict) else {}
+        overrides = overrides if isinstance(overrides, dict) else {}
+        # 1. Explicit profile override
+        for key in ("thinking_mode", "reasoning_mode", "default_thinking_mode"):
+            value = overrides.get(key)
+            if isinstance(value, str) and value.strip():
+                return normalize_thinking_mode(value)
+        # 2. Model-name heuristic
+        text = " ".join(
+            str(v).lower()
+            for v in (
+                selected.get("label"),
+                selected.get("name"),
+                selected.get("notes"),
+                selected.get("slug"),
+                selected.get("backend_id"),
+            )
+            if v
+        ).strip()
+        # Non-thinking markers take priority (more specific)
+        if any(kw in text for kw in ("coder", "instruct")):
+            return "non_thinking"
+        # Thinking markers (Qwen3.6 / MoE A3B / explicit "thinking"/"reasoning")
+        if any(kw in text for kw in ("qwen3.6", "qwen3-6", "a3b", "thinking", "reasoning")):
+            return "thinking"
+        return "auto"
+
+    def selected_thinking_budget_tokens(self, selected: dict | None = None) -> int | None:
+        """Return the per-block reasoning budget in tokens for the selected model, or None."""
+        mode = self.selected_thinking_mode(selected)
+        if mode == "thinking":
+            level = self.selected_reasoning_level(selected)
+            return THINKING_MODE_BUDGET_TOKENS.get(normalize_reasoning_level(level))
         return None
 
     def selected_reasoning_policy(self, selected: dict | None = None, body: dict | None = None):
@@ -683,7 +731,13 @@ class ModelRouter:
                 level = normalize_reasoning_level(body.get("reasoning_effort"))
         policy = reasoning_policy_for_level(level)
         policy["mode"] = reasoning_policy_mode()
-        policy["thinking_budget_tokens"] = None
+        # Resolve thinking mode and per-block budget
+        thinking_mode = self.selected_thinking_mode(selected)
+        thinking_budget_tokens = None
+        if thinking_mode == "thinking":
+            thinking_budget_tokens = THINKING_MODE_BUDGET_TOKENS.get(normalize_reasoning_level(level))
+        policy["thinking_mode"] = thinking_mode
+        policy["thinking_budget_tokens"] = thinking_budget_tokens
         policy["client_override_allowed"] = bool(allow_client_override)
         policy["default_effort"] = default_level
         return policy
@@ -755,9 +809,15 @@ class ModelRouter:
 
     def apply_reasoning_policy(self, body: dict, selected: dict | None = None):
         policy = self.selected_reasoning_policy(selected, body)
-        result = apply_reasoning_policy(body, policy.get("effort"), policy.get("mode"))
+        result = apply_reasoning_policy(
+            body,
+            policy.get("effort"),
+            policy.get("mode"),
+            policy.get("thinking_mode"),
+        )
         metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
         qz_reasoning = metadata.get("qz_reasoning") if isinstance(metadata.get("qz_reasoning"), dict) else {}
+        qz_reasoning["thinking_mode"] = policy.get("thinking_mode")
         qz_reasoning["thinking_budget_tokens"] = policy.get("thinking_budget_tokens")
         qz_reasoning["client_override_allowed"] = bool(policy.get("client_override_allowed"))
         qz_reasoning["default_level"] = policy.get("default_effort")
@@ -831,6 +891,7 @@ class ModelRouter:
             except Exception:
                 pass
         reasoning_level = self.selected_reasoning_level(selected)
+        thinking_mode = self.selected_thinking_mode(selected)
         reasoning_policy = self.selected_reasoning_policy(selected)
         prompt_status = self.selected_prompt_status(selected)
         selected_context_length, selected_context_source, selected_context_state = self.selected_context_length_fact(selected)
@@ -876,6 +937,7 @@ class ModelRouter:
                 "selected_reasoning_policy": reasoning_policy.get("mode"),
                 "selected_reasoning_prompt": reasoning_policy.get("prompt"),
                 "selected_sampling_params": reasoning_policy.get("sampling"),
+                "selected_thinking_mode": thinking_mode,
                 "selected_thinking_budget_tokens": reasoning_policy.get("thinking_budget_tokens"),
                 "backend_reasoning_budget": backend_reasoning_budget(),
                 "selected_context_length": selected_context_length,
@@ -930,6 +992,7 @@ class ModelRouter:
             "reasoning_policy": backend.get("selected_reasoning_policy") or reasoning_policy_mode(),
             "reasoning_prompt": backend.get("selected_reasoning_prompt"),
             "sampling": backend.get("selected_sampling_params") or {},
+            "selected_thinking_mode": backend.get("selected_thinking_mode"),
             "thinking_budget_tokens": backend.get("selected_thinking_budget_tokens"),
             "backend_reasoning_budget": backend.get("backend_reasoning_budget"),
             "selected_context_length": backend.get("selected_context_length"),
