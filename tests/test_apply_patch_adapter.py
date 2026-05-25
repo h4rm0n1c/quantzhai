@@ -689,6 +689,50 @@ class ApplyPatchAdapterTests(unittest.TestCase):
         self.assertIn('"output_tokens": 0', stream)
         self.assertIn('"total_tokens": 0', stream)
 
+    def test_ap1_non_streaming_path_emits_no_apply_patch_sub_lifecycle_events(self):
+        """AP1 Test 3: make_response_stream_events must not emit any response.apply_patch_call.* events.
+
+        Source: docs/apply-patch-codex-lifecycle-audit.md §5.4, §8 G-AP1.
+        """
+        out = {
+            "id": "resp_ns_ap1",
+            "model": "test-model.gguf",
+            "output": [{
+                "id": "apc_ns_1",
+                "type": "apply_patch_call",
+                "status": "completed",
+                "call_id": "call_ns_ap1",
+                "operation": {
+                    "type": "update_file",
+                    "path": "src/main.py",
+                    "diff": "@@\n-old\n+new\n",
+                },
+            }],
+        }
+        stream = b"".join(make_response_stream_events(out)).decode("utf-8")
+
+        # Required generic lifecycle events must be present
+        self.assertIn("response.output_item.added", stream)
+        self.assertIn("response.output_item.done", stream)
+
+        # Forbidden sub-lifecycle events must not appear in the non-streaming synthetic path
+        for forbidden in (
+            "response.apply_patch_call.in_progress",
+            "response.apply_patch_call.searching",
+            "response.apply_patch_call.completed",
+            "response.web_search_call.in_progress",
+            "response.web_search_call.searching",
+            "response.web_search_call.completed",
+            "response.file_search_call.in_progress",
+            "response.code_interpreter_call.in_progress",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+        ):
+            self.assertNotIn(
+                forbidden, stream,
+                f"Non-streaming make_response_stream_events must not emit {forbidden!r} for apply_patch",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

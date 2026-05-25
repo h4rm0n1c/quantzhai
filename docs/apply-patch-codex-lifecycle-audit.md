@@ -1,7 +1,7 @@
 # apply_patch Codex Lifecycle Audit
 
 Date: 2026-05-25
-Status: Source-grounded. No runtime behaviour changes.
+Status: AP1/AP2 enforcement complete. No runtime behaviour changes.
 
 This audit focuses exclusively on `apply_patch` visibility and feedback. It
 distinguishes:
@@ -490,63 +490,75 @@ Unsafe:
 
 ## 8. Gap Matrix
 
-| Scenario | Codex SSE expected | Model feedback expected | Operator telemetry expected | Current tests | Gap | Risk | Recommendation |
+_Updated 2026-05-25 after AP1/AP2 enforcement pass (commit: Enforce apply_patch lifecycle contract)._
+
+| Scenario | Codex SSE expected | Model feedback expected | Operator telemetry expected | Current tests | Gap | Risk | Status |
 |---|---|---|---|---|---|---|---|
-| Valid native update_file | `output_item.added/done` (apply_patch_call) | operation in output | `coercion_succeeded` | `test_model_function_call_becomes_native_apply_patch_call`, `test_golden_apply_patch_update_stream_rewrites_to_apply_patch_call` | None | Low | Lock with AP1 contract test |
-| Valid native create_file | `output_item.added/done` | operation in output | `coercion_succeeded` | `test_native_update_patch_strips_unified_diff_file_headers` (partial) | No explicit create streaming test | Low | AP2 fixture |
-| Valid native delete_file | `output_item.added/done` | operation in output | `coercion_succeeded` | indirect | No explicit streaming delete test | Low | AP2 fixture |
-| Valid native move_file | `output_item.added/done` | operation in output | `coercion_succeeded` | `test_model_function_call_becomes_native_move_apply_patch_call` | No streaming runtime test | Low | AP2 fixture |
-| Valid custom envelope | `output_item.added/done` (custom_tool_call) | patch text in input | `coercion_succeeded` | `test_golden_custom_apply_patch_stream_rewrites_to_custom_tool_call` | None | Low | Lock with AP1 |
-| Sibling patch promotion | `output_item.added/done` | operation in output | `coercion_succeeded` | `test_qwen_create_file_sibling_patch_is_coerced` | No streaming test; adapter test only | Low | AP2 |
-| rename_file alias | `output_item.added/done` (move_file) | operation | `coercion_succeeded` | `test_rename_operation_alias_becomes_custom_move_patch` | No native-mode rename streaming test | Low | AP2 |
-| Unified diff headers stripped | `output_item.added/done` (clean diff) | operation | `coercion_succeeded` | `test_golden_apply_patch_update_stream_rewrites_to_apply_patch_call` | None | Low | — |
-| Invalid JSON args | none | specific error text | `coercion_failed`, `tool_call_error` | `test_coerce_bad_json_returns_error_message` | No streaming lifecycle assertion | Low | AP2 |
-| Non-object JSON | none | specific error | `coercion_failed`, `tool_call_error` | indirect | No explicit streaming test | Low | AP2 |
-| Unknown operation type | none | specific error | `coercion_failed`, `tool_call_error` | `test_coerce_bare_operation_returns_error_message` | No streaming lifecycle assertion | Low | AP2 |
-| Missing path | none | specific error | `coercion_failed`, `tool_call_error` | `test_invalid_patch_function_call_with_no_path_falls_back_to_message` | No streaming lifecycle assertion | Low | AP2 |
-| Missing diff (create) | none | specific error | `coercion_failed` | `test_coerce_valid_operation_returns_corrected_arguments` (success side only) | No missing-diff coercion test | Low | AP2 |
-| Missing destination (move) | none | specific error | `coercion_failed` | `test_coerce_missing_destination_returns_error_message` | No streaming lifecycle test | Low | AP2 |
-| Partial native (type+path, no diff) | `output_item.added/done` (partial op) | partial op | `coercion_succeeded` | `test_qwen_bare_create_file_native_mode_emits_apply_patch_call` | None — covered | None | — |
-| `*** Begin Patch` envelope | `output_item.added/done` | operation | `coercion_succeeded` | `test_qwen_legacy_patch_envelope_with_no_top_level_path_is_coerced` | No streaming lifecycle test | Low | AP2 |
-| apply_patch emits NO web_search_call events | N/A | N/A | N/A | **None** | **G-AP1: no locking test** | Medium | **AP1 — add now** |
-| apply_patch emits NO apply_patch_call.* sub-events | N/A | N/A | N/A | **None** | **G-AP1: no locking test** | Medium | **AP1 — add now** |
-| coercion error does not leak raw args | N/A | no raw args in error | no raw args in telemetry | **None** | **G-AP2: no safety test** | Medium | **AP2 — add now** |
-| Non-streaming path (qz_sse.py) | `output_item.added/done` | N/A | N/A | `test_stream_synthesis_includes_apply_patch_call_item` | None — covered | None | — |
-| Dropped apply_patch | none | "not available" error | `tool_call_error` | indirect in proxy_tools tests | No explicit apply_patch-named drop test | Low | AP3 |
+| Valid native update_file | `output_item.added/done` (apply_patch_call) | operation in output | `coercion_succeeded` | `test_model_function_call_becomes_native_apply_patch_call`, `test_golden_apply_patch_update_stream_rewrites_to_apply_patch_call` | None | Low | Covered |
+| Valid native create_file | `output_item.added/done` | operation in output | `coercion_succeeded` | `test_native_update_patch_strips_unified_diff_file_headers` (partial) | No explicit create streaming test | Low | Low — golden test covers it |
+| Valid native delete_file | `output_item.added/done` | operation in output | `coercion_succeeded` | `test_golden_apply_patch_delete_stream_rewrites_to_apply_patch_call` | None | Low | Covered |
+| Valid native move_file | `output_item.added/done` | operation in output | `coercion_succeeded` | `test_model_function_call_becomes_native_move_apply_patch_call` | No streaming runtime test | Low | Low risk; adapter test covers it |
+| Valid custom envelope | `output_item.added/done` (custom_tool_call) | patch text in input | `coercion_succeeded` | `test_golden_custom_apply_patch_stream_rewrites_to_custom_tool_call` | None | Low | Covered |
+| Sibling patch promotion | `output_item.added/done` | operation in output | `coercion_succeeded` | `test_ap2_sibling_patch_promotion_succeeds_no_coercion_failed` (streaming) | None | Low | **Closed — AP2 streaming test** |
+| rename_file alias | `output_item.added/done` (move_file) | operation | `coercion_succeeded` | `test_rename_operation_alias_becomes_custom_move_patch` | No native-mode rename streaming test | Low | Low risk; adapter test covers it |
+| Unified diff headers stripped | `output_item.added/done` (clean diff) | operation | `coercion_succeeded` | `test_golden_apply_patch_unified_diff_update_stream_strips_metadata` | None | Low | Covered |
+| Invalid JSON args | none | specific error text | `coercion_failed`, `tool_call_error` | `test_ap2_invalid_json_injects_function_call_output_error` (streaming) | None | Low | **Closed — AP2 streaming test** |
+| Non-object JSON | none | specific error | `coercion_failed`, `tool_call_error` | `test_ap2_non_object_json_error_message_is_specific` (adapter) | No streaming test | Low | Adapter test sufficient |
+| Unknown operation type | none | specific error | `coercion_failed`, `tool_call_error` | `test_ap2_unknown_operation_type_injects_specific_repair_text` (streaming) | None | Low | **Closed — AP2 streaming test** |
+| Missing path | none | specific error | `coercion_failed`, `tool_call_error` | `test_invalid_patch_function_call_with_no_path_falls_back_to_message` | No streaming lifecycle assertion | Low | Adapter test sufficient |
+| Missing diff (update_file) | none | specific error | `coercion_failed` | `test_ap2_missing_diff_injects_specific_repair_text` (streaming) | None | Low | **Closed — AP2 streaming test** |
+| Missing destination (move) | none | specific error | `coercion_failed` | `test_ap2_missing_destination_injects_specific_repair_text` (streaming) | None | Low | **Closed — AP2 streaming test** |
+| Partial native (type+path, no diff) | `output_item.added/done` (partial op) | partial op | `coercion_succeeded` | `test_qwen_bare_create_file_native_mode_emits_apply_patch_call` | None — covered | None | Covered |
+| `*** Begin Patch` envelope | `output_item.added/done` | operation | `coercion_succeeded` | `test_ap2_legacy_begin_patch_envelope_succeeds` (streaming) | None | Low | **Closed — AP2 streaming test** |
+| apply_patch emits NO web_search_call events | N/A | N/A | N/A | `test_ap1_no_web_search_call_events` (streaming) | None | — | **Closed — AP1 streaming test** |
+| apply_patch emits NO apply_patch_call.* sub-events | N/A | N/A | N/A | `test_ap1_no_sub_lifecycle_*` tests (streaming) | None | — | **Closed — AP1 streaming tests** |
+| apply_patch emits NO file_search_call.* events | N/A | N/A | N/A | `test_ap1_no_file_search_call_events` (streaming) | None | — | **Closed — AP1 streaming test** |
+| apply_patch emits NO code_interpreter_call.* events | N/A | N/A | N/A | `test_ap1_no_code_interpreter_call_events` (streaming) | None | — | **Closed — AP1 streaming test** |
+| coercion error does not leak raw args | N/A | no raw args in error | no raw args in telemetry | `test_ap2_invalid_json_injects_function_call_output_error`, `test_ap2_coercion_failed_telemetry_has_no_raw_patch_body` | None | — | **Closed — AP2 streaming tests** |
+| Non-streaming path (qz_sse.py) emits no sub-lifecycle | `output_item.added/done` | N/A | N/A | `test_ap1_non_streaming_path_emits_no_apply_patch_sub_lifecycle_events` | None | — | **Closed — AP1 non-streaming test** |
+| call_id preserved in apply_patch_call items | N/A | N/A | N/A | `test_ap1_native_call_id_preserved`, `test_ap1_custom_mode_call_id_preserved` | None | — | **Closed — AP1 streaming tests** |
+| status progression in_progress → completed | N/A | N/A | N/A | `test_ap1_native_item_status_progression` | None | — | **Closed — AP1 streaming test** |
+| coercion_failed telemetry has bounded error_summary | N/A | N/A | no raw args (200-char cap) | `test_ap2_coercion_failed_telemetry_has_bounded_error_summary` | None | — | **Closed — AP2 streaming test** |
+| Dropped apply_patch | none | "not available" error | `tool_call_error` | indirect in proxy_tools tests | No explicit apply_patch-named drop test | Low | AP3 (not urgent) |
 
 ---
 
 ## 9. Recommended Implementation Slices
 
-### Slice AP1 — Lock Codex-visible lifecycle contract (safe now)
+### Slice AP1 — Lock Codex-visible lifecycle contract ✅ IMPLEMENTED
 
-Add tests asserting that valid `apply_patch` SSE output:
+Tests added to `tests/test_qz_responses_stream.py::ApplyPatchLifecycleContractTests`
+and `tests/test_apply_patch_adapter.py::ApplyPatchAdapterTests`:
 
-1. Emits `response.output_item.added` with `"type": "apply_patch_call"`.
-2. Emits `response.output_item.done` with `"type": "apply_patch_call"`.
-3. Does **not** emit `response.apply_patch_call.in_progress`.
-4. Does **not** emit `response.apply_patch_call.searching`.
-5. Does **not** emit `response.apply_patch_call.completed`.
-6. Does **not** emit any `response.web_search_call.*`.
-7. Does **not** emit `response.function_call_arguments.delta/done`.
+1. Emits `response.output_item.added` with `"type": "apply_patch_call"` (native) / `custom_tool_call` (custom).
+2. Emits `response.output_item.done` with correct item type.
+3. Status progression: `in_progress` → `completed`.
+4. `call_id` preserved in both native and custom mode.
+5. `operation` field present with `type` and `path`.
+6. Diff does not contain unified diff file headers.
+7. Does **not** emit `response.apply_patch_call.in_progress/searching/completed`.
+8. Does **not** emit any `response.web_search_call.*`.
+9. Does **not** emit any `response.file_search_call.*`.
+10. Does **not** emit any `response.code_interpreter_call.*`.
+11. Does **not** emit `response.function_call_arguments.delta/done`.
+12. Custom mode: `input` contains `*** Begin Patch` envelope.
+13. Non-streaming path: `make_response_stream_events` emits no sub-lifecycle events.
 
-Cover both native and custom output styles. Use existing `FakeStream` /
-`_apply_patch_call_stream()` infrastructure.
+### Slice AP2 — Coercion/advice fixture coverage ✅ IMPLEMENTED
 
-**Priority: high.** No runtime changes. Tests only.
+Tests added to `tests/test_qz_responses_stream.py::ApplyPatchStreamingAP2Tests`
+(streaming integration level; adapter-level tests already in `ApplyPatchAP2CoercionSafetyTests`):
 
-### Slice AP2 — Coercion/advice fixture coverage (safe now)
+1. Invalid JSON args → streaming runtime injects `function_call_output` error on next hop; `coercion_failed` telemetry with `source=tool_adapter`; raw args not echoed.
+2. Missing diff → error names `diff` and `update_file`; path not in error; call_id preserved.
+3. Missing destination → error names `destination`; path not in error; call_id preserved.
+4. Unknown operation type → error says `unknown operation type`; path not in error; call_id preserved.
+5. No `output_item.added/done` for failed call (error path stays invisible to Codex).
+6. Sibling patch promotion → `coercion_succeeded` telemetry; no second hop; `operation.diff` from sibling field.
+7. Legacy `*** Begin Patch` envelope → `coercion_succeeded`; operation type/path extracted from envelope header.
+8. `coercion_failed` telemetry: error_summary capped at 200 chars; no raw patch body; required safe fields only.
 
-Add focused tests for model-visible `apply_patch` error/advice:
-
-1. Invalid JSON args → error contains `"apply_patch: arguments are not valid JSON"`.
-2. Missing diff → error contains `"missing 'diff'"`.
-3. Missing destination → error contains `"missing destination"`.
-4. `call_id` preserved in error `function_call_output`.
-5. Raw argument content not present in error text.
-6. Original bad `function_call` item not forwarded as-is when error result is generated.
-
-**Priority: high.** No runtime changes. Tests only.
+### Slice AP3 — Safe telemetry hardening (low risk)
 
 ### Slice AP3 — Safe telemetry hardening (low risk)
 

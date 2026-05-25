@@ -5395,6 +5395,543 @@ class ApplyPatchLifecycleContractTests(unittest.TestCase):
         self.assertIn("response.completed", names,
                       "response.completed must be emitted after apply_patch")
 
+    def test_ap1_native_item_status_progression(self):
+        """output_item.added must carry status=in_progress; output_item.done must carry status=completed."""
+        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        patch_items_by_event = [
+            (et, payload["item"])
+            for et, payload in events
+            if et in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "apply_patch_call"
+        ]
+        self.assertEqual(len(patch_items_by_event), 2,
+                         "must have one output_item.added and one output_item.done for apply_patch_call")
+        added_et, added_item = patch_items_by_event[0]
+        done_et, done_item = patch_items_by_event[1]
+        self.assertEqual(added_et, "response.output_item.added")
+        self.assertEqual(done_et, "response.output_item.done")
+        self.assertEqual(added_item["status"], "in_progress",
+                         "output_item.added must carry status=in_progress")
+        self.assertEqual(done_item["status"], "completed",
+                         "output_item.done must carry status=completed")
+
+    def test_ap1_native_call_id_preserved(self):
+        """call_id from the upstream function_call must be preserved in the apply_patch_call item."""
+        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        patch_items = [
+            payload["item"]
+            for et, payload in events
+            if et in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "apply_patch_call"
+        ]
+        self.assertEqual(len(patch_items), 2)
+        # _apply_patch_call_stream uses call_id="call_patch"
+        for item in patch_items:
+            self.assertEqual(item.get("call_id"), "call_patch",
+                             "call_id from upstream function_call must be preserved in apply_patch_call")
+
+    def test_ap1_native_operation_field_present(self):
+        """apply_patch_call items must carry an operation field with at least type and path."""
+        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        patch_items = [
+            payload["item"]
+            for et, payload in events
+            if et in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "apply_patch_call"
+        ]
+        self.assertEqual(len(patch_items), 2)
+        for item in patch_items:
+            operation = item.get("operation")
+            self.assertIsInstance(operation, dict,
+                                  "apply_patch_call item must carry an operation dict")
+            self.assertIn("type", operation, "operation must have a 'type' field")
+            self.assertIn("path", operation, "operation must have a 'path' field")
+
+    def test_ap1_native_diff_no_unified_diff_headers(self):
+        """Unified diff file headers (--- a/..., +++ b/...) must not appear in operation.diff."""
+        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        patch_items = [
+            payload["item"]
+            for et, payload in events
+            if et == "response.output_item.added"
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "apply_patch_call"
+        ]
+        self.assertEqual(len(patch_items), 1)
+        diff = patch_items[0].get("operation", {}).get("diff", "")
+        self.assertNotIn("--- a/", diff,
+                         "unified diff '--- a/' header must be stripped from operation.diff")
+        self.assertNotIn("+++ b/", diff,
+                         "unified diff '+++ b/' header must be stripped from operation.diff")
+        self.assertNotIn("diff --git", diff,
+                         "unified diff 'diff --git' header must be stripped from operation.diff")
+
+    def test_ap1_no_file_search_call_events(self):
+        """apply_patch must NOT emit any response.file_search_call.* events."""
+        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        file_search_events = [et for et, _ in events if (et or "").startswith("response.file_search_call.")]
+        self.assertEqual(file_search_events, [],
+                         "apply_patch must not emit any response.file_search_call.* events")
+
+    def test_ap1_no_code_interpreter_call_events(self):
+        """apply_patch must NOT emit any response.code_interpreter_call.* events."""
+        events, _ = self._run_apply_patch(apply_patch_output_style="native")
+        ci_events = [et for et, _ in events if (et or "").startswith("response.code_interpreter_call.")]
+        self.assertEqual(ci_events, [],
+                         "apply_patch must not emit any response.code_interpreter_call.* events")
+
+    def test_ap1_custom_mode_begin_patch_in_input(self):
+        """Custom mode apply_patch item must carry a *** Begin Patch envelope in its input field."""
+        events, _ = self._run_apply_patch(apply_patch_output_style="custom")
+        custom_items = [
+            payload["item"]
+            for et, payload in events
+            if et == "response.output_item.added"
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "custom_tool_call"
+            and payload["item"].get("name") == "apply_patch"
+        ]
+        self.assertEqual(len(custom_items), 1)
+        self.assertIn("*** Begin Patch", custom_items[0].get("input", ""),
+                      "custom_tool_call apply_patch input must contain a *** Begin Patch envelope")
+
+    def test_ap1_custom_mode_call_id_preserved(self):
+        """call_id must be preserved in custom_tool_call apply_patch items."""
+        events, _ = self._run_apply_patch(apply_patch_output_style="custom")
+        custom_items = [
+            payload["item"]
+            for et, payload in events
+            if et in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "custom_tool_call"
+            and payload["item"].get("name") == "apply_patch"
+        ]
+        self.assertEqual(len(custom_items), 2)
+        for item in custom_items:
+            self.assertEqual(item.get("call_id"), "call_patch",
+                             "call_id must be preserved in custom_tool_call apply_patch items")
+
+
+class ApplyPatchStreamingAP2Tests(unittest.TestCase):
+    """Slice AP2 — Streaming runtime coercion/advice contract (integration level).
+
+    Verifies that the streaming runtime, when it encounters a malformed apply_patch
+    function_call:
+    - Injects a function_call_output error into the model's next-hop input.
+    - Emits coercion_failed / tool_call_error telemetry with source=tool_adapter.
+    - Does NOT echo raw malformed argument content in model-visible output or telemetry.
+    - Preserves call_id in the injected error item.
+    - On success (sibling-patch promotion, legacy envelope): emits coercion_succeeded
+      and emits the apply_patch_call item without error injection.
+
+    Source: docs/apply-patch-codex-lifecycle-audit.md §5.3, §6.2, §7.2, §8 G-AP2.
+    """
+
+    def _make_apply_patch_stream(self, arguments: str, call_id: str = "call_ap2",
+                                  item_id: str = "fc_ap2") -> list:
+        """Return a FakeStream-compatible list for an apply_patch function_call."""
+        return [
+            _sse_block("response.created", {
+                "response": {
+                    "id": "resp_fake_ap2",
+                    "object": "response",
+                    "created_at": 4102444800,
+                    "status": "in_progress",
+                    "model": "fake",
+                    "output": [],
+                },
+            }),
+            _sse_block("response.output_item.added", {
+                "output_index": 0,
+                "item": {
+                    "id": item_id,
+                    "type": "function_call",
+                    "status": "in_progress",
+                    "call_id": call_id,
+                    "name": "apply_patch",
+                    "arguments": "",
+                },
+            }),
+            _sse_block("response.function_call_arguments.delta", {
+                "item_id": item_id,
+                "output_index": 0,
+                "delta": arguments,
+            }),
+            _sse_block("response.output_item.done", {
+                "output_index": 0,
+                "item": {
+                    "id": item_id,
+                    "type": "function_call",
+                    "status": "completed",
+                    "call_id": call_id,
+                    "name": "apply_patch",
+                },
+            }),
+            b"data: [DONE]\n\n",
+        ]
+
+    def _run_error_scenario(self, arguments: str, call_id: str = "call_ap2"):
+        """Run the streaming runtime with a malformed apply_patch call.
+
+        Returns (requests, stream_text, telemetry_events).
+        The second hop is answered with a final message stream so the runtime completes.
+        """
+        requests = []
+        telemetry = TelemetryBus()
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            has_error_output = any(
+                isinstance(item, dict)
+                and item.get("type") == "function_call_output"
+                and item.get("call_id") == call_id
+                for item in body.get("input") or []
+            )
+            return FakeStream(
+                _final_message_stream(text="model recovered.")
+                if has_error_output
+                else self._make_apply_patch_stream(arguments, call_id)
+            )
+
+        chunks = []
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=chunks.append,
+            stream_opener=opener,
+            capture_enabled=False,
+            telemetry=telemetry,
+            request_id="req-ap2-error",
+        )
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                        "content": [{"type": "input_text", "text": "test"}]}],
+            "tools": [{"type": "apply_patch"}],
+        }
+        runtime.run(body, "test-model.gguf", "native")
+        stream_text = b"".join(chunks).decode("utf-8")
+        return requests, stream_text, telemetry.recent()
+
+    def _run_success_scenario(self, arguments: str, call_id: str = "call_ap2_ok",
+                               apply_patch_output_style: str = "native"):
+        """Run the streaming runtime with a well-formed apply_patch call (success path)."""
+        requests = []
+        telemetry = TelemetryBus()
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            return FakeStream(self._make_apply_patch_stream(arguments, call_id))
+
+        chunks = []
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=chunks.append,
+            stream_opener=opener,
+            capture_enabled=False,
+            telemetry=telemetry,
+            request_id="req-ap2-ok",
+        )
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                        "content": [{"type": "input_text", "text": "test"}]}],
+            "tools": [{"type": "apply_patch"}],
+        }
+        runtime.run(body, "test-model.gguf", apply_patch_output_style)
+        stream_text = b"".join(chunks).decode("utf-8")
+        return requests, stream_text, telemetry.recent()
+
+    # ── Tests 4-7: Error path (coercion fails → error injected into next hop) ──
+
+    def test_ap2_invalid_json_injects_function_call_output_error(self):
+        """Invalid JSON apply_patch args: second hop receives function_call_output error."""
+        call_id = "call_bad_json"
+        raw_args = "{not valid json"
+        requests, _, telemetry_events = self._run_error_scenario(raw_args, call_id)
+
+        # Two hops: error injection on first, model recovery on second
+        self.assertEqual(len(requests), 2,
+                         "invalid JSON apply_patch must trigger a second hop with error injection")
+
+        # Second hop input has a function_call_output error for the correct call_id
+        second_input = requests[1].get("input") or []
+        error_items = [
+            item for item in second_input
+            if isinstance(item, dict)
+            and item.get("type") == "function_call_output"
+            and item.get("call_id") == call_id
+        ]
+        self.assertEqual(len(error_items), 1,
+                         "exactly one function_call_output error must be injected for invalid JSON")
+
+        error_output = error_items[0]["output"]
+        # Error text names the failure specifically
+        self.assertIn("apply_patch", error_output)
+        self.assertIn("not valid JSON", error_output)
+        # call_id preserved
+        self.assertEqual(error_items[0]["call_id"], call_id)
+        # Raw malformed args NOT echoed in error output
+        self.assertNotIn("{not valid json", error_output,
+                         "raw malformed JSON args must not appear in the injected error output")
+
+        # Telemetry: coercion_failed with source=tool_adapter
+        coercion_failed = [e for e in telemetry_events if e.get("type") == "coercion_failed"]
+        self.assertTrue(len(coercion_failed) >= 1,
+                         "coercion_failed telemetry must be emitted for invalid JSON apply_patch")
+        payload = coercion_failed[0].get("payload") or {}
+        self.assertEqual(payload.get("source"), "tool_adapter")
+        self.assertEqual(payload.get("tool"), "apply_patch")
+        # Telemetry error_summary must not echo raw args
+        error_summary = payload.get("error_summary", "")
+        self.assertNotIn("{not valid json", error_summary,
+                         "telemetry error_summary must not echo raw malformed args")
+
+    def test_ap2_invalid_json_no_output_item_for_failed_call(self):
+        """When coercion fails, no output_item.added/done must be emitted for the failed call."""
+        call_id = "call_bad_json_lifecycle"
+        raw_args = "{not valid json"
+        requests, stream_text, _ = self._run_error_scenario(raw_args, call_id)
+
+        events = _parse_sse_events(stream_text)
+        # No apply_patch_call item type should appear (the failed call never becomes public)
+        apply_patch_call_items = [
+            payload.get("item", {})
+            for et, payload in events
+            if et in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "apply_patch_call"
+        ]
+        self.assertEqual(apply_patch_call_items, [],
+                         "no apply_patch_call item must be emitted to Codex when coercion fails")
+
+    def test_ap2_missing_diff_injects_specific_repair_text(self):
+        """Missing diff on update_file: error names 'diff' and 'update_file'; call_id preserved; path not echoed."""
+        call_id = "call_missing_diff"
+        args = json.dumps({"operation": {"type": "update_file", "path": "src/main.py"}})
+        requests, _, _ = self._run_error_scenario(args, call_id)
+
+        self.assertEqual(len(requests), 2)
+        second_input = requests[1].get("input") or []
+        error_items = [
+            item for item in second_input
+            if isinstance(item, dict)
+            and item.get("type") == "function_call_output"
+            and item.get("call_id") == call_id
+        ]
+        self.assertEqual(len(error_items), 1)
+        error_output = error_items[0]["output"]
+
+        self.assertIn("diff", error_output,
+                      "error for missing diff must name 'diff'")
+        self.assertIn("update_file", error_output,
+                      "error for missing diff must name the operation type 'update_file'")
+        self.assertEqual(error_items[0]["call_id"], call_id,
+                         "call_id must be preserved in missing-diff error")
+        # Raw path value must not be echoed in the error
+        self.assertNotIn('"src/main.py"', error_output,
+                         "raw path value from arguments must not appear in model-visible error")
+
+    def test_ap2_missing_destination_injects_specific_repair_text(self):
+        """Missing destination on move_file: error names 'destination'; call_id preserved."""
+        call_id = "call_missing_dest"
+        args = json.dumps({"operation": {"type": "move_file", "path": "old.py"}})
+        requests, _, _ = self._run_error_scenario(args, call_id)
+
+        self.assertEqual(len(requests), 2)
+        second_input = requests[1].get("input") or []
+        error_items = [
+            item for item in second_input
+            if isinstance(item, dict)
+            and item.get("type") == "function_call_output"
+            and item.get("call_id") == call_id
+        ]
+        self.assertEqual(len(error_items), 1)
+        error_output = error_items[0]["output"]
+
+        self.assertIn("destination", error_output,
+                      "error for missing destination must name 'destination'")
+        self.assertEqual(error_items[0]["call_id"], call_id)
+        self.assertNotIn('"old.py"', error_output,
+                         "raw path value from arguments must not appear in model-visible error")
+
+    def test_ap2_unknown_operation_type_injects_specific_repair_text(self):
+        """Unknown operation type: error names the bad type; call_id preserved; raw args not echoed."""
+        call_id = "call_unknown_op"
+        args = json.dumps({"operation": {"type": "chmod_file", "path": "x.py"}})
+        requests, _, telemetry_events = self._run_error_scenario(args, call_id)
+
+        self.assertEqual(len(requests), 2)
+        second_input = requests[1].get("input") or []
+        error_items = [
+            item for item in second_input
+            if isinstance(item, dict)
+            and item.get("type") == "function_call_output"
+            and item.get("call_id") == call_id
+        ]
+        self.assertEqual(len(error_items), 1)
+        error_output = error_items[0]["output"]
+
+        self.assertIn("unknown operation type", error_output,
+                      "error for unknown op type must say 'unknown operation type'")
+        self.assertEqual(error_items[0]["call_id"], call_id)
+        # Raw file path must not appear in error output
+        self.assertNotIn('"x.py"', error_output,
+                         "raw path value from arguments must not appear in model-visible error")
+
+        # coercion_failed telemetry emitted with source=tool_adapter
+        coercion_failed = [e for e in telemetry_events if e.get("type") == "coercion_failed"]
+        self.assertTrue(len(coercion_failed) >= 1)
+        self.assertEqual((coercion_failed[0].get("payload") or {}).get("source"), "tool_adapter")
+
+    # ── Tests 8-9: Success path (coercion succeeds → apply_patch_call emitted) ──
+
+    def test_ap2_sibling_patch_promotion_succeeds_no_coercion_failed(self):
+        """Sibling patch promotion: coercion_succeeded emitted; apply_patch_call item present; no error hop."""
+        call_id = "call_sibling_promo"
+        args = json.dumps({
+            "operation": {"type": "create_file", "path": "hello.txt"},
+            "patch": "hello\n",
+        })
+        requests, stream_text, telemetry_events = self._run_success_scenario(args, call_id)
+
+        # Single hop only (no error injection → no second hop)
+        self.assertEqual(len(requests), 1,
+                         "sibling patch promotion must not trigger a second hop")
+
+        # apply_patch_call item present in stream
+        events = _parse_sse_events(stream_text)
+        patch_items = [
+            payload["item"]
+            for et, payload in events
+            if et in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "apply_patch_call"
+        ]
+        self.assertEqual(len(patch_items), 2,
+                         "sibling patch promotion must produce output_item.added + output_item.done")
+        # operation.diff comes from the sibling patch field
+        op = patch_items[0].get("operation", {})
+        self.assertEqual(op.get("diff"), "hello\n",
+                         "operation.diff must contain the promoted sibling patch content")
+
+        # coercion_succeeded present; coercion_failed absent
+        succeeded = [e for e in telemetry_events if e.get("type") == "coercion_succeeded"]
+        failed = [e for e in telemetry_events if e.get("type") == "coercion_failed"]
+        self.assertTrue(len(succeeded) >= 1,
+                        "coercion_succeeded telemetry must be emitted for sibling patch promotion")
+        self.assertEqual(len(failed), 0,
+                         "coercion_failed must NOT be emitted when sibling patch promotion succeeds")
+        self.assertEqual((succeeded[0].get("payload") or {}).get("source"), "tool_adapter")
+
+    def test_ap2_legacy_begin_patch_envelope_succeeds(self):
+        """Legacy *** Begin Patch envelope without top-level path: coercion_succeeded; operation extracted."""
+        call_id = "call_legacy_env"
+        args = json.dumps({
+            "patch": "*** Begin Patch\n*** Add File: hello.txt\n+hello\n*** End Patch\n",
+        })
+        requests, stream_text, telemetry_events = self._run_success_scenario(args, call_id)
+
+        # Single hop (success path)
+        self.assertEqual(len(requests), 1,
+                         "legacy envelope coercion must not trigger an error hop")
+
+        events = _parse_sse_events(stream_text)
+        patch_items = [
+            payload["item"]
+            for et, payload in events
+            if et in {"response.output_item.added", "response.output_item.done"}
+            and isinstance(payload, dict)
+            and isinstance(payload.get("item"), dict)
+            and payload["item"].get("type") == "apply_patch_call"
+        ]
+        self.assertEqual(len(patch_items), 2,
+                         "legacy envelope must produce output_item.added + output_item.done")
+        op = patch_items[0].get("operation", {})
+        self.assertEqual(op.get("type"), "create_file",
+                         "operation.type must be create_file (extracted from *** Add File: header)")
+        self.assertEqual(op.get("path"), "hello.txt",
+                         "operation.path must be extracted from *** Add File: header")
+
+        # coercion_succeeded present; no coercion_failed
+        succeeded = [e for e in telemetry_events if e.get("type") == "coercion_succeeded"]
+        failed = [e for e in telemetry_events if e.get("type") == "coercion_failed"]
+        self.assertTrue(len(succeeded) >= 1,
+                        "coercion_succeeded telemetry must be emitted for legacy envelope success")
+        self.assertEqual(len(failed), 0,
+                         "coercion_failed must NOT be emitted for legacy envelope success")
+
+    # ── Section D: Telemetry safety — no raw content in coercion_failed payload ──
+
+    def test_ap2_coercion_failed_telemetry_has_no_raw_patch_body(self):
+        """Telemetry coercion_failed error_summary must not contain raw patch body content."""
+        call_id = "call_telemetry_safety"
+        # Provide a patch with sentinel sensitive content in the wrong shape
+        sentinel = "VERY_SENSITIVE_PATCH_BODY_XYZ"
+        args = json.dumps({
+            "operation": {"type": "create_file", "path": "f.py"},
+            "extra_non_patch_field": sentinel,
+        })
+        # coerce() will fail because no diff; extra_non_patch_field is not 'patch'
+        _, _, telemetry_events = self._run_error_scenario(args, call_id)
+
+        coercion_failed = [e for e in telemetry_events if e.get("type") == "coercion_failed"]
+        # If coercion failed, error_summary must not contain the sentinel content
+        for event in coercion_failed:
+            error_summary = (event.get("payload") or {}).get("error_summary", "")
+            self.assertNotIn(sentinel, error_summary,
+                             "telemetry error_summary must not contain raw non-standard field content")
+
+    def test_ap2_coercion_failed_telemetry_has_bounded_error_summary(self):
+        """Telemetry coercion_failed error_summary must be capped at 200 characters."""
+        call_id = "call_telemetry_cap"
+        # Provide long malformed args that would produce a long error if echoed verbatim
+        args = "{" + "a" * 500
+        _, _, telemetry_events = self._run_error_scenario(args, call_id)
+
+        coercion_failed = [e for e in telemetry_events if e.get("type") == "coercion_failed"]
+        self.assertTrue(len(coercion_failed) >= 1)
+        error_summary = (coercion_failed[0].get("payload") or {}).get("error_summary", "")
+        self.assertLessEqual(len(error_summary), 200,
+                             "telemetry error_summary must be capped at 200 characters")
+
+    def test_ap2_coercion_failed_telemetry_has_expected_safe_fields(self):
+        """coercion_failed telemetry payload must carry safe fields only (tool, call_id, source, etc.)."""
+        call_id = "call_telemetry_fields"
+        args = "{bad json"
+        _, _, telemetry_events = self._run_error_scenario(args, call_id)
+
+        coercion_failed = [e for e in telemetry_events if e.get("type") == "coercion_failed"]
+        self.assertTrue(len(coercion_failed) >= 1)
+        payload = coercion_failed[0].get("payload") or {}
+        # Required safe fields
+        self.assertIn("tool", payload)
+        self.assertIn("call_id", payload)
+        self.assertIn("source", payload)
+        self.assertIn("error_summary", payload)
+        self.assertEqual(payload.get("tool"), "apply_patch")
+        self.assertEqual(payload.get("call_id"), call_id)
+        self.assertEqual(payload.get("source"), "tool_adapter")
+        # Must not carry raw arguments string
+        self.assertNotIn("arguments", payload,
+                         "coercion_failed payload must not include raw arguments")
+
 
 if __name__ == "__main__":
     unittest.main()

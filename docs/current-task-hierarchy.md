@@ -1,7 +1,53 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-25
-Status: active control sheet — apply_patch Codex lifecycle audited; AP1/AP2 contract tests added.
+Status: active control sheet — apply_patch Codex lifecycle audited; AP1/AP2 contract tests enforced (streaming integration + non-streaming).
+
+## Recently completed — Enforce apply_patch lifecycle contract (2026-05-25)
+
+```text
+Status: COMPLETE — tests only; no runtime behaviour changes.
+
+Output: tests/test_qz_responses_stream.py (ApplyPatchLifecycleContractTests extended,
+        ApplyPatchStreamingAP2Tests added), tests/test_apply_patch_adapter.py (non-streaming AP1 test).
+Reference: docs/apply-patch-codex-lifecycle-audit.md (gap matrix and slice sections updated).
+
+Changes:
+- AP1 lifecycle contract locked with 8 additional streaming assertions:
+    status progression in_progress → completed
+    call_id preserved in both native and custom mode
+    operation field present
+    diff no unified diff headers
+    no file_search_call.* or code_interpreter_call.* events
+    custom mode input contains *** Begin Patch envelope
+    custom mode call_id preserved
+- AP1 non-streaming path: test_ap1_non_streaming_path_emits_no_apply_patch_sub_lifecycle_events
+  confirms make_response_stream_events emits none of the forbidden sub-lifecycle event names.
+- AP2 streaming integration class (ApplyPatchStreamingAP2Tests, 10 tests):
+    invalid JSON → function_call_output error injected on next hop
+    invalid JSON → no output_item.* for failed call
+    missing diff → specific repair text in error; path not echoed; call_id preserved
+    missing destination → specific repair text; path not echoed; call_id preserved
+    unknown operation type → specific repair text; path not echoed; call_id preserved
+    sibling patch promotion → coercion_succeeded; apply_patch_call in stream; single hop
+    legacy *** Begin Patch envelope → coercion_succeeded; operation extracted; single hop
+    coercion_failed telemetry: no raw patch body; error_summary ≤200 chars; safe fields only
+
+Total tests added this pass: 19. Full suite: 3477 passed.
+
+Closed gaps from docs/apply-patch-codex-lifecycle-audit.md §8:
+- G-AP1 no sub-lifecycle locking test → CLOSED (AP1 streaming tests)
+- G-AP2 no safety test for raw arg leakage → CLOSED (AP2 streaming tests)
+- Sibling patch promotion streaming → CLOSED
+- Legacy Begin Patch envelope streaming → CLOSED
+- Invalid JSON / missing diff / missing dest / unknown op streaming → CLOSED
+- Non-streaming path sub-lifecycle absence → CLOSED
+
+Deferred slices (require live Codex capture or non-trivial changes):
+- AP3: safe telemetry metadata fields (operation_type, path_present booleans) — low risk.
+- AP4: live Codex capture to observe apply_patch_call rendering.
+- AP5: optional sub-lifecycle if AP4 proves benefit (requires protocol_adapter → proxy_local mode change).
+```
 
 ## Recently completed — Audit apply_patch Codex lifecycle (2026-05-25)
 
@@ -34,11 +80,6 @@ Slices added:
 Slice L3 from codex-visible-tool-lifecycle-audit.md marked done (superseded by AP1).
 
 Total new tests: 25. Full suite: 3458 passed.
-
-Deferred slices (require live Codex capture or non-trivial changes):
-- AP3: safe telemetry metadata fields (operation_type, path_present booleans).
-- AP4: live Codex capture to observe apply_patch_call rendering.
-- AP5: optional sub-lifecycle if AP4 proves benefit (requires protocol_adapter → proxy_local mode change).
 ```
 
 ## Recently completed — Clarify search backend smoke status (2026-05-25)
