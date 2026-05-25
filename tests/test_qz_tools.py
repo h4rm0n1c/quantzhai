@@ -192,3 +192,118 @@ class DroppedToolFeedbackTests(unittest.TestCase):
         call = {"type": "function_call", "name": "exec_command", "call_id": "c1", "arguments": "{}"}
         decision = registry.completed_call_decision(call)
         self.assertEqual(decision.kind, "public")
+
+    def test_new_native_tools_pass_through_without_error(self):
+        """Tools added in issue #67 must not be given unsupported-tool errors."""
+        registry = self._make_registry()
+        new_tools = [
+            "update_plan",
+            "request_user_input",
+            "request_permissions",
+            "view_image",
+            "get_goal",
+            "create_goal",
+            "update_goal",
+        ]
+        for tool_name in new_tools:
+            with self.subTest(tool=tool_name):
+                call = {"type": "function_call", "name": tool_name, "call_id": "c1", "arguments": "{}"}
+                decision = registry.completed_call_decision(call)
+                self.assertEqual(
+                    decision.kind, "public",
+                    f"Tool '{tool_name}' should be native pass-through (kind='public'), got '{decision.kind}'",
+                )
+
+    def test_no_fake_lifecycle_event_prefix_for_native_tools(self):
+        """Native tools must not produce fake response.<tool>_call.* SSE events.
+
+        The registry completed_call_decision must not reference lifecycle_event_prefix
+        or any response.<tool>_call.* string for native tool names.
+        Regression guard: ensures issue #66 removals stay removed.
+        """
+        registry = self._make_registry()
+        native_names = [
+            "update_plan", "request_user_input", "request_permissions",
+            "view_image", "get_goal", "create_goal", "update_goal",
+            "exec_command", "write_stdin", "shell_command",
+        ]
+        for name in native_names:
+            with self.subTest(tool=name):
+                call = {"type": "function_call", "name": name, "call_id": "c1", "arguments": "{}"}
+                decision = registry.completed_call_decision(call)
+                # Decision must be public (pass-through), never signal or error for native tools
+                self.assertNotEqual(
+                    decision.kind, "error",
+                    f"Native tool '{name}' must not produce an error decision",
+                )
+                # The decision object must not carry fake lifecycle event strings
+                decision_repr = repr(decision)
+                for forbidden in [f"response.{name}_call.", "lifecycle_event_prefix", "_call.in_progress"]:
+                    self.assertNotIn(
+                        forbidden, decision_repr,
+                        f"Native tool '{name}' decision contains forbidden lifecycle string '{forbidden}'",
+                    )
+
+
+class NativeToolNamesMembershipTests(unittest.TestCase):
+    """Confirm CODEX_NATIVE_TOOL_NAMES membership directly, without going through the proxy registry.
+
+    These tests are redundant with NativeToolListContractTests in test_qz_proxy_tools.py
+    but provide a fast, direct check that imports only qz_tools.
+    """
+
+    def _names(self):
+        from proxy.qz_tools import CODEX_NATIVE_TOOL_NAMES
+        return CODEX_NATIVE_TOOL_NAMES
+
+    # --- presence ---
+
+    def test_exec_command_present(self):
+        self.assertIn("exec_command", self._names())
+
+    def test_write_stdin_present(self):
+        self.assertIn("write_stdin", self._names())
+
+    def test_shell_command_present(self):
+        self.assertIn("shell_command", self._names())
+
+    def test_update_plan_present(self):
+        self.assertIn("update_plan", self._names())
+
+    def test_request_user_input_present(self):
+        self.assertIn("request_user_input", self._names())
+
+    def test_request_permissions_present(self):
+        self.assertIn("request_permissions", self._names())
+
+    def test_view_image_present(self):
+        self.assertIn("view_image", self._names())
+
+    def test_get_goal_present(self):
+        self.assertIn("get_goal", self._names())
+
+    def test_create_goal_present(self):
+        self.assertIn("create_goal", self._names())
+
+    def test_update_goal_present(self):
+        self.assertIn("update_goal", self._names())
+
+    # --- absence ---
+
+    def test_computer_absent(self):
+        self.assertNotIn("computer", self._names())
+
+    def test_apply_patch_absent(self):
+        self.assertNotIn("apply_patch", self._names())
+
+    def test_web_search_absent(self):
+        self.assertNotIn("web_search", self._names())
+
+    def test_tool_search_absent(self):
+        self.assertNotIn("tool_search", self._names())
+
+    def test_local_shell_absent(self):
+        self.assertNotIn("local_shell", self._names())
+
+    def test_image_generation_absent(self):
+        self.assertNotIn("image_generation", self._names())

@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# qz-codex-tool-inventory — Quick audit-SHA and native-tool-set sanity check.
+#
+# Usage:
+#   scripts/qz-codex-tool-inventory [--codex-dir <path>]
+#
+# Prints:
+#   - Current Codex checkout SHA
+#   - SHA referenced in docs/codex-source-tool-inventory.md
+#   - Warning if they differ
+#   - QuantZhai CODEX_NATIVE_TOOL_NAMES (from proxy/qz_tools.py)
+#
+# Requires: git, python3
+# Does NOT start Docker, make network calls, or write any files.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+CODEX_DIR="/tmp/qz-audit/codex"
+INVENTORY_DOC="${REPO_ROOT}/docs/codex-source-tool-inventory.md"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --codex-dir)
+            CODEX_DIR="$2"
+            shift 2
+            ;;
+        -h|--help)
+            sed -n '2,10p' "$0" | sed 's/^# //'
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            exit 1
+            ;;
+    esac
+done
+
+echo "=== qz-codex-tool-inventory ==="
+echo ""
+
+# --- Codex checkout SHA ---
+
+if [[ -d "${CODEX_DIR}/.git" ]]; then
+    LIVE_SHA="$(git -C "${CODEX_DIR}" rev-parse HEAD 2>/dev/null || echo "UNKNOWN")"
+    echo "Codex checkout dir : ${CODEX_DIR}"
+    echo "Codex checkout SHA : ${LIVE_SHA}"
+else
+    echo "⚠  Codex checkout not found at ${CODEX_DIR}"
+    LIVE_SHA="MISSING"
+fi
+
+echo ""
+
+# --- SHA referenced in inventory doc ---
+
+if [[ -f "${INVENTORY_DOC}" ]]; then
+    DOC_SHA="$(grep -oP '(?<=\*\*Codex audit SHA:\*\* `)[0-9a-f]+(?=`)' "${INVENTORY_DOC}" || true)"
+    if [[ -z "${DOC_SHA}" ]]; then
+        # fallback: find first 40-char hex after "audit SHA"
+        DOC_SHA="$(grep -oP '(?<=audit SHA: `)[0-9a-f]{40}(?=`)' "${INVENTORY_DOC}" || echo "NOT_FOUND")"
+    fi
+    echo "Inventory doc SHA  : ${DOC_SHA}"
+    if [[ "${LIVE_SHA}" == "${DOC_SHA}" ]]; then
+        echo "✓  SHA match — source evidence is current"
+    elif [[ "${LIVE_SHA}" == "MISSING" ]]; then
+        echo "⚠  Codex checkout missing; cannot verify SHA"
+    else
+        echo "⚠  SHA MISMATCH — Codex has been updated since the last audit"
+        echo "   Re-audit before expanding CODEX_NATIVE_TOOL_NAMES further"
+        echo "   Update docs/codex-source-tool-inventory.md when done"
+    fi
+else
+    echo "⚠  Inventory doc not found: ${INVENTORY_DOC}"
+fi
+
+echo ""
+
+# --- QuantZhai CODEX_NATIVE_TOOL_NAMES ---
+
+QZ_TOOLS_PY="${REPO_ROOT}/proxy/qz_tools.py"
+if [[ -f "${QZ_TOOLS_PY}" ]]; then
+    echo "CODEX_NATIVE_TOOL_NAMES (from proxy/qz_tools.py):"
+    python3 -c "
+import sys, os
+sys.path.insert(0, '${REPO_ROOT}')
+# Avoid triggering relative imports in qz_tools; just grep the frozenset directly
+import re, pathlib
+text = pathlib.Path('${QZ_TOOLS_PY}').read_text()
+# Extract all quoted strings inside the frozenset({...}) block
+match = re.search(r'CODEX_NATIVE_TOOL_NAMES.*?frozenset\(\{(.*?)\}\)', text, re.DOTALL)
+if match:
+    names = sorted(re.findall(r'\"([^\"]+)\"', match.group(1)))
+    for n in names:
+        print(f'  {n}')
+    print(f'\nTotal: {len(names)} native function_call pass-through tools')
+else:
+    print('  (could not parse CODEX_NATIVE_TOOL_NAMES)')
+"
+else
+    echo "⚠  proxy/qz_tools.py not found at ${QZ_TOOLS_PY}"
+fi
+
+echo ""
+
+# --- Key handler lines from Codex source (spot check) ---
+
+if [[ -d "${CODEX_DIR}" ]]; then
+    echo "Spot check — handler ToolName::plain() lines in codex-rs:"
+    rg -n 'ToolName::plain\("(update_plan|request_user_input|request_permissions|view_image|get_goal|create_goal|update_goal|exec_command|write_stdin|shell_command|shell|container\.exec|local_shell)"\)' \
+        "${CODEX_DIR}/codex-rs/core/src/tools/handlers" 2>/dev/null \
+        | grep -v "_tests\|_spec_tests\|test_sync\|apply_patch" \
+        | sed "s|${CODEX_DIR}/||" \
+        | awk '{print "  " $0}' || echo "  (rg not found or no matches)"
+fi
+
+echo ""
+echo "=== done ==="

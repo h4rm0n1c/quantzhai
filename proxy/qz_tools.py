@@ -5,15 +5,47 @@ from dataclasses import dataclass
 from typing import Protocol
 
 # Tool names that Codex handles natively and should be passed through unchanged.
-# Source-backed: exec_command, write_stdin, shell_command are proven in
-# codex-rs/core/src/tools/handlers/ (unified_exec and shell).
-# computer is NOT a native Codex tool — only a reserved namespace in validation.
-# See docs/codex-source-tool-contract.md.
-# Do NOT inject coercion errors for these — Codex will execute them itself.
+#
+# Source-backed as function_call items (codex-rs/core/src/tools/handlers/):
+#
+#   exec_command    — unified_exec handler  (ToolName::plain("exec_command"))
+#   write_stdin     — unified_exec handler  (ToolName::plain("write_stdin"))
+#   shell_command   — shell_command handler (ToolName::plain("shell_command"))
+#   update_plan     — plan handler          (ToolName::plain("update_plan"))
+#   request_user_input — request_user_input handler
+#                       (REQUEST_USER_INPUT_TOOL_NAME = "request_user_input")
+#   request_permissions — request_permissions handler
+#                         (ToolName::plain("request_permissions"))
+#   view_image      — view_image handler    (ToolName::plain("view_image"))
+#   get_goal        — goal/get_goal handler  (GET_GOAL_TOOL_NAME = "get_goal")
+#   create_goal     — goal/create_goal handler (CREATE_GOAL_TOOL_NAME = "create_goal")
+#   update_goal     — goal/update_goal handler (UPDATE_GOAL_TOOL_NAME = "update_goal")
+#
+# Audit SHA: 46f30d02828bd4c52827e5f0482a6f2a982cce5b
+# See docs/codex-source-tool-contract.md, docs/codex-source-tool-inventory.md.
+#
+# NOT included here:
+#   apply_patch  — custom_tool_call item (Freeform handler), not function_call
+#   web_search   — web_search_call item, proxy_local execution
+#   local_shell  — LocalShell item (not function_call); separate contract slice
+#   tool_search  — ToolSearchCall item; separate contract slice
+#   image_generation — ImageGenerationCall item; document only
+#   shell / container.exec — function_call handlers exist, but model-facing
+#                             usage needs further audit; next audit slice
+#   computer     — reserved validation namespace, not a handler
+#
+# Do NOT inject coercion errors for names in this set — Codex executes them.
 CODEX_NATIVE_TOOL_NAMES: frozenset[str] = frozenset({
     "exec_command",
     "write_stdin",
     "shell_command",
+    "update_plan",
+    "request_user_input",
+    "request_permissions",
+    "view_image",
+    "get_goal",
+    "create_goal",
+    "update_goal",
 })
 
 

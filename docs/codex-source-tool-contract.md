@@ -144,17 +144,29 @@ Source: `codex-rs/codex-api/src/sse/responses.rs` (no web_search_call branch in 
 ## 5. CODEX_NATIVE_TOOL_NAMES (proxy/qz_tools.py)
 
 The proxy uses `CODEX_NATIVE_TOOL_NAMES` to identify calls that should pass through to Codex
-as-is (after optional output_to_codex rewrite). Current proven set:
+as-is (after optional output_to_codex rewrite).
 
-| Tool name | Basis |
-|---|---|
-| `exec_command` | Confirmed Codex handler |
-| `write_stdin` | Confirmed Codex handler |
-| `shell_command` | Confirmed Codex handler |
+Current proven set (expanded in issue #67 — audit SHA `46f30d02828bd4c52827e5f0482a6f2a982cce5b`):
+
+| Tool name | Codex handler file | Added |
+|---|---|---|
+| `exec_command` | `handlers/unified_exec/unified_exec.rs` | issue #66 |
+| `write_stdin` | `handlers/unified_exec/unified_exec.rs` | issue #66 |
+| `shell_command` | `handlers/shell/shell_command.rs` | issue #66 |
+| `update_plan` | `handlers/plan.rs` | issue #67 |
+| `request_user_input` | `handlers/request_user_input.rs` | issue #67 |
+| `request_permissions` | `handlers/request_permissions.rs` | issue #67 |
+| `view_image` | `handlers/view_image.rs` | issue #67 |
+| `get_goal` | `handlers/goal/get_goal.rs` | issue #67 |
+| `create_goal` | `handlers/goal/create_goal.rs` | issue #67 |
+| `update_goal` | `handlers/goal/update_goal.rs` | issue #67 |
 
 `computer` was **removed** in issue #66. It appears only as a reserved namespace check in
 `codex-rs/app-server/src/request_processors/thread_processor.rs:194` — it is not a routed
 handler and never should have been in `CODEX_NATIVE_TOOL_NAMES`.
+
+For the full tool-by-tool classification including deferred slices, see
+`docs/codex-source-tool-inventory.md`.
 
 ---
 

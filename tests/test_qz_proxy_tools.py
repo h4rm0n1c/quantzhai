@@ -94,10 +94,25 @@ class ProbeProxyToolExecutor(ProxyLocalToolExecutor):
 class NativeToolListContractTests(unittest.TestCase):
     """Enforce the Codex-source-backed native tool name list.
 
-    See docs/codex-source-tool-contract.md — only exec_command, write_stdin,
-    shell_command are proven in codex-rs/core/src/tools/handlers/.
-    computer is a reserved validation namespace only, not a handler.
+    Source: codex-rs/core/src/tools/handlers/ at SHA 46f30d02828bd4c52827e5f0482a6f2a982cce5b
+    See docs/codex-source-tool-contract.md and docs/codex-source-tool-inventory.md.
+
+    function_call tools (pass through unchanged):
+      exec_command, write_stdin, shell_command — unified_exec + shell handlers (pre-#66)
+      update_plan, request_user_input, request_permissions — respective handlers (#67)
+      view_image — view_image handler (#67)
+      get_goal, create_goal, update_goal — goal handlers (#67)
+
+    NOT in this set:
+      apply_patch  — custom_tool_call item (Freeform), not function_call
+      web_search   — web_search_call item, proxy_local execution
+      tool_search  — ToolSearchCall item; separate contract slice
+      local_shell  — LocalShell item; separate contract slice
+      image_generation — ImageGenerationCall item; document only
+      computer     — reserved validation namespace, not a handler
     """
+
+    # --- presence tests: tools confirmed as function_call handlers ---
 
     def test_exec_command_in_native_tool_names(self):
         self.assertIn("exec_command", CODEX_NATIVE_TOOL_NAMES)
@@ -108,24 +123,98 @@ class NativeToolListContractTests(unittest.TestCase):
     def test_shell_command_in_native_tool_names(self):
         self.assertIn("shell_command", CODEX_NATIVE_TOOL_NAMES)
 
-    def test_computer_not_in_native_tool_names(self):
-        """computer is a reserved namespace, not a native Codex handler.
+    def test_update_plan_in_native_tool_names(self):
+        """update_plan: plan.rs ToolName::plain("update_plan")"""
+        self.assertIn("update_plan", CODEX_NATIVE_TOOL_NAMES)
 
-        codex-rs/app-server/src/request_processors/thread_processor.rs:194
-        lists 'computer' only as a reserved tool namespace for validation,
-        not as a handler or spec.  Removed from CODEX_NATIVE_TOOL_NAMES to
-        prevent silent pass-through of unsupported tool calls.
-        """
+    def test_request_user_input_in_native_tool_names(self):
+        """request_user_input: request_user_input.rs REQUEST_USER_INPUT_TOOL_NAME"""
+        self.assertIn("request_user_input", CODEX_NATIVE_TOOL_NAMES)
+
+    def test_request_permissions_in_native_tool_names(self):
+        """request_permissions: request_permissions.rs ToolName::plain("request_permissions")"""
+        self.assertIn("request_permissions", CODEX_NATIVE_TOOL_NAMES)
+
+    def test_view_image_in_native_tool_names(self):
+        """view_image: view_image.rs ToolName::plain("view_image")"""
+        self.assertIn("view_image", CODEX_NATIVE_TOOL_NAMES)
+
+    def test_get_goal_in_native_tool_names(self):
+        """get_goal: goal/get_goal.rs GET_GOAL_TOOL_NAME = "get_goal" """
+        self.assertIn("get_goal", CODEX_NATIVE_TOOL_NAMES)
+
+    def test_create_goal_in_native_tool_names(self):
+        """create_goal: goal/create_goal.rs CREATE_GOAL_TOOL_NAME = "create_goal" """
+        self.assertIn("create_goal", CODEX_NATIVE_TOOL_NAMES)
+
+    def test_update_goal_in_native_tool_names(self):
+        """update_goal: goal/update_goal.rs UPDATE_GOAL_TOOL_NAME = "update_goal" """
+        self.assertIn("update_goal", CODEX_NATIVE_TOOL_NAMES)
+
+    # --- exclusion tests: tools that must NOT be in the native pass-through set ---
+
+    def test_computer_not_in_native_tool_names(self):
+        """computer is a reserved validation namespace only — no ToolHandler in Codex source."""
         self.assertNotIn(
             "computer", CODEX_NATIVE_TOOL_NAMES,
             "'computer' is not a native Codex handler — must not be in CODEX_NATIVE_TOOL_NAMES",
         )
 
+    def test_apply_patch_not_in_native_tool_names(self):
+        """apply_patch uses custom_tool_call item (Freeform), not function_call pass-through."""
+        self.assertNotIn(
+            "apply_patch", CODEX_NATIVE_TOOL_NAMES,
+            "'apply_patch' is a protocol_adapter custom_tool_call — must not be in CODEX_NATIVE_TOOL_NAMES",
+        )
+
+    def test_web_search_not_in_native_tool_names(self):
+        """web_search uses web_search_call item with proxy_local execution."""
+        self.assertNotIn(
+            "web_search", CODEX_NATIVE_TOOL_NAMES,
+            "'web_search' is a proxy_local web_search_call — must not be in CODEX_NATIVE_TOOL_NAMES",
+        )
+
+    def test_tool_search_not_in_native_tool_names(self):
+        """tool_search uses ToolSearchCall item — separate contract slice."""
+        self.assertNotIn(
+            "tool_search", CODEX_NATIVE_TOOL_NAMES,
+            "'tool_search' is a ToolSearchCall item — must not be in CODEX_NATIVE_TOOL_NAMES",
+        )
+
+    def test_local_shell_not_in_native_tool_names(self):
+        """local_shell uses LocalShell item (not function_call) — separate contract slice."""
+        self.assertNotIn(
+            "local_shell", CODEX_NATIVE_TOOL_NAMES,
+            "'local_shell' is a LocalShell item — must not be in CODEX_NATIVE_TOOL_NAMES",
+        )
+
+    def test_image_generation_not_in_native_tool_names(self):
+        """image_generation uses ImageGenerationCall item — document only."""
+        self.assertNotIn(
+            "image_generation", CODEX_NATIVE_TOOL_NAMES,
+            "'image_generation' is ImageGenerationCall — must not be in CODEX_NATIVE_TOOL_NAMES",
+        )
+
     def test_native_tool_names_contains_exactly_proven_tools(self):
-        expected = {"exec_command", "write_stdin", "shell_command"}
+        """Guard against unreviewed additions — exact set must match audit SHA 46f30d0."""
+        expected = {
+            # Pre-existing (issue #66 baseline)
+            "exec_command",
+            "write_stdin",
+            "shell_command",
+            # Added in issue #67 — source-backed function_call handlers
+            "update_plan",
+            "request_user_input",
+            "request_permissions",
+            "view_image",
+            "get_goal",
+            "create_goal",
+            "update_goal",
+        }
         self.assertEqual(
             set(CODEX_NATIVE_TOOL_NAMES), expected,
-            f"CODEX_NATIVE_TOOL_NAMES should be exactly {expected}",
+            f"CODEX_NATIVE_TOOL_NAMES must match the audited set. "
+            f"If expanding, add source evidence to docs/codex-source-tool-inventory.md first.",
         )
 
 
