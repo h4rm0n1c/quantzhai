@@ -183,7 +183,7 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
     profile_symlink: bool = False
     profile_thinking_mode: str | None = None
     profile_thinking_budget_tokens: int | None = None
-
+    profile_backend_reasoning_budget: int | None = None
     if proxy_ready:
         try:
             router = handler._model_router()
@@ -208,6 +208,7 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
             if isinstance(_bctx, int) and _bctx > 0:
                 profile_backend_context_length = _bctx
             profile_thinking_mode = summary.get("selected_thinking_mode")
+            profile_backend_reasoning_budget = summary.get("backend_reasoning_budget")
             _tbt = summary.get("thinking_budget_tokens")
             if isinstance(_tbt, int):
                 profile_thinking_budget_tokens = _tbt
@@ -384,6 +385,7 @@ def build_control_plane_status(handler: Any) -> dict[str, Any]:
             "reasoning_policy": profile_reasoning_policy,
             "thinking_mode": profile_thinking_mode,
             "thinking_budget_tokens": profile_thinking_budget_tokens,
+            "backend_reasoning_budget": profile_backend_reasoning_budget,
             "sampling": profile_sampling,
             "selected_context_length": profile_context_length,
             "backend_context_length": profile_backend_context_length,

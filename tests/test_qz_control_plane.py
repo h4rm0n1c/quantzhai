@@ -434,6 +434,13 @@ class ModelSelectionFieldsTests(unittest.TestCase):
         self.assertEqual(m["selected_source"], "operator")
         self.assertEqual(m["selection_reason"], "POST /qz/model/select")
 
+    def test_profile_section_has_reasoning_budget(self):
+        h = _make_handler()
+        summary = h._model_router.return_value.status_summary.return_value
+        summary["backend_reasoning_budget"] = 123
+        p = build_control_plane_status(h)
+        self.assertEqual(p["profile"]["backend_reasoning_budget"], 123)
+
     def test_backend_section_has_load_failure_fields(self):
         with self._with_state_file({
             "schema": "qz.model_state.v1",
