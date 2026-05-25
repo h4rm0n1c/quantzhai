@@ -276,15 +276,33 @@ class ApplyReasoningPolicyThinkingModeTests(unittest.TestCase):
         out = self._apply("medium", "auto")
         self.assertEqual(out["metadata"]["qz_reasoning"]["thinking_mode"], "auto")
 
-    # --- backward compat: existing tests that must still pass ---
+    # --- backward compat / OAI path field mirroring ---
 
-    def test_thinking_budget_tokens_key_still_removed_from_body(self):
-        """thinking_budget_tokens (old key) must always be removed from body."""
+    def test_thinking_mode_sets_thinking_budget_tokens_for_oai_path(self):
+        """thinking mode must set thinking_budget_tokens for server-common.cpp OAI compat."""
+        out = self._apply("medium", "thinking")
+        self.assertIn("thinking_budget_tokens", out)
+        self.assertEqual(out["thinking_budget_tokens"], THINKING_MODE_BUDGET_TOKENS["medium"])
+
+    def test_thinking_mode_thinking_budget_tokens_mirrors_reasoning_budget(self):
+        """thinking_budget_tokens must mirror reasoning_budget_tokens (honours caller override)."""
+        out = self._apply("high", "thinking", body={"reasoning_budget_tokens": 999})
+        self.assertEqual(out["reasoning_budget_tokens"], 999)
+        self.assertEqual(out["thinking_budget_tokens"], 999)
+
+    def test_thinking_mode_caller_thinking_budget_replaced_by_policy(self):
+        """Caller-supplied thinking_budget_tokens is replaced by policy budget (pop+set)."""
         out = self._apply("medium", "thinking", body={"thinking_budget_tokens": 512})
-        self.assertNotIn("thinking_budget_tokens", out)
+        self.assertIn("thinking_budget_tokens", out)
+        self.assertEqual(out["thinking_budget_tokens"], THINKING_MODE_BUDGET_TOKENS["medium"])
 
     def test_non_thinking_thinking_budget_tokens_still_removed(self):
         out = self._apply("medium", "non_thinking", body={"thinking_budget_tokens": 512})
+        self.assertNotIn("thinking_budget_tokens", out)
+
+    def test_auto_mode_thinking_budget_tokens_absent(self):
+        """Auto mode must not inject thinking_budget_tokens."""
+        out = self._apply("medium", "auto")
         self.assertNotIn("thinking_budget_tokens", out)
 
 

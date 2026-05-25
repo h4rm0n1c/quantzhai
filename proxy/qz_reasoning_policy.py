@@ -179,10 +179,23 @@ def apply_reasoning_policy(
         body.setdefault(key, value)
 
     # Apply per-block reasoning budget for thinking-mode models.
+    #
+    # Two field names are required for full coverage of the TheTom llama.cpp backend:
+    #   reasoning_budget_tokens — read by server-task.cpp (/completion path)
+    #   thinking_budget_tokens  — read by server-common.cpp (/v1/responses OAI path)
+    #
+    # server-common.cpp only falls back to the body's thinking_budget_tokens when
+    # opt.reasoning_budget (startup --reasoning-budget) is -1 (no startup cap).
+    # QuantZhai defaults QZ_REASONING_BUDGET=-1, so the per-request override applies.
+    # Without thinking_budget_tokens in the body the budget never reaches the sampler
+    # on the OAI path.
     thinking_budget_tokens: Optional[int] = None
     if tm == "thinking":
         thinking_budget_tokens = THINKING_MODE_BUDGET_TOKENS[resolved_level]
         body.setdefault("reasoning_budget_tokens", thinking_budget_tokens)
+        # Mirror to thinking_budget_tokens for server-common.cpp OAI path compat.
+        # Use the resolved reasoning_budget_tokens value (honours caller overrides).
+        body["thinking_budget_tokens"] = body["reasoning_budget_tokens"]
         body.setdefault("reasoning_budget_message", REASONING_BUDGET_MESSAGE)
     elif tm == "non_thinking":
         body.pop("reasoning_budget_tokens", None)
