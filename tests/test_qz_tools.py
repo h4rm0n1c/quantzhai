@@ -194,9 +194,10 @@ class DroppedToolFeedbackTests(unittest.TestCase):
         self.assertEqual(decision.kind, "public")
 
     def test_new_native_tools_pass_through_without_error(self):
-        """Tools added in issue #67 must not be given unsupported-tool errors."""
+        """Tools added in issues #67 and #68 must not be given unsupported-tool errors."""
         registry = self._make_registry()
         new_tools = [
+            # issue #67
             "update_plan",
             "request_user_input",
             "request_permissions",
@@ -204,6 +205,9 @@ class DroppedToolFeedbackTests(unittest.TestCase):
             "get_goal",
             "create_goal",
             "update_goal",
+            # issue #68 — shell + container.exec
+            "shell",
+            "container.exec",
         ]
         for tool_name in new_tools:
             with self.subTest(tool=tool_name):
@@ -214,18 +218,46 @@ class DroppedToolFeedbackTests(unittest.TestCase):
                     f"Tool '{tool_name}' should be native pass-through (kind='public'), got '{decision.kind}'",
                 )
 
+    def test_shell_passes_through_as_public(self):
+        """shell is a confirmed function_call handler (shell_handler.rs issue #68).
+
+        Registered as ShellHandler::default() fallback when shell_type != Default.
+        Must pass through, not receive an unsupported-tool error.
+        """
+        registry = self._make_registry()
+        call = {"type": "function_call", "name": "shell", "call_id": "c2",
+                "arguments": '{"command": ["bash", "-lc", "echo hi"]}'}
+        decision = registry.completed_call_decision(call)
+        self.assertEqual(decision.kind, "public",
+                         "shell must be native pass-through (kind='public')")
+
+    def test_container_exec_passes_through_as_public(self):
+        """container.exec is a confirmed function_call fallback handler (container_exec.rs issue #68).
+
+        Never advertised (no spec), always registered in non-disabled configs.
+        Must pass through, not receive an unsupported-tool error.
+        """
+        registry = self._make_registry()
+        call = {"type": "function_call", "name": "container.exec", "call_id": "c3",
+                "arguments": '{"command": ["ls", "-la"]}'}
+        decision = registry.completed_call_decision(call)
+        self.assertEqual(decision.kind, "public",
+                         "container.exec must be native pass-through (kind='public')")
+
     def test_no_fake_lifecycle_event_prefix_for_native_tools(self):
         """Native tools must not produce fake response.<tool>_call.* SSE events.
 
         The registry completed_call_decision must not reference lifecycle_event_prefix
         or any response.<tool>_call.* string for native tool names.
         Regression guard: ensures issue #66 removals stay removed.
+        Updated in issue #68: shell and container.exec added to the check list.
         """
         registry = self._make_registry()
         native_names = [
             "update_plan", "request_user_input", "request_permissions",
             "view_image", "get_goal", "create_goal", "update_goal",
             "exec_command", "write_stdin", "shell_command",
+            "shell", "container.exec",
         ]
         for name in native_names:
             with self.subTest(tool=name):
@@ -287,6 +319,14 @@ class NativeToolNamesMembershipTests(unittest.TestCase):
 
     def test_update_goal_present(self):
         self.assertIn("update_goal", self._names())
+
+    def test_shell_present(self):
+        """shell: shell/shell_handler.rs ToolName::plain("shell") — issue #68"""
+        self.assertIn("shell", self._names())
+
+    def test_container_exec_present(self):
+        """container.exec: shell/container_exec.rs ToolName::plain("container.exec") — issue #68"""
+        self.assertIn("container.exec", self._names())
 
     # --- absence ---
 

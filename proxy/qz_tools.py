@@ -20,6 +20,17 @@ from typing import Protocol
 #   get_goal        — goal/get_goal handler  (GET_GOAL_TOOL_NAME = "get_goal")
 #   create_goal     — goal/create_goal handler (CREATE_GOAL_TOOL_NAME = "create_goal")
 #   update_goal     — goal/update_goal handler (UPDATE_GOAL_TOOL_NAME = "update_goal")
+#   shell           — shell handler (ToolName::plain("shell"))
+#                     Payload: ShellToolCallParams (command: Vec<String>).
+#                     Not advertised when shell_type=shell_command (QuantZhai's config),
+#                     but registered as a fallback handler in all non-disabled shell
+#                     configurations via spec_plan.rs. Codex will execute it on receipt.
+#                     Source: shell/shell_handler.rs (issue #68)
+#   container.exec  — container_exec handler (ToolName::plain("container.exec"))
+#                     Payload: ShellToolCallParams (command: Vec<String>), same as shell.
+#                     Never advertised (no spec() override — returns None by default).
+#                     Always registered as a fallback handler.
+#                     Source: shell/container_exec.rs (issue #68)
 #
 # Audit SHA: 46f30d02828bd4c52827e5f0482a6f2a982cce5b
 # See docs/codex-source-tool-contract.md, docs/codex-source-tool-inventory.md.
@@ -27,11 +38,9 @@ from typing import Protocol
 # NOT included here:
 #   apply_patch  — custom_tool_call item (Freeform handler), not function_call
 #   web_search   — web_search_call item, proxy_local execution
-#   local_shell  — LocalShell item (not function_call); separate contract slice
-#   tool_search  — ToolSearchCall item; separate contract slice
+#   local_shell  — LocalShell item (not function_call); separate contract slice (#69)
+#   tool_search  — ToolSearchCall item; separate contract slice (#69)
 #   image_generation — ImageGenerationCall item; document only
-#   shell / container.exec — function_call handlers exist, but model-facing
-#                             usage needs further audit; next audit slice
 #   computer     — reserved validation namespace, not a handler
 #
 # Do NOT inject coercion errors for names in this set — Codex executes them.
@@ -46,6 +55,8 @@ CODEX_NATIVE_TOOL_NAMES: frozenset[str] = frozenset({
     "get_goal",
     "create_goal",
     "update_goal",
+    "shell",
+    "container.exec",
 })
 
 

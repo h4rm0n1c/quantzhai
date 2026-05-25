@@ -105,6 +105,16 @@ fi
 
 echo ""
 
+# --- Audit slice status ---
+
+echo "Audit slice status:"
+echo "  #66 baseline : exec_command, write_stdin, shell_command  (DONE)"
+echo "  #67 slice    : update_plan, request_user_input, request_permissions, view_image,"
+echo "                 get_goal, create_goal, update_goal  (DONE)"
+echo "  #68 slice    : shell, container.exec  (DONE)"
+echo "  #69 next     : local_shell (LocalShell item), tool_search (ToolSearchCall item)"
+echo ""
+
 # --- Key handler lines from Codex source (spot check) ---
 
 if [[ -d "${CODEX_DIR}" ]]; then

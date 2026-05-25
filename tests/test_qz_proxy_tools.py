@@ -102,6 +102,8 @@ class NativeToolListContractTests(unittest.TestCase):
       update_plan, request_user_input, request_permissions — respective handlers (#67)
       view_image — view_image handler (#67)
       get_goal, create_goal, update_goal — goal handlers (#67)
+      shell — shell_handler.rs, fallback handler when shell_type != Default (#68)
+      container.exec — container_exec.rs, always-fallback handler (no spec) (#68)
 
     NOT in this set:
       apply_patch  — custom_tool_call item (Freeform), not function_call
@@ -151,6 +153,28 @@ class NativeToolListContractTests(unittest.TestCase):
         """update_goal: goal/update_goal.rs UPDATE_GOAL_TOOL_NAME = "update_goal" """
         self.assertIn("update_goal", CODEX_NATIVE_TOOL_NAMES)
 
+    def test_shell_in_native_tool_names(self):
+        """shell: shell/shell_handler.rs ToolName::plain("shell").
+
+        Payload: ShellToolCallParams (command: Vec<String>).
+        Registered as ShellHandler::default() (fallback, no spec) when
+        shell_type != Default (QuantZhai uses shell_command).
+        Codex executes function_call{name="shell"} via run_exec_like.
+        Source audit: issue #68.
+        """
+        self.assertIn("shell", CODEX_NATIVE_TOOL_NAMES)
+
+    def test_container_exec_in_native_tool_names(self):
+        """container.exec: shell/container_exec.rs ToolName::plain("container.exec").
+
+        Payload: ShellToolCallParams (command: Vec<String>, same as shell).
+        Never advertised (spec() returns None — no override). Always registered
+        as a fallback handler in all non-disabled shell configurations.
+        Codex executes function_call{name="container.exec"} via run_exec_like.
+        Source audit: issue #68.
+        """
+        self.assertIn("container.exec", CODEX_NATIVE_TOOL_NAMES)
+
     # --- exclusion tests: tools that must NOT be in the native pass-through set ---
 
     def test_computer_not_in_native_tool_names(self):
@@ -196,7 +220,11 @@ class NativeToolListContractTests(unittest.TestCase):
         )
 
     def test_native_tool_names_contains_exactly_proven_tools(self):
-        """Guard against unreviewed additions — exact set must match audit SHA 46f30d0."""
+        """Guard against unreviewed additions — exact set must match audit SHA 46f30d0.
+
+        Updated in issue #68: shell and container.exec added after source audit confirmed
+        they are function_call handlers registered as fallbacks in Codex at audited SHA.
+        """
         expected = {
             # Pre-existing (issue #66 baseline)
             "exec_command",
@@ -210,6 +238,9 @@ class NativeToolListContractTests(unittest.TestCase):
             "get_goal",
             "create_goal",
             "update_goal",
+            # Added in issue #68 — shell + container.exec audit
+            "shell",
+            "container.exec",
         }
         self.assertEqual(
             set(CODEX_NATIVE_TOOL_NAMES), expected,

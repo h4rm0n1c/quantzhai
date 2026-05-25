@@ -146,7 +146,7 @@ Source: `codex-rs/codex-api/src/sse/responses.rs` (no web_search_call branch in 
 The proxy uses `CODEX_NATIVE_TOOL_NAMES` to identify calls that should pass through to Codex
 as-is (after optional output_to_codex rewrite).
 
-Current proven set (expanded in issue #67 — audit SHA `46f30d02828bd4c52827e5f0482a6f2a982cce5b`):
+Current proven set (expanded in issues #67, #68 — audit SHA `46f30d02828bd4c52827e5f0482a6f2a982cce5b`):
 
 | Tool name | Codex handler file | Added |
 |---|---|---|
@@ -160,6 +160,14 @@ Current proven set (expanded in issue #67 — audit SHA `46f30d02828bd4c52827e5f
 | `get_goal` | `handlers/goal/get_goal.rs` | issue #67 |
 | `create_goal` | `handlers/goal/create_goal.rs` | issue #67 |
 | `update_goal` | `handlers/goal/update_goal.rs` | issue #67 |
+| `shell` | `handlers/shell/shell_handler.rs` | issue #68 |
+| `container.exec` | `handlers/shell/container_exec.rs` | issue #68 |
+
+`shell` and `container.exec` notes (issue #68):
+- Both use `ShellToolCallParams` (`command: Vec<String>`, not the string form used by `shell_command`).
+- `shell` spec is present only when `shell_type=Default`; QuantZhai uses `shell_command`, so `ShellHandler::default()` is registered as a fallback (no spec, not advertised).
+- `container.exec` is never advertised (no `spec()` override); always registered as fallback handler.
+- Both are executed by Codex via `run_exec_like` with `ShellRuntimeBackend::Generic` when received.
 
 `computer` was **removed** in issue #66. It appears only as a reserved namespace check in
 `codex-rs/app-server/src/request_processors/thread_processor.rs:194` — it is not a routed

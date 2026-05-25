@@ -1,6 +1,6 @@
 # Codex Source Tool Inventory
 
-**Tracking issue:** h4rm0n1c/quantzhai#67
+**Tracking issues:** h4rm0n1c/quantzhai#67 (initial audit), h4rm0n1c/quantzhai#68 (shell + container.exec slice)
 
 **Codex checkout:** `/tmp/qz-audit/codex`
 
@@ -39,8 +39,8 @@ at the audited SHA. See `docs/codex-source-tool-contract.md` for the full SSE an
 | `get_goal` | `codex-rs/core/src/tools/handlers/goal/get_goal.rs` `GET_GOAL_TOOL_NAME = "get_goal"` | `function_call` | `{}` (no args) | Same as exec_command | Added to CODEX_NATIVE_TOOL_NAMES (issue #67) | Pass-through as function_call |
 | `create_goal` | `codex-rs/core/src/tools/handlers/goal/create_goal.rs` `CREATE_GOAL_TOOL_NAME = "create_goal"` | `function_call` | `CreateGoalArgs` JSON (objective, token_budget) | Same as exec_command | Added to CODEX_NATIVE_TOOL_NAMES (issue #67) | Pass-through as function_call |
 | `update_goal` | `codex-rs/core/src/tools/handlers/goal/update_goal.rs` `UPDATE_GOAL_TOOL_NAME = "update_goal"` | `function_call` | `UpdateGoalArgs` JSON (status) | Same as exec_command | Added to CODEX_NATIVE_TOOL_NAMES (issue #67) | Pass-through as function_call |
-| `shell` | `codex-rs/core/src/tools/handlers/shell/shell_handler.rs` `ToolName::plain("shell")` | `function_call` | `ShellToolCallParams` (command: Vec\<String\>) | Same as exec_command | Not yet in CODEX_NATIVE_TOOL_NAMES | Defer — next audit slice; model-facing usage needs further audit |
-| `container.exec` | `codex-rs/core/src/tools/handlers/shell/container_exec.rs` `ToolName::plain("container.exec")` | `function_call` | `ShellToolCallParams` (command: Vec\<String\>) | Same as exec_command | Not yet in CODEX_NATIVE_TOOL_NAMES | Defer — next audit slice; same handler family as `shell` |
+| `shell` | `codex-rs/core/src/tools/handlers/shell/shell_handler.rs` `ToolName::plain("shell")` | `function_call` | `ShellToolCallParams` (command: Vec\<String\>, workdir, timeout_ms, sandbox_permissions, justification) | Same as exec_command | **Added to CODEX_NATIVE_TOOL_NAMES (issue #68)** | Pass-through as function_call. Not advertised when shell_type=shell_command (QuantZhai's config), but registered as fallback. Codex executes on receipt. |
+| `container.exec` | `codex-rs/core/src/tools/handlers/shell/container_exec.rs` `ToolName::plain("container.exec")` | `function_call` | `ShellToolCallParams` (same as shell) | Same as exec_command | **Added to CODEX_NATIVE_TOOL_NAMES (issue #68)** | Pass-through as function_call. Never advertised (spec()=None); always registered as fallback handler. Codex executes on receipt. |
 | `local_shell` | `codex-rs/core/src/tools/handlers/shell/local_shell.rs` `ToolName::plain("local_shell")` | **`local_shell_call`** (`ToolPayload::LocalShell`) | `LocalShellExecAction` | Separate `LocalShellCall` ResponseItem variant | Deferred | Needs separate contract slice — different item type |
 | `tool_search` | `codex-rs/core/src/tools/handlers/tool_search.rs` `TOOL_SEARCH_TOOL_NAME` | **`tool_search_call`** + `ToolSearchOutput` | `ToolSearchCall` ResponseItem | Separate item contract | Deferred | Needs separate contract slice |
 | `image_generation` | `codex-rs/protocol/src/models.rs` `ResponseItem::ImageGenerationCall` | **`image_generation_call`** | id, status, result (base64) | `response.output_item.added` + `response.output_item.done` with item.type=image_generation_call | Document only | Not for QuantZhai at present |
@@ -53,7 +53,7 @@ at the audited SHA. See `docs/codex-source-tool-contract.md` for the full SSE an
 
 ---
 
-## QuantZhai Native Pass-Through Set (after issue #67)
+## QuantZhai Native Pass-Through Set (after issue #68)
 
 ```python
 CODEX_NATIVE_TOOL_NAMES = frozenset({
@@ -69,6 +69,9 @@ CODEX_NATIVE_TOOL_NAMES = frozenset({
     "get_goal",
     "create_goal",
     "update_goal",
+    # Added in issue #68 (shell + container.exec audit)
+    "shell",
+    "container.exec",
 })
 ```
 
@@ -84,9 +87,9 @@ All names in this set:
 
 | Slice | Tools | Reason |
 |---|---|---|
-| Shell-like function_call additions | `shell`, `container.exec` | Handlers confirmed in source; `ShellToolCallParams` (command: Vec\<String\>) shape differs from `shell_command`. Need capture-based test before adding. |
-| LocalShell item contract | `local_shell` | `LocalShell` ResponseItem variant, not function_call. Needs dedicated contract slice. |
-| ToolSearch item contract | `tool_search` | `ToolSearchCall` + `ToolSearchOutput` ResponseItem variants. Needs dedicated slice. |
+| ~~Shell-like function_call additions~~ | ~~`shell`, `container.exec`~~ | **Done in issue #68.** Both added to CODEX_NATIVE_TOOL_NAMES. |
+| LocalShell item contract | `local_shell` | `LocalShell` ResponseItem variant, not function_call. Needs dedicated contract slice (#69). |
+| ToolSearch item contract | `tool_search` | `ToolSearchCall` + `ToolSearchOutput` ResponseItem variants. Needs dedicated slice (#69). |
 | image_generation item | `image_generation` | `ImageGenerationCall` ResponseItem. Document only. |
 | MCP / multi-agent / plugin | see table above | Out of scope for QuantZhai's single-model local stack. |
 
@@ -106,4 +109,45 @@ and compare to `46f30d02828bd4c52827e5f0482a6f2a982cce5b`. If different, re-audi
 
 ---
 
-*Created: 2026-05-25. Governs: issue #67 — Audit and adopt source-backed Codex tool contracts.*
+---
+
+## Slice #68 — shell and container.exec audit result
+
+**Issue:** h4rm0n1c/quantzhai#68
+
+**Decision: both added to `CODEX_NATIVE_TOOL_NAMES`.**
+
+### `shell`
+
+- Handler: `codex-rs/core/src/tools/handlers/shell/shell_handler.rs`
+- `ToolName::plain("shell")`, `matches_kind` → `ToolPayload::Function { .. }`
+- Payload: `ShellToolCallParams` — `command: Vec<String>`, `workdir`, `timeout_ms`, `sandbox_permissions`, `justification`
+- Spec: `self.options.map(create_shell_tool)` → present only when `ShellHandler::new(options)` (shell_type=Default). When `ShellHandler::default()` (options=None), spec=None → not advertised.
+- QuantZhai catalog uses `shell_type = shell_command` → `ShellHandler::default()` registered as fallback.
+- Codex will execute any `function_call { name: "shell" }` it receives, regardless of whether it was advertised. The handler is always registered.
+- Verdict: **native pass-through** — proxy must not inject unsupported-tool errors.
+
+### `container.exec`
+
+- Handler: `codex-rs/core/src/tools/handlers/shell/container_exec.rs`
+- `ToolName::plain("container.exec")`, `matches_kind` → `ToolPayload::Function { .. }`
+- Payload: `ShellToolCallParams` (identical to `shell`)
+- No `spec()` override → always returns `None` (never advertised to model, in any config)
+- Registered as fallback in every non-disabled shell-type configuration via `spec_plan.rs`
+- Both `shell` and `container.exec` use `run_exec_like` with `ShellRuntimeBackend::Generic` — same execution path
+- Verdict: **native pass-through** — proxy must not inject unsupported-tool errors.
+
+### Why both passed the audit
+
+QuantZhai's `CODEX_NATIVE_TOOL_NAMES` guards against the proxy injecting "tool not recognised" errors
+for calls that Codex is prepared to execute. Both `shell` and `container.exec` have registered
+handlers that Codex will route and execute. Adding them prevents spurious model-visible errors.
+
+The prior "shape audit needed" flag was resolved: `ShellToolCallParams.command` is `Vec<String>`
+(not a bare string like `ShellCommandToolCallParams.command`). This is a payload-level difference
+that does not affect proxy pass-through — the proxy does not parse or validate function_call
+argument content for native tools.
+
+---
+
+*Created: 2026-05-25. Updated: 2026-05-25 (issue #68 — shell + container.exec slice). Governs: issues #67, #68.*
