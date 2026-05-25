@@ -375,11 +375,12 @@ def model_status_from_control_plane(cp: Optional[dict]) -> "ModelStatus":
                 error = h[:120]
                 break
 
-    # Prefer backend_reasoning_budget from control-plane; fallback to environment.
-    budget = str(profile.get("backend_reasoning_budget") if profile.get("backend_reasoning_budget") is not None else os.environ.get("QZ_REASONING_BUDGET", ""))
-
     bm = cp.get("backend_manager") or {}
     pf = cp.get("profile") or {}
+
+    # Prefer backend_reasoning_budget from control-plane; fallback to environment.
+    budget = str(pf.get("backend_reasoning_budget") if pf.get("backend_reasoning_budget") is not None else os.environ.get("QZ_REASONING_BUDGET", ""))
+
     return ModelStatus(
         ready=bool(m.get("selected_model_ready") or r.get("backend_ready")),
         profile=selected_key,
