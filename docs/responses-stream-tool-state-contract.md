@@ -1,7 +1,17 @@
 # Responses Stream and Tool State Contract
 
 Status: living contract for QuantZhai's current `/v1/responses` streamed path.
-Last reconciled: 2026-05-09.
+Last reconciled: 2026-05-25 (issue #66).
+
+**Correction (2026-05-25, issue #66):** Any prose below that refers to
+`ToolLifecycleSpec.lifecycle_event_prefix`, `lifecycle_start_stages`, `lifecycle_done_stages`,
+`ProxyLocalToolRegistry.lifecycle_event_chunks/lifecycle_start_event_chunks/lifecycle_done_event_chunks`,
+`web_search_call.in_progress/searching/completed` SSE events, or the `public_tool_lifecycle_event` /
+`web_search_call_lifecycle_event` helper functions is now **superseded**. All of those were removed
+in issue #66 (fake lifecycle system). The authoritative Codex-source event contract is at
+`docs/codex-source-tool-contract.md`. apply_patch now emits `custom_tool_call` items with
+`response.custom_tool_call_input.delta/done` events. web_search emits only `output_item.added` +
+`output_item.done` with item type `web_search_call`.
 
 This document defines how QuantZhai should translate upstream llama.cpp/TurboQuant
 SSE into Codex-visible Responses events, local telemetry, and debug captures. It

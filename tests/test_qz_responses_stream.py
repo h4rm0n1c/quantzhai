@@ -110,6 +110,7 @@ class FakeWebRuntime:
 
 
 class ProbeProxyToolExecutor(ProxyLocalToolExecutor):
+    """Test-only proxy-local executor.  No fake lifecycle subevents."""
     function_name = "qz_probe"
     lifecycle = ToolLifecycleSpec(
         name="qz_probe",
@@ -117,9 +118,7 @@ class ProbeProxyToolExecutor(ProxyLocalToolExecutor):
         public_item_type="qz_probe_call",
         telemetry_name="qz_probe",
         continuation_hops=2,
-        lifecycle_event_prefix="response.qz_probe_call",
-        lifecycle_start_stages=("in_progress", "working"),
-        lifecycle_done_stages=("completed",),
+        # No lifecycle_event_prefix — fake response.<tool>_call.* system removed.
     )
 
     def execute(self, call, context):
@@ -1032,9 +1031,14 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
 
         self.assertEqual(len(requests), 2)
         self.assertIn('"type": "qz_probe_call"', stream_text)
-        self.assertIn("response.qz_probe_call.in_progress", stream_text)
-        self.assertIn("response.qz_probe_call.working", stream_text)
-        self.assertIn("response.qz_probe_call.completed", stream_text)
+        # Fake response.qz_probe_call.* subevents removed — Codex does not parse them.
+        # See docs/codex-source-tool-contract.md.
+        self.assertNotIn("response.qz_probe_call.in_progress", stream_text,
+                         "response.qz_probe_call.* must not appear in Codex SSE")
+        self.assertNotIn("response.qz_probe_call.working", stream_text,
+                         "response.qz_probe_call.* must not appear in Codex SSE")
+        self.assertNotIn("response.qz_probe_call.completed", stream_text,
+                         "response.qz_probe_call.* must not appear in Codex SSE")
         self.assertIn("searched.", stream_text)
         self.assertNotIn('"type": "function_call"', stream_text)
         self.assertTrue(any(item.get("type") == "function_call_output" for item in requests[1]["input"]))
@@ -2279,9 +2283,15 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertEqual(len(requests), 2)
         self.assertEqual(len(web_runtime.calls), 1)
         self.assertIn('"type": "web_search_call"', stream_text)
-        self.assertIn("response.web_search_call.in_progress", stream_text)
-        self.assertIn("response.web_search_call.searching", stream_text)
-        self.assertIn("response.web_search_call.completed", stream_text)
+        # Fake response.web_search_call.* subevents removed — Codex does not parse them.
+        # Real Codex-visible contract: output_item.added / output_item.done only.
+        # See docs/codex-source-tool-contract.md.
+        self.assertNotIn("response.web_search_call.in_progress", stream_text,
+                         "response.web_search_call.* must not appear in Codex SSE")
+        self.assertNotIn("response.web_search_call.searching", stream_text,
+                         "response.web_search_call.* must not appear in Codex SSE")
+        self.assertNotIn("response.web_search_call.completed", stream_text,
+                         "response.web_search_call.* must not appear in Codex SSE")
         self.assertIn("searched.", stream_text)
         self.assertNotIn('"type": "function_call"', stream_text)
         self.assertIn(1, output_indexes)
@@ -2298,9 +2308,10 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         ]
         self.assertEqual(len(web_search_items), 2)
         self.assertEqual(web_search_items[0]["id"], web_search_items[1]["id"])
+        # output_item.added must precede output_item.done
         self.assertLess(
-            event_names.index("response.web_search_call.in_progress"),
-            event_names.index("response.web_search_call.completed"),
+            event_names.index("response.output_item.added"),
+            event_names.index("response.output_item.done"),
         )
         started = [
             event for event in telemetry_events
@@ -2357,8 +2368,28 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertEqual(len(web_runtime.calls), 2)
         self.assertEqual(web_runtime.calls[0]["call_item"]["call_id"], "call_web_one")
         self.assertEqual(web_runtime.calls[1]["call_item"]["call_id"], "call_web_two")
-        self.assertEqual(event_names.count("response.web_search_call.in_progress"), 2)
-        self.assertEqual(event_names.count("response.web_search_call.completed"), 2)
+        # Fake response.web_search_call.* subevents removed.
+        self.assertEqual(event_names.count("response.web_search_call.in_progress"), 0,
+                         "response.web_search_call.* must not appear in Codex SSE")
+        self.assertEqual(event_names.count("response.web_search_call.completed"), 0,
+                         "response.web_search_call.* must not appear in Codex SSE")
+        # Real contract: output_item.added/done for each web_search_call.
+        web_search_added = [
+            et for et, p in events
+            if et == "response.output_item.added"
+            and isinstance(p, dict)
+            and isinstance(p.get("item"), dict)
+            and p["item"].get("type") == "web_search_call"
+        ]
+        web_search_done = [
+            et for et, p in events
+            if et == "response.output_item.done"
+            and isinstance(p, dict)
+            and isinstance(p.get("item"), dict)
+            and p["item"].get("type") == "web_search_call"
+        ]
+        self.assertEqual(len(web_search_added), 2)
+        self.assertEqual(len(web_search_done), 2)
         self.assertEqual(event_names.count("response.created"), 1)
         self.assertEqual(event_names.count("response.completed"), 1)
         self.assertEqual(completed["output"][0]["type"], "web_search_call")
@@ -2407,9 +2438,30 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         self.assertEqual(web_runtime.calls[1]["call_item"]["call_id"], "call_fixture_web_second")
         self.assertEqual(event_names.count("response.created"), 1)
         self.assertEqual(event_names.count("response.completed"), 1)
-        self.assertEqual(event_names.count("response.web_search_call.in_progress"), 2)
-        self.assertEqual(event_names.count("response.web_search_call.searching"), 2)
-        self.assertEqual(event_names.count("response.web_search_call.completed"), 2)
+        # Fake response.web_search_call.* subevents removed.
+        self.assertEqual(event_names.count("response.web_search_call.in_progress"), 0,
+                         "response.web_search_call.* must not appear in Codex SSE")
+        self.assertEqual(event_names.count("response.web_search_call.searching"), 0,
+                         "response.web_search_call.* must not appear in Codex SSE")
+        self.assertEqual(event_names.count("response.web_search_call.completed"), 0,
+                         "response.web_search_call.* must not appear in Codex SSE")
+        # Real contract: output_item.added/done for each web_search_call.
+        web_search_added_raw = [
+            et for et, p in events
+            if et == "response.output_item.added"
+            and isinstance(p, dict)
+            and isinstance(p.get("item"), dict)
+            and p["item"].get("type") == "web_search_call"
+        ]
+        web_search_done_raw = [
+            et for et, p in events
+            if et == "response.output_item.done"
+            and isinstance(p, dict)
+            and isinstance(p.get("item"), dict)
+            and p["item"].get("type") == "web_search_call"
+        ]
+        self.assertEqual(len(web_search_added_raw), 2)
+        self.assertEqual(len(web_search_done_raw), 2)
         self.assertEqual(completed["output"][0]["type"], "web_search_call")
         self.assertEqual(completed["output"][1]["type"], "web_search_call")
         self.assertEqual(completed["output"][2]["type"], "message")
@@ -5191,6 +5243,99 @@ class ApplyPatchLifecycleContractTests(unittest.TestCase):
         for item in custom_items:
             self.assertEqual(item.get("call_id"), "call_patch",
                              "call_id must be preserved in custom_tool_call apply_patch items")
+
+    def test_ap1_emits_custom_tool_call_input_delta(self):
+        """apply_patch must emit response.custom_tool_call_input.delta between output_item.added and .done.
+
+        Codex parses response.custom_tool_call_input.delta → ResponseEvent::ToolCallInputDelta.
+        Source: codex-rs/codex-api/src/sse/responses.rs:314.
+        See docs/codex-source-tool-contract.md.
+        """
+        events, _ = self._run_apply_patch()
+        names = [et for et, _ in events]
+        self.assertIn(
+            "response.custom_tool_call_input.delta", names,
+            "apply_patch must emit response.custom_tool_call_input.delta — "
+            "Codex parses this event to stream the patch envelope input",
+        )
+
+    def test_ap1_emits_custom_tool_call_input_done(self):
+        """apply_patch must emit response.custom_tool_call_input.done.
+
+        Codex parses response.custom_tool_call_input.done → ResponseEvent::ToolCallInputDone.
+        Source: codex-rs/codex-api/src/sse/responses.rs.
+        See docs/codex-source-tool-contract.md.
+        """
+        events, _ = self._run_apply_patch()
+        names = [et for et, _ in events]
+        self.assertIn(
+            "response.custom_tool_call_input.done", names,
+            "apply_patch must emit response.custom_tool_call_input.done",
+        )
+
+    def test_ap1_custom_tool_call_input_delta_carries_call_id(self):
+        """response.custom_tool_call_input.delta must carry the correct call_id."""
+        events, _ = self._run_apply_patch()
+        delta_payloads = [
+            p for et, p in events
+            if et == "response.custom_tool_call_input.delta" and isinstance(p, dict)
+        ]
+        self.assertEqual(len(delta_payloads), 1,
+                         "exactly one custom_tool_call_input.delta expected for a single apply_patch call")
+        self.assertEqual(delta_payloads[0].get("call_id"), "call_patch",
+                         "custom_tool_call_input.delta must preserve the original call_id")
+
+    def test_ap1_custom_tool_call_input_delta_carries_patch_text(self):
+        """response.custom_tool_call_input.delta must carry the patch envelope in its delta field."""
+        events, _ = self._run_apply_patch()
+        delta_payloads = [
+            p for et, p in events
+            if et == "response.custom_tool_call_input.delta" and isinstance(p, dict)
+        ]
+        self.assertEqual(len(delta_payloads), 1)
+        delta_text = delta_payloads[0].get("delta", "")
+        self.assertIn("*** Begin Patch", delta_text,
+                      "custom_tool_call_input.delta must carry the patch envelope text")
+
+    def test_ap1_input_events_between_added_and_done(self):
+        """response.custom_tool_call_input.delta/.done must appear between output_item.added and output_item.done.
+
+        The ordering is: output_item.added → custom_tool_call_input.delta →
+        custom_tool_call_input.done → output_item.done.
+        This mirrors the real Codex Responses API streaming order.
+        """
+        events, _ = self._run_apply_patch()
+        names = [et for et, _ in events]
+        ap_added_idx = next(
+            (i for i, (et, p) in enumerate(events)
+             if et == "response.output_item.added"
+             and isinstance(p, dict)
+             and isinstance(p.get("item"), dict)
+             and p["item"].get("type") == "custom_tool_call"
+             and p["item"].get("name") == "apply_patch"),
+            None,
+        )
+        ap_done_idx = next(
+            (i for i, (et, p) in enumerate(events)
+             if et == "response.output_item.done"
+             and isinstance(p, dict)
+             and isinstance(p.get("item"), dict)
+             and p["item"].get("type") == "custom_tool_call"
+             and p["item"].get("name") == "apply_patch"),
+            None,
+        )
+        delta_idx = next(
+            (i for i, (et, _) in enumerate(events)
+             if et == "response.custom_tool_call_input.delta"),
+            None,
+        )
+        self.assertIsNotNone(ap_added_idx, "output_item.added for apply_patch not found")
+        self.assertIsNotNone(ap_done_idx, "output_item.done for apply_patch not found")
+        self.assertIsNotNone(delta_idx, "custom_tool_call_input.delta not found")
+        self.assertGreater(delta_idx, ap_added_idx,
+                           "custom_tool_call_input.delta must come after output_item.added")
+        self.assertLess(delta_idx, ap_done_idx,
+                        "custom_tool_call_input.delta must come before output_item.done")
 
 
 class ApplyPatchStreamingAP2Tests(unittest.TestCase):

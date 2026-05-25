@@ -17,6 +17,7 @@ try:
     from .qz_sse import _normalize_response_usage, make_sse_block, transform_sse_event
     from .qz_streaming import (
         _sse_block_with_sequence,
+        custom_tool_call_input_events,
         is_function_call_stream_event,
         is_terminal_stream_event,
         parse_sse_event_lines,
@@ -59,6 +60,7 @@ except ImportError:
     from qz_sse import _normalize_response_usage, make_sse_block, transform_sse_event
     from qz_streaming import (
         _sse_block_with_sequence,
+        custom_tool_call_input_events,
         is_function_call_stream_event,
         is_terminal_stream_event,
         parse_sse_event_lines,
@@ -890,35 +892,43 @@ class ResponsesStreamRuntime:
             return None
 
     def _emit_public_tool_item(self, item: dict, public_index: int, sequence: int):
-        chunks, sequence = public_tool_item_events(item, public_index, sequence)
-        forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(chunks)
+        """Emit output_item.added + [custom_tool_call_input.delta/done] + output_item.done.
+
+        For custom_tool_call items (apply_patch), also emits the streaming input
+        delta/done events that Codex parses as ResponseEvent::ToolCallInputDelta.
+        Source: codex-rs/codex-api/src/sse/responses.rs:314
+        """
+        started_chunks, sequence = public_tool_item_started_event(item, public_index, sequence)
+        all_chunks = list(started_chunks)
+
+        # For custom_tool_call items, emit input delta/done between added and done.
+        if isinstance(item, dict) and item.get("type") == "custom_tool_call":
+            input_chunks, sequence = custom_tool_call_input_events(item, public_index, sequence)
+            all_chunks.extend(input_chunks)
+
+        done_chunks, sequence = public_tool_item_done_event(item, public_index, sequence)
+        all_chunks.extend(done_chunks)
+
+        forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(all_chunks)
         return sequence, forwarded_chunks, forwarded_bytes
 
     def _emit_proxy_local_started(self, call: dict, public_index: int, sequence: int):
         public_item = self.proxy_tool_registry.started_public_item(call, public_index)
         item_id = public_item["id"]
+        # Only emit output_item.added. Fake response.<tool>_call.* subevents removed.
+        # Codex only parses output_item.added / output_item.done / completed.
+        # See docs/codex-source-tool-contract.md.
         chunks, sequence = public_tool_item_started_event(public_item, public_index, sequence)
-        stage_chunks, sequence = self.proxy_tool_registry.lifecycle_start_event_chunks(
-            call,
-            item_id,
-            public_index,
-            sequence,
-        )
-        chunks.extend(stage_chunks)
         forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(chunks)
         return sequence, forwarded_chunks, forwarded_bytes, item_id
 
     def _emit_proxy_local_completed(self, call: dict, item: dict, public_index: int, sequence: int, item_id: str):
         item = dict(item)
         item["id"] = item_id
-        completed_chunks, sequence = self.proxy_tool_registry.lifecycle_done_event_chunks(
-            call,
-            item_id,
-            public_index,
-            sequence,
-        )
+        # Only emit output_item.done. Fake response.<tool>_call.* subevents removed.
+        # Codex only parses output_item.added / output_item.done / completed.
+        # See docs/codex-source-tool-contract.md.
         chunks, sequence = public_tool_item_done_event(item, public_index, sequence)
-        chunks = completed_chunks + chunks
         forwarded_chunks, forwarded_bytes = self._write_transformed_chunks(chunks)
         return sequence, forwarded_chunks, forwarded_bytes
 

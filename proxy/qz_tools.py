@@ -5,12 +5,15 @@ from dataclasses import dataclass
 from typing import Protocol
 
 # Tool names that Codex handles natively and should be passed through unchanged.
+# Source-backed: exec_command, write_stdin, shell_command are proven in
+# codex-rs/core/src/tools/handlers/ (unified_exec and shell).
+# computer is NOT a native Codex tool — only a reserved namespace in validation.
+# See docs/codex-source-tool-contract.md.
 # Do NOT inject coercion errors for these — Codex will execute them itself.
 CODEX_NATIVE_TOOL_NAMES: frozenset[str] = frozenset({
     "exec_command",
     "write_stdin",
     "shell_command",
-    "computer",
 })
 
 
@@ -21,9 +24,11 @@ class ToolLifecycleSpec:
     public_item_type: str = ""
     telemetry_name: str = ""
     continuation_hops: int = 0
-    lifecycle_event_prefix: str = ""
-    lifecycle_start_stages: tuple[str, ...] = ()
-    lifecycle_done_stages: tuple[str, ...] = ()
+    # lifecycle_event_prefix, lifecycle_start_stages, lifecycle_done_stages were removed.
+    # They generated fake response.<tool>_call.* Codex-visible SSE events that no
+    # current Codex client actually parses.  Codex-visible tool lifecycle is
+    # output_item.added / output_item.done / completed only.
+    # See docs/codex-source-tool-contract.md.
 
     def __post_init__(self):
         if self.execution not in {"protocol_adapter", "proxy_local"}:

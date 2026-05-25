@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# qz-web-search-lifecycle-smoke: live smoke for web_search lifecycle events
-# and searchengines-private Agent API provider guidance integration.
+# qz-web-search-codex-contract-smoke: live smoke for web_search Codex contract and
+# searchengines-private Agent API provider guidance integration.
 #
 # Usage:
-#   scripts/qz-web-search-lifecycle-smoke [--model MODEL] [--skip-live-search]
-#                                         [--telemetry-limit N]
+#   scripts/qz-web-search-codex-contract-smoke [--model MODEL] [--skip-live-search]
+#                                              [--telemetry-limit N]
 #
 # Run after qz-up. Checks:
 #   A. searchengines Agent API /guidance direct preflight
 #   B. QuantZhai /qz/web-search/capabilities — provider_guidance bridge
-#   C. Streaming web_search lifecycle SSE events (requires live model)
+#   C. Streaming web_search Codex contract SSE events (requires live model)
+#      Checks: output_item.added, output_item.done, response.completed present.
+#      Checks: response.web_search_call.{in_progress,searching,completed} ABSENT
+#              (fake lifecycle events removed in issue #66 — Codex does not parse them).
 #   D. FSE direct search — agent_api metadata, count_mismatch, result domains
 #   E. Operator telemetry visibility
 #
@@ -99,7 +102,7 @@ fail() { printf 'FAIL %s\n' "$*" >&2; FAIL_LIST+=("$*"); }
 warn() { printf 'WARN %s\n' "$*"; WARN_LIST+=("$*"); }
 skip() { printf 'SKIP %s\n' "$*"; SKIP_LIST+=("$*"); }
 
-printf '=== qz-web-search-lifecycle-smoke ===\n'
+printf '=== qz-web-search-codex-contract-smoke ===\n'
 printf '    proxy=%s\n' "$PROXY_BASE"
 printf '    searchengines=%s\n' "$AGENT_BASE"
 if [[ -n "$LEGACY_SEARXNG" && "$LEGACY_SEARXNG" != "$AGENT_BASE" ]]; then
@@ -293,10 +296,10 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# C. Streaming web_search lifecycle SSE events
+# C. Streaming web_search Codex contract SSE events
 # ---------------------------------------------------------------------------
 echo
-echo "--- C. Streaming web_search lifecycle SSE events ---"
+echo "--- C. Streaming web_search Codex contract SSE events ---"
 
 # Optional: wait for backend to become ready before attempting the live search.
 if [[ "$WAIT_BACKEND" -gt 0 ]]; then
@@ -419,16 +422,19 @@ except Exception as exc:
     sys.exit(0)
 
 web_search_events = [e for e in events if "web_search_call" in e]
-has_added        = "response.output_item.added"            in events
-has_ip           = "response.web_search_call.in_progress"  in events
-has_searching    = "response.web_search_call.searching"    in events
-has_completed    = "response.web_search_call.completed"    in events
-has_done         = "response.output_item.done"             in events
-has_resp_done    = "response.completed"                    in events
+has_added     = "response.output_item.added" in events
+has_done      = "response.output_item.done"  in events
+has_resp_done = "response.completed"         in events
+# Fake lifecycle events removed in issue #66 — Codex does not parse these.
+# They must NOT appear in the forwarded SSE stream.
+has_fake_ip        = "response.web_search_call.in_progress" in events
+has_fake_searching = "response.web_search_call.searching"   in events
+has_fake_completed = "response.web_search_call.completed"   in events
+fake_events_absent = not has_fake_ip and not has_fake_searching and not has_fake_completed
 
 if not web_search_events:
     status = "no_search"
-elif has_added and has_ip and has_searching and has_completed and has_done:
+elif has_added and has_done and has_resp_done and fake_events_absent:
     status = "pass"
 else:
     status = "partial"
@@ -438,12 +444,12 @@ print(json.dumps({
     "events_seen": events,
     "web_search_events": web_search_events,
     "checks": {
-        "response.output_item.added":            has_added,
-        "response.web_search_call.in_progress":  has_ip,
-        "response.web_search_call.searching":    has_searching,
-        "response.web_search_call.completed":    has_completed,
-        "response.output_item.done":             has_done,
-        "response.completed":                    has_resp_done,
+        "response.output_item.added":                      has_added,
+        "response.output_item.done":                       has_done,
+        "response.completed":                              has_resp_done,
+        "fake_web_search_call.in_progress_absent":         not has_fake_ip,
+        "fake_web_search_call.searching_absent":           not has_fake_searching,
+        "fake_web_search_call.completed_absent":           not has_fake_completed,
     },
 }))
 PYEOF

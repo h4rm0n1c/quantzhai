@@ -1,7 +1,17 @@
 # Codex-Visible Tool Lifecycle Audit
 
 Date: 2026-05-25
-Status: Source-grounded. No implementation changes.
+Status: Partially superseded by issue #66 (2026-05-25). See correction notice below.
+
+**⚠ Correction (2026-05-25, issue #66):** Section 2 of this document lists
+`response.web_search_call.in_progress`, `response.web_search_call.searching`, and
+`response.web_search_call.completed` as official Responses API events. A source audit of
+h4rm0n1c/codex SHA 46f30d02 confirmed Codex does NOT parse these events. They were
+fabricated by the `ToolLifecycleSpec` fake lifecycle system (`lifecycle_event_prefix`,
+`lifecycle_start_stages`, `lifecycle_done_stages` fields) and removed in issue #66.
+`ToolLifecycleSpec` no longer has those fields. `web_search` now exposes Codex-visible
+items via `output_item.added` / `output_item.done` only (item type `web_search_call`).
+For the authoritative Codex-source event contract, see `docs/codex-source-tool-contract.md`.
 
 This document audits exactly which SSE events Codex sees during a tool call's lifecycle in the QuantZhai streaming runtime. It contrasts Codex-visible events with operator-only telemetry and model-facing feedback, then identifies gaps and recommends future implementation slices.
 

@@ -27,9 +27,16 @@ different execution models:
 | | `web_search` | `apply_patch` |
 |---|---|---|
 | Execution mode | `proxy_local` — QuantZhai fetches results | `protocol_adapter` — Codex applies the patch locally |
-| Lifecycle stages | `in_progress → searching → completed` | none (only `added/done`) |
-| Official event family | `response.web_search_call.*` (official) | none defined — unofficial Codex extension |
+| Lifecycle stages | none — output_item.added/done only | none — output_item.added/done only |
+| Official event family | none (web_search_call.* events removed in issue #66) | none |
 | Continuation hop | yes — tool result returned in next hop | no — item forwarded; Codex closes the loop |
+
+**Correction (2026-05-25, issue #66):** The row above originally said `web_search` has lifecycle
+stages `in_progress → searching → completed` and `Official event family: response.web_search_call.*
+(official)`. A source audit of h4rm0n1c/codex SHA 46f30d02 confirmed Codex does NOT parse
+`response.web_search_call.*` subevents. Those events were fabricated by the QuantZhai
+`ToolLifecycleSpec` fake lifecycle system and have been removed. See
+`docs/codex-source-tool-contract.md` for the authoritative Codex-source event contract.
 
 **Constraints on this audit pass:** No runtime behaviour changes. No invented
 `response.apply_patch_call.*` sub-lifecycle events. No raw patch bodies in

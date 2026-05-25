@@ -42,9 +42,10 @@ class WebSearchToolAdapter:
         public_item_type="web_search_call",
         telemetry_name="web_search",
         continuation_hops=6,
-        lifecycle_event_prefix="response.web_search_call",
-        lifecycle_start_stages=("in_progress", "searching"),
-        lifecycle_done_stages=("completed",),
+        # No lifecycle_event_prefix / lifecycle_start_stages / lifecycle_done_stages.
+        # Codex does not parse response.web_search_call.* subevents.
+        # web_search is exposed only via output_item.added / output_item.done.
+        # See docs/codex-source-tool-contract.md.
     )
 
     def coerce(self, call: dict) -> ToolCoercionResult:

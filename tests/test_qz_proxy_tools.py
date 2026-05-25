@@ -7,7 +7,7 @@ from proxy.qz_proxy_tools import (
     make_proxy_local_tool_registry,
 )
 from proxy.qz_tool_lifecycle import ToolContinuationResult
-from proxy.qz_tools import ToolLifecycleSpec
+from proxy.qz_tools import CODEX_NATIVE_TOOL_NAMES, ToolLifecycleSpec
 
 
 class FakeWebRuntime:
@@ -38,6 +38,12 @@ class FakeWebRuntime:
 
 
 class ProbeProxyToolExecutor(ProxyLocalToolExecutor):
+    """Test-only proxy-local executor.
+
+    Uses a fictional 'qz_probe_call' public item type.
+    No lifecycle_event_prefix — the fake lifecycle subevent system was removed.
+    See docs/codex-source-tool-contract.md.
+    """
     function_name = "qz_probe"
     lifecycle = ToolLifecycleSpec(
         name="qz_probe",
@@ -45,9 +51,6 @@ class ProbeProxyToolExecutor(ProxyLocalToolExecutor):
         public_item_type="qz_probe_call",
         telemetry_name="qz_probe",
         continuation_hops=2,
-        lifecycle_event_prefix="response.qz_probe_call",
-        lifecycle_start_stages=("in_progress", "working"),
-        lifecycle_done_stages=("completed",),
     )
 
     def __init__(self):
@@ -88,6 +91,74 @@ class ProbeProxyToolExecutor(ProxyLocalToolExecutor):
         )
 
 
+class NativeToolListContractTests(unittest.TestCase):
+    """Enforce the Codex-source-backed native tool name list.
+
+    See docs/codex-source-tool-contract.md — only exec_command, write_stdin,
+    shell_command are proven in codex-rs/core/src/tools/handlers/.
+    computer is a reserved validation namespace only, not a handler.
+    """
+
+    def test_exec_command_in_native_tool_names(self):
+        self.assertIn("exec_command", CODEX_NATIVE_TOOL_NAMES)
+
+    def test_write_stdin_in_native_tool_names(self):
+        self.assertIn("write_stdin", CODEX_NATIVE_TOOL_NAMES)
+
+    def test_shell_command_in_native_tool_names(self):
+        self.assertIn("shell_command", CODEX_NATIVE_TOOL_NAMES)
+
+    def test_computer_not_in_native_tool_names(self):
+        """computer is a reserved namespace, not a native Codex handler.
+
+        codex-rs/app-server/src/request_processors/thread_processor.rs:194
+        lists 'computer' only as a reserved tool namespace for validation,
+        not as a handler or spec.  Removed from CODEX_NATIVE_TOOL_NAMES to
+        prevent silent pass-through of unsupported tool calls.
+        """
+        self.assertNotIn(
+            "computer", CODEX_NATIVE_TOOL_NAMES,
+            "'computer' is not a native Codex handler — must not be in CODEX_NATIVE_TOOL_NAMES",
+        )
+
+    def test_native_tool_names_contains_exactly_proven_tools(self):
+        expected = {"exec_command", "write_stdin", "shell_command"}
+        self.assertEqual(
+            set(CODEX_NATIVE_TOOL_NAMES), expected,
+            f"CODEX_NATIVE_TOOL_NAMES should be exactly {expected}",
+        )
+
+
+class ToolLifecycleSpecContractTests(unittest.TestCase):
+    """ToolLifecycleSpec no longer carries lifecycle_event_prefix or stage lists.
+
+    The fake lifecycle subevent system (response.<tool>_call.in_progress etc.) was
+    removed because current Codex source does not parse those events.
+    See docs/codex-source-tool-contract.md.
+    """
+
+    def test_spec_has_no_lifecycle_event_prefix_field(self):
+        spec = ToolLifecycleSpec(name="test", execution="proxy_local")
+        self.assertFalse(
+            hasattr(spec, "lifecycle_event_prefix"),
+            "ToolLifecycleSpec must not have lifecycle_event_prefix — removed in issue #66",
+        )
+
+    def test_spec_has_no_lifecycle_start_stages_field(self):
+        spec = ToolLifecycleSpec(name="test", execution="proxy_local")
+        self.assertFalse(
+            hasattr(spec, "lifecycle_start_stages"),
+            "ToolLifecycleSpec must not have lifecycle_start_stages — removed in issue #66",
+        )
+
+    def test_spec_has_no_lifecycle_done_stages_field(self):
+        spec = ToolLifecycleSpec(name="test", execution="proxy_local")
+        self.assertFalse(
+            hasattr(spec, "lifecycle_done_stages"),
+            "ToolLifecycleSpec must not have lifecycle_done_stages — removed in issue #66",
+        )
+
+
 class ProxyToolRegistryTests(unittest.TestCase):
     def test_registry_classifies_only_registered_proxy_local_calls(self):
         registry = make_proxy_local_tool_registry(FakeWebRuntime())
@@ -95,7 +166,6 @@ class ProxyToolRegistryTests(unittest.TestCase):
         self.assertEqual(registry.function_names, frozenset({"web_search"}))
         self.assertEqual(registry.max_continuation_hops, 6)
         self.assertEqual(registry.specs[0].execution, "proxy_local")
-        self.assertEqual(registry.specs[0].lifecycle_event_prefix, "response.web_search_call")
         self.assertTrue(registry.is_proxy_local_call({
             "type": "function_call",
             "name": "web_search",
@@ -120,7 +190,7 @@ class ProxyToolRegistryTests(unittest.TestCase):
         self.assertEqual(item["status"], "in_progress")
         self.assertEqual(item["call_id"], "call_web")
 
-    def test_spec_for_call_exposes_generic_lifecycle_contract(self):
+    def test_spec_for_call_exposes_web_search_contract(self):
         registry = make_proxy_local_tool_registry(FakeWebRuntime())
 
         spec = registry.spec_for_call({
@@ -133,8 +203,13 @@ class ProxyToolRegistryTests(unittest.TestCase):
         self.assertEqual(spec.name, "web_search")
         self.assertEqual(spec.public_item_type, "web_search_call")
         self.assertEqual(spec.telemetry_name, "web_search")
-        self.assertEqual(spec.lifecycle_start_stages, ("in_progress", "searching"))
-        self.assertEqual(spec.lifecycle_done_stages, ("completed",))
+        # Lifecycle subevent fields were removed — check they are absent.
+        self.assertFalse(hasattr(spec, "lifecycle_event_prefix"),
+                         "lifecycle_event_prefix must not exist on web_search ToolLifecycleSpec")
+        self.assertFalse(hasattr(spec, "lifecycle_start_stages"),
+                         "lifecycle_start_stages must not exist on web_search ToolLifecycleSpec")
+        self.assertFalse(hasattr(spec, "lifecycle_done_stages"),
+                         "lifecycle_done_stages must not exist on web_search ToolLifecycleSpec")
 
     def test_proxy_local_telemetry_payload_comes_from_lifecycle_spec(self):
         registry = make_proxy_local_tool_registry(FakeWebRuntime())
@@ -191,38 +266,19 @@ class ProxyToolRegistryTests(unittest.TestCase):
         self.assertEqual(registry.terminal_suppression_reason(call), "web_search_terminal")
         self.assertIn("web_search", registry.continuation_limit_message())
 
-    def test_proxy_local_lifecycle_events_are_registry_owned(self):
+    def test_proxy_local_registry_has_no_fake_lifecycle_methods(self):
+        """lifecycle_event_chunks/start/done_event_chunks were removed (issue #66).
+
+        These methods emitted fake response.<tool>_call.* SSE events that
+        current Codex source does not parse.
+        """
         registry = make_proxy_local_tool_registry(FakeWebRuntime())
-        call = {
-            "id": "fc_web",
-            "type": "function_call",
-            "call_id": "call_web",
-            "name": "web_search",
-            "arguments": "{\"query\":\"quantzhai\"}",
-        }
-
-        start_chunks, sequence = registry.lifecycle_start_event_chunks(call, "wsc_1", 4, 10)
-        done_chunks, sequence = registry.lifecycle_done_event_chunks(call, "wsc_1", 4, sequence)
-
-        start_text = b"".join(start_chunks).decode("utf-8")
-        done_text = b"".join(done_chunks).decode("utf-8")
-        self.assertIn("response.web_search_call.in_progress", start_text)
-        self.assertIn("response.web_search_call.searching", start_text)
-        self.assertIn("response.web_search_call.completed", done_text)
-        self.assertEqual(sequence, 13)
-
-    def test_proxy_local_lifecycle_rejects_unsupported_stage(self):
-        registry = make_proxy_local_tool_registry(FakeWebRuntime())
-        call = {
-            "id": "fc_web",
-            "type": "function_call",
-            "call_id": "call_web",
-            "name": "web_search",
-            "arguments": "{\"query\":\"quantzhai\"}",
-        }
-
-        with self.assertRaises(ValueError):
-            registry.lifecycle_event_chunks(call, "bogus", "wsc_1", 4, 0)
+        self.assertFalse(hasattr(registry, "lifecycle_event_chunks"),
+                         "lifecycle_event_chunks must be removed")
+        self.assertFalse(hasattr(registry, "lifecycle_start_event_chunks"),
+                         "lifecycle_start_event_chunks must be removed")
+        self.assertFalse(hasattr(registry, "lifecycle_done_event_chunks"),
+                         "lifecycle_done_event_chunks must be removed")
 
     def test_completed_call_decision_uses_registered_proxy_local_names(self):
         registry = make_proxy_local_tool_registry(FakeWebRuntime())
@@ -348,7 +404,12 @@ class ProxyToolRegistryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             registry.continuation_result(decision)
 
-    def test_registry_lifecycle_is_not_web_search_specific(self):
+    def test_registry_is_not_web_search_specific(self):
+        """ProxyLocalToolRegistry works with any proxy-local executor.
+
+        Tests basic execution contract using qz_probe test tool.
+        Does NOT test fake lifecycle subevent generation — those were removed.
+        """
         executor = ProbeProxyToolExecutor()
         registry = ProxyLocalToolRegistry([executor])
         call = {
@@ -366,14 +427,6 @@ class ProxyToolRegistryTests(unittest.TestCase):
         started_item = registry.started_public_item(call, public_index=7)
         self.assertEqual(started_item["type"], "qz_probe_call")
         self.assertEqual(started_item["status"], "in_progress")
-
-        start_chunks, sequence = registry.lifecycle_start_event_chunks(call, "qz_probe_1", 7, 20)
-        done_chunks, sequence = registry.lifecycle_done_event_chunks(call, "qz_probe_1", 7, sequence)
-        lifecycle_text = b"".join(start_chunks + done_chunks).decode("utf-8")
-        self.assertIn("response.qz_probe_call.in_progress", lifecycle_text)
-        self.assertIn("response.qz_probe_call.working", lifecycle_text)
-        self.assertIn("response.qz_probe_call.completed", lifecycle_text)
-        self.assertEqual(sequence, 23)
 
         result = registry.execute(
             call,
@@ -447,196 +500,3 @@ class RepeatedReadDecisionTests(unittest.TestCase):
         decision = registry.completed_call_decision(call, "native", repeated_read_state=state)
         self.assertNotEqual(decision.kind, "error")
         self.assertEqual(decision.kind, "signal")
-
-    def test_repeated_read_signal_output_is_not_json_ok_false(self):
-        """Signal output is advisory text, not an error JSON payload."""
-        import json
-        registry = self._make_registry()
-        call = self._exec_call("cat README.md")
-        state = self._make_state_with_read("README.md")
-        decision = registry.completed_call_decision(call, "native", repeated_read_state=state)
-        # Advisory output is plain text, not {"ok": false, ...}
-        output = decision.signal_result["output"]
-        self.assertIsInstance(output, str)
-        self.assertNotIn('"ok"', output)
-        self.assertIn("already read", output.lower())
-
-    def test_repeat_after_warning_passthrough(self):
-        from proxy.qz_file_signal import RepeatedReadState
-        registry = self._make_registry()
-        call = self._exec_call("cat README.md")
-        state = RepeatedReadState()
-        state.read_paths.add("README.md")
-        state.warned_paths.add("README.md")  # already warned
-        decision = registry.completed_call_decision(call, "native", repeated_read_state=state)
-        # After prior warning, allow through
-        self.assertEqual(decision.kind, "public")
-
-    def test_signal_marks_warned_paths(self):
-        """Returning a signal marks the paths as warned so next repeat is allowed."""
-        registry = self._make_registry()
-        call = self._exec_call("cat README.md")
-        state = self._make_state_with_read("README.md")
-        decision = registry.completed_call_decision(call, "native", repeated_read_state=state)
-        self.assertEqual(decision.kind, "signal")
-        self.assertIn("README.md", state.warned_paths)
-
-    def test_signal_metadata_present(self):
-        registry = self._make_registry()
-        call = self._exec_call("cat README.md", "call_m")
-        state = self._make_state_with_read("README.md")
-        decision = registry.completed_call_decision(call, "native", repeated_read_state=state)
-        md = decision.signal_metadata
-        self.assertIsNotNone(md)
-        self.assertIn("README.md", md.get("paths", []))
-        self.assertEqual(md.get("action"), "signalled")
-        self.assertEqual(md.get("tool"), "exec_command")
-        self.assertEqual(md.get("call_id"), "call_m")
-
-    def test_no_state_exec_command_still_public(self):
-        """Without repeated_read_state, exec_command is a normal public passthrough."""
-        registry = self._make_registry()
-        call = self._exec_call("cat README.md")
-        decision = registry.completed_call_decision(call, "native", repeated_read_state=None)
-        self.assertEqual(decision.kind, "public")
-
-    def test_apply_patch_unaffected(self):
-        from proxy.qz_file_signal import RepeatedReadState
-        registry = self._make_registry()
-        call = {
-            "type": "function_call",
-            "name": "apply_patch",
-            "call_id": "call_ap",
-            "arguments": '{"operation": "create", "path": "foo.py", "file_text": ""}',
-        }
-        state = RepeatedReadState()
-        decision = registry.completed_call_decision(call, "native", repeated_read_state=state)
-        # apply_patch goes through protocol adapter, not Codex-native signal check
-        self.assertIn(decision.kind, {"public", "error"})
-        self.assertNotEqual(decision.kind, "signal")
-
-    def test_web_search_unaffected(self):
-        from proxy.qz_file_signal import RepeatedReadState
-        registry = self._make_registry()
-        call = {
-            "type": "function_call",
-            "name": "web_search",
-            "call_id": "call_ws",
-            "arguments": '{"action": "search", "query": "quantzhai"}',
-        }
-        state = RepeatedReadState()
-        decision = registry.completed_call_decision(call, "native", repeated_read_state=state)
-        # web_search is proxy_local, not affected by repeated-read check
-        self.assertEqual(decision.kind, "proxy_local")
-
-    def test_unknown_tool_unaffected(self):
-        from proxy.qz_file_signal import RepeatedReadState
-        registry = self._make_registry()
-        call = {
-            "type": "function_call",
-            "name": "some_unknown_tool",
-            "call_id": "call_unk",
-            "arguments": "{}",
-        }
-        state = RepeatedReadState()
-        decision = registry.completed_call_decision(call, "native", repeated_read_state=state)
-        self.assertEqual(decision.kind, "error")
-
-
-class CoercionInfoTests(unittest.TestCase):
-    """Tests that coercion_applied and coercion_error are set correctly in decisions."""
-
-    def _make_registry(self):
-        from proxy.qz_proxy_tools import make_proxy_local_tool_registry
-        return make_proxy_local_tool_registry(FakeWebRuntime())
-
-    def test_malformed_web_search_sets_coercion_applied_and_error(self):
-        import json
-        registry = self._make_registry()
-        call = {
-            "type": "function_call", "name": "web_search",
-            "call_id": "c1", "arguments": "{not valid json}",
-        }
-        decision = registry.completed_call_decision(call, "native")
-        self.assertEqual(decision.kind, "error")
-        self.assertTrue(decision.coercion_applied)
-        self.assertTrue(bool(decision.coercion_error))
-        self.assertNotIn("{not valid json}", decision.coercion_error)
-
-    def test_valid_web_search_sets_coercion_applied_no_error(self):
-        import json
-        registry = self._make_registry()
-        call = {
-            "type": "function_call", "name": "web_search",
-            "call_id": "c1",
-            "arguments": json.dumps({"action": "search", "query": "test"}),
-        }
-        decision = registry.completed_call_decision(call, "native")
-        self.assertEqual(decision.kind, "proxy_local")
-        self.assertTrue(decision.coercion_applied)
-        self.assertEqual(decision.coercion_error, "")
-
-    def test_dropped_tool_does_not_set_coercion_applied(self):
-        registry = self._make_registry()
-        call = {
-            "type": "function_call", "name": "dropped_tool",
-            "call_id": "c1", "arguments": "{}",
-        }
-        decision = registry.completed_call_decision(
-            call, dropped_tool_names=frozenset({"dropped_tool"})
-        )
-        self.assertEqual(decision.kind, "error")
-        self.assertFalse(decision.coercion_applied)
-
-    def test_unknown_tool_does_not_set_coercion_applied(self):
-        registry = self._make_registry()
-        call = {
-            "type": "function_call", "name": "mystery_tool",
-            "call_id": "c1", "arguments": "{}",
-        }
-        decision = registry.completed_call_decision(call, "native")
-        self.assertEqual(decision.kind, "error")
-        self.assertFalse(decision.coercion_applied)
-
-    def test_codex_native_does_not_set_coercion_applied(self):
-        registry = self._make_registry()
-        call = {
-            "type": "function_call", "name": "exec_command",
-            "call_id": "c1", "arguments": "{}",
-        }
-        decision = registry.completed_call_decision(call, "native")
-        self.assertEqual(decision.kind, "public")
-        self.assertFalse(decision.coercion_applied)
-
-    def test_apply_patch_sibling_patch_sets_coercion_applied(self):
-        import json
-        registry = self._make_registry()
-        call = {
-            "type": "function_call", "name": "apply_patch",
-            "call_id": "c1",
-            "arguments": json.dumps({
-                "operation": {"type": "create_file", "path": "test.py"},
-                "patch": "x = 1\n",
-            }),
-        }
-        decision = registry.completed_call_decision(call, "native")
-        self.assertEqual(decision.kind, "public")
-        self.assertTrue(decision.coercion_applied)
-        self.assertEqual(decision.coercion_error, "")
-
-    def test_apply_patch_malformed_sets_coercion_error(self):
-        import json
-        registry = self._make_registry()
-        call = {
-            "type": "function_call", "name": "apply_patch",
-            "call_id": "c1",
-            "arguments": json.dumps({"operation": {"type": "create_file", "path": "x.py"}}),
-        }
-        decision = registry.completed_call_decision(call, "native")
-        self.assertEqual(decision.kind, "error")
-        self.assertTrue(decision.coercion_applied)
-        self.assertTrue(bool(decision.coercion_error))
-
-
-if __name__ == "__main__":
-    unittest.main()
