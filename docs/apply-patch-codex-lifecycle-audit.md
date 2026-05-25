@@ -1,7 +1,7 @@
 # apply_patch Codex Lifecycle Audit
 
 Date: 2026-05-25
-Status: AP1/AP2 enforcement complete. No runtime behaviour changes.
+Status: AP1/AP2/AP3 enforcement complete. No runtime behaviour changes.
 
 This audit focuses exclusively on `apply_patch` visibility and feedback. It
 distinguishes:
@@ -558,21 +558,54 @@ Tests added to `tests/test_qz_responses_stream.py::ApplyPatchStreamingAP2Tests`
 7. Legacy `*** Begin Patch` envelope → `coercion_succeeded`; operation type/path extracted from envelope header.
 8. `coercion_failed` telemetry: error_summary capped at 200 chars; no raw patch body; required safe fields only.
 
-### Slice AP3 — Safe telemetry hardening (low risk)
+### Slice AP3 — Safe telemetry hardening ✅ IMPLEMENTED (2026-05-25)
 
-### Slice AP3 — Safe telemetry hardening (low risk)
+Added `inspect_apply_patch_arguments(arguments: str) -> dict` to
+`proxy/qz_tool_apply_patch.py`. Returns only safe fields — booleans and fixed
+enum strings. No raw content (arguments, patch body, diff, file paths,
+destination paths) may escape.
 
-Extend `coercion_succeeded`/`coercion_failed` events with safe metadata only:
+**Safe fields returned:**
 
-- `operation_type` (enum value)
-- `path_present` (bool)
-- `diff_present` (bool)
-- `destination_present` (bool)
+| Field | Type | Notes |
+|---|---|---|
+| `args_shape` | str enum | `"empty"`, `"invalid_json"`, `"non_object_json"`, `"object"` |
+| `operation_present` | bool | `True` if `operation` key is a dict |
+| `patch_present` | bool | `True` if `patch` key is a non-empty string |
+| `path_present` | bool | `True` if path field is a non-empty string |
+| `diff_present` | bool | `True` if diff field exists (before sibling promotion) |
+| `destination_present` | bool | `True` if any destination key is a non-empty string |
+| `operation_type` | str enum | one of `APPLY_PATCH_OPERATION_TYPES`, `"unknown"`, or `"missing"` |
+| `coercion_strategy` | str enum | one of 7 strategy labels (see below) |
 
-Verify no raw patch body, no raw argument string, no file path value is emitted.
-Tests: assert presence of safe fields, absence of unsafe content.
+**`coercion_strategy` values:**
+- `operation_object` — direct operation dict path
+- `sibling_patch_promoted` — sibling `patch` promoted into operation
+- `top_level_operation` — top-level object treated as operation
+- `legacy_patch_with_path` — `{"patch": ..., "path": ...}` legacy shape
+- `legacy_patch_envelope` — `*** Begin Patch` header extracted
+- `failed_*` variants — `failed_invalid_json`, `failed_non_object_json`,
+  `failed_unclassified`, `failed_unknown_operation_type`, `failed_missing_path`,
+  `failed_missing_diff`, `failed_missing_destination`
 
-**Priority: low.** Small runtime change but verifiably safe.
+**Forbidden fields (never in telemetry):** raw arguments string, patch text,
+diff text, file path values, destination path values.
+
+This dict is nested as `"apply_patch"` key in `coercion_succeeded` /
+`coercion_failed` telemetry payloads when `tool == "apply_patch"`. Other tools
+(e.g., `web_search`) never get this key.
+
+No Codex-visible lifecycle changes. No model-visible error text changes.
+
+**Tests added:**
+- `tests/test_apply_patch_adapter.py::ApplyPatchAP3InspectTests` — 16 tests
+  covering empty/invalid inputs, missing diff, missing destination, sibling
+  patch promotion, legacy envelope, unknown operation type, delete_file, and
+  raw-content absence in all cases.
+- `tests/test_qz_responses_stream.py::ApplyPatchStreamingAP3Tests` — 10 tests
+  verifying nested dict present in coercion_failed/succeeded, required fields,
+  correct strategy values, no raw content, bool/str types only, and web_search
+  telemetry unaffected.
 
 ### Slice AP4 — Live Codex capture (deferred, requires running Codex)
 

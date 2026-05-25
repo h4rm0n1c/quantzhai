@@ -5933,5 +5933,379 @@ class ApplyPatchStreamingAP2Tests(unittest.TestCase):
                          "coercion_failed payload must not include raw arguments")
 
 
+# ---------------------------------------------------------------------------
+# AP3: Safe apply_patch coercion telemetry metadata
+# ---------------------------------------------------------------------------
+
+class ApplyPatchStreamingAP3Tests(unittest.TestCase):
+    """Slice AP3 — Safe apply_patch coercion telemetry metadata (streaming integration).
+
+    Verifies that the streaming runtime includes an "apply_patch" nested dict
+    in coercion_succeeded / coercion_failed telemetry payloads when the tool is
+    apply_patch, and that no raw content (patch body, path, diff) escapes into
+    telemetry.  Also verifies that web_search coercion telemetry does NOT get
+    the "apply_patch" nested dict.
+
+    Source: docs/apply-patch-codex-lifecycle-audit.md §AP3.
+    """
+
+    _FORBIDDEN_SENTINELS = [
+        "VERY_SENSITIVE_PATCH_CONTENT",
+        "/etc/secret_path_ap3",
+        "SECRET_DIFF_CONTENT",
+        "DEST_SECRET_PATH_AP3",
+    ]
+
+    def _make_apply_patch_stream(self, arguments: str, call_id: str = "call_ap3",
+                                  item_id: str = "fc_ap3") -> list:
+        return [
+            _sse_block("response.created", {
+                "response": {
+                    "id": "resp_fake_ap3",
+                    "object": "response",
+                    "created_at": 4102444800,
+                    "status": "in_progress",
+                    "model": "fake",
+                    "output": [],
+                },
+            }),
+            _sse_block("response.output_item.added", {
+                "output_index": 0,
+                "item": {
+                    "id": item_id,
+                    "type": "function_call",
+                    "status": "in_progress",
+                    "call_id": call_id,
+                    "name": "apply_patch",
+                    "arguments": "",
+                },
+            }),
+            _sse_block("response.function_call_arguments.delta", {
+                "item_id": item_id,
+                "output_index": 0,
+                "delta": arguments,
+            }),
+            _sse_block("response.output_item.done", {
+                "output_index": 0,
+                "item": {
+                    "id": item_id,
+                    "type": "function_call",
+                    "status": "completed",
+                    "call_id": call_id,
+                    "name": "apply_patch",
+                },
+            }),
+            b"data: [DONE]\n\n",
+        ]
+
+    def _run_apply_patch_error(self, arguments: str, call_id: str = "call_ap3_err"):
+        """Run apply_patch coercion failure scenario; returns telemetry."""
+        requests = []
+        telemetry = TelemetryBus()
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            has_error_output = any(
+                isinstance(item, dict)
+                and item.get("type") == "function_call_output"
+                and item.get("call_id") == call_id
+                for item in body.get("input") or []
+            )
+            return FakeStream(
+                _final_message_stream(text="model recovered.")
+                if has_error_output
+                else self._make_apply_patch_stream(arguments, call_id)
+            )
+
+        chunks = []
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=chunks.append,
+            stream_opener=opener,
+            capture_enabled=False,
+            telemetry=telemetry,
+            request_id="req-ap3-error",
+        )
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                        "content": [{"type": "input_text", "text": "test"}]}],
+            "tools": [{"type": "apply_patch"}],
+        }
+        runtime.run(body, "test-model.gguf", "native")
+        return telemetry.recent()
+
+    def _run_apply_patch_success(self, arguments: str, call_id: str = "call_ap3_ok"):
+        """Run apply_patch coercion success scenario; returns telemetry."""
+        requests = []
+        telemetry = TelemetryBus()
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            return FakeStream(self._make_apply_patch_stream(arguments, call_id))
+
+        chunks = []
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=chunks.append,
+            stream_opener=opener,
+            capture_enabled=False,
+            telemetry=telemetry,
+            request_id="req-ap3-ok",
+        )
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                        "content": [{"type": "input_text", "text": "test"}]}],
+            "tools": [{"type": "apply_patch"}],
+        }
+        runtime.run(body, "test-model.gguf", "native")
+        return telemetry.recent()
+
+    def _run_web_search_scenario(self, call_id: str = "call_ap3_ws"):
+        """Run a web_search coercion cycle; returns telemetry."""
+        requests = []
+        telemetry = TelemetryBus()
+        # well-formed web_search arguments
+        arguments = json.dumps({"query": "test query"})
+
+        def opener(body):
+            requests.append(json.loads(json.dumps(body)))
+            has_tool_output = any(
+                isinstance(item, dict) and item.get("type") == "tool_result"
+                for item in body.get("input") or []
+            )
+            if has_tool_output:
+                return FakeStream(_final_message_stream(text="done."))
+            return FakeStream(
+                _named_function_call_stream("fc_ws_ap3", call_id, "web_search", arguments)
+            )
+
+        chunks = []
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=chunks.append,
+            stream_opener=opener,
+            capture_enabled=False,
+            telemetry=telemetry,
+            request_id="req-ap3-ws",
+        )
+        body = {
+            "model": "test-model.gguf",
+            "input": [{"type": "message", "role": "user",
+                        "content": [{"type": "input_text", "text": "test"}]}],
+            "tools": [{"type": "web_search"}],
+        }
+        runtime.run(body, "test-model.gguf", "native")
+        return telemetry.recent()
+
+    # ── AP3-A: coercion_failed includes "apply_patch" nested dict ─────────────
+
+    def test_ap3_coercion_failed_includes_apply_patch_nested_dict(self):
+        """coercion_failed telemetry for apply_patch must include 'apply_patch' nested dict."""
+        args = "{bad json"
+        telemetry_events = self._run_apply_patch_error(args)
+
+        coercion_failed = [e for e in telemetry_events if e.get("type") == "coercion_failed"]
+        self.assertTrue(len(coercion_failed) >= 1,
+                        "coercion_failed must be emitted for invalid JSON apply_patch")
+        payload = coercion_failed[0].get("payload") or {}
+        self.assertIn("apply_patch", payload,
+                      "coercion_failed payload must include 'apply_patch' nested dict when tool=apply_patch")
+        ap_meta = payload["apply_patch"]
+        self.assertIsInstance(ap_meta, dict,
+                              "'apply_patch' value in payload must be a dict")
+
+    def test_ap3_coercion_failed_apply_patch_dict_has_required_fields(self):
+        """'apply_patch' nested dict in coercion_failed must carry args_shape and coercion_strategy."""
+        args = "{bad json"
+        telemetry_events = self._run_apply_patch_error(args)
+
+        coercion_failed = [e for e in telemetry_events if e.get("type") == "coercion_failed"]
+        self.assertTrue(len(coercion_failed) >= 1)
+        ap_meta = (coercion_failed[0].get("payload") or {}).get("apply_patch") or {}
+        self.assertIn("args_shape", ap_meta)
+        self.assertIn("coercion_strategy", ap_meta)
+        self.assertIn("operation_present", ap_meta)
+        self.assertIn("patch_present", ap_meta)
+        self.assertIn("path_present", ap_meta)
+        self.assertIn("diff_present", ap_meta)
+        self.assertIn("destination_present", ap_meta)
+        self.assertIn("operation_type", ap_meta)
+
+    def test_ap3_coercion_failed_apply_patch_dict_has_correct_strategy(self):
+        """Invalid JSON → coercion_strategy=failed_invalid_json in 'apply_patch' nested dict."""
+        args = "{bad json"
+        telemetry_events = self._run_apply_patch_error(args)
+
+        coercion_failed = [e for e in telemetry_events if e.get("type") == "coercion_failed"]
+        self.assertTrue(len(coercion_failed) >= 1)
+        ap_meta = (coercion_failed[0].get("payload") or {}).get("apply_patch") or {}
+        self.assertIn(ap_meta.get("coercion_strategy"), (
+            "failed_invalid_json", "failed_non_object_json", "failed_unclassified"
+        ), "strategy must be a failure variant for invalid JSON")
+        self.assertEqual(ap_meta.get("args_shape"), "invalid_json")
+
+    # ── AP3-B: coercion_succeeded includes "apply_patch" nested dict ──────────
+
+    def test_ap3_coercion_succeeded_includes_apply_patch_nested_dict(self):
+        """coercion_succeeded telemetry for apply_patch must include 'apply_patch' nested dict."""
+        # Well-formed operation_object path
+        args = json.dumps({
+            "operation": {
+                "type": "create_file",
+                "path": "/etc/secret_path_ap3",
+                "diff": "SECRET_DIFF_CONTENT",
+            }
+        })
+        telemetry_events = self._run_apply_patch_success(args)
+
+        coercion_succeeded = [e for e in telemetry_events if e.get("type") == "coercion_succeeded"]
+        self.assertTrue(len(coercion_succeeded) >= 1,
+                        "coercion_succeeded must be emitted for well-formed apply_patch")
+        payload = coercion_succeeded[0].get("payload") or {}
+        self.assertIn("apply_patch", payload,
+                      "coercion_succeeded payload must include 'apply_patch' nested dict when tool=apply_patch")
+        ap_meta = payload["apply_patch"]
+        self.assertIsInstance(ap_meta, dict)
+
+    def test_ap3_coercion_succeeded_apply_patch_dict_has_correct_strategy(self):
+        """Well-formed operation_object → coercion_strategy=operation_object in 'apply_patch' nested dict."""
+        args = json.dumps({
+            "operation": {
+                "type": "create_file",
+                "path": "/etc/secret_path_ap3",
+                "diff": "SECRET_DIFF_CONTENT",
+            }
+        })
+        telemetry_events = self._run_apply_patch_success(args)
+
+        coercion_succeeded = [e for e in telemetry_events if e.get("type") == "coercion_succeeded"]
+        self.assertTrue(len(coercion_succeeded) >= 1)
+        ap_meta = (coercion_succeeded[0].get("payload") or {}).get("apply_patch") or {}
+        self.assertEqual(ap_meta.get("coercion_strategy"), "operation_object")
+        self.assertEqual(ap_meta.get("operation_type"), "create_file")
+        self.assertTrue(ap_meta.get("operation_present"))
+        self.assertTrue(ap_meta.get("path_present"))
+        self.assertTrue(ap_meta.get("diff_present"))
+
+    # ── AP3-C: No raw content in "apply_patch" nested dict ─────────────────────
+
+    def test_ap3_coercion_failed_apply_patch_dict_no_raw_patch_body(self):
+        """No raw patch body may appear in 'apply_patch' nested dict on coercion_failed."""
+        args = json.dumps({
+            "operation": {"type": "create_file", "path": "/etc/secret_path_ap3"},
+            "patch": "VERY_SENSITIVE_PATCH_CONTENT",
+        })
+        # No diff on operation → coercion fails (or sibling patch is promoted to succeed)
+        # Either way, raw sentinel must not appear in nested dict
+        telemetry_events = self._run_apply_patch_error(args)
+
+        all_events = [e for e in telemetry_events
+                      if e.get("type") in {"coercion_failed", "coercion_succeeded"}]
+        for event in all_events:
+            ap_meta = (event.get("payload") or {}).get("apply_patch") or {}
+            meta_str = json.dumps(ap_meta)
+            for sentinel in self._FORBIDDEN_SENTINELS:
+                self.assertNotIn(
+                    sentinel, meta_str,
+                    f"raw sentinel '{sentinel}' must not appear in 'apply_patch' telemetry metadata"
+                )
+
+    def test_ap3_coercion_succeeded_apply_patch_dict_no_raw_content(self):
+        """No raw path, diff, or patch content may appear in 'apply_patch' nested dict on success."""
+        args = json.dumps({
+            "operation": {
+                "type": "create_file",
+                "path": "/etc/secret_path_ap3",
+                "diff": "SECRET_DIFF_CONTENT",
+            }
+        })
+        telemetry_events = self._run_apply_patch_success(args)
+
+        coercion_succeeded = [e for e in telemetry_events if e.get("type") == "coercion_succeeded"]
+        self.assertTrue(len(coercion_succeeded) >= 1)
+        for event in coercion_succeeded:
+            ap_meta = (event.get("payload") or {}).get("apply_patch") or {}
+            meta_str = json.dumps(ap_meta)
+            for sentinel in self._FORBIDDEN_SENTINELS:
+                self.assertNotIn(
+                    sentinel, meta_str,
+                    f"raw sentinel '{sentinel}' must not appear in 'apply_patch' telemetry metadata"
+                )
+
+    def test_ap3_apply_patch_dict_all_values_are_bool_or_str(self):
+        """All leaf values in 'apply_patch' telemetry dict must be bool or str (no ints, lists, etc.)."""
+        args = json.dumps({
+            "operation": {
+                "type": "update_file",
+                "path": "/etc/secret_path_ap3",
+                "diff": "SECRET_DIFF_CONTENT",
+            }
+        })
+        telemetry_events = self._run_apply_patch_success(args)
+
+        coercion_succeeded = [e for e in telemetry_events if e.get("type") == "coercion_succeeded"]
+        self.assertTrue(len(coercion_succeeded) >= 1)
+        ap_meta = (coercion_succeeded[0].get("payload") or {}).get("apply_patch") or {}
+        for key, val in ap_meta.items():
+            self.assertIsInstance(
+                val, (bool, str),
+                f"'apply_patch' metadata field '{key}' must be bool or str, got {type(val).__name__}"
+            )
+
+    # ── AP3-D: web_search coercion telemetry must NOT include "apply_patch" ───
+
+    def test_ap3_web_search_coercion_telemetry_has_no_apply_patch_key(self):
+        """web_search coercion telemetry events must NOT include an 'apply_patch' nested dict."""
+        telemetry_events = self._run_web_search_scenario()
+
+        coercion_events = [
+            e for e in telemetry_events
+            if e.get("type") in {"coercion_succeeded", "coercion_failed"}
+            and (e.get("payload") or {}).get("tool") == "web_search"
+        ]
+        # web_search goes through tool_call_started/tool_call_completed (proxy_local path),
+        # not through coercion telemetry — so there may be 0 coercion events.
+        # If any exist (e.g., for future web_search coercion), they must not include apply_patch.
+        for event in coercion_events:
+            payload = event.get("payload") or {}
+            self.assertNotIn(
+                "apply_patch", payload,
+                "web_search coercion events must not carry an 'apply_patch' metadata dict"
+            )
+
+    def test_ap3_coercion_events_apply_patch_key_only_for_apply_patch_tool(self):
+        """'apply_patch' nested dict in coercion payload only appears when tool == 'apply_patch'."""
+        # Run apply_patch scenario to collect coercion events
+        args = json.dumps({
+            "operation": {
+                "type": "create_file",
+                "path": "/etc/secret_path_ap3",
+                "diff": "SECRET_DIFF_CONTENT",
+            }
+        })
+        telemetry_events = self._run_apply_patch_success(args)
+
+        for event in telemetry_events:
+            if event.get("type") not in {"coercion_succeeded", "coercion_failed"}:
+                continue
+            payload = event.get("payload") or {}
+            tool = payload.get("tool", "")
+            has_ap_meta = "apply_patch" in payload
+            if has_ap_meta:
+                self.assertEqual(tool, "apply_patch",
+                                 "Only apply_patch coercion events may carry 'apply_patch' metadata dict")
+
+
 if __name__ == "__main__":
     unittest.main()

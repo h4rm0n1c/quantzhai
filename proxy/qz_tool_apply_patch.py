@@ -461,6 +461,163 @@ def _extract_partial_operation(arguments: str) -> dict | None:
     return out
 
 
+def inspect_apply_patch_arguments(arguments: str) -> dict:
+    """Return safe telemetry metadata for an apply_patch arguments string.
+
+    All returned fields are safe for operator telemetry — booleans and enum
+    strings only.  No raw content (arguments, patch body, diff, file paths,
+    or destination paths) is included.
+
+    Fields:
+    - args_shape:           "object" | "non_object" | "invalid_json" | "empty"
+    - operation_present:    bool — data["operation"] is a dict
+    - patch_present:        bool — data["patch"] is a non-empty string
+    - path_present:         bool — candidate["path"] is a non-empty string
+    - diff_present:         bool — candidate["diff"] is present (pre-promotion)
+    - destination_present:  bool — any destination alias is a non-empty string
+    - operation_type:       enum or "unknown" or "missing"
+    - coercion_strategy:    enum (success) or "failed_*" (failure)
+
+    Note: diff_present reflects the operation object before sibling-patch
+    promotion.  When coercion_strategy == "sibling_patch_promoted", diff_present
+    is False (the nested operation lacked diff; the sibling patch supplied it).
+    """
+    if not arguments or not arguments.strip():
+        return {
+            "args_shape": "empty",
+            "operation_present": False,
+            "patch_present": False,
+            "path_present": False,
+            "diff_present": False,
+            "destination_present": False,
+            "operation_type": "missing",
+            "coercion_strategy": "failed_invalid_json",
+        }
+
+    try:
+        data = json.loads(arguments)
+    except Exception:
+        return {
+            "args_shape": "invalid_json",
+            "operation_present": False,
+            "patch_present": False,
+            "path_present": False,
+            "diff_present": False,
+            "destination_present": False,
+            "operation_type": "missing",
+            "coercion_strategy": "failed_invalid_json",
+        }
+
+    if not isinstance(data, dict):
+        return {
+            "args_shape": "non_object",
+            "operation_present": False,
+            "patch_present": False,
+            "path_present": False,
+            "diff_present": False,
+            "destination_present": False,
+            "operation_type": "missing",
+            "coercion_strategy": "failed_non_object_json",
+        }
+
+    nested = data.get("operation")
+    sibling_patch = data.get("patch")
+    candidate = nested if isinstance(nested, dict) else data
+
+    operation_present = isinstance(nested, dict)
+    patch_present = isinstance(sibling_patch, str) and bool(sibling_patch)
+
+    # All booleans — no raw values
+    path_val = candidate.get("path") if isinstance(candidate, dict) else None
+    path_present = isinstance(path_val, str) and bool(path_val.strip())
+    diff_present = isinstance(candidate.get("diff"), str) if isinstance(candidate, dict) else False
+    destination_present = bool(
+        isinstance(candidate, dict)
+        and any(
+            isinstance(candidate.get(k), str) and candidate.get(k, "").strip()
+            for k in APPLY_PATCH_DESTINATION_KEYS
+        )
+    )
+
+    # operation_type: enum string, "unknown", or "missing" — never raw value
+    if isinstance(candidate, dict):
+        op_type = candidate.get("type")
+        if op_type in APPLY_PATCH_OPERATION_TYPES:
+            operation_type = op_type
+        elif op_type is None:
+            operation_type = "missing"
+        else:
+            operation_type = "unknown"
+    else:
+        operation_type = "missing"
+
+    meta = {
+        "args_shape": "object",
+        "operation_present": operation_present,
+        "patch_present": patch_present,
+        "path_present": path_present,
+        "diff_present": diff_present,
+        "destination_present": destination_present,
+        "operation_type": operation_type,
+        "coercion_strategy": "failed_unclassified",
+    }
+
+    # Strategy detection — mirrors _parse_apply_patch_arguments coerce paths.
+    # Each check is a pure function call; no raw content escapes into meta.
+
+    # Path 1: valid nested operation object
+    if isinstance(nested, dict) and _coerce_apply_patch_operation(nested) is not None:
+        meta["coercion_strategy"] = "operation_object"
+        return meta
+
+    # Path 2: sibling patch promoted into operation.diff
+    if (
+        isinstance(nested, dict)
+        and isinstance(sibling_patch, str)
+        and not isinstance(nested.get("diff"), str)
+        and _coerce_apply_patch_operation(dict(nested, diff=sibling_patch)) is not None
+    ):
+        meta["coercion_strategy"] = "sibling_patch_promoted"
+        return meta
+
+    # Path 3: top-level operation fields (no nested "operation" key)
+    if _coerce_apply_patch_operation(data) is not None:
+        meta["coercion_strategy"] = "top_level_operation"
+        return meta
+
+    # Path 4: legacy patch paths
+    patch = data.get("patch")
+    path = data.get("path")
+    if isinstance(patch, str):
+        if not isinstance(path, str) or not path.strip():
+            extracted = _extract_op_and_path_from_patch_envelope(patch)
+            if extracted:
+                _etype, _epath = extracted
+                if isinstance(_epath, str) and _epath.strip():
+                    meta["coercion_strategy"] = "legacy_patch_envelope"
+                    return meta
+        if isinstance(path, str) and path.strip():
+            meta["coercion_strategy"] = "legacy_patch_with_path"
+            return meta
+
+    # All coerce paths failed — classify failure from candidate
+    if isinstance(candidate, dict):
+        cand_type = candidate.get("type")
+        if cand_type not in APPLY_PATCH_OPERATION_TYPES:
+            meta["coercion_strategy"] = "failed_unknown_operation_type"
+        elif not isinstance(candidate.get("path"), str) or not candidate.get("path", "").strip():
+            meta["coercion_strategy"] = "failed_missing_path"
+        elif cand_type in {"create_file", "update_file"} and not isinstance(candidate.get("diff"), str):
+            meta["coercion_strategy"] = "failed_missing_diff"
+        elif cand_type in {"move_file", "rename_file"} and not any(
+            isinstance(candidate.get(k), str) and candidate.get(k, "").strip()
+            for k in APPLY_PATCH_DESTINATION_KEYS
+        ):
+            meta["coercion_strategy"] = "failed_missing_destination"
+
+    return meta
+
+
 def _describe_args_failure(arguments: str) -> str:
     """Produce a specific human-readable reason for an args-coercion failure.
     Used in the fallback assistant message when no envelope can be salvaged."""

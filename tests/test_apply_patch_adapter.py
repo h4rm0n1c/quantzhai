@@ -18,6 +18,7 @@ from proxy.quantzhai_proxy import (
 from proxy.qz_tool_apply_patch import (
     APPLY_PATCH_TOOL_ADAPTER,
     ensure_apply_patch_tool_policy,
+    inspect_apply_patch_arguments,
     _apply_patch_operation_to_patch_text,
 )
 
@@ -915,3 +916,221 @@ class ApplyPatchAP2CoercionSafetyTests(unittest.TestCase):
         output_str = error_item.get("output", "")
         self.assertNotIn("VERY_SENSITIVE_PATCH_CONTENT", output_str,
                          "raw argument content must not appear in the injected error output")
+
+
+# ---------------------------------------------------------------------------
+# AP3: inspect_apply_patch_arguments — safe telemetry metadata
+# ---------------------------------------------------------------------------
+
+class ApplyPatchAP3InspectTests(unittest.TestCase):
+    """Verify inspect_apply_patch_arguments returns only safe metadata fields.
+
+    All returned values must be booleans or fixed enum strings.  No raw
+    arguments, patch text, diff text, file path values, or destination path
+    values may appear anywhere in the returned dict.
+    """
+
+    # Sentinel strings that must never appear in any inspect output.
+    _FORBIDDEN_VALUES = [
+        "VERY_SENSITIVE_PATCH_CONTENT",
+        "/etc/secret_path",
+        "BEGIN PATCH",
+        "--- old.py",
+        "+++ new.py",
+        "DEST_SECRET_PATH",
+    ]
+
+    def _assert_no_raw_content(self, meta: dict, label: str = ""):
+        """Assert that none of the forbidden raw-content sentinels appear in meta."""
+        meta_str = json.dumps(meta)
+        for sentinel in self._FORBIDDEN_VALUES:
+            self.assertNotIn(
+                sentinel, meta_str,
+                f"raw content '{sentinel}' must not appear in inspect output{' (' + label + ')' if label else ''}"
+            )
+
+    def _assert_safe_types(self, meta: dict):
+        """All leaf values must be bool or str (enum strings)."""
+        for key, val in meta.items():
+            self.assertIsInstance(
+                val, (bool, str),
+                f"field '{key}' must be bool or str, got {type(val).__name__}"
+            )
+
+    # --- Empty / invalid inputs -----------------------------------------------
+
+    def test_ap3_empty_string_returns_empty_shape(self):
+        """Empty arguments string → args_shape=empty, failed strategy."""
+        meta = inspect_apply_patch_arguments("")
+        self.assertEqual(meta["args_shape"], "empty")
+        self.assertEqual(meta["coercion_strategy"], "failed_invalid_json")
+        self.assertFalse(meta["operation_present"])
+        self.assertFalse(meta["patch_present"])
+        self._assert_safe_types(meta)
+
+    def test_ap3_invalid_json_returns_invalid_json_shape(self):
+        """Invalid JSON → args_shape=invalid_json, coercion_strategy=failed_invalid_json."""
+        raw = '{"type": "update_file", "path": "/etc/secret_path", "diff": "VERY_SENSITIVE_PATCH_CONTENT"'  # truncated
+        meta = inspect_apply_patch_arguments(raw)
+        self.assertEqual(meta["args_shape"], "invalid_json")
+        self.assertEqual(meta["coercion_strategy"], "failed_invalid_json")
+        self._assert_no_raw_content(meta, "invalid JSON case")
+        self._assert_safe_types(meta)
+
+    def test_ap3_invalid_json_no_raw_args_present(self):
+        """No raw argument content may appear in the metadata for invalid JSON."""
+        raw = '{"patch": "VERY_SENSITIVE_PATCH_CONTENT", bad'
+        meta = inspect_apply_patch_arguments(raw)
+        meta_str = json.dumps(meta)
+        self.assertNotIn("VERY_SENSITIVE_PATCH_CONTENT", meta_str,
+                         "raw patch body must not appear in invalid JSON inspect output")
+
+    # --- Missing diff ----------------------------------------------------------
+
+    def test_ap3_missing_diff_operation_type_and_path_present(self):
+        """update_file with no diff → operation_type=update_file, path_present=True, diff_present=False."""
+        args = json.dumps({"operation": {"type": "update_file", "path": "/etc/secret_path"}})
+        meta = inspect_apply_patch_arguments(args)
+        self.assertEqual(meta["operation_type"], "update_file")
+        self.assertTrue(meta["path_present"])
+        self.assertFalse(meta["diff_present"])
+        self.assertEqual(meta["coercion_strategy"], "failed_missing_diff")
+
+    def test_ap3_missing_diff_no_path_value_present(self):
+        """No raw path value ('/etc/secret_path') may appear in the metadata."""
+        args = json.dumps({"operation": {"type": "update_file", "path": "/etc/secret_path"}})
+        meta = inspect_apply_patch_arguments(args)
+        self._assert_no_raw_content(meta, "missing diff case")
+
+    def test_ap3_missing_diff_safe_types(self):
+        args = json.dumps({"operation": {"type": "create_file", "path": "/etc/secret_path"}})
+        meta = inspect_apply_patch_arguments(args)
+        self._assert_safe_types(meta)
+        self.assertEqual(meta["args_shape"], "object")
+
+    # --- Missing destination ---------------------------------------------------
+
+    def test_ap3_missing_destination_strategy(self):
+        """move_file with no destination → coercion_strategy=failed_missing_destination."""
+        args = json.dumps({"operation": {"type": "move_file", "path": "/etc/secret_path"}})
+        meta = inspect_apply_patch_arguments(args)
+        self.assertEqual(meta["operation_type"], "move_file")
+        self.assertTrue(meta["path_present"])
+        self.assertFalse(meta["destination_present"])
+        self.assertEqual(meta["coercion_strategy"], "failed_missing_destination")
+
+    def test_ap3_missing_destination_no_path_value_present(self):
+        """No raw path value may appear in the metadata for missing destination case."""
+        args = json.dumps({"operation": {"type": "move_file", "path": "/etc/secret_path"}})
+        meta = inspect_apply_patch_arguments(args)
+        self._assert_no_raw_content(meta, "missing destination case")
+
+    # --- Sibling patch promotion -----------------------------------------------
+
+    def test_ap3_sibling_patch_promoted_fields(self):
+        """operation present with sibling patch → operation_present=True, patch_present=True, diff_present=False."""
+        args = json.dumps({
+            "operation": {"type": "update_file", "path": "/etc/secret_path"},
+            "patch": "VERY_SENSITIVE_PATCH_CONTENT",
+        })
+        meta = inspect_apply_patch_arguments(args)
+        self.assertTrue(meta["operation_present"])
+        self.assertTrue(meta["patch_present"])
+        self.assertFalse(meta["diff_present"])
+        self.assertEqual(meta["coercion_strategy"], "sibling_patch_promoted")
+
+    def test_ap3_sibling_patch_promoted_no_patch_body_present(self):
+        """Raw patch body must not appear in sibling_patch_promoted metadata."""
+        args = json.dumps({
+            "operation": {"type": "update_file", "path": "/etc/secret_path"},
+            "patch": "VERY_SENSITIVE_PATCH_CONTENT",
+        })
+        meta = inspect_apply_patch_arguments(args)
+        self._assert_no_raw_content(meta, "sibling patch promotion case")
+
+    # --- Legacy Begin Patch envelope ------------------------------------------
+
+    def test_ap3_legacy_patch_envelope_strategy(self):
+        """Legacy Begin Patch envelope → patch_present=True, coercion_strategy=legacy_patch_envelope."""
+        patch_text = (
+            "*** Begin Patch\n"
+            "*** Update File: /etc/secret_path\n"
+            "@@ -1,3 +1,3 @@\n"
+            "-old\n"
+            "+BEGIN PATCH\n"  # sentinel in patch content
+            "*** End Patch"
+        )
+        args = json.dumps({"patch": patch_text})
+        meta = inspect_apply_patch_arguments(args)
+        self.assertTrue(meta["patch_present"])
+        self.assertEqual(meta["coercion_strategy"], "legacy_patch_envelope")
+
+    def test_ap3_legacy_patch_envelope_no_patch_body_present(self):
+        """Raw patch body (including sentinels inside it) must not appear in metadata."""
+        patch_text = (
+            "*** Begin Patch\n"
+            "*** Update File: /etc/secret_path\n"
+            "@@ -1,3 +1,3 @@\n"
+            "-VERY_SENSITIVE_PATCH_CONTENT\n"
+            "+new content\n"
+            "*** End Patch"
+        )
+        args = json.dumps({"patch": patch_text})
+        meta = inspect_apply_patch_arguments(args)
+        self._assert_no_raw_content(meta, "legacy patch envelope case")
+
+    # --- Successful operation_object path -------------------------------------
+
+    def test_ap3_operation_object_strategy(self):
+        """Well-formed operation object → coercion_strategy=operation_object."""
+        args = json.dumps({
+            "operation": {
+                "type": "create_file",
+                "path": "/etc/secret_path",
+                "diff": "--- /dev/null\n+++ new.py\n+content\n",
+            }
+        })
+        meta = inspect_apply_patch_arguments(args)
+        self.assertEqual(meta["coercion_strategy"], "operation_object")
+        self.assertTrue(meta["operation_present"])
+        self.assertTrue(meta["path_present"])
+        self.assertTrue(meta["diff_present"])
+        self.assertEqual(meta["operation_type"], "create_file")
+
+    def test_ap3_operation_object_no_raw_content(self):
+        """No raw path or diff content may appear in metadata for successful coerce."""
+        args = json.dumps({
+            "operation": {
+                "type": "update_file",
+                "path": "/etc/secret_path",
+                "diff": "--- old.py\n+++ new.py\n-VERY_SENSITIVE_PATCH_CONTENT\n+new\n",
+            }
+        })
+        meta = inspect_apply_patch_arguments(args)
+        self._assert_no_raw_content(meta, "operation_object success case")
+
+    # --- Unknown operation type -----------------------------------------------
+
+    def test_ap3_unknown_operation_type_enum(self):
+        """Non-standard operation type → operation_type=unknown (not the raw string)."""
+        raw_type = "VERY_SENSITIVE_PATCH_CONTENT"  # reuse sentinel as type
+        args = json.dumps({"operation": {"type": raw_type, "path": "/etc/secret_path"}})
+        meta = inspect_apply_patch_arguments(args)
+        self.assertEqual(meta["operation_type"], "unknown",
+                         "operation_type must be the enum string 'unknown', not the raw value")
+        self.assertNotIn(raw_type, json.dumps(meta),
+                         "raw operation type string must not appear in metadata")
+
+    # --- delete_file (no diff / destination required) -------------------------
+
+    def test_ap3_delete_file_coerces_and_safe(self):
+        """delete_file only needs path → operation_object strategy, safe output."""
+        args = json.dumps({"operation": {"type": "delete_file", "path": "/etc/secret_path"}})
+        meta = inspect_apply_patch_arguments(args)
+        self.assertEqual(meta["operation_type"], "delete_file")
+        self.assertTrue(meta["path_present"])
+        self.assertFalse(meta["diff_present"])
+        self.assertFalse(meta["destination_present"])
+        self.assertEqual(meta["coercion_strategy"], "operation_object")
+        self._assert_no_raw_content(meta, "delete_file case")
+        self._assert_safe_types(meta)

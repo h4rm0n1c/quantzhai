@@ -28,6 +28,7 @@ try:
     from .qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
     from .qz_tool_lifecycle import StreamToolCallState
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS
+    from .qz_tool_apply_patch import inspect_apply_patch_arguments
     from .qz_telemetry import RequestTelemetryEmitter
     from .qz_file_signal import record_tool_call, seed_repeated_read_state
     from .qz_stream_terminal import (
@@ -69,6 +70,7 @@ except ImportError:
     from qz_proxy_tools import ProxyToolExecutionContext, make_proxy_local_tool_registry
     from qz_tool_lifecycle import StreamToolCallState
     from qz_tool_web import WEB_SEARCH_MAX_HOPS
+    from qz_tool_apply_patch import inspect_apply_patch_arguments
     from qz_telemetry import RequestTelemetryEmitter
     from qz_file_signal import record_tool_call, seed_repeated_read_state
     from qz_stream_terminal import (
@@ -1899,14 +1901,19 @@ class ResponsesStreamRuntime:
                             if decision.coercion_applied:
                                 _coercion_event = "coercion_failed" if decision.coercion_error else "coercion_succeeded"
                                 _coerce_tool = hs.completed_call.get("name") or ""
-                                self._emit(_coercion_event, {
+                                _coercion_payload = {
                                     "tool": _coerce_tool,
                                     "upstream_name": _coerce_tool,
                                     "call_id": hs.completed_call.get("call_id") or hs.completed_call.get("id") or "",
                                     "correction_applied": not bool(decision.coercion_error),
                                     "error_summary": decision.coercion_error[:200] if decision.coercion_error else "",
                                     "source": "tool_adapter",
-                                })
+                                }
+                                if _coerce_tool == "apply_patch":
+                                    _coercion_payload["apply_patch"] = inspect_apply_patch_arguments(
+                                        hs.completed_call.get("arguments") or ""
+                                    )
+                                self._emit(_coercion_event, _coercion_payload)
 
                             if decision.kind == "signal":
                                 # Advisory repeated-read signal: inject output upstream,

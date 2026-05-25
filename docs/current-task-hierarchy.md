@@ -1,7 +1,56 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-25
-Status: active control sheet — apply_patch Codex lifecycle audited; AP1/AP2 contract tests enforced (streaming integration + non-streaming).
+Status: active control sheet — apply_patch Codex lifecycle audited; AP1/AP2/AP3 contract tests enforced (streaming integration + non-streaming).
+
+## Recently completed — Add safe apply_patch telemetry metadata (2026-05-25)
+
+```text
+Status: COMPLETE — helper + telemetry enrichment + tests; no runtime behaviour changes.
+
+Output:
+  proxy/qz_tool_apply_patch.py — inspect_apply_patch_arguments() helper
+  proxy/qz_responses_stream.py — "apply_patch" nested dict in coercion events
+  tests/test_apply_patch_adapter.py — ApplyPatchAP3InspectTests (16 tests)
+  tests/test_qz_responses_stream.py — ApplyPatchStreamingAP3Tests (10 tests)
+Reference: docs/apply-patch-codex-lifecycle-audit.md §AP3
+
+Changes:
+- inspect_apply_patch_arguments(arguments: str) -> dict added to qz_tool_apply_patch.py.
+  Returns only safe fields: booleans and fixed enum strings. No raw content escapes.
+  Safe fields: args_shape, operation_present, patch_present, path_present, diff_present,
+  destination_present, operation_type, coercion_strategy.
+  operation_type is enum-clamped: known values, "unknown", or "missing" — never raw string.
+- coercion_succeeded / coercion_failed telemetry in qz_responses_stream.py now
+  includes "apply_patch" nested dict when tool == "apply_patch". Other tools unaffected.
+- No Codex-visible lifecycle changes. No model-visible error text changes.
+  BrainCase remains inactive. Watchdog remains disabled. Web_search unchanged.
+
+Total tests added this pass: 26. Full suite: 363 passed (adapter + stream files).
+
+AP3 adapter tests (ApplyPatchAP3InspectTests):
+  empty string → args_shape=empty; failed strategy
+  invalid JSON → args_shape=invalid_json; no raw args
+  missing diff → operation_type=update_file; path_present; coercion_strategy=failed_missing_diff
+  missing destination → operation_type=move_file; coercion_strategy=failed_missing_destination
+  sibling patch → operation_present; patch_present; coercion_strategy=sibling_patch_promoted; no raw body
+  legacy envelope → patch_present; coercion_strategy=legacy_patch_envelope; no raw body
+  operation_object → coercion_strategy=operation_object; no raw content
+  unknown type → operation_type="unknown" (not raw value)
+  delete_file → operation_object; no diff/destination required; safe types
+
+AP3 streaming tests (ApplyPatchStreamingAP3Tests):
+  coercion_failed includes "apply_patch" nested dict with required fields and correct strategy
+  coercion_succeeded includes "apply_patch" nested dict with correct strategy
+  no raw patch body/path/diff in nested dict on failure or success
+  all leaf values are bool or str
+  web_search telemetry has no "apply_patch" key
+  "apply_patch" key appears only when tool == "apply_patch"
+
+Deferred slices (require live Codex capture or non-trivial changes):
+- AP4: live Codex capture to observe apply_patch_call rendering.
+- AP5: optional sub-lifecycle if AP4 proves benefit (requires protocol_adapter → proxy_local mode change).
+```
 
 ## Recently completed — Enforce apply_patch lifecycle contract (2026-05-25)
 
@@ -42,11 +91,6 @@ Closed gaps from docs/apply-patch-codex-lifecycle-audit.md §8:
 - Legacy Begin Patch envelope streaming → CLOSED
 - Invalid JSON / missing diff / missing dest / unknown op streaming → CLOSED
 - Non-streaming path sub-lifecycle absence → CLOSED
-
-Deferred slices (require live Codex capture or non-trivial changes):
-- AP3: safe telemetry metadata fields (operation_type, path_present booleans) — low risk.
-- AP4: live Codex capture to observe apply_patch_call rendering.
-- AP5: optional sub-lifecycle if AP4 proves benefit (requires protocol_adapter → proxy_local mode change).
 ```
 
 ## Recently completed — Audit apply_patch Codex lifecycle (2026-05-25)
