@@ -803,6 +803,33 @@ class ModelRouter:
         if load_state in (None, "", "idle"):
             load_state = backend_state
         ready = health_status == 200 and backend_state == "loaded"
+        # BackendManager fallback: llama.cpp /v1/models does not populate
+        # status.value, so backend_state is "unknown" even when the model is
+        # loaded.  Consult BackendManager snapshot as authoritative source for
+        # direct-launch mode (same logic as qz_control_plane / build_model_status).
+        if not ready and backend_state in (None, "", "unknown") and health_status == 200:
+            try:
+                _bm = getattr(self.handler, "backend_manager", None)
+                if _bm is not None and callable(getattr(_bm, "snapshot", None)):
+                    _bm_snap = _bm.snapshot()
+                    if (
+                        isinstance(_bm_snap, dict)
+                        and _bm_snap.get("phase") == "healthy"
+                        and _bm_snap.get("backend_health_ok") is True
+                        and not _bm_snap.get("launch_model_error")
+                    ):
+                        backend_state = "loaded"
+                        ready = True
+                        if not loaded_model:
+                            for _k in ("launch_model_backend_id", "launch_model_key"):
+                                _v = (_bm_snap.get(_k) or "").strip()
+                                if _v:
+                                    loaded_model = _v
+                                    break
+                        if load_state in (None, "", "idle", "unknown"):
+                            load_state = "loaded"
+            except Exception:
+                pass
         reasoning_level = self.selected_reasoning_level(selected)
         reasoning_policy = self.selected_reasoning_policy(selected)
         prompt_status = self.selected_prompt_status(selected)

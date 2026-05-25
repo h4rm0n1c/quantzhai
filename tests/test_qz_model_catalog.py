@@ -604,6 +604,159 @@ class ModelCatalogProfileValidationTests(_IsolatedModelEnvMixin, unittest.TestCa
             )
 
 
+class StatusSnapshotBackendManagerFallbackTests(_IsolatedModelEnvMixin, unittest.TestCase):
+    """Regression: /qz/status must return ready=True when BackendManager is healthy
+    even when llama.cpp /v1/models returns status=null (backend_state='unknown').
+
+    Root cause: backend_models() sets backend_state='unknown' when the llama.cpp
+    server returns {"status": null}.  The fix adds a BackendManager snapshot
+    fallback in status_snapshot() that mirrors the logic in qz_control_plane.
+
+    Issue: qz/status shows loading while qz-top shows ready.
+    """
+
+    def _write_catalog(self, tmp):
+        root = Path(tmp)
+        model_dir = root / "var" / "models"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        gguf = model_dir / "default.gguf"
+        # Write minimal GGUF magic so ModelCatalog accepts the file
+        gguf.write_bytes(b"GGUF" + b"\x00" * 12)
+        return root, model_dir
+
+    def _make_handler(self, root, model_dir, health_status=200, bm_snap=None):
+        """Build a minimal handler whose backend returns null model status."""
+        catalog = ModelCatalog(root, model_dir, load_manifest(root))
+
+        class NullStatusBackend:
+            """Mimics llama.cpp /v1/models with status=null."""
+            def get_models(self, timeout=30):
+                return {"data": [{"id": "default.gguf", "status": None}]}
+
+            def get_health(self, timeout=10):
+                return BackendResponse(
+                    status=health_status,
+                    content_type="application/json",
+                    data=b'{"status":"ok"}' if health_status == 200 else b'{"status":"loading"}',
+                )
+
+        handler = FakeLoadHandler(catalog, NullStatusBackend())
+
+        if bm_snap is not None:
+            class FakeBM:
+                def snapshot(self_inner):  # noqa: N805
+                    return bm_snap
+
+            handler.backend_manager = FakeBM()
+
+        return handler
+
+    def _healthy_snap(self, backend_id="default.gguf"):
+        return {
+            "phase": "healthy",
+            "backend_health_ok": True,
+            "launch_model_error": None,
+            "launch_model_backend_id": backend_id,
+            "launch_model_key": backend_id,
+        }
+
+    # ------------------------------------------------------------------
+    # Core fix: healthy BackendManager → ready=True despite null status
+    # ------------------------------------------------------------------
+
+    def test_ready_true_when_backendmanager_healthy_and_null_model_status(self):
+        """BackendManager healthy + llama.cpp null status → ready=True (the fix)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root, model_dir = self._write_catalog(tmp)
+            handler = self._make_handler(root, model_dir, health_status=200, bm_snap=self._healthy_snap())
+            snapshot = ModelRouter(handler).status_snapshot()
+            self.assertTrue(snapshot["ready"],
+                            "ready must be True when BackendManager is healthy even if llama.cpp returns null status")
+            self.assertEqual(snapshot["status"], "ok")
+
+    def test_loaded_model_populated_from_backendmanager_when_null_status(self):
+        """Loaded model ID is populated from BackendManager snapshot when null status."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root, model_dir = self._write_catalog(tmp)
+            snap = self._healthy_snap(backend_id="default.gguf")
+            handler = self._make_handler(root, model_dir, health_status=200, bm_snap=snap)
+            snapshot = ModelRouter(handler).status_snapshot()
+            loaded = snapshot.get("backend", {}).get("loaded_model", "")
+            self.assertNotEqual(loaded, "", "loaded_model must be non-empty when BackendManager is healthy")
+
+    # ------------------------------------------------------------------
+    # Non-regression: fallback only fires when backend_state is unknown
+    # ------------------------------------------------------------------
+
+    def test_ready_false_when_backendmanager_phase_not_healthy(self):
+        """BackendManager in non-healthy phase → ready=False (fallback does not fire)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root, model_dir = self._write_catalog(tmp)
+            snap = {"phase": "starting", "backend_health_ok": False,
+                    "launch_model_error": None, "launch_model_backend_id": ""}
+            handler = self._make_handler(root, model_dir, health_status=200, bm_snap=snap)
+            snapshot = ModelRouter(handler).status_snapshot()
+            self.assertFalse(snapshot["ready"],
+                             "ready must be False when BackendManager phase is not healthy")
+
+    def test_ready_false_when_backendmanager_health_not_ok(self):
+        """BackendManager healthy phase but backend_health_ok=False → ready=False."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root, model_dir = self._write_catalog(tmp)
+            snap = {"phase": "healthy", "backend_health_ok": False,
+                    "launch_model_error": None, "launch_model_backend_id": ""}
+            handler = self._make_handler(root, model_dir, health_status=200, bm_snap=snap)
+            snapshot = ModelRouter(handler).status_snapshot()
+            self.assertFalse(snapshot["ready"])
+
+    def test_ready_false_when_backendmanager_has_launch_error(self):
+        """BackendManager healthy but launch_model_error set → ready=False."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root, model_dir = self._write_catalog(tmp)
+            snap = {"phase": "healthy", "backend_health_ok": True,
+                    "launch_model_error": "OOM", "launch_model_backend_id": "default.gguf"}
+            handler = self._make_handler(root, model_dir, health_status=200, bm_snap=snap)
+            snapshot = ModelRouter(handler).status_snapshot()
+            self.assertFalse(snapshot["ready"])
+
+    def test_ready_false_when_http_health_not_200(self):
+        """Even with healthy BackendManager, ready=False when HTTP health != 200."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root, model_dir = self._write_catalog(tmp)
+            handler = self._make_handler(root, model_dir, health_status=503,
+                                         bm_snap=self._healthy_snap())
+            snapshot = ModelRouter(handler).status_snapshot()
+            self.assertFalse(snapshot["ready"],
+                             "ready must be False when HTTP health check returns non-200")
+
+    def test_ready_false_when_no_backendmanager_and_null_status(self):
+        """No BackendManager attached + null model status → ready=False (pre-fix behaviour)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root, model_dir = self._write_catalog(tmp)
+            handler = self._make_handler(root, model_dir, health_status=200, bm_snap=None)
+            snapshot = ModelRouter(handler).status_snapshot()
+            self.assertFalse(snapshot["ready"],
+                             "ready must be False when no BackendManager and llama.cpp status is null")
+
+    def test_backendmanager_snapshot_exception_does_not_raise(self):
+        """If BackendManager.snapshot() raises, status_snapshot() must not propagate."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root, model_dir = self._write_catalog(tmp)
+
+            class ExplodingBM:
+                def snapshot(self):
+                    raise RuntimeError("unexpected error")
+
+            handler = self._make_handler(root, model_dir, health_status=200, bm_snap=None)
+            handler.backend_manager = ExplodingBM()
+            # Must not raise; ready falls back to False
+            try:
+                snapshot = ModelRouter(handler).status_snapshot()
+                self.assertFalse(snapshot["ready"])
+            except Exception as exc:
+                self.fail(f"status_snapshot() raised unexpectedly: {exc}")
+
+
 class MemoryDomainCatalogTests(_IsolatedModelEnvMixin, unittest.TestCase):
     """Tests for memory_domain plumbing through model-overrides -> catalog entry."""
 
