@@ -199,14 +199,33 @@ class NativeToolListContractTests(unittest.TestCase):
         )
 
     def test_tool_search_not_in_native_tool_names(self):
-        """tool_search uses ToolSearchCall item — separate contract slice."""
+        """tool_search uses ToolSearchCall item — NOT a function_call pass-through.
+
+        Source audit (issue #69, SHA 46f30d0):
+          - Handler: codex-rs/core/src/tools/handlers/tool_search.rs
+          - Spec: ToolSpec::ToolSearch { execution, description, parameters } — dedicated spec type
+          - handle() matches ToolPayload::ToolSearch { arguments } — separate dispatch path
+          - ResponseItems: ToolSearchCall + ToolSearchOutput — both separate variants from function_call
+          - Output: ToolSearchOutput (not FunctionToolOutput)
+        Verdict: must NOT be in CODEX_NATIVE_TOOL_NAMES; requires a future dedicated adapter.
+        """
         self.assertNotIn(
             "tool_search", CODEX_NATIVE_TOOL_NAMES,
             "'tool_search' is a ToolSearchCall item — must not be in CODEX_NATIVE_TOOL_NAMES",
         )
 
     def test_local_shell_not_in_native_tool_names(self):
-        """local_shell uses LocalShell item (not function_call) — separate contract slice."""
+        """local_shell uses LocalShell item (not function_call) — NOT a function_call pass-through.
+
+        Source audit (issue #69, SHA 46f30d0):
+          - Handler: codex-rs/core/src/tools/handlers/shell/local_shell.rs
+          - matches_kind → ToolPayload::LocalShell { .. } — NOT Function
+          - Spec: ToolSpec::LocalShell {} via create_local_shell_tool() — dedicated spec type
+          - ResponseItem: LocalShellCall { call_id, status, action: LocalShellAction }
+          - Router: ResponseItem::LocalShellCall → ToolPayload::LocalShell { params }
+          - normalize.rs: "LocalShellCall is represented in upstream streams by a FunctionCallOutput"
+        Verdict: must NOT be in CODEX_NATIVE_TOOL_NAMES; requires a future dedicated adapter.
+        """
         self.assertNotIn(
             "local_shell", CODEX_NATIVE_TOOL_NAMES,
             "'local_shell' is a LocalShell item — must not be in CODEX_NATIVE_TOOL_NAMES",
@@ -224,6 +243,10 @@ class NativeToolListContractTests(unittest.TestCase):
 
         Updated in issue #68: shell and container.exec added after source audit confirmed
         they are function_call handlers registered as fallbacks in Codex at audited SHA.
+
+        Confirmed unchanged in issue #69: local_shell and tool_search audited and excluded.
+        Both use separate item types (LocalShell / ToolSearchCall) — not function_call
+        pass-throughs. CODEX_NATIVE_TOOL_NAMES remains at 12 tools.
         """
         expected = {
             # Pre-existing (issue #66 baseline)
@@ -246,6 +269,77 @@ class NativeToolListContractTests(unittest.TestCase):
             set(CODEX_NATIVE_TOOL_NAMES), expected,
             f"CODEX_NATIVE_TOOL_NAMES must match the audited set. "
             f"If expanding, add source evidence to docs/codex-source-tool-inventory.md first.",
+        )
+
+
+class LocalShellToolSearchItemContractTests(unittest.TestCase):
+    """Enforce the item-type contract for local_shell and tool_search (issue #69).
+
+    Source audit at SHA 46f30d02828bd4c52827e5f0482a6f2a982cce5b confirms:
+      - local_shell  → LocalShellCall ResponseItem + ToolPayload::LocalShell dispatch
+      - tool_search  → ToolSearchCall/ToolSearchOutput ResponseItems + ToolPayload::ToolSearch dispatch
+    Neither is a function_call handler. Neither belongs in CODEX_NATIVE_TOOL_NAMES.
+    No proxy adapter exists yet — both are deferred to future dedicated slices.
+    """
+
+    def test_local_shell_not_in_native_names(self):
+        """local_shell dispatches via LocalShell item, not function_call."""
+        self.assertNotIn("local_shell", CODEX_NATIVE_TOOL_NAMES)
+
+    def test_tool_search_not_in_native_names(self):
+        """tool_search dispatches via ToolSearchCall item, not function_call."""
+        self.assertNotIn("tool_search", CODEX_NATIVE_TOOL_NAMES)
+
+    def test_both_absent_from_native_names(self):
+        """Combined subTest: both must be absent regardless of future set growth."""
+        for name in ("local_shell", "tool_search"):
+            with self.subTest(tool=name):
+                self.assertNotIn(
+                    name, CODEX_NATIVE_TOOL_NAMES,
+                    f"'{name}' uses a non-function_call item type — "
+                    f"must not be in CODEX_NATIVE_TOOL_NAMES until a dedicated adapter is written",
+                )
+
+    def test_local_shell_not_a_dropped_tool_pass_through(self):
+        """completed_call_decision for local_shell returns 'error' (unknown tool).
+
+        local_shell calls should not appear as function_calls to the proxy in normal
+        operation (Codex handles LocalShellCall natively), but if one does arrive,
+        the proxy must treat it as an unsupported tool — not silently pass it through.
+        """
+        from proxy.qz_proxy_tools import make_proxy_local_tool_registry
+
+        class FakeWebRt:
+            def execute_web_search_call(self, call, counters, seen_signatures, request_id=""):
+                return type('R', (), {'public_item': {}, 'upstream_items': (), 'sources': ()})()
+
+        registry = make_proxy_local_tool_registry(FakeWebRt())
+        call = {"type": "function_call", "name": "local_shell", "call_id": "c1", "arguments": "{}"}
+        decision = registry.completed_call_decision(call)
+        self.assertEqual(
+            decision.kind, "error",
+            "local_shell arriving as function_call must not be silently passed through",
+        )
+
+    def test_tool_search_not_a_dropped_tool_pass_through(self):
+        """completed_call_decision for tool_search returns 'error' (unknown tool).
+
+        Same reasoning as local_shell: tool_search uses ToolSearchCall items, not
+        function_call. If it somehow arrives as a function_call to the proxy it must
+        not be silently passed through.
+        """
+        from proxy.qz_proxy_tools import make_proxy_local_tool_registry
+
+        class FakeWebRt:
+            def execute_web_search_call(self, call, counters, seen_signatures, request_id=""):
+                return type('R', (), {'public_item': {}, 'upstream_items': (), 'sources': ()})()
+
+        registry = make_proxy_local_tool_registry(FakeWebRt())
+        call = {"type": "function_call", "name": "tool_search", "call_id": "c1", "arguments": "{}"}
+        decision = registry.completed_call_decision(call)
+        self.assertEqual(
+            decision.kind, "error",
+            "tool_search arriving as function_call must not be silently passed through",
         )
 
 

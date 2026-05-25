@@ -340,9 +340,11 @@ class NativeToolNamesMembershipTests(unittest.TestCase):
         self.assertNotIn("web_search", self._names())
 
     def test_tool_search_absent(self):
+        """tool_search: ToolSearchCall/ToolSearchOutput item type — NOT function_call. (issue #69)"""
         self.assertNotIn("tool_search", self._names())
 
     def test_local_shell_absent(self):
+        """local_shell: LocalShellCall item + ToolPayload::LocalShell dispatch — NOT function_call. (issue #69)"""
         self.assertNotIn("local_shell", self._names())
 
     def test_image_generation_absent(self):

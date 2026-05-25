@@ -112,7 +112,8 @@ echo "  #66 baseline : exec_command, write_stdin, shell_command  (DONE)"
 echo "  #67 slice    : update_plan, request_user_input, request_permissions, view_image,"
 echo "                 get_goal, create_goal, update_goal  (DONE)"
 echo "  #68 slice    : shell, container.exec  (DONE)"
-echo "  #69 next     : local_shell (LocalShell item), tool_search (ToolSearchCall item)"
+echo "  #69 slice    : local_shell (LocalShell item — excluded), tool_search (ToolSearchCall — excluded)  (DONE)"
+echo "  next         : local_shell adapter (LocalShellCall wire), tool_search adapter (ToolSearchCall wire)"
 echo ""
 
 # --- Key handler lines from Codex source (spot check) ---

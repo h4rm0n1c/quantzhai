@@ -1,6 +1,6 @@
 # Codex Source Tool Inventory
 
-**Tracking issues:** h4rm0n1c/quantzhai#67 (initial audit), h4rm0n1c/quantzhai#68 (shell + container.exec slice)
+**Tracking issues:** h4rm0n1c/quantzhai#67 (initial audit), h4rm0n1c/quantzhai#68 (shell + container.exec slice), h4rm0n1c/quantzhai#69 (local_shell + tool_search slice)
 
 **Codex checkout:** `/tmp/qz-audit/codex`
 
@@ -41,8 +41,8 @@ at the audited SHA. See `docs/codex-source-tool-contract.md` for the full SSE an
 | `update_goal` | `codex-rs/core/src/tools/handlers/goal/update_goal.rs` `UPDATE_GOAL_TOOL_NAME = "update_goal"` | `function_call` | `UpdateGoalArgs` JSON (status) | Same as exec_command | Added to CODEX_NATIVE_TOOL_NAMES (issue #67) | Pass-through as function_call |
 | `shell` | `codex-rs/core/src/tools/handlers/shell/shell_handler.rs` `ToolName::plain("shell")` | `function_call` | `ShellToolCallParams` (command: Vec\<String\>, workdir, timeout_ms, sandbox_permissions, justification) | Same as exec_command | **Added to CODEX_NATIVE_TOOL_NAMES (issue #68)** | Pass-through as function_call. Not advertised when shell_type=shell_command (QuantZhai's config), but registered as fallback. Codex executes on receipt. |
 | `container.exec` | `codex-rs/core/src/tools/handlers/shell/container_exec.rs` `ToolName::plain("container.exec")` | `function_call` | `ShellToolCallParams` (same as shell) | Same as exec_command | **Added to CODEX_NATIVE_TOOL_NAMES (issue #68)** | Pass-through as function_call. Never advertised (spec()=None); always registered as fallback handler. Codex executes on receipt. |
-| `local_shell` | `codex-rs/core/src/tools/handlers/shell/local_shell.rs` `ToolName::plain("local_shell")` | **`local_shell_call`** (`ToolPayload::LocalShell`) | `LocalShellExecAction` | Separate `LocalShellCall` ResponseItem variant | Deferred | Needs separate contract slice — different item type |
-| `tool_search` | `codex-rs/core/src/tools/handlers/tool_search.rs` `TOOL_SEARCH_TOOL_NAME` | **`tool_search_call`** + `ToolSearchOutput` | `ToolSearchCall` ResponseItem | Separate item contract | Deferred | Needs separate contract slice |
+| `local_shell` | `codex-rs/core/src/tools/handlers/shell/local_shell.rs` `ToolName::plain("local_shell")` | **`local_shell_call`** (`ToolPayload::LocalShell`) | `LocalShellExecAction` | Separate `LocalShellCall` ResponseItem variant | **Audited (issue #69) — NOT in CODEX_NATIVE_TOOL_NAMES** | LocalShell item type, not function_call. Needs dedicated future adapter. |
+| `tool_search` | `codex-rs/core/src/tools/handlers/tool_search.rs` `TOOL_SEARCH_TOOL_NAME` | **`tool_search_call`** + `ToolSearchOutput` | `ToolSearchCall` ResponseItem | Separate item contract | **Audited (issue #69) — NOT in CODEX_NATIVE_TOOL_NAMES** | ToolSearch item types, not function_call. Needs dedicated future adapter. |
 | `image_generation` | `codex-rs/protocol/src/models.rs` `ResponseItem::ImageGenerationCall` | **`image_generation_call`** | id, status, result (base64) | `response.output_item.added` + `response.output_item.done` with item.type=image_generation_call | Document only | Not for QuantZhai at present |
 | `request_plugin_install` | `codex-rs/core/src/tools/handlers/request_plugin_install.rs` `REQUEST_PLUGIN_INSTALL_TOOL_NAME` | `function_call` | Plugin install request | — | Deferred | Operator-specific; not needed |
 | `test_sync` | `codex-rs/core/src/tools/handlers/test_sync.rs` `ToolName::plain("test_sync_tool")` | `function_call` | Test sync payload | — | Deferred | Test infrastructure only |
@@ -88,9 +88,11 @@ All names in this set:
 | Slice | Tools | Reason |
 |---|---|---|
 | ~~Shell-like function_call additions~~ | ~~`shell`, `container.exec`~~ | **Done in issue #68.** Both added to CODEX_NATIVE_TOOL_NAMES. |
-| LocalShell item contract | `local_shell` | `LocalShell` ResponseItem variant, not function_call. Needs dedicated contract slice (#69). |
-| ToolSearch item contract | `tool_search` | `ToolSearchCall` + `ToolSearchOutput` ResponseItem variants. Needs dedicated slice (#69). |
+| ~~LocalShell item contract~~ | ~~`local_shell`~~ | **Done in issue #69.** Audited; excluded from CODEX_NATIVE_TOOL_NAMES. LocalShell item type — needs dedicated future adapter. |
+| ~~ToolSearch item contract~~ | ~~`tool_search`~~ | **Done in issue #69.** Audited; excluded from CODEX_NATIVE_TOOL_NAMES. ToolSearch item types — needs dedicated future adapter. |
 | image_generation item | `image_generation` | `ImageGenerationCall` ResponseItem. Document only. |
+| local_shell adapter | `local_shell` | Future work: LocalShellCall wire contract + proxy adapter for local_shell item type. |
+| tool_search adapter | `tool_search` | Future work: ToolSearchCall/ToolSearchOutput wire contract + proxy adapter. |
 | MCP / multi-agent / plugin | see table above | Out of scope for QuantZhai's single-model local stack. |
 
 ---
@@ -150,4 +152,41 @@ argument content for native tools.
 
 ---
 
-*Created: 2026-05-25. Updated: 2026-05-25 (issue #68 — shell + container.exec slice). Governs: issues #67, #68.*
+*Created: 2026-05-25. Updated: 2026-05-25 (issue #69 — local_shell + tool_search slice). Governs: issues #67, #68, #69.*
+
+---
+
+## Slice #69 — local_shell and tool_search audit result
+
+**Issue:** h4rm0n1c/quantzhai#69
+
+**Decision: neither added to `CODEX_NATIVE_TOOL_NAMES`. Set remains at 12 tools.**
+
+### `local_shell`
+
+- Handler: `codex-rs/core/src/tools/handlers/shell/local_shell.rs`
+- `ToolName::plain("local_shell")`, `matches_kind` → `ToolPayload::LocalShell { .. }` — NOT `ToolPayload::Function`
+- Spec: `ToolSpec::LocalShell {}` via `create_local_shell_tool()` in `shell_spec.rs` — dedicated spec type, not `ToolSpec::Function`
+- ResponseItem wire type: `LocalShellCall { call_id, status: LocalShellStatus, action: LocalShellAction::Exec(LocalShellExecAction) }`
+- `LocalShellExecAction`: `command: Vec<String>`, `timeout_ms`, `working_directory`, `env`, `user`
+- Router (`router.rs`): `ResponseItem::LocalShellCall → ToolPayload::LocalShell { params }` — never routed through function_call dispatch
+- `normalize.rs` note: "LocalShellCall is represented in upstream streams by a FunctionCallOutput"
+- **Verdict: NOT a function_call item. Must NOT be in `CODEX_NATIVE_TOOL_NAMES`.** Requires a dedicated future adapter covering the LocalShellCall wire contract before any QuantZhai integration.
+
+### `tool_search`
+
+- Handler: `codex-rs/core/src/tools/handlers/tool_search.rs`
+- Tool name: `TOOL_SEARCH_TOOL_NAME` constant
+- `matches_kind` default accepts `Function | ToolSearch`, but `handle()` matches `ToolPayload::ToolSearch { arguments }` — the ToolSearch payload variant
+- Spec: `ToolSpec::ToolSearch { execution, description, parameters }` — dedicated spec type
+- ResponseItem wire types: `ToolSearchCall` and `ToolSearchOutput` — both separate variants from function_call
+- Output type: `ToolSearchOutput` (not `FunctionToolOutput`)
+- **Verdict: NOT a normal function_call pass-through. Must NOT be in `CODEX_NATIVE_TOOL_NAMES`.** Requires a dedicated future adapter covering the ToolSearchCall/ToolSearchOutput wire contract.
+
+### Why both were excluded
+
+`CODEX_NATIVE_TOOL_NAMES` is specifically for tools that Codex routes via `function_call` items with standard JSON arguments. Both `local_shell` and `tool_search` use dedicated item types with separate wire formats, dispatch paths, and output types. Adding them to the native pass-through set would be incorrect — the proxy cannot pass them through as function_call items because Codex dispatches them via completely different paths.
+
+The proxy has no adapter for either item type today. When a `function_call { name: "local_shell" }` or `function_call { name: "tool_search" }` arrives (which would be anomalous), the proxy correctly returns an unsupported-tool error. This is the right behaviour until dedicated adapters are written.
+
+---
