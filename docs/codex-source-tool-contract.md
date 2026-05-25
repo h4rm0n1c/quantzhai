@@ -146,7 +146,7 @@ Source: `codex-rs/codex-api/src/sse/responses.rs` (no web_search_call branch in 
 The proxy uses `CODEX_NATIVE_TOOL_NAMES` to identify calls that should pass through to Codex
 as-is (after optional output_to_codex rewrite).
 
-Current proven set (expanded in issues #67, #68 — audit SHA `46f30d02828bd4c52827e5f0482a6f2a982cce5b`):
+Current proven set (finalised in issues #67–#70 — audit SHA `46f30d02828bd4c52827e5f0482a6f2a982cce5b`):
 
 | Tool name | Codex handler file | Added |
 |---|---|---|
@@ -173,8 +173,11 @@ Current proven set (expanded in issues #67, #68 — audit SHA `46f30d02828bd4c52
 `codex-rs/app-server/src/request_processors/thread_processor.rs:194` — it is not a routed
 handler and never should have been in `CODEX_NATIVE_TOOL_NAMES`.
 
-For the full tool-by-tool classification including deferred slices, see
+For the full tool-by-tool classification, audit-complete note, and adapter backlog, see
 `docs/codex-source-tool-inventory.md`.
+
+**Audit status:** Complete at SHA `46f30d02828bd4c52827e5f0482a6f2a982cce5b` (issues #66–#70).
+Re-audit required when the Codex SHA advances. Adapter backlog is demand-driven.
 
 ---
 
@@ -250,4 +253,4 @@ Section C to always SKIP with "model did not call web_search on this run".
 
 ---
 
-*Created: 2026-05-25. Updated: 2026-05-25 (issue #66 follow-up — smoke proof fixed). Governs: issue #66 — Replace hallucinated tool lifecycle contracts with Codex-source contracts.*
+*Created: 2026-05-25. Updated: 2026-05-26 (issues #69–#70 closure). Governs: issues #66–#70 — Replace hallucinated tool lifecycle contracts with Codex-source contracts; expand and finalise CODEX_NATIVE_TOOL_NAMES.*
