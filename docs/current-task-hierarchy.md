@@ -1,7 +1,94 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-25
-Status: active control sheet — apply_patch fake contract removed; AP1/AP2/AP3 contract tests updated; all 3484 tests pass.
+Status: active control sheet — issue #66 follow-up complete; deterministic web_search Codex contract smoke passes; 3506 tests pass.
+
+## Recently completed — Fix web_search contract smoke proof (2026-05-25, issue #66 follow-up)
+
+```text
+Status: COMPLETE — deterministic C1 smoke + 23 tests + docs; 3506 tests pass.
+
+Problem (f94d967 follow-up):
+  qz-web-search-codex-contract-smoke Section C detected web_search by scanning SSE
+  event names for "web_search_call". Under the corrected Codex contract, the events
+  are response.output_item.added/done with item.type=web_search_call in the DATA
+  PAYLOAD — not in the event name. The scan always returned [] and Section C always
+  SKIPped with "model did not call web_search on this run".
+
+Root cause:
+  web_search_events = [e for e in events if "web_search_call" in e]
+  Wrong: looks at event names.  No event name contains "web_search_call".
+  Correct: check payload["item"]["type"] == "web_search_call".
+
+Changes:
+  scripts/qz_web_search_contract_check.py (NEW):
+    parse_sse_events_with_payloads(stream_text) — payload-aware SSE parser
+    check_contract(events, mode) — enforces Codex contract checks against parsed events
+    run_deterministic(repo_root) — uses ResponsesStreamRuntime + _FakeStream +
+      _FakeWebRuntime; always pass/fail, never skip
+    run_live(proxy_base, model, timeout) — HTTP check against real proxy; may skip
+    run_self_test() — 6 internal test groups
+    CLI: --mode=deterministic|live|self-test
+
+  scripts/qz-web-search-codex-contract-smoke:
+    Section C replaced with:
+      C1: Deterministic — calls qz_web_search_contract_check.py --mode=deterministic
+          Always PASS or FAIL, never SKIP. No live model required.
+      C2: Opportunistic live — calls helper --mode=live
+          SKIP if model does not call web_search (opportunistic, not a proof).
+    Updated wording: no more "lifecycle", "lifecycle events missing".
+    C2 WAIT_BACKEND polling and 503 classification preserved.
+
+  tests/test_qz_web_search_contract_check.py (NEW, 23 tests):
+    ParseSSEEventsTests (5):
+      parser returns (event_name, payload) tuples
+      no event name contains "web_search_call" (it's in item.type not event name)
+      [DONE] sentinel parsed correctly
+      multiple events all parsed
+      fallback to payload.type when no event: line
+    CheckContractTests (11):
+      correct contract → pass
+      detection via item.type, not event name → pass
+      fake in_progress/searching/completed → fail (each)
+      missing added/done/completed → fail (each)
+      no web_search_call in deterministic → fail
+      no web_search_call in live → no_search (not fail)
+      message item does not count as web_search_call
+      all fake absent flags true when none present
+    DeterministicContractTests (4, integration):
+      run_deterministic() → pass
+      mode field = "deterministic"
+      all checks True
+      _FakeWebRuntime returns correct structure
+    FakeStreamTests (2): reads all lines, close() sets closed
+
+Contract rule confirmed:
+  Item type is in the SSE DATA PAYLOAD (item.type), not in the event name.
+  Live model call is prompt-dependent and cannot be the only smoke proof.
+  Deterministic smoke is required for issue #66 closure.
+
+Full suite: 3506 passed.
+```
+
+## Recently completed — Replace fake lifecycle with Codex source contracts (2026-05-25, issue #66)
+
+```text
+Status: COMPLETE — commit f94d967.
+
+Removed fake ToolLifecycleSpec subevent system (lifecycle_event_prefix, lifecycle_start_stages,
+lifecycle_done_stages). Removed ProxyLocalToolRegistry fake lifecycle methods.
+Removed public_tool_lifecycle_event() / web_search_call_lifecycle_event() from qz_streaming.py.
+
+Added custom_tool_call_input_events() for real apply_patch streaming (custom_tool_call_input.delta/done).
+Removed computer from CODEX_NATIVE_TOOL_NAMES (reserved namespace only, not a handler).
+
+Created docs/codex-source-tool-contract.md (authoritative Codex-source event contract).
+Renamed scripts/qz-web-search-lifecycle-smoke → scripts/qz-web-search-codex-contract-smoke.
+
+All fake web_search_call.* assertions converted to assertNotIn.
+3483 tests passed after f94d967.
+See docs/codex-source-tool-contract.md for full contract.
+```
 
 ## Recently completed — Remove fake apply_patch_call contract (2026-05-25)
 

@@ -201,7 +201,33 @@ The following were added:
 | `ToolLifecycleSpecContractTests` | `tests/test_qz_proxy_tools.py` | Fake lifecycle fields do not exist on ToolLifecycleSpec |
 | `StreamingStateTests.test_web_search_call_no_fake_lifecycle_events` | `tests/test_qz_streaming.py` | public_tool_lifecycle_event / web_search_call_lifecycle_event removed from module |
 | `StreamingStateTests.test_custom_tool_call_input_events_emit_delta_and_done` | `tests/test_qz_streaming.py` | custom_tool_call_input_events() emits delta and done with correct fields |
+| `ParseSSEEventsTests` | `tests/test_qz_web_search_contract_check.py` | payload-aware SSE parser; event names never contain web_search_call |
+| `CheckContractTests` | `tests/test_qz_web_search_contract_check.py` | contract via item.type; fake events → fail; no_search vs fail by mode |
+| `DeterministicContractTests` | `tests/test_qz_web_search_contract_check.py` | run_deterministic() passes; all checks True |
 
 ---
 
-*Created: 2026-05-25. Governs: issue #66 — Replace hallucinated tool lifecycle contracts with Codex-source contracts.*
+## 9. web_search Detection Note (issue #66 follow-up)
+
+**Critical:** web_search items appear in `response.output_item.added` and `response.output_item.done` events
+with `item.type = "web_search_call"` in the JSON data payload. The event names do **not** contain
+`web_search_call`. Any code that scans event names for the string `web_search_call` will find nothing.
+
+Correct detection:
+```python
+is_web_search = (
+    event_name in {"response.output_item.added", "response.output_item.done"}
+    and isinstance(payload, dict)
+    and isinstance(payload.get("item"), dict)
+    and payload["item"].get("type") == "web_search_call"
+)
+```
+
+The smoke script (`scripts/qz-web-search-codex-contract-smoke`) was updated in the issue #66 follow-up
+to use `scripts/qz_web_search_contract_check.py` which uses the payload-aware check above. The old
+event-name scan (`[e for e in events if "web_search_call" in e]`) always returned `[]` and caused
+Section C to always SKIP with "model did not call web_search on this run".
+
+---
+
+*Created: 2026-05-25. Updated: 2026-05-25 (issue #66 follow-up — smoke proof fixed). Governs: issue #66 — Replace hallucinated tool lifecycle contracts with Codex-source contracts.*

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# qz-web-search-codex-contract-smoke: live smoke for web_search Codex contract and
+# qz-web-search-codex-contract-smoke: smoke for web_search Codex contract and
 # searchengines-private Agent API provider guidance integration.
 #
 # Usage:
@@ -9,12 +9,25 @@
 # Run after qz-up. Checks:
 #   A. searchengines Agent API /guidance direct preflight
 #   B. QuantZhai /qz/web-search/capabilities — provider_guidance bridge
-#   C. Streaming web_search Codex contract SSE events (requires live model)
-#      Checks: output_item.added, output_item.done, response.completed present.
-#      Checks: response.web_search_call.{in_progress,searching,completed} ABSENT
-#              (fake lifecycle events removed in issue #66 — Codex does not parse them).
+#   C1. Deterministic Codex contract (no live model required)
+#       Uses ResponsesStreamRuntime + fake upstream + FakeWebRuntime.
+#       Verifies: output_item.added item.type=web_search_call PRESENT
+#                 output_item.done  item.type=web_search_call PRESENT
+#                 response.completed PRESENT
+#                 response.web_search_call.{in_progress,searching,completed} ABSENT
+#       Detection is payload-based (item.type field), not event-name-based.
+#       Never skips. Always pass or fail.
+#   C2. Opportunistic live Codex contract (requires live model, may skip)
+#       Same contract checks against a real /v1/responses stream.
+#       SKIP if model does not call web_search (prompt-dependent).
 #   D. FSE direct search — agent_api metadata, count_mismatch, result domains
 #   E. Operator telemetry visibility
+#
+# Exits 0 on all checks passed or skipped, 1 on any hard failure.
+#
+# Agent API base URL resolution (highest to lowest priority):
+#   QZ_SEARCHENGINES_BASE_URL > SEARXNG_AGENT_API_BASE > (not SEARXNG_BASE_URL,
+#   which may point to raw SearXNG) > http://127.0.0.1:8890
 #
 # Exits 0 on all checks passed or skipped, 1 on any hard failure.
 #
@@ -296,12 +309,65 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# C. Streaming web_search Codex contract SSE events
+# Resolve the path to the contract check helper (same directory as this script).
+# ---------------------------------------------------------------------------
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_CONTRACT_HELPER="${_SCRIPT_DIR}/qz_web_search_contract_check.py"
+
+_print_checks() {
+  # Print per-check status lines from a JSON result dict.
+  printf '%s' "$1" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+for k, v in sorted(d.get('checks', {}).items()):
+    print('     {} {}'.format('OK  ' if v else 'MISS', k))
+" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# C1. Deterministic Codex contract (no live model required)
 # ---------------------------------------------------------------------------
 echo
-echo "--- C. Streaming web_search Codex contract SSE events ---"
+echo "--- C1. Deterministic web_search Codex contract ---"
+printf '    (uses ResponsesStreamRuntime + fake upstream + FakeWebRuntime — no live model needed)\n'
 
-# Optional: wait for backend to become ready before attempting the live search.
+if [[ ! -f "$_CONTRACT_HELPER" ]]; then
+  fail "deterministic contract: helper not found at $_CONTRACT_HELPER"
+else
+  _DET_RESULT=$(python3 "$_CONTRACT_HELPER" --mode=deterministic 2>/dev/null) || \
+    _DET_RESULT='{"status":"error","error":"helper script failed","mode":"deterministic"}'
+
+  _DET_STATUS=$(printf '%s' "$_DET_RESULT" | python3 -c \
+    "import json,sys; d=json.load(sys.stdin); print(d.get('status','error'))" 2>/dev/null || echo "error")
+
+  case "$_DET_STATUS" in
+    pass)
+      ok "deterministic Codex contract: all checks passed"
+      _print_checks "$_DET_RESULT"
+      ;;
+    fail)
+      fail "deterministic Codex contract: contract failed — web_search_call item missing or fake event present"
+      _print_checks "$_DET_RESULT"
+      ;;
+    error)
+      _DET_ERR=$(printf '%s' "$_DET_RESULT" | python3 -c \
+        "import json,sys; d=json.load(sys.stdin); print(d.get('error','unknown'))" 2>/dev/null || echo "unknown")
+      fail "deterministic Codex contract: error running check — $_DET_ERR"
+      ;;
+    *)
+      fail "deterministic Codex contract: unexpected status '$_DET_STATUS'"
+      ;;
+  esac
+fi
+
+# ---------------------------------------------------------------------------
+# C2. Opportunistic live Codex contract (requires live model, may skip)
+# ---------------------------------------------------------------------------
+echo
+echo "--- C2. Opportunistic live web_search Codex contract ---"
+printf '    (live /v1/responses stream — SKIP if model does not call web_search)\n'
+
+# Optional: wait for backend to become ready before the live check.
 if [[ "$WAIT_BACKEND" -gt 0 ]]; then
   printf '    waiting up to %ss for backend to become ready...\n' "$WAIT_BACKEND"
   _wait_deadline=$(( $(date +%s) + WAIT_BACKEND ))
@@ -319,204 +385,68 @@ if [[ "$WAIT_BACKEND" -gt 0 ]]; then
     sleep 5
   done
   if [[ "$_backend_ready" -eq 0 ]]; then
-    warn "backend not ready after ${WAIT_BACKEND}s — Section C will classify 503 as skip"
+    warn "backend not ready after ${WAIT_BACKEND}s — C2 will classify 503 as skip"
   fi
 fi
 
 if [[ "$SKIP_LIVE_SEARCH" -eq 1 ]]; then
-  skip "streaming lifecycle check skipped (--skip-live-search)"
+  skip "C2 live Codex contract skipped (--skip-live-search)"
+elif [[ ! -f "$_CONTRACT_HELPER" ]]; then
+  skip "C2 live Codex contract: helper not found at $_CONTRACT_HELPER"
 elif ! curl -sf --max-time 5 "${PROXY_BASE}/qz/control-plane" >/dev/null 2>&1; then
-  skip "streaming lifecycle: proxy not reachable — skipping (is qz-up running?)"
+  skip "C2 live Codex contract: proxy not reachable — skipping (is qz-up running?)"
 else
-  # Write Python script to temp file — avoids heredoc quoting complexity.
-  # The script makes a streaming /v1/responses request, parses SSE event types,
-  # and returns JSON with pass/partial/no_search/not_ready/error status.
-  #
-  # not_ready: HTTP 503 + /qz/model/status says not ready → startup skip, not failure.
-  # error_503_despite_ready: HTTP 503 + model status says ready → possible admission bug → fail.
-  _LIFECYCLE_PY=$(mktemp /tmp/qz-lifecycle-smoke-XXXXXX.py)
-  trap 'rm -f "$_LIFECYCLE_PY"' EXIT
+  _LIVE_RESULT=$(python3 "$_CONTRACT_HELPER" \
+    --mode=live \
+    --proxy-base="$PROXY_BASE" \
+    --model="$SMOKE_MODEL" \
+    --timeout="$SEARCH_TIMEOUT" \
+    2>/dev/null) || _LIVE_RESULT='{"status":"error","error":"helper script failed","mode":"live"}'
 
-  cat > "$_LIFECYCLE_PY" << 'PYEOF'
-import urllib.request
-import urllib.error
-import json
-import sys
-import os
-
-PROXY_BASE = os.environ["QZ_PROXY_BASE"]
-MODEL = os.environ["QZ_SMOKE_MODEL"]
-TIMEOUT = int(os.environ.get("QZ_SEARCH_TIMEOUT", "90"))
-
-SEARCH_PROMPT = (
-    "Use web_search with action=search and profile=furry_fse "
-    "to search for: dragon site:fse.anthro.fr\n"
-    "Return only the first result URL. Do not explain."
-)
-
-body = {
-    "model": MODEL,
-    "stream": True,
-    "tools": [{"type": "web_search"}],
-    "input": [
-        {
-            "type": "message",
-            "role": "user",
-            "content": [{"type": "input_text", "text": SEARCH_PROMPT}],
-        }
-    ],
-}
-
-req = urllib.request.Request(
-    PROXY_BASE.rstrip("/") + "/v1/responses",
-    data=json.dumps(body).encode("utf-8"),
-    headers={
-        "Content-Type": "application/json",
-        "Authorization": "Bearer local",
-    },
-)
-
-events = []
-try:
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-        for raw_line in resp:
-            line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
-            if line.startswith("event:"):
-                evt = line.split(":", 1)[1].strip()
-                events.append(evt)
-except urllib.error.HTTPError as exc:
-    if exc.code == 503:
-        # HTTP 503 = backend starting up or admission gate closed.
-        # Query /qz/model/status to distinguish startup delay from real bug.
-        model_ready = None
-        try:
-            with urllib.request.urlopen(
-                PROXY_BASE.rstrip("/") + "/qz/model/status", timeout=5
-            ) as ms:
-                ms_data = json.loads(ms.read().decode("utf-8"))
-                model_ready = ms_data.get("selected_model_ready")
-        except Exception:
-            pass  # If status endpoint is also down, treat as not ready
-        if model_ready is True:
-            # Backend says ready but returned 503 — real admission bug.
-            print(json.dumps({
-                "status": "error_503_despite_ready",
-                "error": str(exc),
-                "model_ready": model_ready,
-                "events": events,
-            }))
-        else:
-            # Not ready yet — startup delay, not a smoke failure.
-            print(json.dumps({
-                "status": "not_ready",
-                "error": str(exc),
-                "model_ready": model_ready,
-                "events": events,
-            }))
-        sys.exit(0)
-    else:
-        print(json.dumps({"status": "error", "error": str(exc), "events": events}))
-        sys.exit(0)
-except Exception as exc:
-    print(json.dumps({"status": "error", "error": str(exc), "events": events}))
-    sys.exit(0)
-
-web_search_events = [e for e in events if "web_search_call" in e]
-has_added     = "response.output_item.added" in events
-has_done      = "response.output_item.done"  in events
-has_resp_done = "response.completed"         in events
-# Fake lifecycle events removed in issue #66 — Codex does not parse these.
-# They must NOT appear in the forwarded SSE stream.
-has_fake_ip        = "response.web_search_call.in_progress" in events
-has_fake_searching = "response.web_search_call.searching"   in events
-has_fake_completed = "response.web_search_call.completed"   in events
-fake_events_absent = not has_fake_ip and not has_fake_searching and not has_fake_completed
-
-if not web_search_events:
-    status = "no_search"
-elif has_added and has_done and has_resp_done and fake_events_absent:
-    status = "pass"
-else:
-    status = "partial"
-
-print(json.dumps({
-    "status": status,
-    "events_seen": events,
-    "web_search_events": web_search_events,
-    "checks": {
-        "response.output_item.added":                      has_added,
-        "response.output_item.done":                       has_done,
-        "response.completed":                              has_resp_done,
-        "fake_web_search_call.in_progress_absent":         not has_fake_ip,
-        "fake_web_search_call.searching_absent":           not has_fake_searching,
-        "fake_web_search_call.completed_absent":           not has_fake_completed,
-    },
-}))
-PYEOF
-
-  LIFECYCLE_RESULT=$(
-    QZ_PROXY_BASE="$PROXY_BASE" \
-    QZ_SMOKE_MODEL="$SMOKE_MODEL" \
-    QZ_SEARCH_TIMEOUT="$SEARCH_TIMEOUT" \
-    python3 "$_LIFECYCLE_PY" 2>/dev/null
-  ) || LIFECYCLE_RESULT='{"status":"error","error":"python3 script failed"}'
-
-  LC_STATUS=$(printf '%s' "$LIFECYCLE_RESULT" | python3 -c \
+  _LIVE_STATUS=$(printf '%s' "$_LIVE_RESULT" | python3 -c \
     "import json,sys; d=json.load(sys.stdin); print(d.get('status','error'))" 2>/dev/null || echo "error")
 
-  case "$LC_STATUS" in
+  case "$_LIVE_STATUS" in
     pass)
-      ok "streaming lifecycle: all required web_search_call events present"
-      printf '%s' "$LIFECYCLE_RESULT" | python3 -c "
-import json, sys
-d = json.load(sys.stdin)
-for k in sorted(d.get('checks', {})):
-    v = d['checks'][k]
-    print('     {} event: {}'.format('OK  ' if v else 'MISS', k))
-"
+      ok "C2 live Codex contract: all checks passed"
+      _print_checks "$_LIVE_RESULT"
       ;;
-    partial)
-      fail "streaming lifecycle: web_search called but some lifecycle events missing"
-      printf '%s' "$LIFECYCLE_RESULT" | python3 -c "
-import json, sys
-d = json.load(sys.stdin)
-for k in sorted(d.get('checks', {})):
-    v = d['checks'][k]
-    print('     {} event: {}'.format('OK  ' if v else 'MISS', k))
-"
+    fail)
+      fail "C2 live Codex contract: contract item missing or fake event present"
+      _print_checks "$_LIVE_RESULT"
       ;;
     no_search)
-      LC_EVENTS=$(printf '%s' "$LIFECYCLE_RESULT" | python3 -c \
-        "import json,sys; d=json.load(sys.stdin); print(' '.join(d.get('events_seen',[])[:8]))" 2>/dev/null || echo "")
-      skip "streaming lifecycle: model did not call web_search on this run (prompt-dependent)"
-      printf '     (first 8 event types seen: %s)\n' "$LC_EVENTS"
+      _LIVE_EVENTS=$(printf '%s' "$_LIVE_RESULT" | python3 -c \
+        "import json,sys; d=json.load(sys.stdin); print(' '.join(d.get('events',[])[:8]))" 2>/dev/null || echo "")
+      skip "C2 live Codex contract: model did not call web_search on this run (opportunistic — not a failure)"
+      printf '     (first 8 event types seen: %s)\n' "$_LIVE_EVENTS"
       ;;
     not_ready)
-      # HTTP 503 + model status says not ready → backend still starting up.
-      # This is a startup timing issue, not a lifecycle failure.
-      LC_MODEL_READY=$(printf '%s' "$LIFECYCLE_RESULT" | python3 -c \
+      _LIVE_READY=$(printf '%s' "$_LIVE_RESULT" | python3 -c \
         "import json,sys; d=json.load(sys.stdin); print(d.get('model_ready','unknown'))" 2>/dev/null || echo "unknown")
-      skip "streaming lifecycle: backend/model not ready (HTTP 503; selected_model_ready=${LC_MODEL_READY}); retry after load"
+      skip "C2 live Codex contract: backend not ready (HTTP 503; selected_model_ready=${_LIVE_READY})"
       ;;
     error_503_despite_ready)
-      # HTTP 503 + model status says ready → real admission gate bug.
-      LC_ERR=$(printf '%s' "$LIFECYCLE_RESULT" | python3 -c \
-        "import json,sys; d=json.load(sys.stdin); print(d.get('error','unknown'))" 2>/dev/null || echo "unknown")
-      LC_MODEL_READY=$(printf '%s' "$LIFECYCLE_RESULT" | python3 -c \
+      _LIVE_READY=$(printf '%s' "$_LIVE_RESULT" | python3 -c \
         "import json,sys; d=json.load(sys.stdin); print(d.get('model_ready','unknown'))" 2>/dev/null || echo "unknown")
-      fail "streaming lifecycle: HTTP 503 despite backend ready (selected_model_ready=${LC_MODEL_READY}) — possible admission bug"
+      fail "C2 live Codex contract: HTTP 503 despite backend ready (selected_model_ready=${_LIVE_READY}) — possible admission bug"
+      ;;
+    error_timeout)
+      _LIVE_ERR=$(printf '%s' "$_LIVE_RESULT" | python3 -c \
+        "import json,sys; d=json.load(sys.stdin); print(d.get('error','unknown'))" 2>/dev/null || echo "unknown")
+      skip "C2 live Codex contract: request timed out (model likely not loaded) — $_LIVE_ERR"
       ;;
     error)
-      LC_ERR=$(printf '%s' "$LIFECYCLE_RESULT" | python3 -c \
+      _LIVE_ERR=$(printf '%s' "$_LIVE_RESULT" | python3 -c \
         "import json,sys; d=json.load(sys.stdin); print(d.get('error','unknown'))" 2>/dev/null || echo "unknown")
-      if printf '%s' "$LC_ERR" | grep -qiE "timed out|timeout|Connection refused|urlopen error"; then
-        skip "streaming lifecycle: request error (model likely not loaded) — $LC_ERR"
+      if printf '%s' "$_LIVE_ERR" | grep -qiE "timed out|timeout|Connection refused|urlopen error"; then
+        skip "C2 live Codex contract: request error (model likely not loaded) — $_LIVE_ERR"
       else
-        fail "streaming lifecycle: request error — $LC_ERR"
+        fail "C2 live Codex contract: request error — $_LIVE_ERR"
       fi
       ;;
     *)
-      fail "streaming lifecycle: unexpected result status '$LC_STATUS'"
+      fail "C2 live Codex contract: unexpected status '$_LIVE_STATUS'"
       ;;
   esac
 fi
