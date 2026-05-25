@@ -57,8 +57,11 @@ Manual test:
 Reasoning knobs:
 
 - Reasoning effort in the proxy now comes from the selected profile's policy
-  metadata: prompt guidance plus sampler params. `thinking_budget_tokens` is
-  stripped before upstream and reported as `null` in runtime metadata.
+  metadata: prompt guidance plus sampler params.
+- For thinking-mode models (Qwen3.6/A3B), `thinking_budget_tokens` and
+  `reasoning_budget_tokens` are injected per-block based on the effort level
+  (low=16 384, medium=24 576, high=32 768, xhigh=49 152 tokens).
+- For non-thinking models, no budget fields are forwarded.
 - `COMPACTION_CONFIG["target_output_tokens"]` controls local compaction summary
   size, not ordinary chat responses.
 

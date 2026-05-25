@@ -78,9 +78,11 @@ Current behavior:
   selected catalog entry's own reasoning policy metadata rather than the
   backend model filename.
 - Applies Qwen-aware sampler defaults and compact effort prompts.
-- Strips `thinking_budget_tokens`; per-request hard reasoning-token caps are
-  not part of the Codex runtime policy.
-- Uses `QZ_REASONING_BUDGET` for the llama.cpp server-side reasoning budget.
+- Injects per-block `reasoning_budget_tokens` and `thinking_budget_tokens` for
+  thinking-mode models (Qwen3.6/A3B); both fields are mirrored for backend path
+  compat. See `docs/thetom-oai-responses-compat.md`.
+- Uses `QZ_REASONING_BUDGET` for the llama.cpp server-side reasoning budget
+  (default `-1`, no startup cap; keep at default for per-request control).
 
 What works well:
 

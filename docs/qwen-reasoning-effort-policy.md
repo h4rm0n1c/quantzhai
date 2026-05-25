@@ -69,32 +69,102 @@ Optional future general/research policy:
 
 ## Reasoning Budget Policy
 
-Do not send per-request hard reasoning-token caps for normal Codex runtime.
-QuantZhai's reasoning effort implementation is prompt guidance plus Qwen-aware
-sampler params.
+QuantZhai reasoning control has two axes:
 
-`thinking_budget_tokens` is not a supported tuning knob for this stack. If a
-caller sends it, the proxy strips it before forwarding the request upstream.
-Status and telemetry may keep a `thinking_budget_tokens` field for schema
-stability, but its value should be `null`.
+### Axis 1: thinking_mode
 
-The llama.cpp backend still has a server-side `--reasoning-budget` launch
-setting. QuantZhai exposes that as `QZ_REASONING_BUDGET`, default `-1`, so the
-backend does not impose a hard reasoning cap unless explicitly configured.
-Use a positive `QZ_REASONING_BUDGET` only for deliberate cap testing, because a
-hard cap can interrupt legitimate long reasoning before answer/tool output.
+| Value | Meaning |
+|---|---|
+| `thinking` | Model uses a `<think>…</think>` reasoning block. Inject per-block token budget. |
+| `non_thinking` | Model is a coder/instruct variant without a thinking block. No budget injected. |
+| `auto` | Mode unknown. No budget injected (safe fallback). |
+
+**Detection priority:**
+1. Explicit `runtime.thinking_mode` (aliases: `reasoning_mode`, `default_thinking_mode`) in the model profile.
+2. Model-name heuristic: `coder`/`instruct` substrings → `non_thinking`; `qwen3.6`/`a3b`/`thinking` substrings → `thinking`.
+3. Fallback: `auto`.
+
+### Axis 2: reasoning_effort
+
+| Effort | Intent | Per-block token budget (thinking models only) |
+|---|---|---|
+| `low` | Fast/shallow | 16 384 |
+| `medium` | Default balance | 24 576 |
+| `high` | Careful | 32 768 |
+| `xhigh` | Deep | 49 152 |
+
+For non-thinking models the effort level still controls prompt guidance and
+sampling pressure, but no `reasoning_budget_tokens` is injected.
+
+### Per-block budget semantics
+
+- Budgets are **per `<think>…</think>` block**, not total run caps.
+- Total output size is still controlled by `max_output_tokens`/`n_predict`.
+- When the model's reasoning block exceeds the budget, the backend injects the
+  configured `--reasoning-budget-message` (env: `QZ_REASONING_BUDGET_MESSAGE`)
+  into the thinking stream to prompt early exit.
+
+### What QuantZhai injects (thinking mode)
+
+For each thinking-mode request QuantZhai injects **both** field names into the
+forwarded body:
+
+| Field | Used by |
+|---|---|
+| `reasoning_budget_tokens` | TheTom `/completion` path (`server-task.cpp`) |
+| `thinking_budget_tokens` | TheTom `/v1/responses` OAI path (`server-common.cpp`) |
+
+Both fields are set to the same resolved value. This mirroring is required
+because `server-common.cpp` reads `thinking_budget_tokens` (old field name) as
+the per-request override, then internally maps it to `reasoning_budget_tokens`
+before passing to the sampler. Without `thinking_budget_tokens`, the OAI path
+ignored the per-request budget and fell back to `opt.reasoning_budget = -1`
+(no cap). See `docs/thetom-oai-responses-compat.md` for details.
+
+**Do not remove the mirror** unless TheTom's `server-common.cpp` budget-reading
+logic changes.
+
+### Profile config example
+
+```jsonc
+// Thinking model (Qwen3.6/A3B)
+"runtime": {
+  "thinking_mode": "thinking",
+  "default_reasoning_level": "medium"
+}
+
+// Non-thinking model (Coder/Instruct)
+"runtime": {
+  "thinking_mode": "non_thinking",
+  "default_reasoning_level": "medium"
+}
+```
+
+### Server-side startup budget
+
+The llama.cpp backend has a server-side `--reasoning-budget` launch setting.
+QuantZhai exposes that as `QZ_REASONING_BUDGET`, default `-1` (no startup cap).
+The server-common.cpp OAI path only reads the per-request `thinking_budget_tokens`
+override when `opt.reasoning_budget == -1`. If you set a positive
+`QZ_REASONING_BUDGET`, the startup value takes precedence and per-request budgets
+are ignored on the OAI path. Keep `QZ_REASONING_BUDGET=-1` (default) for normal
+operation.
 
 ## Request Behavior
 
 For each `/v1/responses` request:
 
 1. Resolve selected GGUF backend model from current catalog.
-2. Resolve selected reasoning effort from Codex model selection metadata.
-3. Apply the effort policy:
+2. Resolve `thinking_mode` from profile or name heuristic.
+3. Resolve `reasoning_effort` from Codex metadata or profile default.
+4. Apply the effort policy:
    - inject compact prompt guidance into model-visible instructions;
    - apply sampling params unless caller explicitly supplied them;
-   - strip `thinking_budget_tokens` before forwarding upstream.
-4. Preserve existing tool, SSE, and Responses normalization behavior.
+   - for `thinking` mode: inject `reasoning_budget_tokens` and `thinking_budget_tokens`
+     (both, for backend compat — see reasoning budget section above);
+   - for `non_thinking` mode: remove any budget fields from the body;
+   - for `auto` mode: no budget injection.
+5. Preserve existing tool, SSE, and Responses normalization behavior.
 
 Prompt injection should be system/developer-style context, not appended to the
 user's text. Keep prompt-side effort control to the compact labels above.
@@ -103,30 +173,35 @@ backend controls, not repeated model-visible prose.
 
 ## Status And Telemetry
 
-`/qz/status`, `qz-top`, and relevant telemetry should expose:
+`/qz/status`, `qz-top`, and relevant telemetry expose:
 
-- selected model;
-- loaded model;
-- selected reasoning effort;
-- reasoning policy mode;
-- active sampling params;
-- `thinking_budget_tokens: null` for schema stability.
+- `backend.selected_thinking_mode` — resolved thinking mode for the active model
+- `backend.selected_reasoning_level` — resolved effort level
+- `backend.selected_thinking_budget_tokens` — per-block token budget (null if non-thinking)
+- `backend.backend_reasoning_budget` — server-side startup budget (`-1` = no cap)
+- `profile.thinking_mode` / `profile.thinking_budget_tokens` — same, from `/qz/control-plane`
 
-This makes live behavior inspectable without relying on log files.
+This makes live behaviour inspectable without relying on log files.
 
 ## Acceptance Tests
 
 - `qz-codex /model` first screen shows real local GGUF models.
 - Reasoning effort screen still offers `low`, `medium`, `high`, and `xhigh`.
-- Normalized upstream request for each effort contains the expected prompt
-  guidance and sampling params.
-- Normalized upstream request does not contain `thinking_budget_tokens` by
-  default or when callers send it explicitly.
-- Live smoke:
-  - `low` greeting gives short answer with minimal thought;
-  - `medium` coding task remains balanced;
-  - `high` and `xhigh` repo-eval prompts show deeper reasoning without forced
-    cutoff.
+- For thinking-mode models, normalized upstream request contains:
+  - expected prompt guidance and sampling params
+  - `reasoning_budget_tokens` matching the effort-level table
+  - `thinking_budget_tokens` equal to `reasoning_budget_tokens`
+- For non-thinking-mode models, normalized upstream request contains neither
+  budget field.
+- `/qz/status` `backend.selected_thinking_mode` matches the active model's mode.
+- `/qz/control-plane` `profile.thinking_mode` and `profile.thinking_budget_tokens`
+  are populated.
+- Direct tiny-budget probe (e.g. `thinking_budget_tokens: 16`) fires the
+  budget break-out message and yields a short reasoning block.
+- Live smoke (Qwen3.6, grounded prompt):
+  - first tool call fires immediately (no reasoning spin);
+  - total tokens within the relevant budget for the chosen effort level;
+  - budget does not trigger on normal short tasks.
 
 ## Non-Goals For First Pass
 
