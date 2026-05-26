@@ -2,13 +2,29 @@ import json
 import unittest
 
 from proxy.qz_codex_metadata import (
+    COLLABORATION_MODE_NOT_PLANNING,
+    COLLABORATION_MODE_PLANNING,
+    COLLABORATION_MODE_UNKNOWN,
     TURN_METADATA_MAX_BYTES,
     WorkspaceCandidate,
+    detect_codex_collaboration_mode,
     extract_codex_identity,
     extract_workspace_candidates,
     header_lookup,
     parse_codex_turn_metadata_header,
 )
+
+
+PLAN_MODE_BLOCK = """<collaboration_mode>
+# Plan Mode (Conversational)
+
+You are in Plan mode.
+</collaboration_mode>"""
+DEFAULT_MODE_BLOCK = """<collaboration_mode>
+# Collaboration Mode: Default
+
+You are now in Default mode.
+</collaboration_mode>"""
 
 
 class HeaderLookupTests(unittest.TestCase):
@@ -29,6 +45,56 @@ class HeaderLookupTests(unittest.TestCase):
     def test_header_lookup_handles_none_headers(self):
         self.assertIsNone(header_lookup(None, "x"))
         self.assertIsNone(header_lookup({}, None))
+
+
+class CollaborationModeDetectionTests(unittest.TestCase):
+    def test_detects_planning_from_developer_block(self):
+        signal = detect_codex_collaboration_mode({
+            "input": [{
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": PLAN_MODE_BLOCK}],
+            }],
+        })
+
+        self.assertEqual(signal.mode, COLLABORATION_MODE_PLANNING)
+        self.assertEqual(signal.source, "developer_block")
+
+    def test_absent_block_defaults_to_not_planning(self):
+        signal = detect_codex_collaboration_mode({
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}],
+            }],
+        })
+
+        self.assertEqual(signal.mode, COLLABORATION_MODE_NOT_PLANNING)
+        self.assertEqual(signal.source, "absent")
+
+    def test_default_mode_block_is_not_planning(self):
+        signal = detect_codex_collaboration_mode({
+            "input": [{
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": DEFAULT_MODE_BLOCK}],
+            }],
+        })
+
+        self.assertEqual(signal.mode, COLLABORATION_MODE_NOT_PLANNING)
+        self.assertEqual(signal.source, "developer_block")
+
+    def test_malformed_block_is_unknown_without_crashing(self):
+        signal = detect_codex_collaboration_mode({
+            "input": [{
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": "<collaboration_mode>\n# Plan Mode"}],
+            }],
+        })
+
+        self.assertEqual(signal.mode, COLLABORATION_MODE_UNKNOWN)
+        self.assertEqual(signal.source, "malformed_developer_block")
 
 
 class ParseTurnMetadataTests(unittest.TestCase):

@@ -2,6 +2,11 @@
 import re
 
 try:
+    from .qz_codex_metadata import (
+        COLLABORATION_MODE_NOT_PLANNING,
+        COLLABORATION_MODE_PLANNING,
+        detect_codex_collaboration_mode,
+    )
     from .qz_prompt_policy import assemble_instruction_stack, selected_turn_harnesses
     from .qz_proxy_tools import DEFAULT_TOOL_REGISTRY
     from .qz_tool_lifecycle import ToolHistoryReplayFilter
@@ -10,6 +15,11 @@ try:
         inject_braincase_tools_to_body,
     )
 except ImportError:
+    from qz_codex_metadata import (
+        COLLABORATION_MODE_NOT_PLANNING,
+        COLLABORATION_MODE_PLANNING,
+        detect_codex_collaboration_mode,
+    )
     from qz_prompt_policy import assemble_instruction_stack, selected_turn_harnesses
     from qz_proxy_tools import DEFAULT_TOOL_REGISTRY
     from qz_tool_lifecycle import ToolHistoryReplayFilter
@@ -27,6 +37,9 @@ except ImportError:
 
 CHECKPOINT_MARKER = "CONTEXT CHECKPOINT COMPACTION"
 TURN_HARNESS_USER_HEADER = "User message:"
+PLANNING_MODE_HINT = "You are in planning mode."
+NOT_PLANNING_MODE_HINT = "You are not in planning mode."
+PLANNING_MODE_HINTS = (PLANNING_MODE_HINT, NOT_PLANNING_MODE_HINT)
 
 HARNESS_TEXT_MARKERS = (
     "<permissions instructions>",
@@ -163,6 +176,39 @@ def _looks_like_meta(role, text):
     if role == "assistant" and any(marker in lower for marker in META_ASSISTANT_TEXT_MARKERS):
         return True
     return False
+
+
+def _planning_mode_hint(mode: str) -> str:
+    if mode == COLLABORATION_MODE_PLANNING:
+        return PLANNING_MODE_HINT
+    return NOT_PLANNING_MODE_HINT
+
+
+def _strip_planning_mode_hints(text: str) -> str:
+    if not isinstance(text, str):
+        return ""
+    lines = [line for line in text.splitlines() if line.strip() not in PLANNING_MODE_HINTS]
+    return "\n".join(lines).strip()
+
+
+def _existing_planning_mode_hint(text: str) -> str | None:
+    if not isinstance(text, str):
+        return None
+    lines = {line.strip() for line in text.splitlines()}
+    has_planning = PLANNING_MODE_HINT in lines
+    has_not_planning = NOT_PLANNING_MODE_HINT in lines
+    if has_planning and not has_not_planning:
+        return COLLABORATION_MODE_PLANNING
+    if has_not_planning and not has_planning:
+        return COLLABORATION_MODE_NOT_PLANNING
+    return None
+
+
+def _inject_planning_mode_hint(body: dict, mode: str) -> None:
+    hint = _planning_mode_hint(mode)
+    existing = body.get("instructions")
+    clean_existing = _strip_planning_mode_hints(existing) if isinstance(existing, str) else ""
+    body["instructions"] = f"{clean_existing}\n\n{hint}".strip() if clean_existing else hint
 
 
 def _canonicalize_message(item):
@@ -303,6 +349,11 @@ def normalize_responses_input_for_qwen(body: dict, selected_model: dict | None =
     if not isinstance(input_items, list):
         return body
 
+    collaboration_mode_signal = detect_codex_collaboration_mode(body)
+    collaboration_mode = collaboration_mode_signal.mode
+    existing_hint_mode = _existing_planning_mode_hint(body.get("instructions", ""))
+    if collaboration_mode_signal.source == "absent" and existing_hint_mode:
+        collaboration_mode = existing_hint_mode
     clean_input = []
     tool_history_filter = ToolHistoryReplayFilter()
     metadata = body.get("metadata")
@@ -358,6 +409,7 @@ def normalize_responses_input_for_qwen(body: dict, selected_model: dict | None =
         body["instructions"] = assembled_instructions
     else:
         body.pop("instructions", None)
+    _inject_planning_mode_hint(body, collaboration_mode)
 
     harness_blocks, turn_harness_report = selected_turn_harnesses(selected_model)
 

@@ -2,6 +2,7 @@ import json
 import unittest
 
 from proxy.qz_proxy_tools import ProxyLocalToolExecutor, ProxyLocalToolRegistry
+from proxy.qz_request_normalization import NOT_PLANNING_MODE_HINT
 from proxy.qz_request_router import RequestRouter
 from proxy.qz_tool_lifecycle import ToolContinuationResult
 from proxy.qz_tools import ToolLifecycleSpec
@@ -165,7 +166,7 @@ class RequestRouterProxyLocalToolTests(unittest.TestCase):
         )
 
         self.assertEqual(len(router.request_bodies), 1)
-        self.assertNotIn("instructions", router.request_bodies[0])
+        self.assertEqual(router.request_bodies[0]["instructions"], NOT_PLANNING_MODE_HINT)
         self.assertTrue(router.request_bodies[0]["metadata"]["qz_prompt_policy"]["disable_system_prompt"])
 
 

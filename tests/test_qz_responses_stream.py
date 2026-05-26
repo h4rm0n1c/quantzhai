@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from proxy.qz_proxy_tools import ProxyLocalToolExecutor, ProxyLocalToolRegistry
+from proxy.qz_request_normalization import NOT_PLANNING_MODE_HINT
 from proxy.qz_responses_stream import (
     ClientStreamDisconnected,
     ResponsesStreamRuntime,
@@ -986,7 +987,7 @@ class ResponsesStreamRuntimeTests(unittest.TestCase):
         )
 
         self.assertEqual(len(requests), 1)
-        self.assertNotIn("instructions", requests[0])
+        self.assertEqual(requests[0]["instructions"], NOT_PLANNING_MODE_HINT)
         self.assertTrue(requests[0]["metadata"]["qz_prompt_policy"]["disable_system_prompt"])
 
     def test_web_search_call_is_public_and_upstream_resumes_with_hidden_output(self):

@@ -87,7 +87,7 @@ Source-backed facts from Codex SHA
 | --- | --- | --- |
 | Client originator | `codex_exec` for the autonomous baseline capture | `codex-tui` for the interactive Plan-mode probe |
 | Request headers | `x-codex-turn-metadata` did not include a mode field | `x-codex-turn-metadata` did not include a mode field |
-| Incoming body mode signal | No `<collaboration_mode>` developer block | Incoming developer content included a `<collaboration_mode># Plan Mode (Conversational)` block |
+| Incoming body mode signal | No collaboration mode developer block | Incoming developer content included the Plan-mode collaboration mode block |
 | Forwarded body mode signal | QuantZhai forwarded only normalized model input; no separate mode scalar | QuantZhai forwarded only normalized model input; no separate mode scalar |
 | `request_user_input` tool declaration | Present | Present |
 | Tool description | `Request user input for one to three short questions and wait for the response. This tool is only available in Plan mode.` | Same |
@@ -143,6 +143,18 @@ Plan mode works through the live `qz-codex` streaming path. The picker appeared,
 manual answer `2` was accepted, and the turn resumed without stream disconnect,
 `Conversation interrupted`, relative-import failure, or fake lifecycle events.
 
+Follow-up alignment: QuantZhai now detects the observed collaboration mode block
+internally and injects exactly one tiny model-facing hint:
+
+```text
+You are in planning mode.
+You are not in planning mode.
+```
+
+Only a clear Plan-mode block selects the first line; absent, Default, malformed,
+or unclear mode uses the second. This does not change `request_user_input`
+routing, hide tools, or treat normal-mode unavailability as failure.
+
 QuantZhai should not classify `request_user_input is unavailable in Default mode`
 as a broken native tool. If any future advisory is added for unavailable native
 tools, it must be specific to source-backed text and must preserve pass-through
@@ -152,7 +164,7 @@ semantics.
 
 QuantZhai captures did not show a dedicated mode field in headers or in
 `request-contract.json`. Plan mode was visible in the incoming developer message
-as a `<collaboration_mode>` block, while Codex source represents mode internally
+as the collaboration mode block, while Codex source represents mode internally
 through `CollaborationMode` on user turns. Treat the developer block as live
 evidence, not as a guaranteed public API contract, unless future Codex source or
 captures prove a stable header/body field.

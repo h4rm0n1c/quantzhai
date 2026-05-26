@@ -3,6 +3,9 @@ import json
 from dataclasses import dataclass
 
 TURN_METADATA_MAX_BYTES = 100_000
+COLLABORATION_MODE_PLANNING = "planning"
+COLLABORATION_MODE_NOT_PLANNING = "not_planning"
+COLLABORATION_MODE_UNKNOWN = "unknown"
 
 
 @dataclass
@@ -42,6 +45,12 @@ class CodexRequestMetadata:
     has_output_schema: bool = False
     tools_count: int = 0
     tool_names: list[str] | None = None
+
+
+@dataclass(frozen=True)
+class CodexCollaborationModeSignal:
+    mode: str
+    source: str
 
 
 @dataclass
@@ -136,6 +145,84 @@ def parse_memgen_header(value: str | None) -> tuple[bool, bool]:
     if normalized in ("false", "0", "no"):
         return False, False
     return False, True
+
+
+def _content_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        for key in ("text", "content"):
+            value = item.get(key)
+            if isinstance(value, str):
+                parts.append(value)
+                break
+    return "\n".join(parts)
+
+
+def detect_codex_collaboration_mode(body: dict) -> CodexCollaborationModeSignal:
+    """
+    Detect the live-observed Codex collaboration mode block from incoming input.
+
+    This is deliberately narrow: only a clear developer block that says Plan
+    Mode activates the planning signal. Absence is the current practical
+    not-planning path observed in captures.
+    """
+    import re
+
+    if not isinstance(body, dict):
+        return CodexCollaborationModeSignal(COLLABORATION_MODE_NOT_PLANNING, "absent")
+    input_items = body.get("input")
+    if not isinstance(input_items, list):
+        return CodexCollaborationModeSignal(COLLABORATION_MODE_NOT_PLANNING, "absent")
+
+    developer_texts = []
+    for item in input_items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("role") != "developer":
+            continue
+        text = _content_text(item.get("content"))
+        if text:
+            developer_texts.append(text)
+
+    if not developer_texts:
+        return CodexCollaborationModeSignal(COLLABORATION_MODE_NOT_PLANNING, "absent")
+
+    combined = "\n".join(developer_texts)
+    block_re = re.compile(r"<collaboration_mode>\s*(.*?)\s*</collaboration_mode>", re.IGNORECASE | re.DOTALL)
+    blocks = [match.group(1).strip() for match in block_re.finditer(combined)]
+    if not blocks:
+        if re.search(r"<collaboration_mode\b", combined, re.IGNORECASE):
+            return CodexCollaborationModeSignal(COLLABORATION_MODE_UNKNOWN, "malformed_developer_block")
+        return CodexCollaborationModeSignal(COLLABORATION_MODE_NOT_PLANNING, "absent")
+
+    planning_count = 0
+    not_planning_count = 0
+    unknown_count = 0
+    for block in blocks:
+        normalized = re.sub(r"\s+", " ", block).strip().lower()
+        if "plan mode" in normalized:
+            planning_count += 1
+        elif "default mode" in normalized or "collaboration mode: default" in normalized:
+            not_planning_count += 1
+        else:
+            unknown_count += 1
+
+    if planning_count and not not_planning_count and not unknown_count:
+        return CodexCollaborationModeSignal(COLLABORATION_MODE_PLANNING, "developer_block")
+    if not_planning_count and not planning_count and not unknown_count:
+        return CodexCollaborationModeSignal(COLLABORATION_MODE_NOT_PLANNING, "developer_block")
+    if planning_count and (not_planning_count or unknown_count):
+        return CodexCollaborationModeSignal(COLLABORATION_MODE_UNKNOWN, "contradictory_developer_block")
+    return CodexCollaborationModeSignal(COLLABORATION_MODE_UNKNOWN, "developer_block")
 
 
 def _header_values(headers_raw: dict, names: tuple[str, ...]) -> list[tuple[str, str]]:

@@ -5,6 +5,8 @@ from copy import deepcopy
 from pathlib import Path
 
 from proxy.qz_request_normalization import (
+    NOT_PLANNING_MODE_HINT,
+    PLANNING_MODE_HINT,
     clean_content,
     normalize_responses_input_for_qwen,
     recursive_clean,
@@ -13,6 +15,11 @@ from proxy.qz_prompt_policy import assemble_instruction_stack, system_prompt_dis
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "responses_input"
+PLAN_MODE_BLOCK = """<collaboration_mode>
+# Plan Mode (Conversational)
+
+You are in Plan mode.
+</collaboration_mode>"""
 
 
 class RequestNormalizationTests(unittest.TestCase):
@@ -46,7 +53,7 @@ class RequestNormalizationTests(unittest.TestCase):
         self.assertEqual(out["metadata"]["qz_prompt_policy"]["mode"], "replace_client")
         self.assertTrue(out["metadata"]["qz_prompt_policy"]["replaced_client"])
 
-    def test_disable_system_prompt_strips_all_forwarded_instruction_text(self):
+    def test_disable_system_prompt_strips_all_forwarded_instruction_text_except_mode_hint(self):
         body = {
             "instructions": "NATIVE CODEX TOP LEVEL INSTRUCTIONS",
             "input": [
@@ -68,13 +75,80 @@ class RequestNormalizationTests(unittest.TestCase):
             selected_model={"overrides": {"disable_system_prompt": True}},
         )
 
-        self.assertNotIn("instructions", out)
+        self.assertEqual(out["instructions"], NOT_PLANNING_MODE_HINT)
         self.assertEqual(out["input"], [{
             "type": "message",
             "role": "user",
             "content": [{"type": "input_text", "text": "talk directly"}],
         }])
         self.assertTrue(out["metadata"]["qz_prompt_policy"]["disable_system_prompt"])
+
+    def test_planning_mode_hint_is_injected_from_developer_block(self):
+        body = {
+            "input": [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": PLAN_MODE_BLOCK}],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "what mode are you in?"}],
+                },
+            ],
+        }
+
+        out = normalize_responses_input_for_qwen(body)
+
+        self.assertEqual(out["instructions"].count(PLANNING_MODE_HINT), 1)
+        self.assertNotIn(NOT_PLANNING_MODE_HINT, out["instructions"])
+        self.assertNotIn("<collaboration_mode>", json.dumps(out["input"]))
+
+    def test_not_planning_mode_hint_is_default_when_block_absent(self):
+        body = {
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "what mode are you in?"}],
+            }],
+        }
+
+        out = normalize_responses_input_for_qwen(body)
+
+        self.assertEqual(out["instructions"].count(NOT_PLANNING_MODE_HINT), 1)
+        self.assertNotIn(PLANNING_MODE_HINT, out["instructions"])
+
+    def test_planning_mode_hint_is_not_duplicated(self):
+        body = {
+            "instructions": f"Existing.\n\n{NOT_PLANNING_MODE_HINT}",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "continue"}],
+            }],
+        }
+
+        out = normalize_responses_input_for_qwen(body)
+
+        self.assertEqual(out["instructions"].count(NOT_PLANNING_MODE_HINT), 1)
+        self.assertIn("Existing.", out["instructions"])
+
+    def test_existing_planning_mode_hint_survives_second_normalization(self):
+        body = {
+            "instructions": f"Existing.\n\n{PLANNING_MODE_HINT}",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "continue"}],
+            }],
+        }
+
+        out = normalize_responses_input_for_qwen(body)
+
+        self.assertEqual(out["instructions"].count(PLANNING_MODE_HINT), 1)
+        self.assertNotIn(NOT_PLANNING_MODE_HINT, out["instructions"])
+        self.assertIn("Existing.", out["instructions"])
 
     def test_assemble_instruction_stack_reports_system_prompt_disabled(self):
         text, report = assemble_instruction_stack(
