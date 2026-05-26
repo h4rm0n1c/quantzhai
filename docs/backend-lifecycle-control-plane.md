@@ -1,8 +1,110 @@
 # Backend Lifecycle Control Plane
 
-Date: 2026-05-21
+Date: 2026-05-21 (design) / 2026-05-26 (audit)
 Issue: #65
-Status: Slice A-design — design only.
+Status: Slices A–D.3 COMPLETE. One gap remains: OperationalStore not wired to BackendManager (D.4).
+
+---
+
+## 0. Current implementation audit — 2026-05-26
+
+**Audit HEAD:** 7217676 (post-#72)
+**Tests:** 3629 passed
+**#65 status:** OPEN. Slices A through D.3 complete in code. One wire-up gap remains.
+**#72 relationship:** #72 fixed `/qz/status` ↔ `/qz/control-plane` readiness sync and
+`backend_reasoning_budget` surfacing. BackendManager snapshot is already part of both
+endpoints. #72 is closed; its fixes are reflected here.
+
+---
+
+### 0.1 Backend lifecycle ownership (current)
+
+| Responsibility | Current owner | Source location |
+|---|---|---|
+| Starts backend Docker container | `BackendManager._do_start()` | `proxy/qz_backend_manager.py:651` |
+| Stops/removes backend Docker container | `BackendManager._do_stop()` | `proxy/qz_backend_manager.py:760+` |
+| Builds llama.cpp Docker command | `build_docker_run_args()` + `build_backend_args()` | `qz_backend_manager.py:449,490` |
+| Starts proxy | `scripts/qz-proxy` | `scripts/qz-proxy` |
+| Waits for proxy health | `scripts/qz-proxy` (blocks until `/health` answers) | `scripts/qz-proxy` |
+| Waits for catalog readiness | Proxy init thread (`_initialize_proxy_state`) | `quantzhai_proxy.py:500+` |
+| Waits for backend health | BackendManager health-check loop | `qz_backend_manager.py:680+` |
+| Waits for model loaded/ready | BackendManager (internal) + `qz-down` status poll | `qz_backend_manager.py`, `scripts/qz-down:85-92` |
+| Reports backend health | `GET /qz/backend/status`, `/qz/control-plane` | `qz_request_router.py:673`, `qz_control_plane.py:427` |
+| Reports selected model | `/qz/control-plane`, `/qz/model/status` | `qz_control_plane.py`, `qz_model_status.py` |
+| Reports backend reasoning budget | `/qz/control-plane` `profile.backend_reasoning_budget` | `qz_control_plane.py:388` (#72) |
+| Reports readiness | `/qz/control-plane` `readiness` dict | `qz_control_plane.py:308` |
+| Records lifecycle in OperationalStore | **NOT WIRED** | `BackendManager._emit()` exists (line 811) but `operational_store=None` — proxy main never passes the store |
+
+---
+
+### 0.2 #65 target coverage
+
+| Target | Status | Notes |
+|---|---|---|
+| `qz-up` starts proxy only (no `docker run`) | ✅ DONE | `scripts/qz-up` ~100 lines; no Docker calls |
+| Proxy owns backend container lifecycle | ✅ DONE | `proxy/qz_backend_manager.py` 822 lines |
+| 9-state machine (disabled → idle → starting → running → healthy \| failed → stopping → stopped) | ✅ DONE | `PHASE_*` constants + transitions |
+| `GET /qz/backend/status` endpoint | ✅ DONE | `qz_request_router.py:673` |
+| `POST /qz/backend/start\|stop\|restart` endpoints | ✅ DONE | `qz_request_router.py:1555` |
+| `/qz/control-plane` has `backend_manager` snapshot section | ✅ DONE | `qz_control_plane.py:427–434` |
+| `qz-down` asks proxy to stop backend gracefully | ✅ DONE | `scripts/qz-down:74-92` |
+| `qz-down --force` removes Docker container directly | ✅ DONE | `scripts/qz-down:58-67` |
+| Proxy remains alive when backend fails | ✅ DONE | BackendManager sets `phase=failed`, proxy continues |
+| Docker command fidelity (exact port of `qz-up` flags) | ✅ DONE | `build_docker_run_args` + `build_backend_args` |
+| `scripts/qz-backend` thin wrapper (4 subcommands) | ✅ DONE | `scripts/qz-backend` |
+| `qz-top` reads `backend_manager` fields from control-plane | ✅ DONE | `scripts/qz-top:378–419` |
+| GPU offload gate (`QZ_REQUIRE_GPU`, log check) | ✅ DONE | D.1: `qz_backend_manager.py:559+` |
+| Helper compat (no `-e`/`--device` flags) | ✅ DONE | D.2 |
+| Log detection (CPU_Mapped + latest-signal-wins) | ✅ DONE | D.3: `qz_backend_manager.py:562` |
+| D-smoke cold-start verification | ✅ DONE (unrecorded) | Issue comment "D-smoke complete — #65 closed"; never marked ✅ in design doc |
+| OperationalStore records lifecycle events | ⚠️ PARTIAL | `BackendManager._emit()` implemented; `operational_store=None` in proxy — events are silently swallowed |
+
+---
+
+### 0.3 Stale assumptions from original #65 issue
+
+| Original assumption | Current reality |
+|---|---|
+| `qz-up` is the init system (owns docker run, health loops) | `qz-up` only starts the proxy (~100 lines); proxy owns Docker |
+| `qz-down` unconditionally force-removes container | `qz-down` has `--force`; normal path asks proxy gracefully |
+| Cannot restart backend without shell access | `/qz/backend/restart` endpoint + `scripts/qz-backend restart` |
+| Backend failure bricks the Codex session | `phase=failed` is observable; proxy keeps serving; operator can `POST /qz/backend/start` |
+| `docs/backend-lifecycle-control-plane.md` header: "Slice A-design — design only" | Stale; slices A–D.3 are complete |
+
+---
+
+### 0.4 Remaining implementation slice
+
+**D.4 — Wire OperationalStore to BackendManager**
+
+`BackendManager._emit()` (line 811) is fully implemented: it calls
+`self._operational_store.record_startup_event(phase=event_type, payload=...)`.
+The constructor accepts `operational_store: Any = None`.
+But `proxy/quantzhai_proxy.py` `main()` instantiates `BackendManager` without passing the store.
+
+Fix (small, low-risk):
+
+```python
+# proxy/quantzhai_proxy.py main() — after existing _eint() helper
+try:
+    from qz_operational_store import OperationalStore as _OperationalStore
+    _operational_store = _OperationalStore.from_env()
+    _operational_store.init()
+except Exception:
+    _operational_store = None
+
+_backend_manager = BackendManager(
+    ...existing params...,
+    operational_store=_operational_store,
+)
+```
+
+Tests needed:
+- When `operational_store` is passed, `_emit()` calls `record_startup_event` (already tested
+  implicitly in `BackendManagerEmitTests` if they exist; otherwise add 1–2 wiring tests).
+- Non-fatal: if `OperationalStore.init()` fails, `BackendManager` still starts.
+
+This is the only remaining gap. All other #65 targets are complete.
 
 ---
 
@@ -543,10 +645,11 @@ From fully stopped state:
 | **B3-impl** | ✅ qz-up stripped; qz-down graceful + --force; qz-backend wrapper; 32 structural tests |
 | **B.1-audit** | ✅ 4 bugs fixed; docker_cmd documented; 5 new tests; 2929 pass |
 | **C-doc** | ✅ Operator guide, QZ_DOCKER_CMD guidance, status URLs documented |
-| **D-smoke** | Cold-start smoke test (§12) — **amended**: HTTP health is not enough; `gpu_offload_state` must not be `cpu_fallback`/`failed`; verify `nvidia-smi` shows llama/server GPU memory |
+| **D-smoke** | ✅ Cold-start smoke confirmed via issue comment ("D-smoke complete — #65 closed"). Never marked ✅ in this doc — now corrected. |
 | **D.1-gpu-fix** | ✅ GPU offload gate: post-health log check, QZ_REQUIRE_GPU/QZ_GPU_LOG_TAIL; docker args unchanged (helper-compatible); 2953 pass |
 | **D.2-helper-compat** | ✅ Remove `-e`/`--device` flags added in D.1; they break qz-docker-root-helper (rc=126); restore original qz-up flag set |
 | **D.3-log-detection** | ✅ Fix false cpu_fallback: CPU_Mapped + CUDA buffers == gpu; latest-signal-wins algorithm; 6 new tests |
+| **D.4-ops-store-wire** | Wire OperationalStore to BackendManager in `proxy/quantzhai_proxy.py` main(). `BackendManager._emit()` is implemented; `operational_store=None` because proxy never passes it. Small fix + 1-2 wiring tests. |
 
 ---
 

@@ -1,7 +1,7 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-26
-Status: active control sheet — #72 validated and closed; Codex tool contract audit #66–#70 complete; thinking budget controls landed; 3629 tests pass.
+Status: active control sheet — #72 closed; #65 audit complete: slices A–D.3 done, D.4 (OperationalStore wire) open; 3629 tests pass.
 
 ## Recently completed — #72 status/control-plane readiness state sync (2026-05-26)
 
@@ -2184,8 +2184,18 @@ Slices:
   B3-impl   — ✅ COMPLETE. qz-up stripped; qz-down graceful+force; qz-backend added. 2924 pass.
   B.1-audit — ✅ COMPLETE. 4 bugs fixed; docker_cmd documented; 2929 pass.
   C-doc     — ✅ COMPLETE. Operator guide added; QZ_DOCKER_CMD guidance; duplicates cleaned.
-  D-smoke   — cold-start smoke (§12 of design doc)
+  D-smoke   — ✅ COMPLETE. Cold-start confirmed (per issue comment); design doc not updated at close time.
+  D.1       — ✅ COMPLETE. GPU offload gate; QZ_REQUIRE_GPU; log check; 2953 pass.
+  D.2       — ✅ COMPLETE. Remove -e/--device flags; qz-docker-root-helper compat.
+  D.3       — ✅ COMPLETE. CPU_Mapped false-positive fix; latest-signal-wins; 6 new tests.
+  D.4       — OPEN. Wire OperationalStore to BackendManager in proxy main(). BackendManager._emit()
+              is implemented (proxy/qz_backend_manager.py:811) but operational_store=None because
+              proxy/quantzhai_proxy.py main() never passes the store. All backend lifecycle events
+              (backend_start_requested, backend_healthy, etc.) are silently swallowed.
+              Fix: pass operational_store=OperationalStore.from_env() to BackendManager constructor.
+              Add 1-2 wiring tests. Low-risk, small change.
 
+Current audit: docs/backend-lifecycle-control-plane.md §0 (2026-05-26)
 Design doc: docs/backend-lifecycle-control-plane.md §15 (operator guide)
 ```
 
