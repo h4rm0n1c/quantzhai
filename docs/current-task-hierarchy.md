@@ -1,7 +1,7 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-26
-Status: active control sheet — #61 is the immediate unblocked work; #52 is upstream-blocked; #8 is long-term RFC; 3641 tests pass.
+Status: active control sheet — #61 Slice A design complete; Slice B (implementation) is next; #52 is upstream-blocked; #8 is long-term RFC; 3641 tests pass.
 
 ## #73 Remove unsupported custom_tool_call_input.done (2026-05-26)
 
@@ -155,11 +155,61 @@ Remaining: none for #62 current scope. Future fallback-shape advisory should be
 a new issue if telemetry later proves need.
 ```
 
+## #61 Native tool advisory policy — Slice A design (2026-05-26)
+
+```text
+Status: COMPLETE — Slice A design doc created.
+
+QuantZhai commit at Slice A start: 3670821.
+Codex repo path: /tmp/qz-audit/codex.
+Codex audit SHA: 46f30d02828bd4c52827e5f0482a6f2a982cce5b.
+
+Output: docs/native-tool-advisory-policy.md
+
+Codex tool surface re-confirmed (no change from #66–#70 audit):
+  - 12 tools in CODEX_NATIVE_TOOL_NAMES; set remains frozen.
+  - exec_command, shell_command, write_stdin: primary advisory targets.
+  - shell, container.exec: secondary (not advertised in QuantZhai config).
+  - update_plan, request_user_input, view_image, goal tools: out of scope.
+  - local_shell: out of scope (different item type, no proxy adapter).
+  - apply_patch: excluded here; #62 handles borderline coercion advisory.
+
+Existing advisory infrastructure confirmed and in use:
+  - render_advisory_output() / kind="signal" path: working.
+  - repeated_read_signal(): working.
+  - tool_escalation_requested telemetry: working (outgoing escalation).
+  - classify_native_tool_outputs(): working (incoming exit codes).
+
+Designed advisory patterns:
+  A. Repeated failing commands — same cmd signature fails N times (default N=2)
+  B. Excessive call count per turn — >20 native calls (configurable)
+  B2. Repeated same tool+args — >3 identical calls (configurable)
+  C. Excessive apply_patch writes — >10 patches/turn (cautious; Slice C)
+  D. write_stdin loop — >3 to same session without new exec (Slice C)
+  E. Escalation retries — >2 require_escalated in one turn (Slice C; cautious)
+
+Signal state: NativeToolAdvisoryState (per-turn, not persisted, follows
+  RepeatedReadState pattern).
+
+Thresholds: hard-coded defaults + QZ_NATIVE_* env overrides.
+
+No blocking. No BrainCase. No cross-session state. No apply_patch changes.
+No Codex protocol changes. No raw command/path in telemetry.
+
+Validation:
+  - python3 -m pytest: 3641 passed (no code changes in Slice A).
+  - docs/native-tool-advisory-policy.md: created.
+  - docs/current-task-hierarchy.md: updated.
+  - docs/README.md: needs update (new doc indexed below).
+
+Next: Slice B — implement NativeToolAdvisoryState + Patterns A/B/B2 + tests.
+```
+
 ## Remaining open work (tracked in dedicated issues)                                                    
                                                                                                            
    Gap                                                                      │ Issue / status
   ──────────────────────────────────────────────────────────────────────────┼────────────────────────────
-   Advisory signals for native exec patterns (write loops, excessive calls) │ #61 OPEN — next immediate
+   Advisory signals for native exec patterns (#61 Slice A done, B next)    │ #61 OPEN — Slice B next
    Backend-confirmed VRAM allocator metrics                                │ #52 OPEN — upstream-blocked
    Survival-weighted compaction RFC                                         │ #8 OPEN — long-term RFC
 
