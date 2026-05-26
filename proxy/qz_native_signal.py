@@ -58,6 +58,22 @@ QZ_NATIVE_MAX_CALLS_PER_TURN = _parse_env_int("QZ_NATIVE_MAX_CALLS_PER_TURN", 24
 QZ_NATIVE_ESCALATION_THRESHOLD = _parse_env_int("QZ_NATIVE_ESCALATION_THRESHOLD", 2)
 
 
+def _codex_native_tool_names() -> frozenset:
+    try:
+        from .qz_tools import CODEX_NATIVE_TOOL_NAMES
+    except ImportError:
+        from qz_tools import CODEX_NATIVE_TOOL_NAMES
+    return CODEX_NATIVE_TOOL_NAMES
+
+
+def _native_output_exit_code(output: str) -> Optional[int]:
+    try:
+        from .qz_native_tool_output import _parse_exit_code
+    except ImportError:
+        from qz_native_tool_output import _parse_exit_code
+    return _parse_exit_code(output)
+
+
 def _canonicalize_args(args: Any) -> str:
     """Return a canonical JSON string for *args* suitable for stable hashing.
 
@@ -130,7 +146,7 @@ def seed_native_advisory_state(input_items: list) -> NativeToolAdvisoryState:
     
     # First pass: find all function_calls in history to know their signatures
     # and count turn-wide usage.
-    from .qz_tools import CODEX_NATIVE_TOOL_NAMES
+    CODEX_NATIVE_TOOL_NAMES = _codex_native_tool_names()
     
     for item in input_items:
         if not isinstance(item, dict) or item.get("type") != "function_call":
@@ -158,7 +174,6 @@ def seed_native_advisory_state(input_items: list) -> NativeToolAdvisoryState:
                     state.escalation_count += 1
 
     # Second pass: check outputs for failures
-    from .qz_native_tool_output import _parse_exit_code
     for item in input_items:
         if not isinstance(item, dict) or item.get("type") != "function_call_output":
             continue
@@ -170,7 +185,7 @@ def seed_native_advisory_state(input_items: list) -> NativeToolAdvisoryState:
             
         output = item.get("output")
         if isinstance(output, str):
-            exit_code = _parse_exit_code(output)
+            exit_code = _native_output_exit_code(output)
             if exit_code is not None and exit_code != 0:
                 state.command_failure_counts[sig] = state.command_failure_counts.get(sig, 0) + 1
             elif exit_code == 0:
@@ -181,7 +196,7 @@ def seed_native_advisory_state(input_items: list) -> NativeToolAdvisoryState:
 
 def record_native_tool_call(call: dict, state: NativeToolAdvisoryState) -> None:
     """Records a native tool call in the state during a run."""
-    from .qz_tools import CODEX_NATIVE_TOOL_NAMES
+    CODEX_NATIVE_TOOL_NAMES = _codex_native_tool_names()
     
     name = call.get("name")
     if name in CODEX_NATIVE_TOOL_NAMES:
@@ -201,7 +216,7 @@ def record_native_tool_call(call: dict, state: NativeToolAdvisoryState) -> None:
 
 def check_native_advisories(call: dict, state: NativeToolAdvisoryState) -> Optional[NativeAdvisoryDecision]:
     """Checks if a native tool call should trigger an advisory."""
-    from .qz_tools import CODEX_NATIVE_TOOL_NAMES
+    CODEX_NATIVE_TOOL_NAMES = _codex_native_tool_names()
     
     name = call.get("name")
     if name not in CODEX_NATIVE_TOOL_NAMES:
