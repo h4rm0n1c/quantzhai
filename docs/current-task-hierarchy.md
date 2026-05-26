@@ -3,7 +3,29 @@
 Date: 2026-05-26
 Status: active control sheet — #59 umbrella audit refreshed + closed; #61/#62 open; 3636 tests pass.
 
-## Recently completed — #72 status/control-plane readiness state sync (2026-05-26)
+## Recently completed — #62 Slice A audit complete (2026-05-26)
+
+```text
+Status: COMPLETE — Audit completed; docs/apply-patch-coercion-map.md created.
+
+Problem (#62):
+  - apply_patch coercion stack was complex and undocumented.
+  - Telemetry and advisory gaps in coercion paths.
+
+Audit findings:
+  - Canonical, Split, and Envelope shapes documented.
+  - Coercion/Failure paths mapped.
+  - Telemetry safety confirmed (metadata only).
+
+See docs/apply-patch-coercion-map.md for full coercion map and Slice B recommendations.
+```
+
+## Remaining open work (tracked in dedicated issues)                                                    
+                                                                                                           
+   Gap                                                                      │ Issue                        
+  ──────────────────────────────────────────────────────────────────────────┼────────────────────────────  
+   Advisory signals for native exec patterns (write loops, excessive calls) │ #61 OPEN                     
+   apply_patch borderline coercion advisory + edge-case tests               │ #62 OPEN                     
 
 ```text
 Status: COMPLETE — commits 2bda8ca, 315103f, 76aca3c; 3629 tests pass.
