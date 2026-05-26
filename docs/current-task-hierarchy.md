@@ -3,24 +3,29 @@
 Date: 2026-05-26
 Status: active control sheet — #59 umbrella audit refreshed + closed; #61/#62 open; 3636 tests pass.
 
-## Recently completed — #62 Slice B.1 (test coverage) complete (2026-05-26)
+## Recently completed — #62 Slice B.2 (stream telemetry integration tests) complete (2026-05-26)
 
 ```text
-Status: COMPLETE — tests added to tests/test_apply_patch_adapter.py.
+Status: COMPLETE — tests added to tests/test_apply_patch_telemetry.py.
 
-Problem: Insufficient unit test coverage for coercion paths and telemetry safety.
+Problem: Telemetry coverage for apply_patch coercion was unverified.
 
 Changes:
-  - Added ApplyPatchAP3InspectTests:
-      - Validated all coercion strategies (canonical, sibling, envelope, etc.).
-      - Confirmed safe metadata-only telemetry.
-      - Confirmed telemetry exclusion of raw arguments, patch body, diff, and file paths.
-  - Added ApplyPatchCoerceTests:
-      - Validated success/error paths for valid, sibling-patch, bare-operation,
-        missing-destination, and invalid-JSON scenarios.
+  - Added ApplyPatchTelemetryIntegrationTests:
+      - Validated coercion_succeeded telemetry for sibling_patch_promoted path.
+      - Validated coercion_failed telemetry for failed_missing_diff path.
+      - Confirmed telemetry payload safety (exclusion of raw patch/path/diff content).
+      - Verified telemetry consistency with internal adapter coercion strategies.
 
-Remaining: Slice B implementation (add telemetry emission) and Slice C (advisory).
+Remaining: Slice C (advisory logic).
 ```
+
+## Remaining open work (tracked in dedicated issues)                                                    
+                                                                                                           
+   Gap                                                                      │ Issue                        
+  ──────────────────────────────────────────────────────────────────────────┼────────────────────────────  
+   Advisory signals for native exec patterns (write loops, excessive calls) │ #61 OPEN                     
+   apply_patch borderline coercion advisory + edge-case tests               │ #62 OPEN                     
 
 ## Remaining open work (tracked in dedicated issues)                                                    
                                                                                                            
