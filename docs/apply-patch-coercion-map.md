@@ -134,6 +134,48 @@ Advisory recommendation:
 - Future fallback-shape advisory should be a new issue if telemetry later
   proves need.
 
+## Post-close Codex source reconciliation — 2026-05-26
+
+QuantZhai commit at reconciliation start: `17894d8`.
+
+Codex repo path: `/tmp/qz-audit/codex`.
+
+Codex audit SHA: `46f30d02828bd4c52827e5f0482a6f2a982cce5b`.
+
+Checked current Codex source:
+
+- `codex-rs/protocol/src/models.rs`: `ResponseInputItem` and `ResponseItem`.
+- `codex-rs/codex-api/src/sse/responses.rs`: `process_responses_event`.
+- `codex-rs/core/src/tools/handlers/apply_patch_spec.rs`:
+  `create_apply_patch_freeform_tool`.
+- `codex-rs/core/src/tools/handlers/apply_patch.rs`: `ApplyPatchHandler`,
+  `apply_patch_payload_command`, and patch parsing call path.
+- `codex-rs/core/src/tools/handlers/apply_patch.lark`: patch envelope grammar.
+- `codex-rs/core/tests/common/responses.rs`: apply_patch test helper emits
+  `custom_tool_call` for the freeform path.
+
+Result:
+
+- `CustomToolCall` is present.
+- `CustomToolCallOutput` is present.
+- No `ApplyPatchCall` / `apply_patch_call` `ResponseItem` variant exists.
+- `apply_patch` is represented as `custom_tool_call` with
+  `name="apply_patch"` and freeform `input`.
+- The current Codex stream parser handles `response.output_item.added`,
+  `response.output_item.done`, and `response.custom_tool_call_input.delta`.
+- Current Codex source does not parse `response.custom_tool_call_input.done`
+  as a typed event; QuantZhai's extra `.done` marker is ignored/compatible and
+  not required for Codex tool execution.
+- `response.apply_patch_call.*`, `apply_patch_call`, and
+  `apply_patch_call_output` remain absent from the Codex-visible contract.
+
+Decision:
+
+- #62 remains closed.
+- No runtime change is required.
+- No model-visible advisory is required for the observed canonical
+  `operation_object` path.
+
 ## 8. Recommended Slice B
 
 - Add tests proving each `coercion_strategy` is classified correctly.

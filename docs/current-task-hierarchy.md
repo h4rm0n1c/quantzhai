@@ -3,6 +3,42 @@
 Date: 2026-05-26
 Status: active control sheet — #61 is the immediate unblocked work; #52 is upstream-blocked; #8 is long-term RFC; 3641 tests pass.
 
+## Post-close Codex source reconciliation — 2026-05-26
+
+```text
+Status: COMPLETE — #62 remains closed after current Codex source check.
+
+QuantZhai commit at reconciliation start: 17894d8.
+Codex repo path: /tmp/qz-audit/codex.
+Codex audit SHA: 46f30d02828bd4c52827e5f0482a6f2a982cce5b.
+
+Checked:
+  - codex-rs/protocol/src/models.rs: ResponseInputItem, ResponseItem.
+  - codex-rs/codex-api/src/sse/responses.rs: process_responses_event.
+  - codex-rs/core/src/tools/handlers/apply_patch_spec.rs:
+    create_apply_patch_freeform_tool.
+  - codex-rs/core/src/tools/handlers/apply_patch.rs:
+    ApplyPatchHandler, apply_patch_payload_command, patch parsing path.
+  - codex-rs/core/src/tools/handlers/apply_patch.lark.
+  - codex-rs/core/tests/common/responses.rs apply_patch helper.
+
+Result:
+  - CustomToolCall present.
+  - CustomToolCallOutput present.
+  - No ApplyPatchCall / apply_patch_call ResponseItem variant.
+  - apply_patch remains a freeform custom_tool_call.
+  - Valid stream path is response.output_item.added/done plus
+    response.custom_tool_call_input.delta.
+  - Current Codex does not parse response.custom_tool_call_input.done as a typed
+    event; QuantZhai's extra done marker is ignored/compatible.
+  - response.apply_patch_call.* remains absent.
+
+Decision:
+  - #62 remains closed.
+  - No runtime change required.
+  - No Codex-visible protocol change required.
+```
+
 ## Live apply_patch probe — linuxstreamtools /tmp clone (2026-05-26)
 
 ```text
@@ -359,9 +395,10 @@ AP3 streaming tests (ApplyPatchStreamingAP3Tests):
   web_search telemetry has no "apply_patch" key
   "apply_patch" key appears only when tool == "apply_patch"
 
-Deferred slices (require live Codex capture or non-trivial changes):
-- AP4: live Codex capture to observe apply_patch_call rendering.
-- AP5: optional sub-lifecycle if AP4 proves benefit (requires protocol_adapter → proxy_local mode change).
+Deferred slices: none for #62 current scope. The later live probe and
+post-close source reconciliation confirmed the `custom_tool_call` path; any
+future advisory for repeated fallback argument shapes should be opened as a new
+issue.
 ```
 
 ## Recently completed — Enforce apply_patch lifecycle contract (2026-05-25)
@@ -390,7 +427,7 @@ Changes:
     missing diff → specific repair text in error; path not echoed; call_id preserved
     missing destination → specific repair text; path not echoed; call_id preserved
     unknown operation type → specific repair text; path not echoed; call_id preserved
-    sibling patch promotion → coercion_succeeded; apply_patch_call in stream; single hop
+    sibling patch promotion → coercion_succeeded; custom_tool_call in stream; single hop
     legacy *** Begin Patch envelope → coercion_succeeded; operation extracted; single hop
     coercion_failed telemetry: no raw patch body; error_summary ≤200 chars; safe fields only
 
@@ -417,8 +454,9 @@ Key findings:
   the patch locally; QuantZhai only translates the shape.
 - No official response.apply_patch_call.* event family exists in the Responses API.
   QuantZhai must not invent these events without live Codex client proof.
-- Only response.output_item.added/done are emitted (item types: apply_patch_call or
-  custom_tool_call depending on output style). No sub-lifecycle stages.
+- Only response.output_item.added/done are required for the final item;
+  current Codex-compatible apply_patch output is custom_tool_call. No
+  sub-lifecycle stages.
 - No tool_call_started/tool_call_completed telemetry — those are proxy_local only.
 - coercion_succeeded/coercion_failed emitted via tool_adapter source.
 - Error messages are specific (bad JSON / unknown op / missing diff / missing dest);
