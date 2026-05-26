@@ -39,6 +39,7 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 5. [Codex context and memory contract](codex-context-memory-contract.md) — source-grounded v2 contract for Codex 0.130 identity, workspace candidates, thread/turn scope, and QuantZhai memory domains.
 6. [Codex 0.130 live signal capture](codex-0130-live-signal-capture.md) — live request/header/body evidence from Codex 0.130.
 7. [Model state signal contract](model-state-signal-contract.md) — LimbiCore state/signal/memory envelope; store scoped records, render narrowly later.
+7a. [Codex Plan mode live capture](codex-plan-mode-live-capture.md) — live request_user_input evidence showing normal-mode unavailability versus Plan-mode success.
 8. [Responses stream and tool state contract](responses-stream-tool-state-contract.md) — runtime contract for streamed Responses events, tool-call state, telemetry, and captures.
 8a. [Runtime streaming tool contract audit](runtime-streaming-tool-contract-audit.md) — Slice A contract map: pipeline, event shapes, metadata flow, coercion map, test plan, and findings.
 8b. [Tool schema coercion audit](tool-schema-coercion-audit.md) — Slice B: schema replacement, coercion/advice paths, failure matrix, test coverage, and B2 fix plan.
@@ -78,6 +79,7 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 | Runtime contract | [Responses stream and tool state contract](responses-stream-tool-state-contract.md) | State contract for streamed Responses events, tool calls, telemetry, and captures. |
 | Codex contract | [Codex context and memory contract](codex-context-memory-contract.md) | Authoritative v2 contract for Codex 0.130 session/thread/turn/window/workspace metadata, SQLite scope direction, and memory_domain terminology. |
 | Codex evidence | [Codex 0.130 live signal capture](codex-0130-live-signal-capture.md) | Live capture evidence for Codex 0.130 request/header/body/turn/workspace signals. |
+| Codex evidence | [Codex Plan mode live capture](codex-plan-mode-live-capture.md) | Live request_user_input evidence for normal-mode unavailability and Plan-mode answer flow. |
 | Runtime contract | [Codex native first request capture](codex-native-request-capture.md) | Raw first request shape Codex CLI sends before QuantZhai wrapper/proxy normalization. |
 | LimbiCore contract | [Model state signal contract](model-state-signal-contract.md) | Future-facing state/signal/memory envelope; no clever memory in Phase 1. |
 | Signal surface map | [Codex/QuantZhai bidirectional signal map](codex-quantzhai-bidirectional-signal-map.md) | Source-grounded map of all signals: Codex→QZ, QZ→model, backend→QZ, QZ→monitor, safety matrix, gaps, and next targets. |
@@ -365,6 +367,7 @@ docs/bugs/zombie-model-slot.md
 docs/benchmark-findings-effort-tuning.md
 docs/codex-0130-live-signal-capture.md
 docs/codex-context-memory-contract.md
+docs/codex-plan-mode-live-capture.md
 docs/codex-native-first-request-capture.md
 docs/codex-request-signal-inventory.md
 docs/conversation-history-audit-plan.md
