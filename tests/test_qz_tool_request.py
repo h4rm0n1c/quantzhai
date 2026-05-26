@@ -285,5 +285,60 @@ class ToolDedupAndReplacementTests(unittest.TestCase):
         self.assertIn("deduped: web_search", notes)
 
 
+class PermissionToolHintTests(unittest.TestCase):
+    """Tests for REQUEST_PERMISSIONS_TOOL_HINT appended to request_permissions description."""
+
+    def test_request_permissions_receives_permission_hint(self):
+        """request_permissions description must include the permission affordance hint."""
+        body = {
+            "input": [],
+            "tools": [
+                {"type": "function", "name": "request_permissions", "description": "Request extra permissions for this turn."},
+            ],
+        }
+        normalize_tool_request_for_llamacpp(body, write_captures=False)
+        desc = body["tools"][0]["description"]
+        self.assertIn("request broader permissions", desc,
+                      "request_permissions description should include permission affordance hint")
+
+    def test_request_permissions_hint_not_added_to_other_tools(self):
+        """Other tools must not receive the request_permissions hint."""
+        body = {
+            "input": [],
+            "tools": [
+                {"type": "function", "name": "exec_command", "description": "Run a command."},
+            ],
+        }
+        normalize_tool_request_for_llamacpp(body, write_captures=False)
+        self.assertNotIn("request broader permissions", body["tools"][0]["description"])
+
+    def test_request_permissions_deduped(self):
+        """Duplicate request_permissions must be deduped, not passed through twice."""
+        body = {
+            "input": [],
+            "tools": [
+                {"type": "function", "name": "request_permissions", "description": "First."},
+                {"type": "function", "name": "request_permissions", "description": "Second."},
+            ],
+        }
+        report = normalize_tool_request_for_llamacpp(body, write_captures=False)
+        self.assertEqual(len(body["tools"]), 1)
+        self.assertIn("request_permissions", report.deduped)
+        # The surviving tool should have the hint
+        self.assertIn("request broader permissions", body["tools"][0]["description"])
+
+    def test_request_permissions_survives_normalization(self):
+        """request_permissions must remain in the tool list after normalization."""
+        body = {
+            "input": [],
+            "tools": [
+                {"type": "function", "name": "request_permissions", "description": "Original."},
+            ],
+        }
+        normalize_tool_request_for_llamacpp(body, write_captures=False)
+        names = [t.get("name") for t in body["tools"]]
+        self.assertIn("request_permissions", names)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -382,8 +382,12 @@ class NativeToolNamesPolicyTests(unittest.TestCase):
                       "CODEX_NATIVE_TOOL_NAMES comment must describe it as routing inventory")
         self.assertIn("NOT an authority", content,
                       "CODEX_NATIVE_TOOL_NAMES comment must clarify it is not an authority")
-        self.assertIn("immutability boundary", content,
-                      "CODEX_NATIVE_TOOL_NAMES comment must clarify it is not an immutability boundary")
+        # The comment wraps "immutability\\n# boundary" across two lines, so
+        # check for each substring separately.
+        self.assertIn("NOT an authority or immutability", content,
+                      "CODEX_NATIVE_TOOL_NAMES comment must clarify it is not an authority or immutability boundary")
+        self.assertIn("boundary", content,
+                      "CODEX_NATIVE_TOOL_NAMES comment must contain 'boundary'")
 
     def test_parity_policy_doc_exists(self):
         """The parity/policy matrix doc must exist and cover the audit."""

@@ -823,6 +823,45 @@ class ResponsesStreamRuntime:
             "cmd_preview": self._safe_preview(args.get("cmd"), 80),
         }
 
+    def _check_request_permissions(self, call: dict) -> dict | None:
+        """Return a bounded telemetry payload for outgoing request_permissions calls.
+
+        Returns None for other tools or unparseable arguments.
+        Telemetry includes: tool, call_id, reason_preview (<=200 chars),
+        reason_len, permission_profile summary. No full raw args.
+        """
+        if not isinstance(call, dict):
+            return None
+        if call.get("name") != "request_permissions":
+            return None
+        raw_args = call.get("arguments")
+        if not isinstance(raw_args, str) or not raw_args.strip():
+            return None
+        try:
+            args = json.loads(raw_args)
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(args, dict):
+            return None
+        payload: dict = {
+            "tool": "request_permissions",
+            "call_id": str(call.get("call_id") or call.get("id") or ""),
+        }
+        reason = args.get("reason")
+        if reason is not None:
+            reason_str = str(reason)
+            payload["reason_preview"] = self._safe_preview(reason_str, 200)
+            payload["reason_len"] = len(reason_str)
+        permissions = args.get("permissions")
+        if isinstance(permissions, dict):
+            parts = []
+            if permissions.get("network") is not None:
+                parts.append("network")
+            if permissions.get("file_system") is not None:
+                parts.append("file_system")
+            payload["permission_profile"] = ",".join(parts) if parts else "none"
+        return payload
+
     def _emit_stream_event_timing(
         self,
         event_type: str,
@@ -1916,6 +1955,10 @@ class ResponsesStreamRuntime:
                             escalation = self._check_sandbox_escalation(hs.completed_call)
                             if escalation:
                                 self._emit("tool_escalation_requested", escalation)
+
+                            perm = self._check_request_permissions(hs.completed_call)
+                            if perm:
+                                self._emit("request_permissions_requested", perm)
 
                             decision = self.proxy_tool_registry.completed_call_decision(
                                 hs.completed_call,

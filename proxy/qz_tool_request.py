@@ -23,6 +23,11 @@ WRITE_STDIN_TOOL_HINT = (
     " Only use this with an existing running session id from prior exec_command output. "
     "Do not invent session ids, and do not use write_stdin for file creation or edits."
 )
+REQUEST_PERMISSIONS_TOOL_HINT = (
+    " If a command fails because it needs filesystem or network access beyond the sandbox, "
+    "request broader permissions here and explain why. "
+    "Do not retry sandbox-blocked commands without requesting permission first."
+)
 
 
 @dataclass(frozen=True)
@@ -116,6 +121,13 @@ def normalize_tool_request_for_llamacpp(
                 if tool_name not in seen_names:
                     seen_names.add(tool_name)
                     clean.append(append_tool_hint(tool, WRITE_STDIN_TOOL_HINT))
+                else:
+                    deduped.append(tool_name)
+                continue
+            if tool_name == "request_permissions":
+                if tool_name not in seen_names:
+                    seen_names.add(tool_name)
+                    clean.append(append_tool_hint(tool, REQUEST_PERMISSIONS_TOOL_HINT))
                 else:
                     deduped.append(tool_name)
                 continue

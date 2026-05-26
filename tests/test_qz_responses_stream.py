@@ -3230,6 +3230,147 @@ class SandboxEscalationDetectionTests(unittest.TestCase):
         self.assertEqual(escalation_events, [])
 
 
+class RequestPermissionsTelemetryTests(unittest.TestCase):
+    """Tests for request_permissions telemetry on outgoing calls."""
+
+    def _make_runtime(self):
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=lambda _: None,
+            capture_enabled=False,
+        )
+        return runtime
+
+    def test_request_permissions_returns_payload(self):
+        """request_permissions with reason and permissions returns bounded telemetry."""
+        rt = self._make_runtime()
+        call = {
+            "type": "function_call",
+            "name": "request_permissions",
+            "call_id": "call_perm_1",
+            "arguments": json.dumps({
+                "reason": "need to write to /etc/config for setup",
+                "permissions": {"file_system": {"write": ["/etc/config"]}},
+            }),
+        }
+        result = rt._check_request_permissions(call)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["tool"], "request_permissions")
+        self.assertEqual(result["call_id"], "call_perm_1")
+        self.assertIn("need to write to", result["reason_preview"])
+        self.assertEqual(result["reason_len"], 38)
+        self.assertIn("file_system", result["permission_profile"])
+        self.assertNotIn("network", result["permission_profile"])
+
+    def test_request_permissions_without_reason(self):
+        """request_permissions with no reason still returns profile."""
+        rt = self._make_runtime()
+        call = {
+            "type": "function_call",
+            "name": "request_permissions",
+            "call_id": "call_perm_2",
+            "arguments": json.dumps({
+                "permissions": {"network": {"enabled": True}},
+            }),
+        }
+        result = rt._check_request_permissions(call)
+        self.assertIsNotNone(result)
+        self.assertNotIn("reason_preview", result)
+        self.assertEqual(result["permission_profile"], "network")
+
+    def test_request_permissions_both_profiles(self):
+        """Both network and file_system permissions in profile."""
+        rt = self._make_runtime()
+        call = {
+            "type": "function_call",
+            "name": "request_permissions",
+            "call_id": "call_perm_3",
+            "arguments": json.dumps({
+                "reason": "need full access",
+                "permissions": {
+                    "network": {"enabled": True},
+                    "file_system": {"write": ["/data"]},
+                },
+            }),
+        }
+        result = rt._check_request_permissions(call)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["permission_profile"], "network,file_system")
+
+    def test_request_permissions_reason_truncated_at_200(self):
+        """reason_preview must be truncated at 200 chars."""
+        rt = self._make_runtime()
+        long_reason = "x" * 500
+        call = {
+            "type": "function_call",
+            "name": "request_permissions",
+            "call_id": "call_perm_4",
+            "arguments": json.dumps({
+                "reason": long_reason,
+                "permissions": {"file_system": {"write": ["/data"]}},
+            }),
+        }
+        result = rt._check_request_permissions(call)
+        self.assertIsNotNone(result)
+        self.assertLessEqual(len(result["reason_preview"]), 200)
+        self.assertEqual(result["reason_len"], 500)
+
+    def test_non_request_permissions_returns_none(self):
+        """Other tools must not match."""
+        rt = self._make_runtime()
+        call = {
+            "type": "function_call",
+            "name": "exec_command",
+            "call_id": "call_other",
+            "arguments": json.dumps({"cmd": "ls"}),
+        }
+        self.assertIsNone(rt._check_request_permissions(call))
+
+    def test_bad_args_returns_none_without_crash(self):
+        """Unparseable arguments must not crash."""
+        rt = self._make_runtime()
+        call = {
+            "type": "function_call",
+            "name": "request_permissions",
+            "call_id": "call_bad",
+            "arguments": "NOT JSON {{{",
+        }
+        result = rt._check_request_permissions(call)
+        self.assertIsNone(result)
+
+    def test_null_call_returns_none(self):
+        rt = self._make_runtime()
+        self.assertIsNone(rt._check_request_permissions(None))
+
+    def test_no_raw_args_in_telemetry_payload(self):
+        """Telemetry payload must not include the full raw arguments object."""
+        rt = self._make_runtime()
+        call = {
+            "type": "function_call",
+            "name": "request_permissions",
+            "call_id": "call_perm_5",
+            "arguments": json.dumps({
+                "reason": "confidential setup task",
+                "permissions": {"file_system": {"write": ["/secret/path"]}},
+            }),
+        }
+        result = rt._check_request_permissions(call)
+        self.assertIsNotNone(result)
+        payload_json = json.dumps(result)
+        # The raw args dict must not appear in telemetry
+        self.assertNotIn('"arguments"', payload_json,
+                         "Raw arguments object must not appear in telemetry payload")
+        # Permission path details must not appear
+        self.assertNotIn("/secret/path", payload_json,
+                         "Permission path details must not appear in telemetry")
+        # The full permissions dict with write paths must not appear
+        self.assertNotIn('"write"', payload_json,
+                         "Permission write details must not appear in telemetry")
+
+
 class RepeatedReadStreamingTests(unittest.TestCase):
     """Tests for repeated-read signal in the streaming path."""
 

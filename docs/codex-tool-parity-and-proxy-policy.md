@@ -74,8 +74,11 @@ Before adding in-transit handling for any tool, the following evidence must exis
 
 - Do not invent Codex lifecycle SSE events that Codex does not parse.
 - Do not emit `response.custom_tool_call_input.done` (Codex only parses `.delta`).
-- Do not leak raw commands, paths, args, stdin text, patch text, diffs, search queries,
-  permission reasons, or secret-like env values into telemetry.
+- Do not leak raw commands, paths, full args dumps, stdin text, patch text, diffs,
+  full env maps, API keys, tokens, passwords, or secret-like values into telemetry.
+- Bounded permission reason previews (≤200 chars) ARE allowed in permission-related
+  telemetry (`request_permissions_requested`, `tool_escalation_requested`). The
+  preview must be truncated and must not include full raw request dumps.
 - Do not remove pass-through behaviour without source/runtime evidence.
 
 ## 5. Audit SHA
@@ -210,14 +213,14 @@ may be stale. Re-run the audit before expanding parity decisions.
 | Advertised argument shape/schema | `RequestPermissionsArgs`: `reason: Option<String>`, `permissions: RequestPermissionProfile { network: Option<NetworkPermissions>, file_system: Option<FileSystemPermissions> }` |
 | Result/output shape | `RequestPermissionsResponse`: `permissions: RequestPermissionProfile`, `scope: PermissionGrantScope`, `strict_auto_review: bool` |
 | QuantZhai route | Native pass-through via `CODEX_NATIVE_TOOL_NAMES` |
-| Current QuantZhai transformations | None |
-| Current telemetry | None specific to `request_permissions`. Standard request lifecycle events only. |
-| Current tests | `NativeToolNamesMembershipTests.test_request_permissions_present`. `NativeToolListContractTests.test_request_permissions_in_native_tool_names`. |
+| Current QuantZhai transformations | Description amended with `REQUEST_PERMISSIONS_TOOL_HINT` at declaration time (`qz_tool_request.py`). Telemetry-only observation: `request_permissions_requested` event with bounded fields (`reason_preview` ≤200 chars, `reason_len`, `permission_profile`, `call_id`). |
+| Current telemetry | `request_permissions_requested` — emitted on outgoing `request_permissions` calls with `tool`, `call_id`, `reason_preview` (≤200 chars), `reason_len`, `permission_profile` summary. No full raw args. Standard request lifecycle events also apply. |
+| Current tests | `NativeToolNamesMembershipTests.test_request_permissions_present`. `NativeToolListContractTests.test_request_permissions_in_native_tool_names`. `PermissionToolHintTests` (test_qz_tool_request.py). `RequestPermissionsTelemetryTests` (test_qz_responses_stream.py). |
 | Runtime/capture evidence | Captures show `request_permissions` in tool declarations. No live `request_permissions` calls observed in recent captures. |
-| Known failure modes | **High-priority**: QuantZhai has no proxy-side handling for `request_permissions`. The call passes through to Codex. Codex handles sandbox grant/deny. The proxy CANNOT see whether permission was granted or denied — it only sees the result as a `function_call_output` in the next request's input. However, the proxy CAN observe the model's escalation pattern via `sandbox_permissions: "require_escalated"` on command tools (telemetry: `tool_escalation_requested`). The proxy does NOT know if escalation was granted. See Section 7. |
-| Current policy decision | **pass-through** with observation-only on denial patterns |
-| Rationale | Codex source proves `RequestPermissionsHandler` expects `ToolPayload::Function` and calls `session.request_permissions()`. QuantZhai cannot intercept the grant/deny flow without breaking the Codex permissions protocol. The existing `qz_native_tool_output.py` classifier for `sandbox_denied_readonly_fs` provides partial observation. |
-| Follow-up issue required | **Yes** — see Section 7 for Phase B recommendations. |
+| Known failure modes | QuantZhai CANNOT see whether permission was granted or denied — it only sees the result as a `function_call_output` in the next request's input. The proxy can observe escalation patterns via `sandbox_permissions: "require_escalated"` on command tools (`tool_escalation_requested`). Bounded telemetry provides call observation without breaking pass-through. See Section 7. |
+| Current policy decision | **pass-through** with bounded telemetry and model-facing affordance guidance (tool hint) |
+| Rationale | Codex source proves `RequestPermissionsHandler` expects `ToolPayload::Function` and calls `session.request_permissions()`. QuantZhai cannot intercept the grant/deny flow without breaking the Codex permissions protocol. Bounded telemetry (Phase B.1, issue #74) adds observation without breaking semantics. |
+| Follow-up issue required | Yes — see Section 7 for remaining Phase B items. |
 
 ### 6.7 view_image
 
@@ -512,7 +515,7 @@ may be stale. Re-run the audit before expanding parity decisions.
 
 ### 7.1 request_permissions — permission affordance gap
 
-**Status:** Known gap. Documented for Phase B.
+**Status:** Phase B.1 complete. See `docs/codex-tool-parity-and-proxy-policy.md` for Phase A status.
 
 **What Codex expects:**
 - Handler: `codex-rs/core/src/tools/handlers/request_permissions.rs`
@@ -520,26 +523,29 @@ may be stale. Re-run the audit before expanding parity decisions.
 - Output: `RequestPermissionsResponse { permissions, scope: PermissionGrantScope, strict_auto_review }`
 - Codex routes to `session.request_permissions()` which blocks until user grants/denies
 
-**What QuantZhai does today:**
-- Passes through the call unchanged
-- Can observe the call via `completed_call_decision()` but does not inspect
-- Cannot see grant/deny result (Codex handles the UI side)
+**What QuantZhai does today (Phase B.1 — issue #74):**
+- Passes through the call unchanged (CODEX_NATIVE_TOOL_NAMES pass-through preserved)
+- Adds model-facing affordance guidance via `REQUEST_PERMISSIONS_TOOL_HINT` appended to the
+  tool description at declaration time (`qz_tool_request.py`). Text: "If a command fails because
+  it needs filesystem or network access beyond the sandbox, request broader permissions here and
+  explain why. Do not retry sandbox-blocked commands without requesting permission first."
+- Emits `request_permissions_requested` telemetry on outgoing calls with bounded fields:
+  `tool`, `call_id`, `reason_preview` (≤200 chars), `reason_len`, `permission_profile` summary.
+- Cannot see grant/deny result (Codex handles the UI side) — denial observation deferred to Phase B.2
 - Has `_check_sandbox_escalation()` for `sandbox_permissions: "require_escalated"` on command tools
 
-**What QuantZhai does NOT do:**
-- Does not inspect `request_permissions` arguments or inject model-facing affordance guidance
-- Does not track permission grant/deny outcomes
-- Does not guide the model to use `request_permissions` instead of repeatedly using
-  `sandbox_permissions: "require_escalated"` on command tools
-
-**Recommendation for Phase B:**
-1. Add telemetry for `request_permissions` calls (call_id, reason preview, permission profile).
-2. Add model-facing affordance guidance: if the model repeatedly uses `require_escalated`
-   on command tools without success, inject an advisory suggesting `request_permissions`.
-3. Consider whether `request_permissions` denial can be observed through the incoming
-   `function_call_output` and whether a denial advisory would help the model.
-4. The current `tool_sandbox_denied` classifier (`qz_native_tool_output.py`) already detects
-   "Read-only file system" in sandbox output. This could be extended to detect denial patterns.
+**Remaining gaps (Phase B.2):**
+1. Permission grant/deny outcome tracking — the proxy cannot directly observe
+   `request_permissions` results, but the incoming `function_call_output` could be analysed
+   for denial patterns.
+2. Escalation retry advisory (Pattern E in `docs/native-tool-advisory-policy.md` §4) — when the
+   model repeatedly uses `require_escalated` on command tools without success, inject an advisory
+   suggesting `request_permissions` or explaining the blocker to the user. This requires threshold
+   tracking beyond the current single-call telemetry.
+3. The current `tool_sandbox_denied` classifier (`qz_native_tool_output.py`) already detects
+   "Read-only file system" in sandbox output. This could be extended to detect broader denial
+   patterns, but the proxy cannot distinguish `request_permissions` denial from other
+   permission denials via function_call_output text alone.
 
 ### 7.2 sandbox_permissions — escalation tracking
 
@@ -585,7 +591,8 @@ may be stale. Re-run the audit before expanding parity decisions.
 
 | Issue | Priority | Description |
 |---|---|---|
-| #74 (this issue) Phase B | Medium | request_permissions permission affordance audit — model-facing guidance, denial detection, telemetry |
+| #74 Phase B.1 | Medium | request_permissions permission affordance — **COMPLETE**. Added tool hint, bounded telemetry, tests. |
+| #74 Phase B.2 | Low | request_permissions denial detection / escalation retry advisory — analyse `function_call_output` for denial patterns, inject advisory when escalation_count threshold exceeded. |
 | #61 Slice C.1 | Low | Escalation retry advisory (Pattern E) — implement when escalation_count threshold is exceeded |
 | #61 Slice C.2 | Low | Write-count advisory for apply_patch — requires live evidence |
 | #61 Slice C.3 | Low | write_stdin loop advisory (Pattern D) — requires live evidence |
@@ -594,7 +601,7 @@ may be stale. Re-run the audit before expanding parity decisions.
 
 ---
 
-*Created: 2026-05-27. Issue: h4rm0n1c/quantzhai#74 Phase A.*
+*Created: 2026-05-27. Issue: h4rm0n1c/quantzhai#74 Phase A / Phase B.1.*
 *Codex audit SHA: 46f30d02828bd4c52827e5f0482a6f2a982cce5b*
 *Governs: issue #74 — Audit Codex tool parity and QuantZhai proxy policy.*
 *Depends on: docs/codex-source-tool-contract.md, docs/codex-source-tool-inventory.md, docs/native-tool-advisory-policy.md.*
