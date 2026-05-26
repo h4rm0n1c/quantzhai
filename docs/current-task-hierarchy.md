@@ -1,21 +1,30 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-26
-Status: active control sheet — #59 umbrella audit refreshed + closed; #61/#62 open; 3636 tests pass.
+Status: active control sheet — #59 umbrella audit refreshed + closed; #61/#62 open; 3641 tests pass.
 
-## Recently completed — #62 Slice B.2 (stream telemetry integration tests) complete (2026-05-26)
+## Recently completed — #62 Slice B.2 corrected (stream telemetry helper tests) (2026-05-26)
 
 ```text
-Status: COMPLETE — tests added to tests/test_apply_patch_telemetry.py.
+Status: COMPLETE — tests/test_apply_patch_telemetry.py now exercises production telemetry helper.
 
-Problem: Telemetry coverage for apply_patch coercion was unverified.
+Problem: Commit 6c8e7ac claimed stream telemetry integration coverage, but the
+test simulated qz_responses_stream.py payload construction. It could pass even
+if ResponsesStreamRuntime stopped emitting coercion telemetry.
 
 Changes:
-  - Added ApplyPatchTelemetryIntegrationTests:
-      - Validated coercion_succeeded telemetry for sibling_patch_promoted path.
-      - Validated coercion_failed telemetry for failed_missing_diff path.
-      - Confirmed telemetry payload safety (exclusion of raw patch/path/diff content).
-      - Verified telemetry consistency with internal adapter coercion strategies.
+  - Extracted build_tool_coercion_telemetry_payload() in proxy/qz_responses_stream.py.
+  - ResponsesStreamRuntime uses the helper at the existing coercion telemetry call site.
+  - Replaced simulated tests with focused tests using real completed_call_decision()
+    decisions plus the production helper.
+  - Validated coercion_succeeded telemetry for sibling_patch_promoted path.
+  - Validated coercion_failed telemetry for failed_missing_diff path.
+  - Confirmed telemetry payload safety (exclusion of raw patch/path/diff content).
+  - Confirmed no telemetry when coercion_applied is false.
+  - Confirmed non-apply_patch coercion payloads do not attach apply_patch metadata.
+
+Runtime behaviour: unchanged except telemetry construction is factored into the
+helper used by both stream runtime and tests.
 
 Remaining: Slice C (advisory logic).
 ```

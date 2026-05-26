@@ -50,7 +50,10 @@ Destination is identified via any key in `APPLY_PATCH_DESTINATION_KEYS`:
 
 ## 6. Telemetry safety
 
-`inspect_apply_patch_arguments(arguments: str) -> dict` generates telemetry.
+`inspect_apply_patch_arguments(arguments: str) -> dict` generates safe nested
+`apply_patch` telemetry metadata. `build_tool_coercion_telemetry_payload()` in
+`proxy/qz_responses_stream.py` builds the stream coercion telemetry payload used
+by `ResponsesStreamRuntime`.
 
 - **Included:** `args_shape`, `operation_present`, `patch_present`, `path_present`, `diff_present`, `destination_present`, `operation_type` (enum-clamped), `coercion_strategy` (enum).
 - **Excluded:** Raw arguments, raw patch body, raw diff, file content, full path, destination path.
@@ -61,6 +64,11 @@ Destination is identified via any key in `APPLY_PATCH_DESTINATION_KEYS`:
 - `coerce()` itself does not emit telemetry.
 - `completed_call_decision()` in `proxy/qz_proxy_tools.py` populates `CompletedToolCallDecision` with `coercion_applied` and `coercion_error`.
 - `qz_responses_stream.py` emits `coercion_succeeded` or `coercion_failed` telemetry based on `decision.coercion_applied` and `decision.coercion_error`.
+- Commit `6c8e7ac` claimed Slice B.2 stream telemetry integration coverage, but
+  its test duplicated payload construction instead of exercising production
+  code. The corrected B.2 tests now call the production helper used by
+  `ResponsesStreamRuntime`; runtime behaviour is unchanged except for the
+  helper extraction.
 
 ## 8. Recommended Slice B
 
