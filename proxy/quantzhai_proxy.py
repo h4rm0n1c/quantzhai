@@ -102,6 +102,26 @@ except ImportError:
     from qz_search_config import load_search_config as _load_search_config, resolve_searchengines_base_url as _resolve_searchengines_base_url
     from qz_backend_manager import BackendManager, _parse_bool_env
 
+
+def _load_operational_store_optional():
+    """Return an OperationalStore for BackendManager backend lifecycle event recording.
+
+    Fail-open: returns None on any error (import failure, init exception, etc.).
+    BackendManager._emit() is a no-op when operational_store is None, so the proxy
+    and BackendManager start correctly even when OperationalStore is unavailable.
+    """
+    try:
+        try:
+            from .qz_operational_store import OperationalStore as _OpStore
+        except ImportError:
+            from qz_operational_store import OperationalStore as _OpStore  # type: ignore[no-redef]
+        store = _OpStore.from_env()
+        store.init()
+        return store
+    except Exception:
+        return None
+
+
 class ProxyHandler(BaseHTTPRequestHandler):
     upstream = "http://127.0.0.1:18084"
     reasoning_stream_format = "raw"
@@ -741,6 +761,7 @@ def main():
             return default
 
     _backend_autostart = _parse_bool_env(os.environ.get("QZ_BACKEND_AUTOSTART", "1"), default=True)
+    _operational_store = _load_operational_store_optional()
     try:
         _backend_manager = BackendManager(
             docker_cmd=os.environ.get("QZ_DOCKER_CMD", "docker"),
@@ -770,6 +791,7 @@ def main():
             autostart=_backend_autostart,
             require_gpu=_parse_bool_env(os.environ.get("QZ_REQUIRE_GPU", "1"), default=True),
             gpu_log_tail=_eint("QZ_GPU_LOG_TAIL", 1000),
+            operational_store=_operational_store,
         )
     except Exception as _bm_exc:
         print(f"BackendManager init failed (backend disabled): {_bm_exc}", flush=True)

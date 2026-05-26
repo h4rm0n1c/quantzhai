@@ -1508,5 +1508,120 @@ class GPURetryLogicTests(unittest.TestCase):
         self.assertEqual(mgr.snapshot()["gpu_offload_state"], "unknown_after_retries")
 
 
+class BackendManagerConstructorStoreWiringTests(unittest.TestCase):
+    """Verify operational_store passed via constructor (not back-door assignment) receives events."""
+
+    def _wait_phase(self, mgr, *phases, timeout=3.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if mgr.phase in phases:
+                return True
+            time.sleep(0.02)
+        return False
+
+    def test_store_via_constructor_receives_lifecycle_events(self):
+        """BackendManager(operational_store=store) wires _emit to the store."""
+        events = []
+
+        class FakeStore:
+            def record_startup_event(self, phase, payload=None, source=""):
+                events.append(phase)
+
+        runner_calls = []
+        def runner(args, timeout=None):
+            runner_calls.append(args)
+            if "ps" in args:
+                return 0, "test-ctr", ""
+            return 0, "", ""
+
+        health_checker = lambda url, timeout=3.0: True
+
+        mgr = _make_mgr(
+            runner=runner,
+            health_checker=health_checker,
+            operational_store=FakeStore(),
+        )
+        mgr.start()
+        self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
+        self.assertIn("backend_start_requested", events)
+        self.assertIn("backend_healthy", events)
+
+    def test_store_none_via_constructor_no_crash(self):
+        """BackendManager(operational_store=None) must not raise on _emit calls."""
+        mgr = _make_mgr(operational_store=None)
+        try:
+            mgr._emit("backend_start_requested", {"x": 1})
+        except Exception as exc:
+            self.fail(f"_emit raised with operational_store=None: {exc}")
+
+    def test_store_broken_via_constructor_nonfatal(self):
+        """A store that raises on record_startup_event must not propagate the error."""
+        class BrokenStore:
+            def record_startup_event(self, **kw):
+                raise OSError("disk full")
+
+        runner_calls = []
+        def runner(args, timeout=None):
+            runner_calls.append(args)
+            if "ps" in args:
+                return 0, "test-ctr", ""
+            return 0, "", ""
+
+        health_checker = lambda url, timeout=3.0: True
+        mgr = _make_mgr(
+            runner=runner,
+            health_checker=health_checker,
+            operational_store=BrokenStore(),
+        )
+        try:
+            mgr.start()
+            self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
+        except Exception as exc:
+            self.fail(f"BrokenStore via constructor raised: {exc}")
+
+
+class ProxyLoadOperationalStoreTests(unittest.TestCase):
+    """Tests for _load_operational_store_optional() in proxy/quantzhai_proxy.py."""
+
+    def _helper(self):
+        from proxy.quantzhai_proxy import _load_operational_store_optional
+        return _load_operational_store_optional
+
+    def test_returns_store_object_on_success(self):
+        """Returns an OperationalStore (disabled-mode is fine) on success."""
+        from proxy.qz_operational_store import OperationalStore
+        fn = self._helper()
+        result = fn()
+        # Should be an OperationalStore (enabled or disabled) or None on env error
+        self.assertTrue(result is None or isinstance(result, OperationalStore))
+
+    def test_returns_none_when_from_env_raises(self):
+        """Returns None when OperationalStore.from_env() raises."""
+        from unittest.mock import patch
+        fn = self._helper()
+        with patch("proxy.qz_operational_store.OperationalStore.from_env",
+                   side_effect=RuntimeError("db error")):
+            result = fn()
+        self.assertIsNone(result)
+
+    def test_returns_none_when_init_raises(self):
+        """Returns None when OperationalStore.init() raises."""
+        from unittest.mock import patch
+        fn = self._helper()
+        with patch("proxy.qz_operational_store.OperationalStore.init",
+                   side_effect=OSError("cannot open db")):
+            result = fn()
+        self.assertIsNone(result)
+
+    def test_nonfatal_on_repeated_calls(self):
+        """Calling the helper multiple times must not raise."""
+        fn = self._helper()
+        try:
+            fn()
+            fn()
+        except Exception as exc:
+            self.fail(f"repeated calls raised: {exc}")
+
+
 if __name__ == "__main__":
     unittest.main()

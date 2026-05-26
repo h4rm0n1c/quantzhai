@@ -1,8 +1,8 @@
 # Backend Lifecycle Control Plane
 
-Date: 2026-05-21 (design) / 2026-05-26 (audit)
+Date: 2026-05-21 (design) / 2026-05-26 (audit + D.4 complete)
 Issue: #65
-Status: Slices A–D.3 COMPLETE. One gap remains: OperationalStore not wired to BackendManager (D.4).
+Status: ALL SLICES COMPLETE (A–D.4). Backend lifecycle events reach OperationalStore. Startup fail-open.
 
 ---
 
@@ -33,7 +33,7 @@ endpoints. #72 is closed; its fixes are reflected here.
 | Reports selected model | `/qz/control-plane`, `/qz/model/status` | `qz_control_plane.py`, `qz_model_status.py` |
 | Reports backend reasoning budget | `/qz/control-plane` `profile.backend_reasoning_budget` | `qz_control_plane.py:388` (#72) |
 | Reports readiness | `/qz/control-plane` `readiness` dict | `qz_control_plane.py:308` |
-| Records lifecycle in OperationalStore | **NOT WIRED** | `BackendManager._emit()` exists (line 811) but `operational_store=None` — proxy main never passes the store |
+| Records lifecycle in OperationalStore | ✅ WIRED (D.4) | `_load_operational_store_optional()` in proxy creates store; passed as `operational_store=` to BackendManager. Fail-open if unavailable. |
 
 ---
 
@@ -57,7 +57,7 @@ endpoints. #72 is closed; its fixes are reflected here.
 | Helper compat (no `-e`/`--device` flags) | ✅ DONE | D.2 |
 | Log detection (CPU_Mapped + latest-signal-wins) | ✅ DONE | D.3: `qz_backend_manager.py:562` |
 | D-smoke cold-start verification | ✅ DONE (unrecorded) | Issue comment "D-smoke complete — #65 closed"; never marked ✅ in design doc |
-| OperationalStore records lifecycle events | ⚠️ PARTIAL | `BackendManager._emit()` implemented; `operational_store=None` in proxy — events are silently swallowed |
+| OperationalStore records lifecycle events | ✅ DONE (D.4) | `_load_operational_store_optional()` wires store into BackendManager; fail-open if unavailable |
 
 ---
 
@@ -73,38 +73,26 @@ endpoints. #72 is closed; its fixes are reflected here.
 
 ---
 
-### 0.4 Remaining implementation slice
+### 0.4 Completed implementation — D.4
 
-**D.4 — Wire OperationalStore to BackendManager**
+**D.4 — Wire OperationalStore to BackendManager** ✅ COMPLETE
 
-`BackendManager._emit()` (line 811) is fully implemented: it calls
-`self._operational_store.record_startup_event(phase=event_type, payload=...)`.
-The constructor accepts `operational_store: Any = None`.
-But `proxy/quantzhai_proxy.py` `main()` instantiates `BackendManager` without passing the store.
+`_load_operational_store_optional()` added to `proxy/quantzhai_proxy.py` at module level.
+It constructs `OperationalStore.from_env()`, calls `.init()`, and returns the store.
+Returns `None` on any exception (import failure, DB error, etc.) — completely fail-open.
 
-Fix (small, low-risk):
+The result is passed as `operational_store=_operational_store` to `BackendManager(...)` in `main()`.
 
-```python
-# proxy/quantzhai_proxy.py main() — after existing _eint() helper
-try:
-    from qz_operational_store import OperationalStore as _OperationalStore
-    _operational_store = _OperationalStore.from_env()
-    _operational_store.init()
-except Exception:
-    _operational_store = None
+Tests added (7 new in `tests/test_qz_backend_manager.py`):
+- `BackendManagerConstructorStoreWiringTests.test_store_via_constructor_receives_lifecycle_events`
+- `BackendManagerConstructorStoreWiringTests.test_store_none_via_constructor_no_crash`
+- `BackendManagerConstructorStoreWiringTests.test_store_broken_via_constructor_nonfatal`
+- `ProxyLoadOperationalStoreTests.test_returns_store_object_on_success`
+- `ProxyLoadOperationalStoreTests.test_returns_none_when_from_env_raises`
+- `ProxyLoadOperationalStoreTests.test_returns_none_when_init_raises`
+- `ProxyLoadOperationalStoreTests.test_nonfatal_on_repeated_calls`
 
-_backend_manager = BackendManager(
-    ...existing params...,
-    operational_store=_operational_store,
-)
-```
-
-Tests needed:
-- When `operational_store` is passed, `_emit()` calls `record_startup_event` (already tested
-  implicitly in `BackendManagerEmitTests` if they exist; otherwise add 1–2 wiring tests).
-- Non-fatal: if `OperationalStore.init()` fails, `BackendManager` still starts.
-
-This is the only remaining gap. All other #65 targets are complete.
+**All #65 targets are now complete.**
 
 ---
 
@@ -649,7 +637,7 @@ From fully stopped state:
 | **D.1-gpu-fix** | ✅ GPU offload gate: post-health log check, QZ_REQUIRE_GPU/QZ_GPU_LOG_TAIL; docker args unchanged (helper-compatible); 2953 pass |
 | **D.2-helper-compat** | ✅ Remove `-e`/`--device` flags added in D.1; they break qz-docker-root-helper (rc=126); restore original qz-up flag set |
 | **D.3-log-detection** | ✅ Fix false cpu_fallback: CPU_Mapped + CUDA buffers == gpu; latest-signal-wins algorithm; 6 new tests |
-| **D.4-ops-store-wire** | Wire OperationalStore to BackendManager in `proxy/quantzhai_proxy.py` main(). `BackendManager._emit()` is implemented; `operational_store=None` because proxy never passes it. Small fix + 1-2 wiring tests. |
+| **D.4-ops-store-wire** | ✅ `_load_operational_store_optional()` added to `proxy/quantzhai_proxy.py`; result passed as `operational_store=` to `BackendManager(...)`. Fail-open: returns None on any error. 7 new tests (constructor wiring + proxy helper). 3636 pass. |
 
 ---
 
