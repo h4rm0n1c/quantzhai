@@ -70,12 +70,67 @@ by `ResponsesStreamRuntime`.
   `ResponsesStreamRuntime`; runtime behaviour is unchanged except for the
   helper extraction.
 
+## Live apply_patch probe — linuxstreamtools /tmp clone
+
+Date: 2026-05-26.
+
+QuantZhai commit: `ff74216`.
+
+Target repo: `https://github.com/h4rm0n1c/linuxstreamtools`, disposable clone
+at `/tmp/qz-apply-patch-live/linuxstreamtools`, reset to `origin/main`
+`1864b99`.
+
+Model: `Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf`.
+
+Attempts:
+
+1. Prompt: create `QZ_APPLY_PATCH_PROBE.txt` containing exactly
+   `QuantZhai apply_patch live probe`; stop, do not modify anything else, do
+   not commit. Codex emitted `apply_patch` but local Codex sandbox was
+   read-only, so the patch was rejected before the file was written.
+2. Prompt: explicitly use the available `apply_patch` tool to create the same
+   file with the same content and nothing else. Codex emitted `apply_patch`
+   and the file was created as an untracked file with the requested single
+   line.
+
+Observed shape:
+
+- Both live attempts emitted canonical `operation_object` arguments:
+  `{"operation":{"type":"create_file","path":"...","diff":"..."}}`.
+- No `sibling_patch_promoted`, `legacy_patch_envelope`, `legacy_patch_with_path`,
+  or `partial_custom_envelope` shape occurred.
+- QuantZhai adapted the canonical operation into the Codex-visible
+  `custom_tool_call` patch envelope; no fallback argument repair was needed.
+
+Telemetry observed:
+
+- `coercion_succeeded` fired for both attempts.
+- Nested `apply_patch` telemetry was:
+  `coercion_strategy=operation_object`, `patch_present=false`,
+  `path_present=true`, `diff_present=true`, `operation_type=create_file`.
+- Telemetry did not include raw patch body, raw diff, or raw file path. Full
+  request captures intentionally contained raw request/stream bodies because
+  the probe ran with full capture enabled; telemetry remained metadata-only.
+- Codex-visible forwarded SSE remained `custom_tool_call` plus
+  `response.custom_tool_call_input.*`; no `apply_patch_call`,
+  `apply_patch_call_output`, or `response.apply_patch_call.*` contract appeared.
+
+Advisory recommendation:
+
+- Do not add a model-visible advisory for canonical `operation_object` based on
+  this live probe.
+- Keep #62 open for future evidence. If live telemetry later shows repeated
+  fallback shapes such as `sibling_patch_promoted` or `legacy_patch_*`, decide
+  between operator-only telemetry and a short post-fallback advisory from that
+  evidence.
+- Protocol remains unchanged.
+
 ## 8. Recommended Slice B
 
 - Add tests proving each `coercion_strategy` is classified correctly.
 - Add tests proving telemetry payload excludes raw patch/path/diff.
 - Add tests for `partial_custom_envelope` path.
 - Add tests for `failed_missing_diff` and `failed_missing_destination` failure modes.
-- Assess whether model-visible advisory is needed for `sibling_patch_promoted` / `legacy_patch_envelope` only.
-- No advisory required for `operation_object` canonical path.
+- Live probe result: `operation_object` occurred in both attempts; no model-visible advisory is required for the canonical path right now.
+- Reassess model-visible advisory only if future live telemetry repeatedly shows fallback shapes such as `sibling_patch_promoted` or `legacy_patch_envelope`.
 - Protocol remains unchanged.

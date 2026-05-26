@@ -3,6 +3,44 @@
 Date: 2026-05-26
 Status: active control sheet — #59 umbrella audit refreshed + closed; #61/#62 open; 3641 tests pass.
 
+## Live apply_patch probe — linuxstreamtools /tmp clone (2026-05-26)
+
+```text
+Status: COMPLETE — live Codex/QuantZhai probe captured real apply_patch shape.
+
+QuantZhai commit: ff74216.
+Target: https://github.com/h4rm0n1c/linuxstreamtools, disposable clone at
+        /tmp/qz-apply-patch-live/linuxstreamtools, origin/main 1864b99.
+Model: Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf.
+
+Attempts:
+  1. Tiny create-file prompt. Codex emitted apply_patch, but the local Codex
+     sandbox was read-only, so the tool was rejected before the file was
+     written.
+  2. Explicit apply_patch prompt with workspace-write. Codex emitted
+     apply_patch and created untracked QZ_APPLY_PATCH_PROBE.txt containing the
+     requested single line.
+
+Observed shape: operation_object in both attempts.
+Fallback shapes: none observed; no sibling_patch_promoted, legacy_patch_envelope,
+legacy_patch_with_path, or partial_custom_envelope occurred.
+
+Telemetry:
+  - coercion_succeeded fired in both attempts.
+  - apply_patch.coercion_strategy=operation_object.
+  - patch_present=false, path_present=true, diff_present=true,
+    operation_type=create_file.
+  - Telemetry stayed metadata-only; no raw patch body, raw diff, or raw file path
+    leaked into telemetry.
+  - Codex-visible forwarded SSE stayed custom_tool_call +
+    response.custom_tool_call_input.*; no apply_patch_call,
+    apply_patch_call_output, or response.apply_patch_call.* appeared.
+
+Advisory decision: no model-visible advisory is needed for canonical
+operation_object right now. Keep #62 open and revisit advisory only if future
+live telemetry repeatedly shows fallback shapes or bad-but-coerced arguments.
+```
+
 ## Recently completed — #62 Slice B.2 corrected (stream telemetry helper tests) (2026-05-26)
 
 ```text
@@ -26,7 +64,8 @@ Changes:
 Runtime behaviour: unchanged except telemetry construction is factored into the
 helper used by both stream runtime and tests.
 
-Remaining: Slice C (advisory logic).
+Remaining: #62 stays open for future evidence; do not implement Slice C advisory
+for canonical operation_object unless live fallback telemetry justifies it.
 ```
 
 ## Remaining open work (tracked in dedicated issues)                                                    
