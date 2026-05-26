@@ -149,8 +149,14 @@ Source: `codex-rs/codex-api/src/sse/responses.rs` (no web_search_call branch in 
 
 ## 5. CODEX_NATIVE_TOOL_NAMES (proxy/qz_tools.py)
 
-The proxy uses `CODEX_NATIVE_TOOL_NAMES` to identify calls that should pass through to Codex
-as-is (after optional output_to_codex rewrite).
+**This is a routing inventory, NOT an authority and NOT an immutability boundary.**
+See `docs/codex-tool-parity-and-proxy-policy.md` for the full policy.
+
+The proxy uses `CODEX_NATIVE_TOOL_NAMES` to identify tools currently routed as Codex-native
+pass-through (after optional output_to_codex rewrite). Tools in this set are NOT locked
+away forever — QuantZhai may add in-transit handling when justified by Codex source audit,
+runtime evidence, and tests. Valid handling includes observation, telemetry, advisory
+signals, argument normalisation, deliberate conversion, or proxy-local handling.
 
 Current proven set (finalised in issues #67–#70 — audit SHA `46f30d02828bd4c52827e5f0482a6f2a982cce5b`):
 

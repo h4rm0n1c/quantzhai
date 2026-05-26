@@ -366,3 +366,59 @@ class NativeToolNamesMembershipTests(unittest.TestCase):
     def test_spawn_agents_on_csv_absent(self):
         """spawn_agents_on_csv: function_call handler gated by agent_jobs_tools flag. (issue #70)"""
         self.assertNotIn("spawn_agents_on_csv", self._names())
+
+
+class NativeToolNamesPolicyTests(unittest.TestCase):
+    """Lock the corrected policy: CODEX_NATIVE_TOOL_NAMES is a routing inventory, not an
+    authority or immutability boundary. Tests are low-risk and focus on doc/comment presence
+    and invariant enforcement.
+    """
+
+    def test_comment_identifies_as_routing_inventory(self):
+        """The block comment near CODEX_NATIVE_TOOL_NAMES must describe it as routing inventory."""
+        with open("proxy/qz_tools.py", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("routing inventory", content,
+                      "CODEX_NATIVE_TOOL_NAMES comment must describe it as routing inventory")
+        self.assertIn("NOT an authority", content,
+                      "CODEX_NATIVE_TOOL_NAMES comment must clarify it is not an authority")
+        self.assertIn("immutability boundary", content,
+                      "CODEX_NATIVE_TOOL_NAMES comment must clarify it is not an immutability boundary")
+
+    def test_parity_policy_doc_exists(self):
+        """The parity/policy matrix doc must exist and cover the audit."""
+        from pathlib import Path
+        doc = Path("docs/codex-tool-parity-and-proxy-policy.md")
+        self.assertTrue(doc.exists(), "Parity/policy matrix doc must exist")
+        text = doc.read_text(encoding="utf-8")
+        self.assertIn("46f30d02828bd4c52827e5f0482a6f2a982cce5b", text,
+                      "Parity doc must contain the audit SHA")
+        self.assertIn("CODEX_NATIVE_TOOL_NAMES", text,
+                      "Parity doc must mention CODEX_NATIVE_TOOL_NAMES")
+
+    def test_no_custom_tool_call_input_done_regression(self):
+        """Response custom_tool_call_input.done must not appear in streaming code."""
+        with open("proxy/qz_streaming.py", encoding="utf-8") as f:
+            content = f.read()
+        # The string 'custom_tool_call_input.done' must not be in the streaming module
+        # (it was removed in issue #73 because Codex does not parse it)
+        self.assertNotIn(
+            "custom_tool_call_input.done",
+            content,
+            "response.custom_tool_call_input.done must not be emitted — Codex does not parse it",
+        )
+
+    def test_apply_patch_native_advisory_path_not_used(self):
+        """apply_patch must NOT be assumed part of the native function_call advisory path.
+        It is a protocol adapter (custom_tool_call), not a native tool.
+        The completed_call_decision path for apply_patch goes through path #3 not #4.
+        """
+        from proxy.qz_tools import CODEX_NATIVE_TOOL_NAMES
+        self.assertNotIn("apply_patch", CODEX_NATIVE_TOOL_NAMES,
+                         "apply_patch is a protocol adapter, not native pass-through")
+
+    def test_web_search_not_in_native_names(self):
+        """web_search must remain proxy-local, not in CODEX_NATIVE_TOOL_NAMES."""
+        from proxy.qz_tools import CODEX_NATIVE_TOOL_NAMES
+        self.assertNotIn("web_search", CODEX_NATIVE_TOOL_NAMES,
+                         "web_search is proxy-local, not native pass-through")

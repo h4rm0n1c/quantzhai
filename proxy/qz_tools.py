@@ -4,7 +4,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-# Tool names that Codex handles natively and should be passed through unchanged.
+# CODEX_NATIVE_TOOL_NAMES: routing inventory, NOT an authority or immutability
+# boundary.
+#
+# This set records tools that QuantZhai currently routes as Codex-native/pass-
+# through by default, because Codex owns their baseline execution semantics and
+# QuantZhai has not installed specialised in-transit policy for them.
+#
+# Tools in this set are NOT locked away forever. QuantZhai may add handling for
+# any tool when justified by Codex source audit, runtime evidence, and tests.
+# Valid handling includes observation, telemetry, advisory signals, argument
+# normalisation, deliberate conversion, or proxy-local handling.
+#
+# The hard rule is NOT "never touch native tools".
+# The hard rule is: do not invent Codex contracts, do not fake lifecycle events,
+# and do not silently break Codex execution semantics.
+#
+# See docs/codex-tool-parity-and-proxy-policy.md for the full policy.
 #
 # Source-backed as function_call items (codex-rs/core/src/tools/handlers/):
 #
@@ -33,7 +49,7 @@ from typing import Protocol
 #                     Source: shell/container_exec.rs (issue #68)
 #
 # Audit SHA: 46f30d02828bd4c52827e5f0482a6f2a982cce5b
-# See docs/codex-source-tool-contract.md, docs/codex-source-tool-inventory.md.
+# See docs/codex-tool-parity-and-proxy-policy.md.
 #
 # NOT included here:
 #   apply_patch  — custom_tool_call item (Freeform handler), not function_call

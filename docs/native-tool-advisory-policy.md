@@ -188,6 +188,12 @@ CODEX_NATIVE_TOOL_NAMES = frozenset({
 
 Confirmed at audit SHA `46f30d02828bd4c52827e5f0482a6f2a982cce5b`. See `docs/codex-source-tool-inventory.md`.
 
+**CODEX_NATIVE_TOOL_NAMES is a routing inventory, not an authority and not an immutability
+boundary.** Tools in this set may acquire in-transit handling (observation, telemetry,
+advisory signals) when justified by Codex source, runtime evidence, and tests.
+The native advisory signals added in #61 are exactly this type of justified in-transit
+handling. See `docs/codex-tool-parity-and-proxy-policy.md` for the full policy.
+
 ### 3.2 Argument fields observable by the proxy
 
 The proxy reads arguments from outgoing `function_call` items. Relevant fields:

@@ -911,6 +911,86 @@ class RepeatedReadDecisionTests(unittest.TestCase):
         self.assertNotEqual(decision.kind, "error")
         self.assertEqual(decision.kind, "signal")
 
+class SandboxPermissionsPreservationTests(unittest.TestCase):
+    """sandbox_permissions=require_escalated must be preserved in native tool pass-through.
+    
+    Codex source (codex-rs/protocol/src/models.rs:34-43) defines SandboxPermissions enum with
+    UseDefault, RequireEscalated, and WithAdditionalPermissions variants. QuantZhai must
+    preserve this field unchanged in pass-through (no stripping, no rewriting).
+    """
+
+    def _make_registry(self):
+        from proxy.qz_proxy_tools import make_proxy_local_tool_registry
+
+        class FakeWebRt:
+            def execute_web_search_call(self, call, counters, seen_signatures, request_id=""):
+                return type('R', (), {'public_item': {}, 'upstream_items': (), 'sources': ()})()
+
+        return make_proxy_local_tool_registry(FakeWebRt())
+
+    def test_sandbox_permissions_preserved_in_exec_command_pass_through(self):
+        """sandbox_permissions=require_escalated must survive pass-through in arguments."""
+        import json
+        registry = self._make_registry()
+        call = {
+            "type": "function_call",
+            "name": "exec_command",
+            "call_id": "c1",
+            "arguments": json.dumps({
+                "cmd": "sudo apt update",
+                "sandbox_permissions": "require_escalated",
+                "justification": "need elevated access",
+            }),
+        }
+        decision = registry.completed_call_decision(call)
+        self.assertEqual(decision.kind, "public")
+        # The pass-through preserves the call dict (including arguments) unchanged
+        args = json.loads(decision.call["arguments"])
+        self.assertEqual(args.get("sandbox_permissions"), "require_escalated")
+
+    def test_sandbox_permissions_preserved_in_shell_command_pass_through(self):
+        """sandbox_permissions=require_escalated must survive pass-through in shell_command."""
+        import json
+        registry = self._make_registry()
+        call = {
+            "type": "function_call",
+            "name": "shell_command",
+            "call_id": "c2",
+            "arguments": json.dumps({
+                "command": "sudo systemctl status",
+                "sandbox_permissions": "require_escalated",
+            }),
+        }
+        decision = registry.completed_call_decision(call)
+        self.assertEqual(decision.kind, "public")
+        args = json.loads(decision.call["arguments"])
+        self.assertEqual(args.get("sandbox_permissions"), "require_escalated")
+
+    def test_request_permissions_preserved_as_pass_through(self):
+        """request_permissions must pass through as public, not error or signal."""
+        import json
+        registry = self._make_registry()
+        call = {
+            "type": "function_call",
+            "name": "request_permissions",
+            "call_id": "c3",
+            "arguments": json.dumps({
+                "reason": "need full disk access",
+                "permissions": {"file_system": "full_read_write"},
+            }),
+        }
+        decision = registry.completed_call_decision(call)
+        self.assertEqual(
+            decision.kind, "public",
+            "request_permissions must be native pass-through (kind='public'), "
+            f"got '{decision.kind}'",
+        )
+        # Arguments must be preserved
+        args = json.loads(decision.call["arguments"])
+        self.assertIn("permissions", args)
+        self.assertIn("reason", args)
+
+
 class NativeToolAdvisoryIntegrationTests(unittest.TestCase):
     """Tests for native tool advisory integration in completed_call_decision."""
 

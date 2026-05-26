@@ -19,7 +19,13 @@ Codex-visible SSE must be sourced from current Codex parser/item/handler support
 - No generic `response.<tool>_call.*` lifecycle.
 
 Every entry in `CODEX_NATIVE_TOOL_NAMES` must have a confirmed handler in the Codex source
-at the audited SHA. See `docs/codex-source-tool-contract.md` for the full SSE and item-type contracts.
+at the audited SHA. See `docs/codex-tool-parity-and-proxy-policy.md` for the full policy on
+what `CODEX_NATIVE_TOOL_NAMES` is and is not.
+
+**CODEX_NATIVE_TOOL_NAMES is a routing inventory, not an authority and not an immutability
+boundary.** Tools in this set may acquire in-transit handling (observation, telemetry,
+advisory signals, normalisation, conversion, or proxy-local handling) when justified by
+Codex source audit, runtime evidence, and tests. See `docs/codex-tool-parity-and-proxy-policy.md`.
 
 ---
 
@@ -93,6 +99,8 @@ All names in this set:
 - pass through as public function_call items with standard lifecycle events
 - do **not** receive QuantZhai coercion errors
 - do **not** receive fake `response.<tool>_call.*` events
+- are NOT locked away forever — see `docs/codex-tool-parity-and-proxy-policy.md`
+  for the full policy on when in-transit handling may be added
 
 ---
 
