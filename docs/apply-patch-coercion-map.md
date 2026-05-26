@@ -119,11 +119,20 @@ Advisory recommendation:
 
 - Do not add a model-visible advisory for canonical `operation_object` based on
   this live probe.
-- Keep #62 open for future evidence. If live telemetry later shows repeated
-  fallback shapes such as `sibling_patch_promoted` or `legacy_patch_*`, decide
-  between operator-only telemetry and a short post-fallback advisory from that
-  evidence.
+- #62 current scope complete. Future fallback-shape advisory should be a new
+  issue if telemetry later proves need.
 - Protocol remains unchanged.
+
+## #62 closeout decision
+
+- Advisory not implemented by design.
+- Telemetry is sufficient for the currently observed canonical
+  `operation_object` shape.
+- Hard errors remain model-visible for invalid apply_patch calls.
+- Future advisory requires repeated live fallback evidence such as
+  `sibling_patch_promoted`, `legacy_patch_*`, or other bad-but-coerced patterns.
+- Future fallback-shape advisory should be a new issue if telemetry later
+  proves need.
 
 ## 8. Recommended Slice B
 
@@ -132,5 +141,7 @@ Advisory recommendation:
 - Add tests for `partial_custom_envelope` path.
 - Add tests for `failed_missing_diff` and `failed_missing_destination` failure modes.
 - Live probe result: `operation_object` occurred in both attempts; no model-visible advisory is required for the canonical path right now.
-- Reassess model-visible advisory only if future live telemetry repeatedly shows fallback shapes such as `sibling_patch_promoted` or `legacy_patch_envelope`.
+- #62 current scope is complete; open a new issue before adding advisory logic
+  for repeated fallback shapes such as `sibling_patch_promoted` or
+  `legacy_patch_envelope`.
 - Protocol remains unchanged.

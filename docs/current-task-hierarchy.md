@@ -1,7 +1,7 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-26
-Status: active control sheet — #59 umbrella audit refreshed + closed; #61/#62 open; 3641 tests pass.
+Status: active control sheet — #59 umbrella audit refreshed + closed; #61 open; #62 closeout documented; 3641 tests pass.
 
 ## Live apply_patch probe — linuxstreamtools /tmp clone (2026-05-26)
 
@@ -37,8 +37,24 @@ Telemetry:
     apply_patch_call_output, or response.apply_patch_call.* appeared.
 
 Advisory decision: no model-visible advisory is needed for canonical
-operation_object right now. Keep #62 open and revisit advisory only if future
-live telemetry repeatedly shows fallback shapes or bad-but-coerced arguments.
+operation_object. #62 current scope complete. Future fallback-shape advisory
+should be a new issue if telemetry later proves need.
+```
+
+## #62 closeout decision (2026-05-26)
+
+```text
+Status: COMPLETE — close #62 for the current apply_patch advisory audit scope.
+
+Decision:
+  - Advisory not implemented by design.
+  - Telemetry is sufficient for the currently observed canonical
+    operation_object shape.
+  - Hard errors remain model-visible for invalid apply_patch calls.
+  - Future advisory requires repeated live fallback evidence such as
+    sibling_patch_promoted, legacy_patch_*, or other bad-but-coerced patterns.
+  - Future fallback-shape advisory should be a new issue if telemetry later
+    proves need.
 ```
 
 ## Recently completed — #62 Slice B.2 corrected (stream telemetry helper tests) (2026-05-26)
@@ -64,8 +80,8 @@ Changes:
 Runtime behaviour: unchanged except telemetry construction is factored into the
 helper used by both stream runtime and tests.
 
-Remaining: #62 stays open for future evidence; do not implement Slice C advisory
-for canonical operation_object unless live fallback telemetry justifies it.
+Remaining: none for #62 current scope. Future fallback-shape advisory should be
+a new issue if telemetry later proves need.
 ```
 
 ## Remaining open work (tracked in dedicated issues)                                                    
@@ -73,14 +89,12 @@ for canonical operation_object unless live fallback telemetry justifies it.
    Gap                                                                      │ Issue                        
   ──────────────────────────────────────────────────────────────────────────┼────────────────────────────  
    Advisory signals for native exec patterns (write loops, excessive calls) │ #61 OPEN                     
-   apply_patch borderline coercion advisory + edge-case tests               │ #62 OPEN                     
 
 ## Remaining open work (tracked in dedicated issues)                                                    
                                                                                                            
    Gap                                                                      │ Issue                        
   ──────────────────────────────────────────────────────────────────────────┼────────────────────────────  
    Advisory signals for native exec patterns (write loops, excessive calls) │ #61 OPEN                     
-   apply_patch borderline coercion advisory + edge-case tests               │ #62 OPEN                     
 
 ```text
 Status: COMPLETE — commits 2bda8ca, 315103f, 76aca3c; 3629 tests pass.
