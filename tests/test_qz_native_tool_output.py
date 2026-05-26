@@ -1,4 +1,5 @@
 import copy
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -44,6 +45,23 @@ _CONN_REFUSED_OUTPUT = (
     "Output:\n"
     "curl: (7) Failed to connect to 127.0.0.1 port 18180: Connection refused\n"
 )
+
+_REQUEST_PERMISSIONS_GRANTED_OUTPUT = json.dumps({
+    "permissions": {
+        "network": {"enabled": True},
+        "file_system": None,
+    },
+    "scope": "turn",
+    "strict_auto_review": False,
+})
+
+_REQUEST_PERMISSIONS_EMPTY_OUTPUT = json.dumps({
+    "permissions": {
+        "network": None,
+        "file_system": None,
+    },
+    "scope": "turn",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +200,59 @@ class ClassifyNativeToolOutputsTests(unittest.TestCase):
         _, payload = classify_native_tool_outputs(items)[0]
         self.assertEqual(payload["tool"], "unknown")
 
+    # --- request_permissions outcome JSON ---
+
+    def test_request_permissions_granted_fixture_classified(self):
+        items = [
+            _fc("call_perm", "request_permissions"),
+            _fco("call_perm", _REQUEST_PERMISSIONS_GRANTED_OUTPUT),
+        ]
+        results = classify_native_tool_outputs(items)
+        self.assertEqual(len(results), 1)
+        event_type, payload = results[0]
+        self.assertEqual(event_type, "request_permissions_outcome")
+        self.assertEqual(payload["classifier"], "request_permissions_granted")
+        self.assertEqual(payload["outcome"], "granted")
+        self.assertEqual(payload["scope"], "turn")
+        self.assertFalse(payload["strict_auto_review"])
+        self.assertEqual(payload["permission_summary"], {"network": True, "file_system": False})
+        self.assertEqual(payload["confidence"], "high")
+
+    def test_request_permissions_empty_fixture_classified_as_denied_or_unavailable(self):
+        items = [
+            _fc("call_perm", "request_permissions"),
+            _fco("call_perm", _REQUEST_PERMISSIONS_EMPTY_OUTPUT),
+        ]
+        results = classify_native_tool_outputs(items)
+        self.assertEqual(len(results), 1)
+        event_type, payload = results[0]
+        self.assertEqual(event_type, "request_permissions_outcome")
+        self.assertEqual(payload["classifier"], "request_permissions_denied_or_unavailable")
+        self.assertEqual(payload["outcome"], "denied_or_unavailable")
+        self.assertEqual(payload["permission_summary"], {"network": False, "file_system": False})
+        self.assertLessEqual(len(payload["output_preview"]), 200)
+
+    def test_request_permissions_json_requires_matching_tool_name(self):
+        items = [
+            _fc("call_perm", "exec_command"),
+            _fco("call_perm", _REQUEST_PERMISSIONS_EMPTY_OUTPUT),
+        ]
+        self.assertEqual(classify_native_tool_outputs(items), [])
+
+    def test_request_permissions_malformed_json_not_classified(self):
+        items = [
+            _fc("call_perm", "request_permissions"),
+            _fco("call_perm", '{"permissions":{}'),
+        ]
+        self.assertEqual(classify_native_tool_outputs(items), [])
+
+    def test_request_permissions_json_requires_source_backed_response_shape(self):
+        items = [
+            _fc("call_perm", "request_permissions"),
+            _fco("call_perm", json.dumps({"permissions": {}, "ok": False})),
+        ]
+        self.assertEqual(classify_native_tool_outputs(items), [])
+
     # --- NOT classified ---
 
     def test_plain_permission_denied_not_classified(self):
@@ -192,6 +263,11 @@ class ClassifyNativeToolOutputsTests(unittest.TestCase):
     def test_process_exited_code_1_alone_not_classified(self):
         output = "Process exited with code 1\nOutput:\n"
         items = [_fco("call_exit", output)]
+        self.assertEqual(classify_native_tool_outputs(items), [])
+
+    def test_arbitrary_denied_text_not_classified(self):
+        output = "denied denied unavailable sandbox"
+        items = [_fco("call_denied_words", output)]
         self.assertEqual(classify_native_tool_outputs(items), [])
 
     def test_exit_code_zero_success_not_classified(self):
@@ -399,6 +475,17 @@ class SignalWrapperTests(unittest.TestCase):
         event_types = {r.event_type for r in results}
         self.assertIn("tool_sandbox_denied", event_types)
         self.assertIn("tool_connection_failed", event_types)
+
+    def test_request_permissions_outcome_wrapped(self):
+        from proxy.qz_native_tool_output import classify_native_tool_output_signals
+        items = [
+            _fc("call_perm", "request_permissions"),
+            _fco("call_perm", _REQUEST_PERMISSIONS_EMPTY_OUTPUT),
+        ]
+        results = classify_native_tool_output_signals(items)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].event_type, "request_permissions_outcome")
+        self.assertEqual(results[0].payload["classifier"], "request_permissions_denied_or_unavailable")
 
     def test_connection_failed_confidence_is_medium(self):
         from proxy.qz_native_tool_output import classify_native_tool_output_signals

@@ -145,6 +145,11 @@ _SANDBOX_READONLY_ADVISORY_TEXT = (
     "Choose a writable path, request the required permission/escalation if available, "
     "or explain the blocker."
 )
+_PERMISSION_OUTCOME_ADVISORY_TEXT = (
+    "Permission or sandbox access appears denied or unavailable for this action. "
+    "Choose a non-escalated approach, use request_permissions if broader access is needed, "
+    "or tell the user the exact command they must run manually."
+)
 
 _TRIGGER_WARNINGS: dict = {
     "refresh_catalog":      "Refreshing the catalog does not restart the backend.",
@@ -339,9 +344,12 @@ class RequestRouter:
     def _model_visible_native_advisories(self, signals: List[Any]) -> List[dict]:
         """Build model-visible advisory function_call_output items for qualifying signals.
 
-        Currently only produces advisories for:
+        Currently produces advisories for:
         - event_type:   tool_sandbox_denied
         - classifier:   sandbox_denied_readonly_fs
+        - confidence:   high
+        - event_type:   request_permissions_outcome
+        - classifier:   request_permissions_denied_or_unavailable
         - confidence:   high
 
         Deduplicates per call_id within a single request: if multiple signals match
@@ -349,6 +357,7 @@ class RequestRouter:
 
         Does not produce advisories for:
         - connection_refused (telemetry-only)
+        - request_permissions_granted
         - non-high-confidence sandbox signals
         - generic permission denied
 
@@ -365,14 +374,23 @@ class RequestRouter:
 
         for signal in signals:
             try:
-                if signal.event_type != "tool_sandbox_denied":
-                    continue
                 payload = signal.payload
                 if not isinstance(payload, dict):
                     continue
-                if payload.get("classifier") != "sandbox_denied_readonly_fs":
-                    continue
                 if signal.confidence != "high":
+                    continue
+                message = ""
+                if (
+                    signal.event_type == "tool_sandbox_denied"
+                    and payload.get("classifier") == "sandbox_denied_readonly_fs"
+                ):
+                    message = _SANDBOX_READONLY_ADVISORY_TEXT
+                elif (
+                    signal.event_type == "request_permissions_outcome"
+                    and payload.get("classifier") == "request_permissions_denied_or_unavailable"
+                ):
+                    message = _PERMISSION_OUTCOME_ADVISORY_TEXT
+                else:
                     continue
                 call_id = payload.get("call_id") or ""
                 if call_id in seen_call_ids:
@@ -380,7 +398,7 @@ class RequestRouter:
                 seen_call_ids.add(call_id)
                 advisories.append(render_advisory_output(
                     {"call_id": call_id} if call_id else {},
-                    _SANDBOX_READONLY_ADVISORY_TEXT,
+                    message,
                 ))
             except Exception:
                 pass
@@ -3022,16 +3040,23 @@ class RequestRouter:
                                     "call_id": _adv_call_id,
                                     "request_id": request_id,
                                 }
+                                _adv_event = "tool_sandbox_advisory_injected"
                                 for _sig in signals:
                                     if (
-                                        _sig.event_type == "tool_sandbox_denied"
+                                        _sig.event_type in {
+                                            "tool_sandbox_denied",
+                                            "request_permissions_outcome",
+                                        }
                                         and isinstance(_sig.payload, dict)
                                         and _sig.payload.get("call_id") == _adv_call_id
                                     ):
                                         _adv_tel["tool"] = _sig.payload.get("tool") or ""
                                         _adv_tel["classifier"] = _sig.payload.get("classifier") or ""
+                                        if _sig.event_type == "request_permissions_outcome":
+                                            _adv_tel["outcome"] = _sig.payload.get("outcome") or ""
+                                            _adv_event = "permission_outcome_advisory_injected"
                                         break
-                                self.handler.telemetry.emit("tool_sandbox_advisory_injected", _adv_tel)
+                                self.handler.telemetry.emit(_adv_event, _adv_tel)
                             except Exception:
                                 pass
 

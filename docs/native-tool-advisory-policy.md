@@ -48,7 +48,7 @@ Scope column decides whether #61 advisory design should cover the tool.
 | `shell_command` | `handlers/shell/shell_command.rs` | `function_call` | `ToolPayload::Function { arguments }` (`command: String`) | Same as exec_command | Native pass-through | **Yes** | Shell-style exec. Single `command` string field. Same failure-loop pattern as exec_command. |
 | `shell` | `handlers/shell/shell_handler.rs` | `function_call` | `ToolPayload::Function { arguments }` (`command: Vec<String>`) | Same as exec_command | Native pass-through (issue #68) | **Cautious** | Not advertised in QuantZhai's `shell_command` config. Unlikely to be called. In-scope in principle but lower priority. |
 | `container.exec` | `handlers/shell/container_exec.rs` | `function_call` | `ToolPayload::Function { arguments }` (`command: Vec<String>`) | Same as exec_command | Native pass-through (issue #68) | **Cautious** | Never advertised, fallback only. Advisory applicable if ever called. Same pattern as `shell`. |
-| `request_permissions` | `handlers/request_permissions.rs` | `function_call` | `ToolPayload::Function { arguments }` | Same as exec_command | Native pass-through (issue #67) | **Cautious — escalation only** | Escalation already observed via `tool_escalation_requested` (on outgoing exec with `sandbox_permissions=require_escalated`). `request_permissions` itself is separate. Needs live evidence before advisory. |
+| `request_permissions` | `handlers/request_permissions.rs` | `function_call` | `ToolPayload::Function { arguments }` | Same as exec_command | Native pass-through (issue #67) | **Yes — outcome feedback** | Phase B.3 source audit proves result JSON shape. Empty `permissions` means denied/unavailable/disabled/abort/timeout with no narrower discriminator. |
 | `update_plan` | `handlers/plan.rs` | `function_call` | `ToolPayload::Function { arguments }` | Same as exec_command | Native pass-through (issue #67) | **Out of scope** | No looping risk; used once per plan revision. Not an execution pattern. |
 | `request_user_input` | `handlers/request_user_input.rs` | `function_call` | `ToolPayload::Function { arguments }` | Same as exec_command | Native pass-through (issue #67) | **Out of scope** | Pauses for user input. Repetition is user-driven, not a proxy concern. |
 | `view_image` | `handlers/view_image.rs` | `function_call` | `ToolPayload::Function { arguments }` (`path`, `detail`) | Same as exec_command | Native pass-through (issue #67) | **Out of scope** | Not execution. Repeated image reads are benign. |
@@ -73,7 +73,6 @@ Secondary (in scope if evidence presents; lower priority):
 
 Cautious/out-of-scope for Slice B:
   apply_patch       — write-count advisory only, not failure loop
-  request_permissions — no proxy-side observation of response (Codex-side gate)
   All goal tools, update_plan, request_user_input, view_image — no loop/exec risk
   local_shell       — no proxy adapter
   web_search        — separate budget enforcement system
@@ -144,7 +143,10 @@ Separate from the advisory system: `proxy/qz_native_tool_output.py`
 
 - `tool_sandbox_denied` — fires when `function_call_output` contains "Read-only file system"
 - `tool_connection_failed` — fires when output contains "Connection refused"
-- Both are **operator-only** (telemetry); NOT injected into model context
+- `request_permissions_outcome` — fires only when a matching `request_permissions`
+  `function_call_output` parses as Codex `RequestPermissionsResponse` JSON
+- These classifiers are emitted as telemetry first; selected high-confidence outcomes may also
+  add a model-visible advisory through `RequestRouter._model_visible_native_advisories()`
 - Exit codes parsed via `_parse_exit_code()` from the `"Process exited with code N"` envelope
 
 **Key observation:** Native tool exit codes ARE observable at the proxy, but only on the **incoming side** (next request's `input` array containing `function_call_output` items). The proxy processes them in `classify_native_tool_outputs()`. This is the right place to detect repeated failures.
@@ -906,6 +908,41 @@ QZ_NATIVE_ESCALATION_THRESHOLD = _parse_env_int("QZ_NATIVE_ESCALATION_THRESHOLD"
 ```
 
 All use the existing `_parse_env_int` safe helper added in Slice B.1.
+
+---
+
+## 13. Phase B.3 — Permission Outcome Feedback (2026-05-27)
+
+**Status:** Implemented for #74 Phase B.3.
+
+**Source-backed signal:** Codex audit SHA `46f30d02828bd4c52827e5f0482a6f2a982cce5b` shows
+`request_permissions` returns serialized `RequestPermissionsResponse` as text through
+`FunctionToolOutput::from_text()`. Non-empty `permissions` means granted. Empty `permissions`
+is used for denial, disabled/unavailable policy, abort, timeout, and network deny. Codex does not
+include a field that distinguishes those empty-response causes.
+
+**Classifier classes:**
+- `request_permissions_granted` — matching `request_permissions` result JSON with non-empty
+  permissions.
+- `request_permissions_denied_or_unavailable` — matching `request_permissions` result JSON with
+  empty permissions.
+- Existing `sandbox_denied_readonly_fs` remains unchanged.
+
+**Advisory behavior:** `request_permissions_denied_or_unavailable` with high confidence appends a
+plain-text advisory `function_call_output` through the existing router advisory path:
+
+```text
+Permission or sandbox access appears denied or unavailable for this action. Choose a non-escalated approach, use request_permissions if broader access is needed, or tell the user the exact command they must run manually.
+```
+
+**Telemetry:** `request_permissions_outcome` is retained request telemetry. Payload includes
+`tool`, `call_id`, `classifier`, `outcome`, `scope`, `strict_auto_review`, boolean
+`permission_summary`, bounded `output_preview` (≤200 chars), and `confidence`. Advisory injection
+emits `permission_outcome_advisory_injected` with bounded outcome/classifier metadata only.
+
+**Safety constraints preserved:** no broad `permission denied` classifier, no raw args/output dumps,
+no automatic retry, no tool blocking, no cross-session state, no fake Codex lifecycle event, and no
+changes to `apply_patch`, `web_search`, or `request_permissions` pass-through routing.
 
 ---
 

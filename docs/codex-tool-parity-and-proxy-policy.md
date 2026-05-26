@@ -213,14 +213,14 @@ may be stale. Re-run the audit before expanding parity decisions.
 | Advertised argument shape/schema | `RequestPermissionsArgs`: `reason: Option<String>`, `permissions: RequestPermissionProfile { network: Option<NetworkPermissions>, file_system: Option<FileSystemPermissions> }` |
 | Result/output shape | `RequestPermissionsResponse`: `permissions: RequestPermissionProfile`, `scope: PermissionGrantScope`, `strict_auto_review: bool` |
 | QuantZhai route | Native pass-through via `CODEX_NATIVE_TOOL_NAMES` |
-| Current QuantZhai transformations | Description amended with `REQUEST_PERMISSIONS_TOOL_HINT` at declaration time (`qz_tool_request.py`). Telemetry-only observation: `request_permissions_requested` event with bounded fields (`reason_preview` ≤200 chars, `reason_len`, `permission_profile`, `call_id`). |
-| Current telemetry | `request_permissions_requested` — emitted on outgoing `request_permissions` calls with `tool`, `call_id`, `reason_preview` (≤200 chars), `reason_len`, `permission_profile` summary. No full raw args. Standard request lifecycle events also apply. |
-| Current tests | `NativeToolNamesMembershipTests.test_request_permissions_present`. `NativeToolListContractTests.test_request_permissions_in_native_tool_names`. `PermissionToolHintTests` (test_qz_tool_request.py). `RequestPermissionsTelemetryTests` (test_qz_responses_stream.py). |
-| Runtime/capture evidence | Captures show `request_permissions` in tool declarations. No live `request_permissions` calls observed in recent captures. |
-| Known failure modes | QuantZhai CANNOT see whether permission was granted or denied — it only sees the result as a `function_call_output` in the next request's input. The proxy can observe escalation patterns via `sandbox_permissions: "require_escalated"` on command tools (`tool_escalation_requested`). Bounded telemetry provides call observation without breaking pass-through. See Section 7. |
+| Current QuantZhai transformations | Description amended with `REQUEST_PERMISSIONS_TOOL_HINT` at declaration time (`qz_tool_request.py`). Outgoing call observation emits `request_permissions_requested` with bounded fields (`reason_preview` ≤200 chars, `reason_len`, `permission_profile`, `call_id`). Incoming result observation parses only matching `request_permissions` `function_call_output` JSON for source-backed `RequestPermissionsResponse` shape. |
+| Current telemetry | `request_permissions_requested` — emitted on outgoing `request_permissions` calls with `tool`, `call_id`, `reason_preview` (≤200 chars), `reason_len`, `permission_profile` summary. `request_permissions_outcome` — emitted on incoming `request_permissions` result JSON with `classifier`, `outcome`, `scope`, `strict_auto_review`, bounded `output_preview` (≤200 chars), and `permission_summary` booleans only. No full raw args. Standard request lifecycle events also apply. |
+| Current tests | `NativeToolNamesMembershipTests.test_request_permissions_present`. `NativeToolListContractTests.test_request_permissions_in_native_tool_names`. `PermissionToolHintTests` (test_qz_tool_request.py). `RequestPermissionsTelemetryTests` (test_qz_responses_stream.py). Request-permission outcome classifier and advisory tests in `test_qz_native_tool_output.py` and `test_qz_request_router.py`. |
+| Runtime/capture evidence | Captures show `request_permissions` in tool declarations. Phase B.3 uses Codex source evidence, not a live capture, for the result JSON shape. |
+| Known failure modes | Codex source does not expose distinct fields for user denial, disabled/unavailable policy, abort, timeout, or network deny. Those cases collapse to an empty `permissions` profile. QuantZhai classifies that precise shape as `request_permissions_denied_or_unavailable` and does not guess a narrower reason. The proxy can also observe escalation patterns via `sandbox_permissions: "require_escalated"` on command tools (`tool_escalation_requested`). See Section 7. |
 | Current policy decision | **pass-through** with bounded telemetry and model-facing affordance guidance (tool hint) |
-| Rationale | Codex source proves `RequestPermissionsHandler` expects `ToolPayload::Function` and calls `session.request_permissions()`. QuantZhai cannot intercept the grant/deny flow without breaking the Codex permissions protocol. Bounded telemetry (Phase B.1, issue #74) adds observation without breaking semantics. |
-| Follow-up issue required | Yes — see Section 7 for remaining Phase B items. |
+| Rationale | Codex source proves `RequestPermissionsHandler` expects `ToolPayload::Function`, calls `session.request_permissions()`, and returns serialized `RequestPermissionsResponse` via `FunctionToolOutput::from_text()`. QuantZhai does not intercept the permission flow; it observes the next request's tool output and adds bounded feedback only when the result shape is source-backed. |
+| Follow-up issue required | Live capture validation remains useful, but no blocker for Phase B.3. |
 
 ### 6.7 view_image
 
@@ -513,9 +513,9 @@ may be stale. Re-run the audit before expanding parity decisions.
 
 ## 7. High-Priority Findings
 
-### 7.1 request_permissions — permission affordance gap
+### 7.1 request_permissions — permission affordance and outcome feedback
 
-**Status:** Phase B.1 complete. See `docs/codex-tool-parity-and-proxy-policy.md` for Phase A status.
+**Status:** Phase B.3 complete (#74). Outcome C: precise classifier plus model-visible advisory.
 
 **What Codex expects:**
 - Handler: `codex-rs/core/src/tools/handlers/request_permissions.rs`
@@ -523,7 +523,14 @@ may be stale. Re-run the audit before expanding parity decisions.
 - Output: `RequestPermissionsResponse { permissions, scope: PermissionGrantScope, strict_auto_review }`
 - Codex routes to `session.request_permissions()` which blocks until user grants/denies
 
-**What QuantZhai does today (Phase B.1 — issue #74):**
+**Codex source findings at SHA `46f30d02828bd4c52827e5f0482a6f2a982cce5b`:**
+- `request_permissions` returns serialized `RequestPermissionsResponse` as text through `FunctionToolOutput::from_text(...)`.
+- Granted responses have a non-empty `permissions` profile and `scope` `turn` or `session`.
+- Denial, disabled/unavailable policy, abort, timeout, and network deny paths all use an empty `permissions` profile with `scope: turn` and `strict_auto_review: false`.
+- There is no structured field that distinguishes denial from unavailable/disabled policy in the result.
+- QuantZhai can observe this result only in the next request's `function_call_output`.
+
+**What QuantZhai does today (Phase B.3 — issue #74):**
 - Passes through the call unchanged (CODEX_NATIVE_TOOL_NAMES pass-through preserved)
 - Adds model-facing affordance guidance via `REQUEST_PERMISSIONS_TOOL_HINT` appended to the
   tool description at declaration time (`qz_tool_request.py`). Text: "If a command fails because
@@ -531,21 +538,21 @@ may be stale. Re-run the audit before expanding parity decisions.
   explain why. Do not retry sandbox-blocked commands without requesting permission first."
 - Emits `request_permissions_requested` telemetry on outgoing calls with bounded fields:
   `tool`, `call_id`, `reason_preview` (≤200 chars), `reason_len`, `permission_profile` summary.
-- Cannot see grant/deny result (Codex handles the UI side) — denial observation deferred to Phase B.2
+- Emits `request_permissions_outcome` telemetry on incoming, matching `request_permissions`
+  result JSON:
+  - `request_permissions_granted` when `permissions` is non-empty.
+  - `request_permissions_denied_or_unavailable` when `permissions` is empty.
+- Injects a short model-visible advisory for `request_permissions_denied_or_unavailable` using
+  the existing advisory `function_call_output` path. The advisory is non-blocking, adds no retry,
+  and emits no Codex lifecycle events.
 - Has `_check_sandbox_escalation()` for `sandbox_permissions: "require_escalated"` on command tools
+  and Pattern E escalation retry advisory from Phase B.2.
 
-**Remaining gaps (Phase B.2):**
-1. Permission grant/deny outcome tracking — the proxy cannot directly observe
-   `request_permissions` results, but the incoming `function_call_output` could be analysed
-   for denial patterns.
-2. Escalation retry advisory (Pattern E in `docs/native-tool-advisory-policy.md` §4) — when the
-   model repeatedly uses `require_escalated` on command tools without success, inject an advisory
-   suggesting `request_permissions` or explaining the blocker to the user. This requires threshold
-   tracking beyond the current single-call telemetry.
-3. The current `tool_sandbox_denied` classifier (`qz_native_tool_output.py`) already detects
-   "Read-only file system" in sandbox output. This could be extended to detect broader denial
-   patterns, but the proxy cannot distinguish `request_permissions` denial from other
-   permission denials via function_call_output text alone.
+**Deferred deliberately:**
+1. Separate `request_permissions_denied` vs `request_permissions_unavailable` classes. Codex source
+   does not expose a reliable discriminator.
+2. Broad `permission denied` classification. It remains too fuzzy because normal command failure,
+   host ACL denial, and sandbox denial can share that text.
 
 ### 7.2 sandbox_permissions — escalation tracking
 
@@ -592,7 +599,8 @@ may be stale. Re-run the audit before expanding parity decisions.
 | Issue | Priority | Description |
 |---|---|---|
 | #74 Phase B.1 | Medium | request_permissions permission affordance — **COMPLETE**. Added tool hint, bounded telemetry, tests. |
-| #74 Phase B.2 | Low | request_permissions denial detection / escalation retry advisory — **COMPLETE**. Pattern E implemented: escalation counting, threshold check, advisory, tests. |
+| #74 Phase B.2 | Low | escalation retry advisory — **COMPLETE**. Pattern E implemented: escalation counting, threshold check, advisory, tests. |
+| #74 Phase B.3 | High | sandbox / permission outcome feedback — **COMPLETE**. Added source-backed `request_permissions_outcome` classifier and denied/unavailable advisory. |
 | #61 Slice C.1 | Low | Escalation retry advisory (Pattern E) — **COMPLETE**. Implemented in #74 Phase B.2. |
 | #61 Slice C.2 | Low | Write-count advisory for apply_patch — requires live evidence |
 | #61 Slice C.3 | Low | write_stdin loop advisory (Pattern D) — requires live evidence |

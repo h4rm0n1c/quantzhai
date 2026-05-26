@@ -10,15 +10,25 @@ classifiers, and returns (event_type, payload) pairs for the caller to emit.
 
 It never mutates the request body and never retries or escalates automatically.
 
-Classifier table (conservative — only high-signal strings):
-  sandbox_denied_readonly_fs    "Read-only file system"  → tool_sandbox_denied
-  native_tool_connection_refused  "Connection refused"   → tool_connection_failed
+Classifier table (conservative — only high-signal strings / source-backed shapes):
+  request_permissions_granted            Codex RequestPermissionsResponse JSON
+                                          with non-empty permissions
+                                          → request_permissions_outcome
+  request_permissions_denied_or_unavailable
+                                          Codex RequestPermissionsResponse JSON
+                                          with empty permissions
+                                          → request_permissions_outcome
+  sandbox_denied_readonly_fs              "Read-only file system"
+                                          → tool_sandbox_denied
+  native_tool_connection_refused          "Connection refused"
+                                          → tool_connection_failed
 
 Deliberately NOT classified:
   plain "permission denied" alone  (too common — normal file ACLs)
   "Process exited with code 1"     (any failing command)
   exit code alone                  (too broad)
 """
+import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -39,6 +49,8 @@ CLASSIFIERS: List[Dict[str, Any]] = [
 ]
 
 _EXIT_CODE_RE = re.compile(r"Process exited with code\s+(-?\d+)", re.IGNORECASE)
+_REQUEST_PERMISSIONS_TOOL = "request_permissions"
+_REQUEST_PERMISSIONS_SCOPES = {"turn", "session"}
 
 
 def _parse_exit_code(output: str) -> Optional[int]:
@@ -85,6 +97,80 @@ def _build_call_id_to_name(input_items: List[Any]) -> Dict[str, str]:
     return mapping
 
 
+def _permission_profile_summary(permissions: Dict[str, Any]) -> Dict[str, bool]:
+    """Summarize a RequestPermissionProfile without storing raw paths/rules."""
+    return {
+        # Codex RequestPermissionProfile::is_empty checks only whether these
+        # Option fields are None, not whether their inner structs are empty.
+        "network": permissions.get("network") is not None,
+        "file_system": permissions.get("file_system") is not None,
+    }
+
+
+def _classify_request_permissions_output(
+    output: str,
+    *,
+    call_id: str,
+    tool: str,
+    preview: str,
+) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """Classify Codex request_permissions result JSON.
+
+    Codex source at audit SHA 46f30d02828bd4c52827e5f0482a6f2a982cce5b shows
+    request_permissions returns a serialized RequestPermissionsResponse through
+    FunctionToolOutput::from_text(). Empty permissions are used for denial,
+    disabled/unavailable policy, abort, timeout, and network deny paths; there is
+    no separate deny/unavailable field to distinguish those outcomes.
+    """
+    if tool != _REQUEST_PERMISSIONS_TOOL:
+        return None
+
+    try:
+        parsed = json.loads(output)
+    except (TypeError, ValueError):
+        return None
+
+    if not isinstance(parsed, dict):
+        return None
+
+    permissions = parsed.get("permissions")
+    scope = parsed.get("scope")
+    strict_auto_review = parsed.get("strict_auto_review", False)
+
+    if not isinstance(permissions, dict):
+        return None
+    if scope not in _REQUEST_PERMISSIONS_SCOPES:
+        return None
+    if not isinstance(strict_auto_review, bool):
+        return None
+
+    permission_summary = _permission_profile_summary(permissions)
+    granted = any(permission_summary.values())
+    if granted:
+        classifier = "request_permissions_granted"
+        outcome = "granted"
+        confidence = "high"
+    else:
+        classifier = "request_permissions_denied_or_unavailable"
+        outcome = "denied_or_unavailable"
+        confidence = "high"
+
+    return (
+        "request_permissions_outcome",
+        {
+            "call_id": call_id,
+            "tool": tool,
+            "classifier": classifier,
+            "outcome": outcome,
+            "scope": scope,
+            "strict_auto_review": strict_auto_review,
+            "permission_summary": permission_summary,
+            "output_preview": preview,
+            "confidence": confidence,
+        },
+    )
+
+
 def classify_native_tool_outputs(
     input_items: List[Any],
 ) -> List[Tuple[str, Dict[str, Any]]]:
@@ -119,6 +205,16 @@ def classify_native_tool_outputs(
         tool = call_id_to_name.get(call_id) or "unknown"
         exit_code = _parse_exit_code(output)
         preview = _safe_output_preview(output, 200)
+
+        request_permissions_result = _classify_request_permissions_output(
+            output,
+            call_id=call_id,
+            tool=tool,
+            preview=preview,
+        )
+        if request_permissions_result is not None:
+            results.append(request_permissions_result)
+            continue
 
         for classifier in CLASSIFIERS:
             matched = next(

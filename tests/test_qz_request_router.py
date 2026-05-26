@@ -353,6 +353,32 @@ class SandboxAdvisoryHelperTests(unittest.TestCase):
             confidence="medium",
         )
 
+    def _make_request_permissions_signal(
+        self,
+        call_id="call_perm",
+        classifier="request_permissions_denied_or_unavailable",
+        outcome="denied_or_unavailable",
+        confidence="high",
+    ):
+        from proxy.qz_feedback import FeedbackChannel, FeedbackVisibility, SignalDecision
+        return SignalDecision(
+            event_type="request_permissions_outcome",
+            payload={
+                "call_id": call_id,
+                "tool": "request_permissions",
+                "classifier": classifier,
+                "outcome": outcome,
+                "scope": "turn",
+                "strict_auto_review": False,
+                "permission_summary": {"network": False, "file_system": False},
+                "output_preview": '{"permissions":{"network":null,"file_system":null},"scope":"turn"}',
+                "confidence": confidence,
+            },
+            visibility=FeedbackVisibility.OPERATOR,
+            channel=FeedbackChannel.TELEMETRY,
+            confidence=confidence,
+        )
+
     def test_sandbox_denied_high_confidence_produces_advisory(self):
         router = self._make_router()
         advisories = router._model_visible_native_advisories([self._make_sandbox_signal()])
@@ -397,6 +423,31 @@ class SandboxAdvisoryHelperTests(unittest.TestCase):
         advisories = router._model_visible_native_advisories([self._make_connection_refused_signal()])
         self.assertEqual(advisories, [])
 
+    def test_request_permissions_denied_or_unavailable_produces_advisory(self):
+        router = self._make_router()
+        advisories = router._model_visible_native_advisories([self._make_request_permissions_signal()])
+        self.assertEqual(len(advisories), 1)
+        self.assertEqual(advisories[0]["type"], "function_call_output")
+        self.assertEqual(advisories[0]["call_id"], "call_perm")
+        self.assertIn("denied or unavailable", advisories[0]["output"])
+
+    def test_request_permissions_granted_produces_no_advisory(self):
+        router = self._make_router()
+        advisories = router._model_visible_native_advisories([
+            self._make_request_permissions_signal(
+                classifier="request_permissions_granted",
+                outcome="granted",
+            )
+        ])
+        self.assertEqual(advisories, [])
+
+    def test_request_permissions_non_high_confidence_produces_no_advisory(self):
+        router = self._make_router()
+        advisories = router._model_visible_native_advisories([
+            self._make_request_permissions_signal(confidence="medium")
+        ])
+        self.assertEqual(advisories, [])
+
     def test_non_high_confidence_sandbox_signal_produces_no_advisory(self):
         router = self._make_router()
         advisories = router._model_visible_native_advisories([self._make_sandbox_signal(confidence="medium")])
@@ -405,6 +456,15 @@ class SandboxAdvisoryHelperTests(unittest.TestCase):
     def test_duplicate_call_id_produces_one_advisory(self):
         router = self._make_router()
         signals = [self._make_sandbox_signal("call_same"), self._make_sandbox_signal("call_same")]
+        advisories = router._model_visible_native_advisories(signals)
+        self.assertEqual(len(advisories), 1)
+
+    def test_duplicate_permission_call_id_produces_one_advisory(self):
+        router = self._make_router()
+        signals = [
+            self._make_request_permissions_signal("call_same"),
+            self._make_request_permissions_signal("call_same"),
+        ]
         advisories = router._model_visible_native_advisories(signals)
         self.assertEqual(len(advisories), 1)
 
@@ -472,6 +532,13 @@ class SandboxAdvisoryInjectionTests(unittest.TestCase):
         "Output:\n"
         "curl: (7) Failed to connect to 127.0.0.1 port 18180: Connection refused\n"
     )
+    _REQUEST_PERMISSIONS_EMPTY_OUTPUT = json.dumps({
+        "permissions": {
+            "network": None,
+            "file_system": None,
+        },
+        "scope": "turn",
+    })
 
     def _classify_and_advise(self, input_items):
         """Classify input_items and return the advisory items a router would produce."""
@@ -543,6 +610,20 @@ class SandboxAdvisoryInjectionTests(unittest.TestCase):
         ]
         advisories = self._classify_and_advise(input_items)
         self.assertEqual(advisories, [])
+
+    def test_request_permissions_empty_output_produces_advisory(self):
+        input_items = [
+            {"type": "function_call", "call_id": "call_perm", "name": "request_permissions",
+             "arguments": '{"reason": "need network", "permissions": {"network": {"enabled": true}}}'},
+            {"type": "function_call_output", "call_id": "call_perm",
+             "output": self._REQUEST_PERMISSIONS_EMPTY_OUTPUT},
+        ]
+        advisories = self._classify_and_advise(input_items)
+        self.assertEqual(len(advisories), 1)
+        self.assertEqual(advisories[0]["type"], "function_call_output")
+        self.assertEqual(advisories[0]["call_id"], "call_perm")
+        self.assertIn("non-escalated", advisories[0]["output"])
+        self.assertNotIn("response.custom_tool_call_input.done", json.dumps(advisories))
 
     def test_original_input_items_not_mutated_by_advisory_path(self):
         import copy
