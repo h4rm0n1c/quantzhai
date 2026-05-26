@@ -1,7 +1,7 @@
 # Anchored Compaction Schema v0
 
 Date: 2026-05-27
-Status: **Stage 1** — schema/prompt/config artifact. No runtime changes.
+Status: **Stage 2** — deterministic survival-weight scorer complete. No proxy integration.
 Codex audit SHA: `46f30d02828bd4c52827e5f0482a6f2a982cce5b`
 Codex audit repo: `/tmp/qz-audit/codex`
 

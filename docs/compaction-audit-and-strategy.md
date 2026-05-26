@@ -1,7 +1,7 @@
 # Compaction Audit and Strategy
 
 Date: 2026-05-27
-Status: **Planning doc** — Stage 0. No runtime changes made.
+Status: **Stage 2** — deterministic survival-weight scorer complete.
 
 ---
 
