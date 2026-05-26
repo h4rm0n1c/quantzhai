@@ -1,7 +1,7 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-26
-Status: active control sheet — #72 closed; #65 COMPLETE (all slices A–D.4 done); 3636 tests pass.
+Status: active control sheet — #72 closed; #65 COMPLETE; #64 COMPLETE + closed; 3636 tests pass.
 
 ## Recently completed — #72 status/control-plane readiness state sync (2026-05-26)
 
@@ -2161,7 +2161,7 @@ BrainCase work is paused until tool policy is improved and audited.
 #61  Native exec/tool advisory policy    — OPEN; depends on #59
 #62  apply_patch coercion audit          — OPEN; depends on #59
 #63  web_search retrieve action          — CLOSED. All slices delivered.
-#64  Research-grade web_search budgets   — OPEN; new. Depends on #63.
+#64  Research-grade web_search budgets   — CLOSED. All slices A–D + capabilities introspection delivered.
 ```
 
 After tool policy chain:

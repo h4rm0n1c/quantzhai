@@ -673,8 +673,9 @@ test_source_annotations_backwards_compatible (Slice D)
 
 ## §64. Research-grade web_search budget modes (#64 Slice A-design)
 
-Date: 2026-05-21
-Status: ALL SLICES COMPLETE. #64 closed.
+Date: 2026-05-21 (design) / 2026-05-26 (audit)
+Status: ALL SLICES COMPLETE. #64 closed. Audit 2026-05-26: HEAD 617bf80; all acceptance
+criteria confirmed; capabilities introspection (3e4bc33) added post-smoke; 3636 tests pass.
 
 ### 64.0 Problem statement
 
