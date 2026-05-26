@@ -1,7 +1,112 @@
 # QuantZhai Current Task Hierarchy
 
-Date: 2026-05-25
-Status: active control sheet — issue #66 follow-up complete; deterministic web_search Codex contract smoke passes; 3506 tests pass.
+Date: 2026-05-26
+Status: active control sheet — #72 validated and closed; Codex tool contract audit #66–#70 complete; thinking budget controls landed; 3629 tests pass.
+
+## Recently completed — #72 status/control-plane readiness state sync (2026-05-26)
+
+```text
+Status: COMPLETE — commits 2bda8ca, 315103f, 76aca3c; 3629 tests pass.
+
+Problem (issue #72):
+  - ready logic was duplicated between ModelRouter and qz_control_plane
+  - backend_reasoning_budget was missing from /qz/control-plane profile section
+  - qz-top was falling back to local environment for rbudget instead of proxy value
+  - status_snapshot() always returned ready=False when llama.cpp /v1/models returns
+    status.value=null (backend_state="unknown") even when the model was loaded
+
+Fixes:
+  2bda8ca: Fix qz status readiness mismatch
+    - status_snapshot() adds BackendManager snapshot fallback after llama.cpp check
+    - When backend_state unknown but HTTP 200 + BackendManager phase=healthy +
+      backend_health_ok=True + no launch_model_error → promote backend_state to
+      "loaded" and ready=True
+    - Mirrors existing override logic in build_control_plane_status()
+    - 8 regression tests (StatusSnapshotBackendManagerFallbackTests)
+
+  315103f: Surface backend_reasoning_budget in /qz/control-plane and qz-top
+    - profile.backend_reasoning_budget added to /qz/control-plane payload
+    - qz-top: model_status_from_control_plane prefers proxy rbudget (line 381-382)
+    - 1 new test (test_profile_section_has_reasoning_budget)
+
+  76aca3c: Fix qz-top backend reasoning budget parsing
+    - Corrected parsing from control-plane profile section
+    - 2 new tests (test_model_status_from_control_plane_success/fallback)
+
+Residual drift documented (not fixed, acceptable):
+  - State labels (unknown / not_loaded / loading / ready / loaded) are not fully
+    normalised across ModelRouter, model_load_state, and backend_state. This is
+    observational drift only; no routing or safety impact. Track in a future
+    audit if it becomes confusing.
+
+Validation:
+  - python3 -m pytest: 3629 passed
+  - StatusSnapshotBackendManagerFallbackTests: 8/8 passed
+  - test_profile_section_has_reasoning_budget: passed
+  - test_model_status_from_control_plane_*: 2/2 passed
+  - git diff --check: clean
+
+#72 CLOSED at HEAD 76aca3c.
+```
+
+## Recently completed — Thinking budget controls (2026-05-26, commits 45cb522–6a1139d)
+
+```text
+Status: COMPLETE — 3 commits, 62+ tests added, 3629 total pass.
+
+Two-axis reasoning control system implemented:
+
+  thinking_mode: auto | thinking | non_thinking
+    - normalize_thinking_mode() normalises aliases
+      (think/on/true → thinking; instruct/off/none → non_thinking)
+    - Source: explicit profile override > model-name heuristic > auto
+    - Coder/Instruct names → non_thinking
+    - Qwen3.6/A3B/thinking names → thinking
+    - Profile runtime.thinking_mode flows through catalog entry overrides
+
+  reasoning_effort × thinking_mode → per-block token budgets:
+    low=16384  medium=24576  high=32768  xhigh=49152
+
+  OAI path fix (commit 53eff6b):
+    server-common.cpp reads thinking_budget_tokens (not reasoning_budget_tokens)
+    on the /v1/responses OAI path. Without thinking_budget_tokens the budget was
+    silently ignored (QZ_REASONING_BUDGET=-1 keeps reasoning_budget at -1 until
+    per-request override fires). Fix: mirror resolved budget to both field names.
+
+  Documentation (commit 6a1139d):
+    - docs/thetom-oai-responses-compat.md: NEW — two-path field name mismatch,
+      server-common.cpp budget logic, startup budget interaction
+    - docs/qwen-reasoning-effort-policy.md: updated (old policy said strip
+      thinking_budget_tokens; new policy says mirror both field names)
+    - docs/README.md: indexed new doc
+
+Key invariants:
+  - QZ_REASONING_BUDGET=-1 must stay as default for per-request control to work
+  - non_thinking models: no budget fields forwarded
+  - auto mode: safe fallback, no injection
+  - Caller overrides preserved via setdefault (caller value wins)
+```
+
+## Recently completed — Codex tool contract audit close-out (2026-05-26, #66–#70)
+
+```text
+Status: COMPLETE — commit 5c23924; 3565 tests passed at audit close; qz-live-smoke passed.
+
+Completed audit slices:
+  #66: fake lifecycle removal + real Codex source contracts
+  #67: local_shell + tool_search contracts
+  #68: shell + container.exec contracts
+  #69: document-only bucket audit
+  #70: final audit pass — CODEX_NATIVE_TOOL_NAMES final at 12 tools
+
+Adapter backlog is demand-driven; no further audit slices planned.
+
+Key rules locked:
+  - Item type is in SSE DATA PAYLOAD (item.type), not in event name
+  - No fake web_search_call.* sub-lifecycle events
+  - apply_patch always emits custom_tool_call (not apply_patch_call)
+  - Deterministic C1 smoke confirms web_search contract without live model
+```
 
 ## Recently completed — Fix web_search contract smoke proof (2026-05-25, issue #66 follow-up)
 
