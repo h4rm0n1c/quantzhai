@@ -15,18 +15,29 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from proxy.qz_compaction_eval import load_fixtures, run_eval, EvalResult
 
 def render_table(results: List[EvalResult]):
-    headers = ["Fixture", "Strategy", "Atom Ret", "Path Ret", "Neg Ret", "Halluc Rate", "Tkn Ratio"]
-    print(f"{headers[0]:<35} {headers[1]:<20} {headers[2]:>8} {headers[3]:>8} {headers[4]:>8} {headers[5]:>10} {headers[6]:>10}")
-    print("-" * 105)
+    headers = ["Fixture", "Strategy", "Atoms", "Path", "Cmd", "Err", "Neg", "EvDec", "Stale", "Halluc", "Recov", "TknR"]
+    print(f"{headers[0]:<25} {headers[1]:<18} {headers[2]:>6} {headers[3]:>6} {headers[4]:>6} {headers[5]:>6} {headers[6]:>6} {headers[7]:>6} {headers[8]:>6} {headers[9]:>7} {headers[10]:>6} {headers[11]:>6}")
+    print("-" * 125)
     
     for r in results:
         m = r.metrics
-        print(f"{r.fixture_name:<35} {r.strategy:<20} {m['exact_atom_retention']:>8.2f} {m['exact_path_retention']:>8.2f} {m['negation_retention']:>8.2f} {m['hallucinated_fact_rate']:>10.2f} {m['token_budget_ratio']:>10.2f}")
+        print(f"{r.fixture_name[:25]:<25} {r.strategy:<18} "
+              f"{m['exact_atom_retention']:>6.2f} "
+              f"{m['exact_path_retention']:>6.2f} "
+              f"{m['exact_command_retention']:>6.2f} "
+              f"{m['error_retention']:>6.2f} "
+              f"{m['negation_retention']:>6.2f} "
+              f"{m['evidence_decision_chain']:>6.2f} "
+              f"{m['stale_fact_correction']:>6.2f} "
+              f"{m['hallucinated_fact_rate']:>7.2f} "
+              f"{m['downstream_recovery']:>6.2f} "
+              f"{m['token_budget_ratio']:>6.2f}")
 
 def render_aggregates(results: List[EvalResult]):
     print("\nAggregate Averages per Strategy:")
-    print(f"{'Strategy':<20} {'Atom Ret':>8} {'Path Ret':>8} {'Neg Ret':>8} {'Halluc':>10} {'Tkn Ratio':>10}")
-    print("-" * 70)
+    headers = ["Strategy", "Atoms", "Path", "Cmd", "Err", "Neg", "EvDec", "Stale", "Halluc", "Recov", "TknR"]
+    print(f"{headers[0]:<18} {headers[1]:>6} {headers[2]:>6} {headers[3]:>6} {headers[4]:>6} {headers[5]:>6} {headers[6]:>6} {headers[7]:>6} {headers[8]:>7} {headers[9]:>6} {headers[10]:>6}")
+    print("-" * 90)
     
     strategy_metrics = {}
     for r in results:
@@ -35,13 +46,20 @@ def render_aggregates(results: List[EvalResult]):
         strategy_metrics[r.strategy].append(r.metrics)
         
     for strategy, metrics_list in sorted(strategy_metrics.items()):
-        avg_atom = sum(m['exact_atom_retention'] for m in metrics_list) / len(metrics_list)
-        avg_path = sum(m['exact_path_retention'] for m in metrics_list) / len(metrics_list)
-        avg_neg = sum(m['negation_retention'] for m in metrics_list) / len(metrics_list)
-        avg_halluc = sum(m['hallucinated_fact_rate'] for m in metrics_list) / len(metrics_list)
-        avg_tkn = sum(m['token_budget_ratio'] for m in metrics_list) / len(metrics_list)
+        def avg(key):
+            return sum(m[key] for m in metrics_list) / len(metrics_list)
         
-        print(f"{strategy:<20} {avg_atom:>8.2f} {avg_path:>8.2f} {avg_neg:>8.2f} {avg_halluc:>10.2f} {avg_tkn:>10.2f}")
+        print(f"{strategy:<18} "
+              f"{avg('exact_atom_retention'):>6.2f} "
+              f"{avg('exact_path_retention'):>6.2f} "
+              f"{avg('exact_command_retention'):>6.2f} "
+              f"{avg('error_retention'):>6.2f} "
+              f"{avg('negation_retention'):>6.2f} "
+              f"{avg('evidence_decision_chain'):>6.2f} "
+              f"{avg('stale_fact_correction'):>6.2f} "
+              f"{avg('hallucinated_fact_rate'):>7.2f} "
+              f"{avg('downstream_recovery'):>6.2f} "
+              f"{avg('token_budget_ratio'):>6.2f}")
 
 def main():
     parser = argparse.ArgumentParser(description="Run QuantZhai compaction evaluation.")
@@ -73,7 +91,7 @@ def main():
         print(json.dumps(serializable_results, indent=2))
     else:
         print(f"QuantZhai Compaction Strategy Evaluation (n={len(specs)} fixtures)")
-        print("=" * 105)
+        print("=" * 125)
         render_table(results)
         render_aggregates(results)
 

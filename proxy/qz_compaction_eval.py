@@ -7,7 +7,7 @@ NOT for use in live proxy runtime.
 import os
 import re
 from dataclasses import dataclass, field
-from typing import List, Dict, Set, Any
+from typing import List, Dict, Set, Any, Optional
 from proxy.qz_survival_weight import score_text, format_survival_hints
 
 @dataclass(frozen=True)
@@ -15,8 +15,15 @@ class FixtureSpec:
     name: str
     input_text: str
     expected_atoms: Set[str] = field(default_factory=set)
-    required_decisions: Set[str] = field(default_factory=set) # evidence/decision markers
-    negative_constraints: Set[str] = field(default_factory=set)
+    expected_paths: Set[str] = field(default_factory=set)
+    expected_commands: Set[str] = field(default_factory=set)
+    expected_errors: Set[str] = field(default_factory=set)
+    expected_negations: Set[str] = field(default_factory=set)
+    expected_evidence: Set[str] = field(default_factory=set)
+    expected_decisions: Set[str] = field(default_factory=set)
+    expected_deferred: Set[str] = field(default_factory=set)
+    stale_old_absent: Set[str] = field(default_factory=set)
+    stale_new_present: Set[str] = field(default_factory=set)
     file_path: str = ""
 
 @dataclass(frozen=True)
@@ -25,6 +32,28 @@ class EvalResult:
     strategy: str
     metrics: Dict[str, float]
     output_text: str
+
+# Canonical schema headings from Stage 1
+CANONICAL_HEADINGS = [
+    "## Goal",
+    "## Active Constraints & Guardrails",
+    "## Current Status",
+    "### Done",
+    "### In Progress",
+    "### Blocked / Deferred",
+    "## Key Decisions",
+    "## Evidence Boundaries",
+    "## Technical State",
+    "### Files / Paths",
+    "### Commands / Flags / Env Vars",
+    "### SHAs / Versions / Model Names",
+    "### Tests / Results",
+    "### Tool / Capture Outputs",
+    "## Rejected / Abandoned Approaches",
+    "## Open Questions / Uncertainties",
+    "## Next Actions",
+    "## Provenance / Source Pointers"
+]
 
 def load_fixtures(fixtures_dir: str) -> List[FixtureSpec]:
     specs = []
@@ -39,7 +68,7 @@ def load_fixtures(fixtures_dir: str) -> List[FixtureSpec]:
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
 
-        # Extract input sketch - skip intro text and find the code block
+        # Extract input sketch
         input_text = ""
         sketch_section = re.search(r"## Input Sketch\n\n(.*?)(?:\n##|$)", content, re.DOTALL)
         if sketch_section:
@@ -50,38 +79,67 @@ def load_fixtures(fixtures_dir: str) -> List[FixtureSpec]:
             else:
                 input_text = section_content.strip()
 
-        # Extract atoms from "What a Compliant Compaction Must Preserve" table
+        # Define expectations per fixture (Stage 3.1 hardening)
+        # In a real system these might be parsed from the MD, but for now we'll 
+        # hardcode or use simple extraction to ensure high-quality eval.
         atoms = set()
-        table_match = re.search(r"## What a Compliant Compaction Must Preserve\n\n(.*?)(?:\n\n|\n##|\n#|$)", content, re.DOTALL)
-        if table_match:
-            rows = table_match.group(1).strip().split("\n")
-            for row in rows:
-                if "|" not in row or "---" in row or "Atom" in row:
-                    continue
-                parts = row.strip("|").split("|")
-                if parts:
-                    atom = parts[0].strip().strip("`")
-                    if atom:
-                        atoms.add(atom)
+        paths = set()
+        cmds = set()
+        errors = set()
+        negations = set()
+        evidence = set()
+        decisions = set()
+        deferred = set()
+        stale_old = set()
+        stale_new = set()
 
-        # Heuristic extraction of negative constraints for fixture-03
-        neg_constraints = set()
-        if "fixture-03" in filename:
-            for atom in atoms:
-                if atom.lower().startswith("do not"):
-                    neg_constraints.add(atom)
-        
-        # Add atoms from the table in a separate step to be sure
-        if not atoms:
-            # Try a simpler regex if the table one failed
-             for match in re.finditer(r"\|\s*`([^`]+)`\s*\|\s*verbatim", content):
-                 atoms.add(match.group(1))
+        # Simple table parser for atoms
+        # Look for rows that have backticks in the first column
+        for match in re.finditer(r"\|\s*`([^`]+)`\s*\|", content):
+            atom = match.group(1).strip()
+            # Basic sanity check: ignore if it's the header
+            if atom == "Atom": continue
+            
+            atoms.add(atom)
+            atom_lower = atom.lower()
+            
+            # Order matters here! Check commands first because they might contain paths.
+            if any(c in atom_lower for c in ("git ", "python", "rg ", "curl ", "bash ", "sudo ")) or "--" in atom or (atom.startswith("-") and len(atom) < 5):
+                cmds.add(atom)
+            elif "/" in atom or atom_lower.endswith(".py") or atom_lower.endswith(".md") or atom_lower == "agents.md":
+                paths.add(atom)
+            elif "exit_code=" in atom or "importerror" in atom_lower:
+                errors.add(atom)
+            elif atom_lower.startswith("do not"):
+                negations.add(atom)
+
+        # Fixture-specific overrides for Stage 3.1 precision
+        if "fixture-01" in filename:
+            evidence.update(["proxy/qz_request_router.py:312", "docs/codex-plan-mode-live-capture.md"])
+            decisions.update(["input_mode guard must be checked", "Plan mode hint belongs in AGENTS.md"])
+        elif "fixture-02" in filename:
+            evidence.update(["proxy/qz_responses.py:243", "proxy/qz_responses.py:187"])
+            decisions.update(["does not crash on empty item list", "Depth cap is 8"])
+            errors.update(["exit_code=0"]) # In this fixture, 0 is the expected verbatim signal
+        elif "fixture-03" in filename:
+            negations.update(["Do not implement proxy-level sudo interception", "Do not add a sudo -v pre-run wrapper"])
+            deferred.update(["#74 permissions/escalation", "model_auto_compact_token_limit"])
+            stale_old.add("0627f39 — Fix live streaming runtime import mode (previous session)")
+            stale_new.add("0627f39 — Fix live streaming runtime import mode\nbabf7b5 — Add permission outcome feedback advisory")
 
         specs.append(FixtureSpec(
             name=filename.replace(".md", ""),
             input_text=input_text,
             expected_atoms=atoms,
-            negative_constraints=neg_constraints,
+            expected_paths=paths,
+            expected_commands=cmds,
+            expected_errors=errors,
+            expected_negations=negations,
+            expected_evidence=evidence,
+            expected_decisions=decisions,
+            expected_deferred=deferred,
+            stale_old_absent=stale_old,
+            stale_new_present=stale_new,
             file_path=path
         ))
     return specs
@@ -89,12 +147,14 @@ def load_fixtures(fixtures_dir: str) -> List[FixtureSpec]:
 # --- Strategies ---
 
 def freeform_summary_baseline(input_text: str) -> str:
-    """Simulates a loose, generic compactor that loses exact atoms."""
-    # Just a very generic summary that drops most technical details
-    return "The agent fixed some bugs in the proxy related to import modes and updated AGENTS.md with some planning mode hints. Some tests were run and commits were made."
+    """A fair but loose prose summary baseline."""
+    # Simulates what a generic LLM might do without structural constraints
+    return """The agent worked on the proxy code. Specifically, they addressed an import-mode regression 
+and added a hint for Codex Plan mode. Files like qz_request_router.py were checked. 
+Tests passed and changes were committed with SHAs like 0627f39."""
 
 def current_heuristic_baseline(input_text: str) -> str:
-    """Mimics current flat bullet extraction baseline."""
+    """Mimics current proxy bullet extraction."""
     lines = input_text.split("\n")
     summary_lines = []
     for line in lines:
@@ -105,90 +165,124 @@ def current_heuristic_baseline(input_text: str) -> str:
     return "<|history_summary|>\nPrior turn summary:\n" + "\n".join(summary_lines) + "\n<|end_history_summary|>"
 
 def anchored_template(input_text: str) -> str:
-    """Uses Stage 1 headings but simple summary inside."""
+    """Uses Stage 1 headings with fair high-level content but no exact atoms."""
     return """## Goal
-General task completion.
+Resolve reported issues and document behavior.
+
+## Current Status
+### Done
+- Bug fixed and documentation updated.
 
 ## Technical State
 ### Files / Paths
-(various files updated)
+- Various proxy and doc files.
 
 ## Next Actions
-1. Continue as requested.
+1. Task complete.
 """
 
 def survival_weighted_anchored(input_text: str) -> str:
-    """Uses qz_survival_weight to inject atoms into anchored schema."""
+    """Uses Stage 2.1 hardened scorer to anchor verbatim line preservation in canonical schema."""
     spans = score_text(input_text)
     hints = format_survival_hints(spans)
     
-    # Extract whole lines containing heavy/high spans to simulate "preservation"
     input_lines = input_text.split("\n")
     preserved_lines = []
-    
-    # We'll use atoms as anchors to keep the whole line
     for line in input_lines:
         line_spans = score_text(line)
         if any(s.weight == "heavy" for s in line_spans):
             preserved_lines.append(line.strip())
 
-    # Simulate an anchored summary that preserves these hints
-    output = "## Goal\nPreserve context with anchored schema.\n\n"
+    output_lines = ["## Goal", "Preserve context with anchored survival-weighted strategy.", ""]
     
-    output += "## Technical State\n### Files / Paths\n"
+    output_lines.append("## Key Decisions")
     for line in preserved_lines:
-        # Heuristic: if it looks like a path or command line
-        if "/" in line or "python" in line or "git" in line:
-            output += f"{line}\n"
-    
-    output += "\n## Key Decisions & Anchors\n"
-    for line in preserved_lines:
-        # Heuristic: if it looks like a decision or constraint
-        if any(w in line.lower() for w in ("do not", "not", "rejected", "decided", "evidence")):
-            output += f"- {line}\n"
+        if any(w in line.lower() for w in ("decided", "rejected", "therefore", "evidence")):
+            output_lines.append(f"- {line}")
+    output_lines.append("")
 
-    output += "\n## Survival Hints (Internal Metadata)\n"
-    output += hints
+    output_lines.append("## Technical State")
+    output_lines.append("### Files / Paths")
+    for line in preserved_lines:
+        if "/" in line and not line.startswith("rg"):
+            output_lines.append(line)
+    output_lines.append("")
     
-    return output
+    output_lines.append("### Commands / Flags / Env Vars")
+    for line in preserved_lines:
+        if any(f in line for f in ("git", "python", "sudo", "--", "exit_code=")):
+            output_lines.append(line)
+    output_lines.append("")
+
+    output_lines.append("## Evidence Boundaries")
+    output_lines.append(hints)
+    output_lines.append("")
+    
+    # Ensure some other headings are present for structure
+    output_lines.append("## Next Actions")
+    output_lines.append("1. Continue from preserved state.")
+
+    return "\n".join(output_lines)
 
 # --- Metrics ---
 
 def calculate_metrics(output: str, spec: FixtureSpec) -> Dict[str, float]:
     metrics = {}
     
-    # 1. Exact atom retention
-    if not spec.expected_atoms:
-        metrics["exact_atom_retention"] = 1.0
-    else:
-        preserved = sum(1 for atom in spec.expected_atoms if atom in output)
-        metrics["exact_atom_retention"] = preserved / len(spec.expected_atoms)
+    # helper for retention
+    def retention(expected):
+        if not expected: return 1.0
+        found = sum(1 for item in expected if item in output)
+        return found / len(expected)
 
-    # 2. Path retention
-    paths = {a for a in spec.expected_atoms if "/" in a or a.endswith(".py") or a.endswith(".md")}
-    if not paths:
-        metrics["exact_path_retention"] = 1.0
-    else:
-        preserved = sum(1 for p in paths if p in output)
-        metrics["exact_path_retention"] = preserved / len(paths)
+    metrics["exact_atom_retention"] = retention(spec.expected_atoms)
+    metrics["exact_path_retention"] = retention(spec.expected_paths)
+    metrics["exact_command_retention"] = retention(spec.expected_commands)
+    metrics["error_retention"] = retention(spec.expected_errors)
+    metrics["negation_retention"] = retention(spec.expected_negations)
 
-    # 3. Negation retention
-    if not spec.negative_constraints:
-        metrics["negation_retention"] = 1.0
-    else:
-        preserved = sum(1 for n in spec.negative_constraints if n in output)
-        metrics["negation_retention"] = preserved / len(spec.negative_constraints)
+    # 6. evidence_decision_chain
+    ev_score = retention(spec.expected_evidence) * 0.34
+    dec_score = retention(spec.expected_decisions) * 0.33
+    def_score = retention(spec.expected_deferred) * 0.33
+    metrics["evidence_decision_chain"] = ev_score + dec_score + def_score
 
-    # 4. Token budget (approx)
+    # 7. stale_fact_correction
+    if not spec.stale_old_absent and not spec.stale_new_present:
+        metrics["stale_fact_correction"] = 1.0
+    else:
+        old_absent = sum(1 for item in spec.stale_old_absent if item not in output)
+        new_present = sum(1 for item in spec.stale_new_present if item in output)
+        total = len(spec.stale_old_absent) + len(spec.stale_new_present)
+        metrics["stale_fact_correction"] = (old_absent + new_present) / total if total > 0 else 1.0
+
+    # 8. hallucinated_fact_rate
+    out_spans = score_text(output)
+    out_atoms = {s.text for s in out_spans if s.weight == "heavy"}
+    # Ignore headings
+    clean_headings = {h.strip("# ").strip() for h in CANONICAL_HEADINGS}
+    in_spans = score_text(spec.input_text)
+    in_atoms = {s.text for s in in_spans if s.weight == "heavy"}
+    
+    hallucinated = 0
+    for atom in out_atoms:
+        if atom in clean_headings: continue
+        if atom not in in_atoms and atom not in spec.input_text:
+            hallucinated += 1
+    metrics["hallucinated_fact_rate"] = hallucinated / max(1, len(out_atoms))
+
+    # 9. token_budget_ratio
     metrics["token_budget_ratio"] = len(output) / max(1, len(spec.input_text))
 
-    # 5. Hallucinated fact rate (naive)
-    # Count SHAs or paths in output that were NOT in input
-    # (For Stage 3, we expect this to be 0 for our deterministic strategies)
-    shas_in_output = set(re.findall(r"\b[0-9a-f]{7}\b", output))
-    shas_in_input = set(re.findall(r"\b[0-9a-f]{7}\b", spec.input_text))
-    hallucinated = len(shas_in_output - shas_in_input)
-    metrics["hallucinated_fact_rate"] = hallucinated / max(1, len(shas_in_output))
+    # 10. downstream_recovery (proxy)
+    relevant_metrics = [
+        metrics["exact_path_retention"],
+        metrics["exact_command_retention"],
+        metrics["error_retention"],
+        metrics["negation_retention"],
+        metrics["evidence_decision_chain"]
+    ]
+    metrics["downstream_recovery"] = sum(relevant_metrics) / len(relevant_metrics)
 
     return metrics
 
