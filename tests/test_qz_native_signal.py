@@ -12,7 +12,8 @@ from proxy.qz_native_signal import (
     check_native_advisories,
     QZ_NATIVE_FAIL_REPEAT_THRESHOLD,
     QZ_NATIVE_REPEAT_SIGNATURE_THRESHOLD,
-    QZ_NATIVE_MAX_CALLS_PER_TURN
+    QZ_NATIVE_MAX_CALLS_PER_TURN,
+    QZ_NATIVE_ESCALATION_THRESHOLD,
 )
 
 class NativeToolAdvisoryTests(unittest.TestCase):
@@ -231,6 +232,101 @@ class NativeToolAdvisoryTests(unittest.TestCase):
         allowed_keys = {"tool_name", "advisory_reason", "count", "threshold", "signature_hash"}
         extra = set(decision.metadata.keys()) - allowed_keys
         self.assertFalse(extra, f"Unexpected keys in advisory metadata: {extra}")
+
+
+    # ------------------------------------------------------------------
+    # Pattern E: Escalation retry advisory tests
+    # ------------------------------------------------------------------
+
+    def test_escalation_count_seed_from_history(self):
+        """seed_native_advisory_state counts require_escalated from history."""
+        history = [
+            {"type": "function_call", "name": "exec_command",
+             "arguments": {"cmd": "deploy", "sandbox_permissions": "require_escalated"}, "call_id": "c1"},
+            {"type": "function_call", "name": "exec_command",
+             "arguments": {"cmd": "restart", "sandbox_permissions": "require_escalated"}, "call_id": "c2"},
+        ]
+        state = seed_native_advisory_state(history)
+        self.assertEqual(state.escalation_count, 2)
+
+    def test_escalation_count_seed_json_string_args(self):
+        """seed_native_advisory_state handles JSON-string arguments."""
+        history = [
+            {"type": "function_call", "name": "exec_command",
+             "arguments": '{"cmd":"deploy","sandbox_permissions":"require_escalated"}', "call_id": "c1"},
+        ]
+        state = seed_native_advisory_state(history)
+        self.assertEqual(state.escalation_count, 1)
+
+    def test_escalation_count_record_call(self):
+        """record_native_tool_call increments escalation_count on require_escalated."""
+        state = NativeToolAdvisoryState()
+        call = {"name": "exec_command", "arguments": {"cmd": "deploy", "sandbox_permissions": "require_escalated"}}
+        record_native_tool_call(call, state)
+        self.assertEqual(state.escalation_count, 1)
+
+    def test_escalation_count_no_escalation(self):
+        """record_native_tool_call does NOT increment when sandbox_permissions is absent."""
+        state = NativeToolAdvisoryState()
+        call = {"name": "exec_command", "arguments": {"cmd": "ls"}}
+        record_native_tool_call(call, state)
+        self.assertEqual(state.escalation_count, 0)
+
+    def test_repeated_escalation_advisory(self):
+        """check_native_advisories triggers repeated_escalation at threshold."""
+        state = NativeToolAdvisoryState()
+        state.escalation_count = QZ_NATIVE_ESCALATION_THRESHOLD
+
+        call = {"name": "exec_command", "arguments": {"cmd": "ls"}}
+        decision = check_native_advisories(call, state)
+        self.assertIsNotNone(decision)
+        self.assertTrue(decision.should_signal)
+        self.assertEqual(decision.metadata["advisory_reason"], "repeated_escalation")
+        self.assertEqual(decision.metadata["count"], QZ_NATIVE_ESCALATION_THRESHOLD)
+        self.assertEqual(decision.metadata["threshold"], QZ_NATIVE_ESCALATION_THRESHOLD)
+
+    def test_repeated_escalation_below_threshold(self):
+        """check_native_advisories does NOT trigger below threshold."""
+        state = NativeToolAdvisoryState()
+        state.escalation_count = QZ_NATIVE_ESCALATION_THRESHOLD - 1
+
+        call = {"name": "exec_command", "arguments": {"cmd": "ls"}}
+        decision = check_native_advisories(call, state)
+        # Should not produce escalation advisory (may produce other advisory)
+        if decision is not None:
+            self.assertNotEqual(decision.metadata.get("advisory_reason"), "repeated_escalation")
+
+    def test_repeated_escalation_dedup(self):
+        """repeated_escalation fires only once per turn."""
+        state = NativeToolAdvisoryState()
+        state.escalation_count = QZ_NATIVE_ESCALATION_THRESHOLD
+
+        call = {"name": "exec_command", "arguments": {"cmd": "ls"}}
+        decision1 = check_native_advisories(call, state)
+        self.assertIsNotNone(decision1)
+
+        decision2 = check_native_advisories(call, state)
+        self.assertIsNone(decision2)
+
+    def test_escalation_telemetry_no_raw_args(self):
+        """repeated_escalation metadata must not contain raw command args."""
+        state = NativeToolAdvisoryState()
+        state.escalation_count = QZ_NATIVE_ESCALATION_THRESHOLD
+
+        call = {
+            "name": "exec_command",
+            "arguments": {"cmd": "echo SECRET_DEPLOY_KEY", "sandbox_permissions": "require_escalated"},
+        }
+        decision = check_native_advisories(call, state)
+        self.assertIsNotNone(decision)
+
+        meta_str = json.dumps(decision.metadata)
+        self.assertNotIn("SECRET_DEPLOY_KEY", meta_str)
+        self.assertNotIn("require_escalated", meta_str)
+
+        allowed_keys = {"tool_name", "advisory_reason", "count", "threshold"}
+        extra = set(decision.metadata.keys()) - allowed_keys
+        self.assertFalse(extra, f"Unexpected keys in escalation metadata: {extra}")
 
 
 if __name__ == "__main__":

@@ -549,7 +549,7 @@ may be stale. Re-run the audit before expanding parity decisions.
 
 ### 7.2 sandbox_permissions — escalation tracking
 
-**Status:** Partially implemented. Escalation retry advisory (Pattern E) deferred to #61 Slice C.1.
+**Status:** Fully implemented. Escalation retry advisory (Pattern E) completed in #74 Phase B.2.
 
 **What Codex expects:**
 - `SandboxPermissions` enum on `ShellToolCallParams` and `ExecCommandArgs`
@@ -560,13 +560,13 @@ may be stale. Re-run the audit before expanding parity decisions.
 - Preserves `sandbox_permissions` unchanged in pass-through
 - Detects `require_escalated` via `_check_sandbox_escalation()` in the stream loop
 - Emits `tool_escalation_requested` telemetry with safe preview fields
-- The `qz_native_signal.py` `seed_native_advisory_state` function scans prior `function_call`
-  items for `sandbox_permissions == "require_escalated"` and increments `escalation_count`
-
-**Gap:**
-- The escalation retry advisory (Pattern E in `docs/native-tool-advisory-policy.md` §4)
-  is designed but not implemented. It would fire when `escalation_count >= threshold`
-  within one turn, suggesting the model explain the specific requirement to the user.
+- `qz_native_signal.py` `seed_native_advisory_state()` and `record_native_tool_call()`
+  count escalation requests into `NativeToolAdvisoryState.escalation_count`
+- `check_native_advisories()` returns `repeated_escalation` advisory when
+  `escalation_count >= QZ_NATIVE_ESCALATION_THRESHOLD` (default 2, configurable via
+  `QZ_NATIVE_ESCALATION_THRESHOLD` env var)
+- Advisory fires once per turn (dedup key `__escalation__`); model-visible wording
+  suggests explaining the specific permission requirement to the user
 
 ### 7.3 apply_patch path
 
@@ -592,8 +592,8 @@ may be stale. Re-run the audit before expanding parity decisions.
 | Issue | Priority | Description |
 |---|---|---|
 | #74 Phase B.1 | Medium | request_permissions permission affordance — **COMPLETE**. Added tool hint, bounded telemetry, tests. |
-| #74 Phase B.2 | Low | request_permissions denial detection / escalation retry advisory — analyse `function_call_output` for denial patterns, inject advisory when escalation_count threshold exceeded. |
-| #61 Slice C.1 | Low | Escalation retry advisory (Pattern E) — implement when escalation_count threshold is exceeded |
+| #74 Phase B.2 | Low | request_permissions denial detection / escalation retry advisory — **COMPLETE**. Pattern E implemented: escalation counting, threshold check, advisory, tests. |
+| #61 Slice C.1 | Low | Escalation retry advisory (Pattern E) — **COMPLETE**. Implemented in #74 Phase B.2. |
 | #61 Slice C.2 | Low | Write-count advisory for apply_patch — requires live evidence |
 | #61 Slice C.3 | Low | write_stdin loop advisory (Pattern D) — requires live evidence |
 | None (deferred) | Low | local_shell adapter — needs LocalShellCall wire contract |

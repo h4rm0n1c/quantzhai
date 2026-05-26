@@ -17,6 +17,9 @@ class NativeToolAdvisoryState:
     # Key: (tool_name, arg_hash), Value: call count
     tool_arg_call_counts: dict[tuple[str, str], int] = field(default_factory=dict)
 
+    # Escalation tracking
+    escalation_count: int = 0           # require_escalated requests this turn
+
     # Dedup guard — warn once per (namespace, advisory_kind, signature) per turn.
     # Excessive-call uses namespace "__native_total__" so it fires once per turn
     # regardless of which tool crosses the threshold.
@@ -52,6 +55,7 @@ def _parse_env_int(name: str, default: int) -> int:
 QZ_NATIVE_FAIL_REPEAT_THRESHOLD = _parse_env_int("QZ_NATIVE_FAIL_REPEAT_THRESHOLD", 3)
 QZ_NATIVE_REPEAT_SIGNATURE_THRESHOLD = _parse_env_int("QZ_NATIVE_REPEAT_SIGNATURE_THRESHOLD", 4)
 QZ_NATIVE_MAX_CALLS_PER_TURN = _parse_env_int("QZ_NATIVE_MAX_CALLS_PER_TURN", 24)
+QZ_NATIVE_ESCALATION_THRESHOLD = _parse_env_int("QZ_NATIVE_ESCALATION_THRESHOLD", 2)
 
 
 def _canonicalize_args(args: Any) -> str:
@@ -143,6 +147,16 @@ def seed_native_advisory_state(input_items: list) -> NativeToolAdvisoryState:
                 if call_id:
                     call_id_to_signature[str(call_id)] = command_signature(item)
 
+                # Detect escalation requests in history
+                raw_args = item.get("arguments")
+                if isinstance(raw_args, str):
+                    try:
+                        raw_args = json.loads(raw_args)
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        raw_args = None
+                if isinstance(raw_args, dict) and raw_args.get("sandbox_permissions") == "require_escalated":
+                    state.escalation_count += 1
+
     # Second pass: check outputs for failures
     from .qz_native_tool_output import _parse_exit_code
     for item in input_items:
@@ -175,6 +189,16 @@ def record_native_tool_call(call: dict, state: NativeToolAdvisoryState) -> None:
         tool_sig = arg_signature(call)
         state.tool_arg_call_counts[tool_sig] = state.tool_arg_call_counts.get(tool_sig, 0) + 1
 
+        if name in ("exec_command", "shell_command", "shell", "container.exec"):
+            raw_args = call.get("arguments")
+            if isinstance(raw_args, str):
+                try:
+                    raw_args = json.loads(raw_args)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    raw_args = None
+            if isinstance(raw_args, dict) and raw_args.get("sandbox_permissions") == "require_escalated":
+                state.escalation_count += 1
+
 def check_native_advisories(call: dict, state: NativeToolAdvisoryState) -> Optional[NativeAdvisoryDecision]:
     """Checks if a native tool call should trigger an advisory."""
     from .qz_tools import CODEX_NATIVE_TOOL_NAMES
@@ -198,6 +222,23 @@ def check_native_advisories(call: dict, state: NativeToolAdvisoryState) -> Optio
                     "advisory_reason": kind,
                     "count": state.native_call_count,
                     "threshold": QZ_NATIVE_MAX_CALLS_PER_TURN,
+                }
+            )
+
+    # 1b. Pattern E: Escalation retry — warn once per turn regardless of tool
+    if state.escalation_count >= QZ_NATIVE_ESCALATION_THRESHOLD:
+        kind = "repeated_escalation"
+        if ("__escalation__", kind, "total") not in state.warned_signatures:
+            state.warned_signatures.add(("__escalation__", kind, "total"))
+            return NativeAdvisoryDecision(
+                should_signal=True,
+                message="Multiple sandbox permission requests have been made in this turn. If elevated "
+                        "permissions are required, explain the specific requirement to the user before retrying.",
+                metadata={
+                    "tool_name": name,
+                    "advisory_reason": kind,
+                    "count": state.escalation_count,
+                    "threshold": QZ_NATIVE_ESCALATION_THRESHOLD,
                 }
             )
 

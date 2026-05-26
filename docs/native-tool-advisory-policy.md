@@ -290,9 +290,11 @@ All patterns are advisory-only. No blocking. No automatic retry. Original call i
 
 ### Pattern E: Sandbox/escalation retries
 
-**Trigger:** `sandbox_permissions == "require_escalated"` appears on more than `escalation_retry_threshold` distinct outgoing exec calls within one turn.
+**Status:** **Implemented** (2026-05-27). Part of #74 Phase B.2 / #61 Slice C.1.
 
-**Observable:** `_check_sandbox_escalation()` already parses this in `qz_responses_stream.py` and emits `tool_escalation_requested` telemetry. The advisory state can count these.
+**Trigger:** `sandbox_permissions == "require_escalated"` appears on more than `escalation_retry_threshold` outgoing exec calls within one turn.
+
+**Observable:** `_check_sandbox_escalation()` parses this in `qz_responses_stream.py` and emits `tool_escalation_requested` telemetry. `seed_native_advisory_state()` and `record_native_tool_call()` in `qz_native_signal.py` count escalation requests.
 
 **Condition for advisory:** Only if `escalation_retry_threshold` is exceeded. Single escalation requests are normal. Repeated escalation requests within one turn suggest the model is not understanding that permission is not being granted.
 
@@ -300,6 +302,14 @@ All patterns are advisory-only. No blocking. No automatic retry. Original call i
 > "Multiple escalation requests have been made in this turn. If elevated permissions are needed for the task, explain the specific requirement to the user before proceeding."
 
 **Important caveat:** The proxy can observe outgoing escalation requests but NOT whether they were denied. Codex handles the sandbox grant/deny. This advisory fires on repeated escalation attempts regardless of grant status. Threshold should be conservative (≥2 or ≥3) to avoid false positives on legitimate multi-step escalated workflows.
+
+**Implementation details:**
+- `NativeToolAdvisoryState.escalation_count` tracks per-turn escalation total.
+- `seed_native_advisory_state()` scans prior `function_call` items in input history for `sandbox_permissions == "require_escalated"` on exec tools.
+- `record_native_tool_call()` increments `escalation_count` on outgoing exec calls with `require_escalated`.
+- `check_native_advisories()` returns `repeated_escalation` advisory when `escalation_count >= QZ_NATIVE_ESCALATION_THRESHOLD` (default 2).
+- Dedup key: `("__escalation__", "repeated_escalation", "total")` — fires once per turn.
+- Env var: `QZ_NATIVE_ESCALATION_THRESHOLD` (default 2).
 
 ---
 
@@ -320,7 +330,7 @@ Building a dedicated `config/default/tool_policy.json` would require a parser, a
 | `QZ_NATIVE_REPEAT_SIGNATURE_THRESHOLD` | 4 | `QZ_NATIVE_REPEAT_SIGNATURE_THRESHOLD` | Calling the same tool with identical arguments 4 times in a turn is a clear repetition signal. |
 | `NATIVE_ADVISORY_WRITE_THRESHOLD` | 10 | `QZ_NATIVE_WRITE_THRESHOLD` | 10 `apply_patch` calls is already a lot for normal tasks. Default is permissive to avoid noise. |
 | `NATIVE_ADVISORY_WRITE_STDIN_SESSION_THRESHOLD` | 3 | `QZ_NATIVE_WRITE_STDIN_SESSION_THRESHOLD` | 3 write_stdin calls to the same session without a new exec_command between them suggests a stuck interaction. |
-| `NATIVE_ADVISORY_ESCALATION_THRESHOLD` | 2 | `QZ_NATIVE_ESCALATION_THRESHOLD` | 2 escalation requests in one turn is unusual. Conservative to avoid false positives. |
+| `QZ_NATIVE_ESCALATION_THRESHOLD` | 2 | `QZ_NATIVE_ESCALATION_THRESHOLD` | 2 escalation requests in one turn is unusual. Conservative to avoid false positives. **Implemented in Slice C.1.** |
 
 All thresholds are loaded once at proxy startup. If an env var is unset, the constant default applies.
 
@@ -597,15 +607,23 @@ Implement `NativeToolAdvisoryState` and the primary advisory detection functions
 
 ### Slice C (write-count, write_stdin, escalation)
 
-Implement write-count, write_stdin session loop, and escalation advisory if source evidence supports them.
+Implement write-count, write_stdin session loop, and escalation advisory.
 
-**Prerequisites:** Slice B merged and green. At least one live `apply_patch`-heavy session or write_stdin capture to validate thresholds. Escalation advisory requires a live escalation-retry capture.
+**Prerequisites:** Slice B merged and green. At least one live `apply_patch`-heavy session or write_stdin capture to validate thresholds.
 
-**Scope:**
+**Scope (original):**
 - Extend `NativeToolAdvisoryState` with `apply_patch_count`, `write_stdin_session_counts`, `escalation_count`
 - Extend `observe_outgoing_call()` to track these
 - Extend `check_native_advisories()` for Patterns C/D/E
 - Tests for each pattern
+
+**C.1 Status: COMPLETE** (2026-05-27, #74 Phase B.2). Pattern E (escalation retry) implemented:
+- `escalation_count` field added to `NativeToolAdvisoryState`
+- `QZ_NATIVE_ESCALATION_THRESHOLD` env var (default 2)
+- Escalation detection in `seed_native_advisory_state()` and `record_native_tool_call()`
+- Pattern E check in `check_native_advisories()`
+- 7 tests in `test_qz_native_signal.py`
+- Docs updated.
 
 ---
 
@@ -837,7 +855,7 @@ the threshold is not noise-prone. Do not implement now without live evidence.
 
 | Slice | Pattern | Readiness | Rationale |
 |---|---|---|---|
-| C.1 | E: Escalation retry | Ready | Detection path proven; single new field; low false-positive risk |
+| C.1 | E: Escalation retry | **Complete** | Implemented 2026-05-27 (#74 Phase B.2). Detection path proven; single new field; low false-positive risk |
 | C.2 | C: Excessive writes | Needs live evidence | Design clear (Option C-c); code small; threshold unvalidated |
 | C.3 | D: write_stdin loop | Needs live evidence | Drop mechanism already covers main case; reset semantics unvalidated |
 
@@ -856,7 +874,7 @@ class NativeToolAdvisoryState:
     tool_arg_call_counts: dict[tuple[str, str], int] = field(default_factory=dict)
     warned_signatures: set[tuple[str, str, str]] = field(default_factory=set)
 
-    # Slice C.1 addition
+    # Slice C.1 addition (IMPLEMENTED)
     escalation_count: int = 0           # require_escalated requests this turn
 
     # Slice C.2 addition (when live evidence supports it)
@@ -879,10 +897,12 @@ dict keys to avoid surfacing process-identifying information in telemetry. Use
 Add to `proxy/qz_native_signal.py`:
 
 ```python
-# Slice C thresholds (added in respective slices)
+# Slice C.1 threshold (IMPLEMENTED)
 QZ_NATIVE_ESCALATION_THRESHOLD = _parse_env_int("QZ_NATIVE_ESCALATION_THRESHOLD", 2)
-QZ_NATIVE_WRITE_THRESHOLD = _parse_env_int("QZ_NATIVE_WRITE_THRESHOLD", 10)
-QZ_NATIVE_WRITE_STDIN_SESSION_THRESHOLD = _parse_env_int("QZ_NATIVE_WRITE_STDIN_SESSION_THRESHOLD", 3)
+
+# Slice C.2/3 thresholds (not yet implemented — pending live evidence)
+# QZ_NATIVE_WRITE_THRESHOLD = _parse_env_int("QZ_NATIVE_WRITE_THRESHOLD", 10)
+# QZ_NATIVE_WRITE_STDIN_SESSION_THRESHOLD = _parse_env_int("QZ_NATIVE_WRITE_STDIN_SESSION_THRESHOLD", 3)
 ```
 
 All use the existing `_parse_env_int` safe helper added in Slice B.1.
