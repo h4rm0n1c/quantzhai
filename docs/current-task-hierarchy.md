@@ -1,7 +1,7 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-26
-Status: active control sheet — #59 umbrella audit refreshed + closed; #61 open; #62 closeout documented; 3641 tests pass.
+Status: active control sheet — #61 is the immediate unblocked work; #52 is upstream-blocked; #8 is long-term RFC; 3641 tests pass.
 
 ## Live apply_patch probe — linuxstreamtools /tmp clone (2026-05-26)
 
@@ -86,15 +86,11 @@ a new issue if telemetry later proves need.
 
 ## Remaining open work (tracked in dedicated issues)                                                    
                                                                                                            
-   Gap                                                                      │ Issue                        
-  ──────────────────────────────────────────────────────────────────────────┼────────────────────────────  
-   Advisory signals for native exec patterns (write loops, excessive calls) │ #61 OPEN                     
-
-## Remaining open work (tracked in dedicated issues)                                                    
-                                                                                                           
-   Gap                                                                      │ Issue                        
-  ──────────────────────────────────────────────────────────────────────────┼────────────────────────────  
-   Advisory signals for native exec patterns (write loops, excessive calls) │ #61 OPEN                     
+   Gap                                                                      │ Issue / status
+  ──────────────────────────────────────────────────────────────────────────┼────────────────────────────
+   Advisory signals for native exec patterns (write loops, excessive calls) │ #61 OPEN — next immediate
+   Backend-confirmed VRAM allocator metrics                                │ #52 OPEN — upstream-blocked
+   Survival-weighted compaction RFC                                         │ #8 OPEN — long-term RFC
 
 ```text
 Status: COMPLETE — commits 2bda8ca, 315103f, 76aca3c; 3629 tests pass.
@@ -2249,10 +2245,10 @@ BrainCase work is paused until tool policy is improved and audited.
 ```text
 #59  Tool coercion/advice policy audit   — CLOSED. Umbrella audit refreshed 2026-05-26 after
                                            #60/#63/#64/#67–#70/#72 closures. All original gaps
-                                           resolved or handed off to #61/#62. docs/tool-policy-audit.md updated.
+                                           resolved, closed, or handed off to #61. docs/tool-policy-audit.md updated.
 #60  web_search quality improvements     — CLOSED. All slices A–close-out delivered.
 #61  Native exec/tool advisory policy    — OPEN; depends on #59 (unblocked)
-#62  apply_patch coercion audit          — OPEN; depends on #59 (unblocked)
+#62  apply_patch coercion audit          — CLOSED. Current scope complete; future fallback advisory needs a new issue.
 #63  web_search retrieve action          — CLOSED. All slices delivered.
 #64  Research-grade web_search budgets   — CLOSED. All slices A–D + capabilities introspection delivered.
 ```
