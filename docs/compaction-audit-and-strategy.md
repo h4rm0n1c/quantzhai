@@ -1,7 +1,7 @@
 # Compaction Audit and Strategy
 
 Date: 2026-05-27
-Status: **Stage 2** — deterministic survival-weight scorer complete.
+Status: **Stage 3** — offline fixture/eval harness complete.
 
 ---
 
@@ -1014,10 +1014,10 @@ fixture-05: session with stale facts — test stale fact correction
 
 ```text
 Stage 0 (this doc)    — 2026-05-27     — planning doc only
-Stage 1               — next available  — anchored schema + prompt template
-Stage 2               — after Stage 1   — deterministic survival-weight scorer
-Stage 3               — after Stage 2   — fixture/eval harness
-Stage 4               — after Stage 3   — LLM-generated v3 blobs
+Stage 1               — complete       — anchored schema + prompt template
+Stage 2               — complete       — deterministic survival-weight scorer
+Stage 3               — complete       — offline fixture/eval harness
+Stage 4               — next available  — LLM-generated v3 blobs
 Stage 5               — after Stage 4   — proxy integration, QZCOMPACT config
 Stage 6               — after Stage 5   — dogfood/live tuning
 ```
