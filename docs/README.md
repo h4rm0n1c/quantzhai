@@ -64,6 +64,7 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 15. [Edge case and config contract plan](edge-case-config-contract-plan.md) — audit/refactor plan for config layout, compact errors, profile safety, and script sprawl.
 16. [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) — focused TODO/review plan for `/status`, `qz-top`, `qz-thoughts`, profiles, and streaming.
 17. [Runtime observability notes](runtime-observability-notes.md) — how to inspect live proxy/model behaviour.
+18. [Compaction audit and strategy](compaction-audit-and-strategy.md) — source-grounded audit of Codex and QuantZhai compaction, issue #8 promoted ideas, anchored summary schema v0, recommended prompt v0, and staged implementation roadmap.
 
 ## Documentation by area
 
@@ -91,6 +92,7 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 | Repeated-read signal | [Repeated-read signal plan](repeated-read-dedup-plan.md) | Advisory repeated-read v1 plan and v2 scope blockers. |
 | Stream watchdog | [Stream watchdog calibration plan](stream-watchdog-calibration-plan.md) | Phase 0 only. Failure classes, calibration metrics, percentile-based tuning, adaptive budget sketch, phased modes, smoke plan. Watchdog intentionally disabled until live data is collected. |
 | LLM signal system | [LLM signal system](llm-signal-system.md) | Hop budget, context pressure, compaction, and signal design notes. |
+| Compaction strategy | [Compaction audit and strategy](compaction-audit-and-strategy.md) | Codex audit (SHA 46f30d0), QuantZhai current behaviour, #8 promoted ideas, anchored schema v0, prompt v0, staged plan Stages 0–6. |
 | Benchmarking | [Benchmark findings: effort tuning](benchmark-findings-effort-tuning.md) | Measured profile/tool-use behaviour and open questions around open-ended repo exploration. |
 | Config and error handling | [Edge case and config contract plan](edge-case-config-contract-plan.md) | Audit/refactor plan for edge cases, compact errors, profile safety, config layering, script sprawl, and the profile-bundle design (qz.profiles.v1, profiles/*.json, memory_domain plumbing). |
 | Current bugfix focus | [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) | Triage, review plan, proposed fixes, and acceptance checks for `/status`, monitor tools, profile tuning, and proxy streaming. |
