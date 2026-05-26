@@ -155,61 +155,64 @@ Remaining: none for #62 current scope. Future fallback-shape advisory should be
 a new issue if telemetry later proves need.
 ```
 
-## #61 Native tool advisory policy — Slice A design (2026-05-26)
+## #61 Native tool advisory policy (2026-05-26)
 
 ```text
-Status: COMPLETE — Slice A design doc created.
+Slice A — COMPLETE (commit 003b282)
+  Design doc: docs/native-tool-advisory-policy.md
+  Codex audit SHA: 46f30d02828bd4c52827e5f0482a6f2a982cce5b
 
-QuantZhai commit at Slice A start: 3670821.
-Codex repo path: /tmp/qz-audit/codex.
-Codex audit SHA: 46f30d02828bd4c52827e5f0482a6f2a982cce5b.
+Slice B — COMPLETE (commit 636c252)
+  Implemented NativeToolAdvisoryState + Patterns A, B, B2.
+  proxy/qz_native_signal.py created.
+  native_tool_advisory telemetry event added.
+  3641 → 3648 tests pass.
 
-Output: docs/native-tool-advisory-policy.md
+Slice B.1 — COMPLETE (commit ef5b5ff)
+  Hardening pass: full canonical signatures (tool_name + full args),
+  JSON-string arg canonicalization, once-per-turn excessive-call dedup,
+  safe QZ_NATIVE_* env parsing, telemetry payload safety tests.
+  17 tests in test_qz_native_signal.py; 3663 total pass.
 
-Codex tool surface re-confirmed (no change from #66–#70 audit):
-  - 12 tools in CODEX_NATIVE_TOOL_NAMES; set remains frozen.
-  - exec_command, shell_command, write_stdin: primary advisory targets.
-  - shell, container.exec: secondary (not advertised in QuantZhai config).
-  - update_plan, request_user_input, view_image, goal tools: out of scope.
-  - local_shell: out of scope (different item type, no proxy adapter).
-  - apply_patch: excluded here; #62 handles borderline coercion advisory.
+Slice C.0 — COMPLETE (this commit)
+  Evidence and design refresh for Patterns C/D/E.
+  Outcome A: design-only. No runtime changes.
+  Key findings:
+  - No live apply_patch-heavy session or write_stdin loop in captures.
+  - One live escalation call (probe session); single escalation, not a loop.
+  - CRITICAL: apply_patch NOT in CODEX_NATIVE_TOOL_NAMES; Pattern C needs
+    a separate hook in completed_call_decision path #3.
+  Design decisions: see docs/native-tool-advisory-policy.md §12.
 
-Existing advisory infrastructure confirmed and in use:
-  - render_advisory_output() / kind="signal" path: working.
-  - repeated_read_signal(): working.
-  - tool_escalation_requested telemetry: working (outgoing escalation).
-  - classify_native_tool_outputs(): working (incoming exit codes).
+Slice C.1 — PENDING
+  Pattern E: escalation retry advisory.
+  Scope: add escalation_count to NativeToolAdvisoryState; detect
+  require_escalated in seed_native_advisory_state and record_native_tool_call;
+  add Pattern E check in check_native_advisories.
+  Dedup key: ("__escalation__", "repeated_escalation", "total").
+  Threshold: QZ_NATIVE_ESCALATION_THRESHOLD=2 via _parse_env_int.
+  Tests: threshold, dedup, metadata safety.
 
-Designed advisory patterns:
-  A. Repeated failing commands — same cmd signature fails N times (default N=2)
-  B. Excessive call count per turn — >20 native calls (configurable)
-  B2. Repeated same tool+args — >3 identical calls (configurable)
-  C. Excessive apply_patch writes — >10 patches/turn (cautious; Slice C)
-  D. write_stdin loop — >3 to same session without new exec (Slice C)
-  E. Escalation retries — >2 require_escalated in one turn (Slice C; cautious)
+Slice C.2 — PENDING (needs live evidence)
+  Pattern C: excessive writes (apply_patch count).
+  Needs live apply_patch-heavy session to validate threshold before implement.
+  Design: Option C-c (increment in completed_call_decision path #3).
 
-Signal state: NativeToolAdvisoryState (per-turn, not persisted, follows
-  RepeatedReadState pattern).
+Slice C.3 — PENDING (needs live evidence)
+  Pattern D: write_stdin loop.
+  Needs live write_stdin loop capture to validate threshold + reset semantics.
+  Existing write_stdin drop mechanism already handles no-session case.
 
-Thresholds: hard-coded defaults + QZ_NATIVE_* env overrides.
-
-No blocking. No BrainCase. No cross-session state. No apply_patch changes.
-No Codex protocol changes. No raw command/path in telemetry.
-
-Validation:
-  - python3 -m pytest: 3641 passed (no code changes in Slice A).
-  - docs/native-tool-advisory-policy.md: created.
-  - docs/current-task-hierarchy.md: updated.
-  - docs/README.md: needs update (new doc indexed below).
-
-Next: Slice B — implement NativeToolAdvisoryState + Patterns A/B/B2 + tests.
+Codex tool surface: 12 tools in CODEX_NATIVE_TOOL_NAMES; set frozen.
+Codex audit SHA: 46f30d02828bd4c52827e5f0482a6f2a982cce5b (unchanged).
 ```
 
-## Remaining open work (tracked in dedicated issues)                                                    
-                                                                                                           
-   Gap                                                                      │ Issue / status
-  ──────────────────────────────────────────────────────────────────────────┼────────────────────────────
-   Advisory signals for native exec patterns (#61 Slice A done, B next)    │ #61 OPEN — Slice B next
+## Remaining open work (tracked in dedicated issues)
+
+   Gap                                                                                      │ Issue / status
+  ────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────
+   Native advisory Slice C.1 (escalation)                                                  │ #61 OPEN — next
+   Native advisory Slice C.2/C.3 (writes/write_stdin, needs live evidence)                 │ #61 OPEN — pending evidence
    Backend-confirmed VRAM allocator metrics                                │ #52 OPEN — upstream-blocked
    Survival-weighted compaction RFC                                         │ #8 OPEN — long-term RFC
 

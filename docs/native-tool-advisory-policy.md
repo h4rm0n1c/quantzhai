@@ -660,6 +660,230 @@ Add `native_tool_advisory` to `REQUEST_LIFECYCLE_EVENT_TYPES` in `qz_telemetry.p
 
 ---
 
+## 12. Slice C.0 — Evidence and Design Refresh (2026-05-26)
+
+**Codex audit SHA:** `46f30d02828bd4c52827e5f0482a6f2a982cce5b` (unchanged; no advance)
+**QuantZhai commits at this pass:** ef5b5ff (Slice B.1 hardening, immediately prior)
+
+**Outcome:** A — design/evidence pass only. No runtime changes.
+
+---
+
+### 12.1 Live Evidence Review
+
+Nine request captures from `var/captures/requests/` were inspected.
+
+| Pattern | Evidence found | Notes |
+|---|---|---|
+| C: excessive apply_patch | **None** | All 9 captures have 0–2 function_call items. No high-volume apply_patch session observed. |
+| D: write_stdin loop | **None** | `write_stdin` appears in tool declarations but no `function_call` items of type `write_stdin` appear in any capture. The existing write_stdin drop mechanism (§12.4) already handles no-session abuse. |
+| E: escalation retry | **Indirect** | `qz_req_1779799312343_72b0` shows a single `exec_command` with `sandbox_permissions: "require_escalated"` — a single escalation, not a loop. Followed by `qz_req_1779799316831_7040` where the permissions context says "Approval policy is currently never" yet the escalated call appears in history. Confirms the pattern is real; confirms a single escalation is legitimate (threshold ≥ 2 is correct). |
+
+No live evidence found for Patterns C or D. Pattern E has indirect evidence (the escalation path is real and the detection infrastructure is already proven).
+
+---
+
+### 12.2 Critical Design Constraint: apply_patch is NOT in CODEX_NATIVE_TOOL_NAMES
+
+`apply_patch` is a protocol adapter, not a Codex-native pass-through tool. It goes through path #3
+("Protocol adapter") in `completed_call_decision()`, not path #4 ("Known Codex-native tool") where
+`check_native_advisories()` is invoked.
+
+This means **Pattern C counting cannot hook into `check_native_advisories`** without additional plumbing.
+
+Options for Pattern C:
+
+**Option C-a:** Increment `apply_patch_count` in the protocol adapter path (#3 in
+`completed_call_decision`), then check the count in `check_native_advisories` if `apply_patch` calls it.
+Problem: `check_native_advisories` only runs on path #4, so this doesn't work directly.
+
+**Option C-b:** Add a separate `check_write_advisory(call, state)` function that is called from path #3
+in `completed_call_decision` when `name == "apply_patch"`.
+
+**Option C-c:** Increment `apply_patch_count` in path #3 and check the threshold there,
+returning `kind="signal"` from `completed_call_decision` directly. This is the simplest and most
+self-contained change.
+
+**Recommended:** Option C-c — keep the advisory decision inside `completed_call_decision`
+just like the native advisory path. The signal return value and metadata format are identical.
+
+```python
+# In completed_call_decision path #3 (after coercion succeeds):
+if native_advisory_state is not None and name == "apply_patch":
+    native_advisory_state.apply_patch_count += 1
+    if native_advisory_state.apply_patch_count > QZ_NATIVE_WRITE_THRESHOLD:
+        kind = "excessive_write_count"
+        if ("apply_patch", kind, "total") not in native_advisory_state.warned_signatures:
+            native_advisory_state.warned_signatures.add(("apply_patch", kind, "total"))
+            advisory = render_advisory_output(call, "...")
+            return CompletedToolCallDecision(kind="signal", ...)
+```
+
+Note: this must NOT change apply_patch protocol behavior (coercion, output shaping). It inserts
+purely before the `return CompletedToolCallDecision(kind="public", ...)` at the end of path #3.
+
+**Non-goal constraint preserved:** "No apply_patch changes" in CLAUDE.md refers to
+protocol/coercion behavior. The write-count advisory is orthogonal — it fires at the advisory threshold,
+not on every call, and does not alter how apply_patch arguments are parsed or how output is shaped.
+
+---
+
+### 12.3 Pattern E: Escalation Retry — Design Ready for Slice C.1
+
+**Observable:** `sandbox_permissions == "require_escalated"` in outgoing `exec_command` /
+`shell_command` arguments. The proxy already detects this in `_check_sandbox_escalation()` in
+`qz_responses_stream.py` and emits `tool_escalation_requested` telemetry.
+
+**State field:** Add `escalation_count: int = 0` to `NativeToolAdvisoryState`.
+
+**Detection path:** Two places need to track escalation count:
+1. `seed_native_advisory_state(input_items)` — scan prior `function_call` items for
+   `sandbox_permissions == "require_escalated"` and increment `state.escalation_count`.
+2. `record_native_tool_call(call, state)` — when a call passes through on the native path,
+   detect `require_escalated` and increment.
+
+**Advisory check in `check_native_advisories()`:**
+```python
+# After existing Pattern 1 (excessive call count) check:
+if state.escalation_count >= QZ_NATIVE_ESCALATION_THRESHOLD:
+    kind = "repeated_escalation"
+    if ("__escalation__", kind, "total") not in state.warned_signatures:
+        state.warned_signatures.add(("__escalation__", kind, "total"))
+        return NativeAdvisoryDecision(
+            should_signal=True,
+            message="Multiple sandbox permission requests have been made in this turn. "
+                    "If elevated permissions are required, explain the specific requirement "
+                    "to the user before retrying.",
+            metadata={
+                "tool_name": name,
+                "advisory_reason": kind,
+                "count": state.escalation_count,
+                "threshold": QZ_NATIVE_ESCALATION_THRESHOLD,
+            },
+        )
+```
+
+**Telemetry safety:** Metadata contains only count, threshold, advisory_reason, tool_name.
+No raw command, no justification text, no `cmd_preview`.
+
+**False positive risk:** A task that legitimately needs escalation for two different commands
+in the same turn (e.g. `git push` then `sudo systemctl`) would trigger the advisory at threshold 2.
+This is by design — the advisory is informational only. If the threshold is too aggressive for a
+workflow, operator can raise `QZ_NATIVE_ESCALATION_THRESHOLD`.
+
+**Integration point:** The `check_native_advisories` call is at path #4 in `completed_call_decision`.
+Exec commands (`exec_command`, `shell_command`, `shell`, `container.exec`) are in `CODEX_NATIVE_TOOL_NAMES`
+and go through path #4. The escalation check fires on these tools when the threshold is reached.
+
+**Dedup key:** `("__escalation__", "repeated_escalation", "total")` — once per turn, like excessive
+call count.
+
+---
+
+### 12.4 Pattern D: write_stdin Loop — No Evidence; Hold
+
+**Existing mitigation:** `normalize_tools_for_llamacpp` in `proxy/qz_tool_request.py` already
+drops `write_stdin` from the tool declaration when there is no live exec session in request history.
+This prevents the primary abuse case (model inventing session IDs or calling `write_stdin` with no
+active interactive process).
+
+**What a loop would require:**
+- A live exec session must be present (otherwise write_stdin is not offered)
+- The model must call `write_stdin` to the same session multiple times
+- The process must not be responding
+
+**Observable key:** `session_id` (int) from `write_stdin` arguments. Must hash the value (not
+store raw). **The `chars` field (stdin content) must never appear in state or telemetry.**
+
+**Design note — reset semantics:** Should the write_stdin count reset on a new `exec_command`?
+Proposed: reset the count for a session when ANY exec_command or shell_command that is NOT
+write_stdin completes successfully (exit code 0). This is conservative and avoids resetting on
+failed exec attempts that themselves indicate a stuck state.
+
+**Proposed threshold:** `QZ_NATIVE_WRITE_STDIN_SESSION_THRESHOLD` = 3 (default).
+Three write_stdin calls to the same session without a successful exec between them.
+
+**False positive risk:** Legitimate REPL interaction (Python REPL, pager, sudo password prompt)
+may involve 2–3 writes to the same session. Threshold 3 is permissive but not zero-risk. If the
+operator's workflow involves more REPL interaction, they should raise the threshold.
+
+**Recommendation:** Hold for Slice C.3 until at least one live write_stdin loop capture is available.
+The existing drop mechanism is sufficient protection for now.
+
+---
+
+### 12.5 Pattern C: Excessive Writes — No Evidence; Hold for Live Data
+
+**Default threshold:** 10 apply_patch calls per turn (permissive; legitimate refactors may need 5–8).
+
+**False positive risk:** Large automated refactors (rename a method across many files). Operator should
+raise `QZ_NATIVE_WRITE_THRESHOLD` if needed.
+
+**Implementation readiness:** Design is clear (Option C-c above). Code change is small (increment +
+threshold check in `completed_call_decision` path #3, new field in `NativeToolAdvisoryState`).
+
+**Recommendation:** Implement in Slice C.2, after at least one live apply_patch-heavy session confirms
+the threshold is not noise-prone. Do not implement now without live evidence.
+
+---
+
+### 12.6 Proposed Implementation Ordering
+
+| Slice | Pattern | Readiness | Rationale |
+|---|---|---|---|
+| C.1 | E: Escalation retry | Ready | Detection path proven; single new field; low false-positive risk |
+| C.2 | C: Excessive writes | Needs live evidence | Design clear (Option C-c); code small; threshold unvalidated |
+| C.3 | D: write_stdin loop | Needs live evidence | Drop mechanism already covers main case; reset semantics unvalidated |
+
+Each slice is independent. C.1 does not depend on C.2 or C.3.
+
+---
+
+### 12.7 NativeToolAdvisoryState Fields Needed for Slice C
+
+```python
+@dataclass
+class NativeToolAdvisoryState:
+    # Existing fields (Slice B)
+    native_call_count: int = 0
+    command_failure_counts: dict[str, int] = field(default_factory=dict)
+    tool_arg_call_counts: dict[tuple[str, str], int] = field(default_factory=dict)
+    warned_signatures: set[tuple[str, str, str]] = field(default_factory=set)
+
+    # Slice C.1 addition
+    escalation_count: int = 0           # require_escalated requests this turn
+
+    # Slice C.2 addition (when live evidence supports it)
+    apply_patch_count: int = 0          # apply_patch calls this turn
+
+    # Slice C.3 addition (when live evidence supports it)
+    # Key: session_id hash (NOT raw int), Value: write_stdin count without intervening exec
+    write_stdin_session_counts: dict[str, int] = field(default_factory=dict)
+```
+
+**Note on session_id safety:** The session_id in `write_stdin` is an integer (process ID or
+similar). While integers are lower risk than strings, they should still be hashed before use as
+dict keys to avoid surfacing process-identifying information in telemetry. Use
+`hashlib.sha256(str(session_id).encode()).hexdigest()[:12]` as the key.
+
+---
+
+### 12.8 Threshold Constants for Slice C
+
+Add to `proxy/qz_native_signal.py`:
+
+```python
+# Slice C thresholds (added in respective slices)
+QZ_NATIVE_ESCALATION_THRESHOLD = _parse_env_int("QZ_NATIVE_ESCALATION_THRESHOLD", 2)
+QZ_NATIVE_WRITE_THRESHOLD = _parse_env_int("QZ_NATIVE_WRITE_THRESHOLD", 10)
+QZ_NATIVE_WRITE_STDIN_SESSION_THRESHOLD = _parse_env_int("QZ_NATIVE_WRITE_STDIN_SESSION_THRESHOLD", 3)
+```
+
+All use the existing `_parse_env_int` safe helper added in Slice B.1.
+
+---
+
 *Created: 2026-05-26. Issue: h4rm0n1c/quantzhai#61 Slice A design.*
 *Governs: #61 Slice B (implementation), Slice C (write-count/escalation), Slice D (docs/smoke).*
 *Depends on: docs/codex-source-tool-contract.md, docs/codex-source-tool-inventory.md, docs/tool-policy-audit.md.*
+*Slice C.0 evidence/design added: 2026-05-26. Outcome A. Codex SHA unchanged: 46f30d02828bd4c52827e5f0482a6f2a982cce5b.*
