@@ -1,3 +1,15 @@
+"""
+Deterministic survival-weight span scorer for QuantZhai compaction.
+
+This module identifies high-value technical atoms (paths, commands, SHAs, etc.)
+and semantic anchors (negations, user corrections, decisions) that must survive
+context compaction to maintain agent intelligibility and safety.
+
+It is regex-driven and heuristic, intended as a pre-pass for LLM-based or
+rule-based context compression. It does not provide full tokenization or
+embedding-based semantic ranking.
+"""
+
 from dataclasses import dataclass
 import re
 
@@ -11,22 +23,25 @@ class SurvivalSpan:
     end: int | None = None
 
 # Feature classification patterns
-# Use a two-group strategy: Group 1 is the prefix (optional), Group 2 is the content.
+# Use a consistent three-group strategy:
+# Group 1: Prefix (consumed)
+# Group 2: Content (the survival atom)
+# Group 3: Suffix (non-consuming lookahead)
 PATTERNS = {
-    "path": re.compile(r'(^|[\s"\'\(])((?:\.?\.?/[a-zA-Z0-9._\-\[\]]+)+|(?:\w+[/\\])+[a-zA-Z0-9._\-\[\]]+\.\w+)(?=$|[\s"\'\):,;])'),
-    "command": re.compile(r'(^|[\s"\'\(])(git\s+\w+|python3?\s+(?:-m\s+)?[\w\.-]+(?:\s+[\w\.-]+)*|rg\b.*?|curl\b.*?|bash\b.*?|sudo\b.*?)(?=$|[\s"\'\):,;])'),
-    "flag": re.compile(r'(^|\s)(--[a-z0-9_-]+|-[a-z0-9])(?=$|[\s:,;])'),
-    "env_var": re.compile(r'(^|\s)([A-Z0-9_]+=[^ \s]+|\$[A-Z0-9_]+)(?=$|[\s:,;])'),
-    "sha": re.compile(r'(\b)([0-9a-f]{7,64})(\b)'),
-    "issue_ref": re.compile(r'(^|\s)(#\d+|issue\s+#\d+|PR\s+#\d+)(?=$|[\s:,;])', re.IGNORECASE),
-    "version": re.compile(r'(^|\s)(v\d+\.\d+\.\d+|localcmp:v\d+:?|Codex\s+\d+\.\d+)(?=$|[\s:,;])', re.IGNORECASE),
-    "error_string": re.compile(r'(^|[\s"\'\(])(error:|failed:|exception:|traceback|permission denied|exit_code=\d+)(?=$|[\s"\'\):,;])', re.IGNORECASE),
-    "negation": re.compile(r'(\b)(not|never|no|without|unless|rejected|disallowed|disagree|don\'t|cannot)(\b)', re.IGNORECASE),
-    "user_correction": re.compile(r'(\b)(user corrected|user rejected|user explicitly said|do not re-attempt|incorrect|mistake)(\b)', re.IGNORECASE),
-    "decision_boundary": re.compile(r'(\b)(therefore|decided|deferred|blocked because|evidence|source-backed|inferred|concluded)(\b)', re.IGNORECASE),
-    "test_name": re.compile(r'(\b)(test_[a-z0-9_]+|[A-Z][a-zA-Z0-9]+Tests|[a-z0-9_]+\.py)(\b)'),
-    "model_name": re.compile(r'(\b)(Qwen[a-zA-Z0-9\.-]+|gemini-[a-z0-9\.-]+|GPT-[a-z0-9\.-]+)(\b)', re.IGNORECASE),
-    "code_symbol": re.compile(r'(\b)([a-z_][a-z0-9_]{3,}|[A-Z][a-zA-Z0-9_]{3,})(\b)'),
+    "path": re.compile(r'(^|[\s"\'\(])((?:\.?\.?/[a-zA-Z0-9._\-\[\]]+)+|(?:\w+[/\\])+[a-zA-Z0-9._\-\[\]]+\.\w+)(?=($|[\s"\'\):,;]))'),
+    "command": re.compile(r'(^|[\s"\'\(])((?:git|python3?|rg|curl|bash|sudo)\b(?:\s+(?!(?:and|or)\b)[^\s"\'\(\)\)\:,;]+)*)(?=($|[\s"\'\(\)\)\:,;]|(?:\s+and\b|\s+or\b)))'),
+    "flag": re.compile(r'(^|\s)(--[a-z0-9_-]+|-[a-z0-9])(?=($|[\s:,;]))'),
+    "env_var": re.compile(r'(^|\s)([A-Z0-9_]{3,}=[^ \s]+|\$[A-Z0-9_]{3,})(?=($|[\s:,;]))'),
+    "sha": re.compile(r'(^|[\s"\'\(])([0-9a-f]{7,64})(?=($|[\s"\'\):,;]))'),
+    "issue_ref": re.compile(r'(^|\s)(#\d+|issue\s+#\d+|PR\s+#\d+)(?=($|[\s:,;]))', re.IGNORECASE),
+    "version": re.compile(r'(^|\s)(v\d+\.\d+\.\d+|localcmp:v\d+:?|Codex\s+v?\d+\.\d+(?:\.\d+)?)(?=($|[\s:,;]))', re.IGNORECASE),
+    "error_string": re.compile(r'(^|[\s"\'\(])(error:|failed:|exception:|traceback|permission denied|exit_code=\d+|ImportError|attempted relative import with no known parent package|local streaming runtime error|response\.custom_tool_call_input\.done)(?=($|[\s"\'\):,;]))', re.IGNORECASE),
+    "negation": re.compile(r'(^|[\s"\'\(])(not|never|no|without|unless|rejected|disallowed|disagree|don\'t|cannot)(?=($|[\s"\'\):,;]))', re.IGNORECASE),
+    "user_correction": re.compile(r'(^|[\s"\'\(])(user corrected|user rejected|user explicitly said|do not re-attempt|incorrect|mistake)(?=($|[\s"\'\):,;]))', re.IGNORECASE),
+    "decision_boundary": re.compile(r'(^|[\s"\'\(])(therefore|decided|deferred|blocked because|evidence-to-decision|evidence|source-backed|inferred|concluded)(?=($|[\s"\'\):,;]))', re.IGNORECASE),
+    "test_name": re.compile(r'(^|[\s"\'\(])(test_[a-z0-9_]+|[A-Z][a-zA-Z0-9]+Tests|[a-z0-9_]+\.py)(?=($|[\s"\'\):,;]))'),
+    "model_name": re.compile(r'(^|[\s"\'\(])(Qwen[a-zA-Z0-9\._\-\[\]]+|gemini-[a-z0-9\.-]+|GPT-[a-z0-9\.-]+)(?=($|[\s"\'\):,;]))', re.IGNORECASE),
+    "code_symbol": re.compile(r'(^|[\s"\'\(])([a-z_][a-z0-9_]{2,}_[a-z0-9_]+|[a-z_][a-z0-9_]*\(\)|[A-Z][a-z0-9]+[A-Z][a-zA-Z0-9]+|[a-z0-9_]+\.[a-z0-9_]+)(?=($|[\s"\'\):,;]))'),
 }
 
 # Weighting overrides
@@ -52,7 +67,8 @@ def score_text(text: str) -> list[SurvivalSpan]:
                 continue
             
             # Basic heuristic for avoiding too many generic code symbols
-            if name == "code_symbol" and len(span_text) < 5:
+            is_call = span_text.endswith("()")
+            if name == "code_symbol" and len(span_text) < 5 and not is_call:
                 continue
 
             all_matches.append({
@@ -73,7 +89,10 @@ def score_text(text: str) -> list[SurvivalSpan]:
 
     for m in all_matches:
         if m["start"] >= last_end:
+            # Skip if we already have this EXACT text as a survival atom
             if m["text"] in seen_texts:
+                # Still count as consuming the space to avoid overlapping a different atom
+                last_end = max(last_end, m["end"])
                 continue
             
             name = m["name"]
@@ -98,11 +117,15 @@ def score_text(text: str) -> list[SurvivalSpan]:
     return selected_spans
 
 def score_items(items: list[dict]) -> list[SurvivalSpan]:
+    """Extract survival spans from a list of conversation items."""
+    if not isinstance(items, list):
+        return []
+
     all_spans = []
     seen_texts = set()
 
     def add_spans(text):
-        if not text:
+        if not isinstance(text, str) or not text:
             return
         spans = score_text(text)
         for s in spans:
@@ -112,58 +135,102 @@ def score_items(items: list[dict]) -> list[SurvivalSpan]:
 
     for item in items:
         if not isinstance(item, dict):
+            # Safe skip non-dict items if they are accidentally mixed in
+            if isinstance(item, str):
+                add_spans(item)
             continue
         
+        item_type = item.get("type")
+        
         # Message items
-        if item.get("type") == "message":
+        if item_type == "message":
             content = item.get("content")
             if isinstance(content, str):
                 add_spans(content)
             elif isinstance(content, list):
                 for part in content:
-                    if isinstance(part, dict) and part.get("type") == "input_text":
-                        add_spans(part.get("text"))
+                    if isinstance(part, dict):
+                        # Support input_text, output_text, or generic text
+                        for field in ("input_text", "output_text", "text", "content"):
+                            val = part.get(field)
+                            if isinstance(val, str):
+                                add_spans(val)
+                            elif field == "content" and isinstance(val, str):
+                                add_spans(val)
+                    elif isinstance(part, str):
+                        add_spans(part)
         
         # Tool call items
-        elif item.get("type") == "function_call":
+        elif item_type == "function_call":
             add_spans(item.get("name"))
-            add_spans(item.get("arguments"))
+            # For JSON arguments, just scan as text for now
+            args = item.get("arguments")
+            if isinstance(args, str):
+                add_spans(args)
+            elif isinstance(args, dict):
+                # Fallback: scan string values in the dict
+                for v in args.values():
+                    if isinstance(v, str):
+                        add_spans(v)
         
-        elif item.get("type") == "custom_tool_call":
+        elif item_type == "custom_tool_call":
             add_spans(item.get("name"))
             add_spans(item.get("input"))
             
-        elif item.get("type") == "function_call_output":
+        elif item_type == "function_call_output":
             add_spans(item.get("output"))
         
-        # Fallback for unknown shapes: check 'text', 'content', 'output' fields
+        # Fallback for unknown shapes: check common string fields
         else:
-            for field in ("text", "content", "output", "summary"):
+            for field in ("text", "content", "output", "summary", "input", "arguments"):
                 val = item.get(field)
                 if isinstance(val, str):
                     add_spans(val)
+                elif isinstance(val, dict):
+                     for v in val.values():
+                        if isinstance(v, str):
+                            add_spans(v)
 
     return all_spans
 
 def format_survival_hints(spans: list[SurvivalSpan], *, max_spans: int = 80) -> str:
+    """Format spans into a compact hint string for the compaction prompt."""
     if not spans:
         return ""
 
-    lines = ["Survival hints:"]
-    
-    # Priority sort: heavy/high first, then by text length descending?
-    # Let's keep it simple: heavy/high first, then others.
-    sorted_spans = sorted(spans, key=lambda s: (
-        0 if s.weight == "heavy" and s.exactness_risk == "high" else 1,
-        0 if s.weight == "heavy" else 1,
-        -len(s.text)
+    # Weights for stable sorting
+    weight_map = {"heavy": 0, "medium": 1, "light": 2}
+    risk_map = {"high": 0, "medium": 1, "low": 2}
+
+    # Deduplicate by text while preserving first occurrence order for priority
+    unique_spans = []
+    seen_text = set()
+    for s in spans:
+        if s.text not in seen_text:
+            unique_spans.append(s)
+            seen_text.add(s.text)
+
+    # Priority sort: 
+    # 1. heavy/high 
+    # 2. heavy/medium
+    # 3. medium/high
+    # 4. medium/medium
+    # 5. light
+    # 6. text length (longer first)
+    # 7. alphabetical (deterministic tie-break)
+    sorted_spans = sorted(unique_spans, key=lambda s: (
+        weight_map.get(s.weight, 99),
+        risk_map.get(s.exactness_risk, 99),
+        -len(s.text),
+        s.text
     ))
 
+    lines = ["Survival hints:"]
     for span in sorted_spans[:max_spans]:
-        # Truncate very long spans
+        # Truncate very long spans safely (preserving start/end context)
         display_text = span.text
         if len(display_text) > 120:
-            display_text = display_text[:60] + "..." + display_text[-60:]
+            display_text = display_text[:58] + "..." + display_text[-59:]
         
         feature = span.features[0] if span.features else "unknown"
         lines.append(f"- {span.weight}/{span.exactness_risk} {feature}: {display_text}")
