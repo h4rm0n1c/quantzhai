@@ -10,7 +10,7 @@ Last reconciled: 2026-05-25 (issue #66).
 `web_search_call_lifecycle_event` helper functions is now **superseded**. All of those were removed
 in issue #66 (fake lifecycle system). The authoritative Codex-source event contract is at
 `docs/codex-source-tool-contract.md`. apply_patch now emits `custom_tool_call` items with
-`response.custom_tool_call_input.delta/done` events. web_search emits only `output_item.added` +
+`response.custom_tool_call_input.delta` plus final `output_item.done`. web_search emits only `output_item.added` +
 `output_item.done` with item type `web_search_call`.
 
 This document defines how QuantZhai should translate upstream llama.cpp/TurboQuant

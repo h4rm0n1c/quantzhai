@@ -152,10 +152,11 @@ class StreamingStateTests(unittest.TestCase):
             "public_tool_lifecycle_event must not exist — removed in issue #66",
         )
 
-    def test_custom_tool_call_input_events_emit_delta_and_done(self):
-        """custom_tool_call_input.delta and .done events for apply_patch streaming.
+    def test_custom_tool_call_input_events_emit_delta_only(self):
+        """custom_tool_call_input.delta event for apply_patch streaming.
 
         Codex parses response.custom_tool_call_input.delta → ToolCallInputDelta.
+        Current Codex does not parse response.custom_tool_call_input.done.
         Source: codex-rs/codex-api/src/sse/responses.rs:314.
         See docs/codex-source-tool-contract.md.
         """
@@ -170,27 +171,22 @@ class StreamingStateTests(unittest.TestCase):
         chunks, sequence = custom_tool_call_input_events(item, output_index=1, sequence_start=5)
         stream = b"".join(chunks).decode("utf-8")
 
-        self.assertEqual(sequence, 7)  # 5 + 1 (delta) + 1 (done) = 7
+        self.assertEqual(sequence, 6)  # 5 + 1 (delta) = 6
         self.assertIn("response.custom_tool_call_input.delta", stream)
-        self.assertIn("response.custom_tool_call_input.done", stream)
+        self.assertNotIn("response.custom_tool_call_input.done", stream)
         # patch text is JSON-encoded in SSE stream — newlines become \\n
         self.assertIn("Begin Patch", stream)
 
         # Parse individual events
         lines = stream.strip().split("\n\n")
-        self.assertEqual(len(lines), 2)
+        self.assertEqual(len(lines), 1)
 
         delta_lines = [l.encode("utf-8") + b"\n" for l in lines[0].split("\n")]
-        done_lines = [l.encode("utf-8") + b"\n" for l in lines[1].split("\n")]
         et_delta, pd_delta = parse_sse_event_lines(delta_lines)
-        et_done, pd_done = parse_sse_event_lines(done_lines)
 
         self.assertEqual(et_delta, "response.custom_tool_call_input.delta")
-        self.assertEqual(et_done, "response.custom_tool_call_input.done")
         self.assertEqual(pd_delta["delta"], patch_text)
-        self.assertEqual(pd_done["input"], patch_text)
         self.assertEqual(pd_delta["call_id"], "call_ap_1")
-        self.assertEqual(pd_done["call_id"], "call_ap_1")
 
     def test_custom_tool_call_input_events_preserves_call_id(self):
         item = {

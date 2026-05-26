@@ -5212,20 +5212,21 @@ class ApplyPatchLifecycleContractTests(unittest.TestCase):
                          "apply_patch must not emit any response.code_interpreter_call.* events")
 
     def test_ap1_begin_patch_in_input(self):
-        """apply_patch custom_tool_call item must carry a *** Begin Patch envelope in its input field."""
+        """apply_patch custom_tool_call items must carry a *** Begin Patch envelope in input."""
         events, _ = self._run_apply_patch()
         custom_items = [
             payload["item"]
             for et, payload in events
-            if et == "response.output_item.added"
+            if et in {"response.output_item.added", "response.output_item.done"}
             and isinstance(payload, dict)
             and isinstance(payload.get("item"), dict)
             and payload["item"].get("type") == "custom_tool_call"
             and payload["item"].get("name") == "apply_patch"
         ]
-        self.assertEqual(len(custom_items), 1)
-        self.assertIn("*** Begin Patch", custom_items[0].get("input", ""),
-                      "custom_tool_call apply_patch input must contain a *** Begin Patch envelope")
+        self.assertEqual(len(custom_items), 2)
+        for item in custom_items:
+            self.assertIn("*** Begin Patch", item.get("input", ""),
+                          "custom_tool_call apply_patch input must contain a *** Begin Patch envelope")
 
     def test_ap1_call_id_preserved(self):
         """call_id must be preserved in custom_tool_call apply_patch items."""
@@ -5259,18 +5260,18 @@ class ApplyPatchLifecycleContractTests(unittest.TestCase):
             "Codex parses this event to stream the patch envelope input",
         )
 
-    def test_ap1_emits_custom_tool_call_input_done(self):
-        """apply_patch must emit response.custom_tool_call_input.done.
+    def test_ap1_does_not_emit_custom_tool_call_input_done(self):
+        """apply_patch must not emit response.custom_tool_call_input.done.
 
-        Codex parses response.custom_tool_call_input.done → ResponseEvent::ToolCallInputDone.
+        Current Codex does not parse response.custom_tool_call_input.done.
         Source: codex-rs/codex-api/src/sse/responses.rs.
         See docs/codex-source-tool-contract.md.
         """
         events, _ = self._run_apply_patch()
         names = [et for et, _ in events]
-        self.assertIn(
+        self.assertNotIn(
             "response.custom_tool_call_input.done", names,
-            "apply_patch must emit response.custom_tool_call_input.done",
+            "apply_patch must not emit unsupported response.custom_tool_call_input.done",
         )
 
     def test_ap1_custom_tool_call_input_delta_carries_call_id(self):
@@ -5298,11 +5299,10 @@ class ApplyPatchLifecycleContractTests(unittest.TestCase):
                       "custom_tool_call_input.delta must carry the patch envelope text")
 
     def test_ap1_input_events_between_added_and_done(self):
-        """response.custom_tool_call_input.delta/.done must appear between output_item.added and output_item.done.
+        """response.custom_tool_call_input.delta must appear between output_item.added and output_item.done.
 
         The ordering is: output_item.added → custom_tool_call_input.delta →
-        custom_tool_call_input.done → output_item.done.
-        This mirrors the real Codex Responses API streaming order.
+        output_item.done. This matches the current Codex parser contract.
         """
         events, _ = self._run_apply_patch()
         names = [et for et, _ in events]

@@ -102,7 +102,7 @@ def public_tool_item_done_event(item: dict, output_index: int, sequence_start: i
 
 
 def custom_tool_call_input_events(item: dict, output_index: int, sequence_start: int = 0):
-    """Emit response.custom_tool_call_input.delta and .done for a custom_tool_call item.
+    """Emit response.custom_tool_call_input.delta for a custom_tool_call item.
 
     Codex parses response.custom_tool_call_input.delta → ResponseEvent::ToolCallInputDelta
     and uses it to feed the active_tool_argument_diff_consumer.
@@ -114,28 +114,13 @@ def custom_tool_call_input_events(item: dict, output_index: int, sequence_start:
     call_id = item.get("call_id") or item.get("id") or f"ctc_{output_index}"
     item_id = item.get("id") or call_id
     input_text = item.get("input") or ""
-    chunks = []
-    seq = sequence_start
-
-    # delta event
-    seq += 1
-    chunks.append(_sse_block_with_sequence("response.custom_tool_call_input.delta", {
+    seq = sequence_start + 1
+    return [_sse_block_with_sequence("response.custom_tool_call_input.delta", {
         "item_id": item_id,
         "call_id": call_id,
         "output_index": output_index,
         "delta": input_text,
-    }, seq))
-
-    # done event
-    seq += 1
-    chunks.append(_sse_block_with_sequence("response.custom_tool_call_input.done", {
-        "item_id": item_id,
-        "call_id": call_id,
-        "output_index": output_index,
-        "input": input_text,
-    }, seq))
-
-    return chunks, seq
+    }, seq)], seq
 
 
 def public_tool_item_events(item: dict, output_index: int, sequence_start: int = 0):

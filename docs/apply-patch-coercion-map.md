@@ -46,7 +46,8 @@ Destination is identified via any key in `APPLY_PATCH_DESTINATION_KEYS`:
 - `_function_call_to_custom_apply_patch_call`: Normalizes outgoing call.
 - `_custom_apply_patch_call_to_function_call`: Codex-to-proxy conversion.
 - `_custom_apply_patch_output_to_function_output`: Proxy-to-Codex output mapping.
-- Streaming: `custom_tool_call_input.delta/done` are used for real-time patch streaming.
+- Streaming: `custom_tool_call_input.delta` plus final `output_item.done` are
+  used for real-time patch streaming.
 
 ## 6. Telemetry safety
 
@@ -175,6 +176,38 @@ Decision:
 - No runtime change is required.
 - No model-visible advisory is required for the observed canonical
   `operation_object` path.
+
+## #73 custom_tool_call_input.done removal — 2026-05-26
+
+QuantZhai commit at #73 start: `1fb3dba`.
+
+Codex repo path: `/tmp/qz-audit/codex`.
+
+Codex audit SHA: `46f30d02828bd4c52827e5f0482a6f2a982cce5b`.
+
+Checked current Codex source:
+
+- `codex-rs/protocol/src/models.rs`: `CustomToolCall` and
+  `CustomToolCallOutput` are present; no `ApplyPatchCall` /
+  `apply_patch_call` item exists.
+- `codex-rs/codex-api/src/sse/responses.rs`: `process_responses_event`
+  parses `response.output_item.added`, `response.output_item.done`, and
+  `response.custom_tool_call_input.delta`; it does not parse
+  `response.custom_tool_call_input.done`.
+- `codex-rs/core/src/tools/handlers/apply_patch_spec.rs` and
+  `apply_patch.rs`: apply_patch remains a freeform `custom_tool_call` using the
+  `*** Begin Patch` / `*** End Patch` envelope.
+
+Decision:
+
+- Removed `response.custom_tool_call_input.done` from the default
+  Codex-visible stream.
+- Supported stream path is now `response.output_item.added` →
+  `response.custom_tool_call_input.delta` → `response.output_item.done`.
+- No runtime behaviour change to apply_patch coercion, patch envelope
+  construction, telemetry, or advisory policy.
+- `apply_patch_call`, `apply_patch_call_output`, and
+  `response.apply_patch_call.*` remain forbidden.
 
 ## 8. Recommended Slice B
 

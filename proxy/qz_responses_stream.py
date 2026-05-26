@@ -911,16 +911,16 @@ class ResponsesStreamRuntime:
             return None
 
     def _emit_public_tool_item(self, item: dict, public_index: int, sequence: int):
-        """Emit output_item.added + [custom_tool_call_input.delta/done] + output_item.done.
+        """Emit output_item.added + [custom_tool_call_input.delta] + output_item.done.
 
         For custom_tool_call items (apply_patch), also emits the streaming input
-        delta/done events that Codex parses as ResponseEvent::ToolCallInputDelta.
+        delta event that Codex parses as ResponseEvent::ToolCallInputDelta.
         Source: codex-rs/codex-api/src/sse/responses.rs:314
         """
         started_chunks, sequence = public_tool_item_started_event(item, public_index, sequence)
         all_chunks = list(started_chunks)
 
-        # For custom_tool_call items, emit input delta/done between added and done.
+        # For custom_tool_call items, emit input delta between added and done.
         if isinstance(item, dict) and item.get("type") == "custom_tool_call":
             input_chunks, sequence = custom_tool_call_input_events(item, public_index, sequence)
             all_chunks.extend(input_chunks)

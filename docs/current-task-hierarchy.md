@@ -3,6 +3,41 @@
 Date: 2026-05-26
 Status: active control sheet — #61 is the immediate unblocked work; #52 is upstream-blocked; #8 is long-term RFC; 3641 tests pass.
 
+## #73 Remove unsupported custom_tool_call_input.done (2026-05-26)
+
+```text
+Status: COMPLETE — unsupported custom_tool_call_input.done removed from the
+default Codex-visible apply_patch stream.
+
+QuantZhai commit at #73 start: 1fb3dba.
+Codex repo path: /tmp/qz-audit/codex.
+Codex audit SHA: 46f30d02828bd4c52827e5f0482a6f2a982cce5b.
+
+Codex source result:
+  - CustomToolCall present.
+  - CustomToolCallOutput present.
+  - No ApplyPatchCall / apply_patch_call ResponseItem variant.
+  - process_responses_event parses response.custom_tool_call_input.delta.
+  - process_responses_event does not parse response.custom_tool_call_input.done.
+  - apply_patch remains a freeform custom_tool_call using the
+    *** Begin Patch / *** End Patch envelope.
+
+Decision:
+  - Remove response.custom_tool_call_input.done from the default Codex-visible
+    apply_patch stream.
+  - Supported path: response.output_item.added →
+    response.custom_tool_call_input.delta → response.output_item.done.
+  - No runtime behaviour change to apply_patch semantics, coercion, telemetry, or
+    patch envelope construction.
+
+Validation:
+  - tests/test_qz_streaming.py: 11 passed.
+  - tests/test_qz_responses_stream.py: 284 passed.
+  - tests/test_apply_patch_adapter.py: 65 passed.
+  - tests/test_apply_patch_telemetry.py: 5 passed.
+  - python3 -m pytest: 3641 passed.
+```
+
 ## Post-close Codex source reconciliation — 2026-05-26
 
 ```text
@@ -30,7 +65,7 @@ Result:
   - Valid stream path is response.output_item.added/done plus
     response.custom_tool_call_input.delta.
   - Current Codex does not parse response.custom_tool_call_input.done as a typed
-    event; QuantZhai's extra done marker is ignored/compatible.
+    event; issue #73 removes that unsupported marker from the default stream.
   - response.apply_patch_call.* remains absent.
 
 Decision:
@@ -307,7 +342,7 @@ Removed fake ToolLifecycleSpec subevent system (lifecycle_event_prefix, lifecycl
 lifecycle_done_stages). Removed ProxyLocalToolRegistry fake lifecycle methods.
 Removed public_tool_lifecycle_event() / web_search_call_lifecycle_event() from qz_streaming.py.
 
-Added custom_tool_call_input_events() for real apply_patch streaming (custom_tool_call_input.delta/done).
+Added custom_tool_call_input_events() for real apply_patch streaming (initially custom_tool_call_input.delta/done; issue #73 later removed unsupported .done).
 Removed computer from CODEX_NATIVE_TOOL_NAMES (reserved namespace only, not a handler).
 
 Created docs/codex-source-tool-contract.md (authoritative Codex-source event contract).

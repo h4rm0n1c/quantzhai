@@ -7,8 +7,8 @@ stream, and which item/event shapes it routes, renders, and executes. It superse
 QuantZhai docs that described fake or inferred lifecycle events.
 
 Codex source was audited locally at `/tmp/qz-audit/codex` during issue #66.
-Issue #62 post-close reconciliation on 2026-05-26 rechecked the same SHA for
-the apply_patch custom-tool path.
+Issue #62 post-close reconciliation and issue #73 on 2026-05-26 rechecked the
+same SHA for the apply_patch custom-tool path.
 
 ---
 
@@ -34,9 +34,8 @@ Source: `codex-rs/codex-api/src/sse/responses.rs`
 
 Note: current Codex source parses `response.custom_tool_call_input.delta` for
 custom-tool input streaming. It does not parse
-`response.custom_tool_call_input.done` as a typed `ResponseEvent`; QuantZhai may
-emit `.done` as a compatibility marker, but Codex execution must not depend on
-that event.
+`response.custom_tool_call_input.done` as a typed `ResponseEvent`; issue #73
+removed that unsupported marker from the default Codex-visible stream.
 
 ---
 
@@ -83,10 +82,6 @@ Source: `codex-rs/protocol/src/models.rs:743-900`
 // response.custom_tool_call_input.delta
 { "item_id": "...", "call_id": "...", "output_index": N, "delta": "<full patch text>" }
 
-// response.custom_tool_call_input.done
-// QuantZhai compatibility marker; current Codex does not parse this as a typed event.
-{ "item_id": "...", "call_id": "...", "output_index": N, "input": "<full patch text>" }
-
 // output_item.done
 {
   "type": "custom_tool_call",
@@ -113,11 +108,13 @@ model (llama.cpp / Qwen). It:
 2. Rewrites the item as `custom_tool_call { name="apply_patch", input="*** Begin Patch..." }`
 3. Emits `output_item.added` (status=in_progress)
 4. Emits `custom_tool_call_input.delta` (delta=patch text)
-5. Emits `custom_tool_call_input.done` (input=patch text; compatibility marker,
-   not required by current Codex parser)
-6. Emits `output_item.done` (status=completed)
+5. Emits `output_item.done` (status=completed)
 
 Source: `proxy/qz_tool_apply_patch.py`, `proxy/qz_streaming.py:custom_tool_call_input_events()`
+
+Issue #73 removed the default `response.custom_tool_call_input.done` emission
+after current Codex source confirmed that only `.delta` is parsed. This does not
+change apply_patch coercion, the patch envelope, or tool execution semantics.
 
 ---
 
@@ -220,7 +217,7 @@ The following were removed:
 The following were added:
 
 - `proxy/qz_streaming.py`: `custom_tool_call_input_events()` — emits
-  `response.custom_tool_call_input.delta` plus a `.done` compatibility marker
+  `response.custom_tool_call_input.delta`
 - `proxy/qz_responses_stream.py`: `_emit_public_tool_item()` now calls `custom_tool_call_input_events()` when the item type is `custom_tool_call`
 
 ---
@@ -229,11 +226,11 @@ The following were added:
 
 | Test class | File | What it enforces |
 |---|---|---|
-| `ApplyPatchLifecycleContractTests` | `tests/test_qz_responses_stream.py` | Full apply_patch output item lifecycle including custom_tool_call_input.delta/done |
+| `ApplyPatchLifecycleContractTests` | `tests/test_qz_responses_stream.py` | Full apply_patch output item lifecycle including custom_tool_call_input.delta and absence of unsupported custom_tool_call_input.done |
 | `NativeToolListContractTests` | `tests/test_qz_proxy_tools.py` | computer absent, exec_command/write_stdin/shell_command present |
 | `ToolLifecycleSpecContractTests` | `tests/test_qz_proxy_tools.py` | Fake lifecycle fields do not exist on ToolLifecycleSpec |
 | `StreamingStateTests.test_web_search_call_no_fake_lifecycle_events` | `tests/test_qz_streaming.py` | public_tool_lifecycle_event / web_search_call_lifecycle_event removed from module |
-| `StreamingStateTests.test_custom_tool_call_input_events_emit_delta_and_done` | `tests/test_qz_streaming.py` | custom_tool_call_input_events() emits delta and done with correct fields |
+| `StreamingStateTests.test_custom_tool_call_input_events_emit_delta_only` | `tests/test_qz_streaming.py` | custom_tool_call_input_events() emits delta only with correct fields |
 | `ParseSSEEventsTests` | `tests/test_qz_web_search_contract_check.py` | payload-aware SSE parser; event names never contain web_search_call |
 | `CheckContractTests` | `tests/test_qz_web_search_contract_check.py` | contract via item.type; fake events → fail; no_search vs fail by mode |
 | `DeterministicContractTests` | `tests/test_qz_web_search_contract_check.py` | run_deterministic() passes; all checks True |
