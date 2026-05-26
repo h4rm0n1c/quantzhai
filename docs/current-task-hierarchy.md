@@ -1,7 +1,7 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-26
-Status: active control sheet — #72 closed; #65 COMPLETE; #64 COMPLETE + closed; 3636 tests pass.
+Status: active control sheet — #59 umbrella audit refreshed + closed; #61/#62 open; 3636 tests pass.
 
 ## Recently completed — #72 status/control-plane readiness state sync (2026-05-26)
 
@@ -2156,10 +2156,12 @@ Keep the patch boring.
 BrainCase work is paused until tool policy is improved and audited.
 
 ```text
-#59  Tool coercion/advice policy audit   — Slice A-audit CLOSED; gaps documented
+#59  Tool coercion/advice policy audit   — CLOSED. Umbrella audit refreshed 2026-05-26 after
+                                           #60/#63/#64/#67–#70/#72 closures. All original gaps
+                                           resolved or handed off to #61/#62. docs/tool-policy-audit.md updated.
 #60  web_search quality improvements     — CLOSED. All slices A–close-out delivered.
-#61  Native exec/tool advisory policy    — OPEN; depends on #59
-#62  apply_patch coercion audit          — OPEN; depends on #59
+#61  Native exec/tool advisory policy    — OPEN; depends on #59 (unblocked)
+#62  apply_patch coercion audit          — OPEN; depends on #59 (unblocked)
 #63  web_search retrieve action          — CLOSED. All slices delivered.
 #64  Research-grade web_search budgets   — CLOSED. All slices A–D + capabilities introspection delivered.
 ```
