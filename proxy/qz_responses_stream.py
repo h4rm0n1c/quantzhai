@@ -32,6 +32,7 @@ try:
     from .qz_tool_apply_patch import inspect_apply_patch_arguments
     from .qz_telemetry import RequestTelemetryEmitter
     from .qz_file_signal import record_tool_call, seed_repeated_read_state
+    from .qz_native_signal import record_native_tool_call, seed_native_advisory_state
     from .qz_stream_terminal import (
         StreamObservation,
         accumulate,
@@ -75,6 +76,7 @@ except ImportError:
     from qz_tool_apply_patch import inspect_apply_patch_arguments
     from qz_telemetry import RequestTelemetryEmitter
     from qz_file_signal import record_tool_call, seed_repeated_read_state
+    from qz_native_signal import record_native_tool_call, seed_native_advisory_state
     from qz_stream_terminal import (
         StreamObservation,
         accumulate,
@@ -1529,6 +1531,7 @@ class ResponsesStreamRuntime:
         # Seed repeated-read state from incoming body["input"] before the hop loop.
         # This detects cross-request repeated reads that Codex replays in history.
         repeated_read_state = seed_repeated_read_state(working_body.get("input") or [])
+        native_advisory_state = seed_native_advisory_state(working_body.get("input") or [])
 
         completed_at = None
         public_trace = []
@@ -1918,6 +1921,7 @@ class ResponsesStreamRuntime:
                                 hs.completed_call,
                                 dropped_tool_names=dropped_tool_names,
                                 repeated_read_state=repeated_read_state,
+                                native_advisory_state=native_advisory_state,
                             )
 
                             built = build_tool_coercion_telemetry_payload(hs.completed_call, decision)
@@ -1926,14 +1930,21 @@ class ResponsesStreamRuntime:
                                 self._emit(_coercion_event, _coercion_payload)
 
                             if decision.kind == "signal":
-                                # Advisory repeated-read signal: inject output upstream,
+                                # Advisory signal: inject output upstream,
                                 # continue the hop loop. No public Codex lifecycle event.
                                 hs.next_input.append(decision.signal_result)
                                 hs.signal_injected = True
-                                self._emit("repeated_read_signal", decision.signal_metadata or {})
+                                
+                                # Determine telemetry event type based on metadata
+                                signal_payload = decision.signal_metadata or {}
+                                event_type = "repeated_read_signal"
+                                if "advisory_reason" in signal_payload:
+                                    event_type = "native_tool_advisory"
+                                
+                                self._emit(event_type, signal_payload)
                                 self._emit_stream_event_timing(
                                     event_type, event_received_at, event_parsed_at,
-                                    time.time(), suppressed="repeated_read_signal",
+                                    time.time(), suppressed=event_type,
                                 )
                                 break
 
@@ -2025,9 +2036,10 @@ class ResponsesStreamRuntime:
                                 break
 
                             result = self.proxy_tool_registry.continuation_result(decision)
-                            # Record this public call so within-run repeated-read
-                            # tracking works for subsequent tool calls in the same run.
+                            # Record this public call so within-run tracking works
+                            # for subsequent tool calls in the same run.
                             record_tool_call(hs.completed_call, repeated_read_state)
+                            record_native_tool_call(hs.completed_call, native_advisory_state)
                             public_item = result.public_item
                             public_trace.append(public_item)
                             sequence, forwarded_chunks, forwarded_bytes = self._emit_public_tool_item(public_item, public_index, sequence)

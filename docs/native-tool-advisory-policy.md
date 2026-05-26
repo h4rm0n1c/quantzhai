@@ -309,14 +309,22 @@ Building a dedicated `config/default/tool_policy.json` would require a parser, a
 
 | Constant | Default | Env override | Rationale |
 |---|---|---|---|
-| `NATIVE_ADVISORY_CMD_FAILURE_THRESHOLD` | 2 | `QZ_NATIVE_CMD_FAILURE_THRESHOLD` | After 2 failures with the same command signature, the model has seen the error at least once. A 3rd attempt with no change is a loop signal. Default=2 means: fire on the 3rd attempt. |
-| `NATIVE_ADVISORY_MAX_CALLS_PER_TURN` | 20 | `QZ_NATIVE_MAX_CALLS_PER_TURN` | A typical Codex turn rarely exceeds 10–15 exec calls for well-scoped tasks. 20 is a generous limit that catches runaway loops without false-positives on legitimate multi-step tasks. |
-| `NATIVE_ADVISORY_REPEATED_ARGS_THRESHOLD` | 3 | `QZ_NATIVE_REPEATED_ARGS_THRESHOLD` | Calling the same tool with the same args 3 times in a turn with no change in between is a clear loop indicator. |
+| `QZ_NATIVE_FAIL_REPEAT_THRESHOLD` | 3 | `QZ_NATIVE_FAIL_REPEAT_THRESHOLD` | After 3 failures with the same command signature in one turn, the model likely needs a warning to change approach. |
+| `QZ_NATIVE_MAX_CALLS_PER_TURN` | 24 | `QZ_NATIVE_MAX_CALLS_PER_TURN` | High-volume native tool use (24+) often indicates an infinite loop or agent confusion. |
+| `QZ_NATIVE_REPEAT_SIGNATURE_THRESHOLD` | 4 | `QZ_NATIVE_REPEAT_SIGNATURE_THRESHOLD` | Calling the same tool with identical arguments 4 times in a turn is a clear repetition signal. |
 | `NATIVE_ADVISORY_WRITE_THRESHOLD` | 10 | `QZ_NATIVE_WRITE_THRESHOLD` | 10 `apply_patch` calls is already a lot for normal tasks. Default is permissive to avoid noise. |
 | `NATIVE_ADVISORY_WRITE_STDIN_SESSION_THRESHOLD` | 3 | `QZ_NATIVE_WRITE_STDIN_SESSION_THRESHOLD` | 3 write_stdin calls to the same session without a new exec_command between them suggests a stuck interaction. |
 | `NATIVE_ADVISORY_ESCALATION_THRESHOLD` | 2 | `QZ_NATIVE_ESCALATION_THRESHOLD` | 2 escalation requests in one turn is unusual. Conservative to avoid false positives. |
 
 All thresholds are loaded once at proxy startup. If an env var is unset, the constant default applies.
+
+---
+
+### Troubleshooting
+
+- If advisories trigger during legitimate large refactors, raise `QZ_NATIVE_MAX_CALLS_PER_TURN`.
+- If repeated useful probes trigger warnings, raise `QZ_NATIVE_REPEAT_SIGNATURE_THRESHOLD`.
+- If the agent keeps retrying identical failing commands before being warned, lower `QZ_NATIVE_FAIL_REPEAT_THRESHOLD`.
 
 ---
 

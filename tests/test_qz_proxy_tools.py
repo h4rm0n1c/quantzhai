@@ -910,3 +910,42 @@ class RepeatedReadDecisionTests(unittest.TestCase):
         decision = registry.completed_call_decision(call, "native", repeated_read_state=state)
         self.assertNotEqual(decision.kind, "error")
         self.assertEqual(decision.kind, "signal")
+
+class NativeToolAdvisoryIntegrationTests(unittest.TestCase):
+    """Tests for native tool advisory integration in completed_call_decision."""
+
+    def _make_registry(self):
+        return make_proxy_local_tool_registry(FakeWebRuntime())
+
+    def _exec_call(self, cmd, call_id="call_abc"):
+        return {
+            "type": "function_call",
+            "name": "exec_command",
+            "call_id": call_id,
+            "arguments": {"cmd": cmd},
+        }
+
+    def test_repeated_failing_command_integration(self):
+        from proxy.qz_native_signal import NativeToolAdvisoryState, QZ_NATIVE_FAIL_REPEAT_THRESHOLD
+        registry = self._make_registry()
+        call = self._exec_call("fail")
+        state = NativeToolAdvisoryState()
+        
+        from proxy.qz_native_signal import command_signature
+        sig = command_signature(call)
+        state.command_failure_counts[sig] = QZ_NATIVE_FAIL_REPEAT_THRESHOLD
+        
+        decision = registry.completed_call_decision(call, native_advisory_state=state)
+        self.assertEqual(decision.kind, "signal")
+        self.assertEqual(decision.signal_metadata["advisory_reason"], "repeated_failing_command")
+
+    def test_excessive_call_count_integration(self):
+        from proxy.qz_native_signal import NativeToolAdvisoryState, QZ_NATIVE_MAX_CALLS_PER_TURN
+        registry = self._make_registry()
+        call = self._exec_call("ls")
+        state = NativeToolAdvisoryState()
+        state.native_call_count = QZ_NATIVE_MAX_CALLS_PER_TURN
+        
+        decision = registry.completed_call_decision(call, native_advisory_state=state)
+        self.assertEqual(decision.kind, "signal")
+        self.assertEqual(decision.signal_metadata["advisory_reason"], "excessive_call_count")

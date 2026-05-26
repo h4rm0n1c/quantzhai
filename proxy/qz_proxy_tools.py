@@ -9,6 +9,7 @@ try:
     from .qz_tools import CODEX_NATIVE_TOOL_NAMES, ToolRegistry, synthesize_tool_error_result
     from .qz_feedback import render_advisory_output
     from .qz_file_signal import RepeatedReadState, repeated_read_signal
+    from .qz_native_signal import NativeToolAdvisoryState, check_native_advisories
 except ImportError:
     from qz_tool_apply_patch import APPLY_PATCH_TOOL_ADAPTER
     from qz_tool_web import WEB_SEARCH_TOOL_ADAPTER
@@ -17,6 +18,7 @@ except ImportError:
     from qz_tools import CODEX_NATIVE_TOOL_NAMES, ToolRegistry, synthesize_tool_error_result
     from qz_feedback import render_advisory_output
     from qz_file_signal import RepeatedReadState, repeated_read_signal
+    from qz_native_signal import NativeToolAdvisoryState, check_native_advisories
 
 
 DEFAULT_TOOL_REGISTRY = ToolRegistry((APPLY_PATCH_TOOL_ADAPTER, WEB_SEARCH_TOOL_ADAPTER))
@@ -151,6 +153,7 @@ class ProxyLocalToolRegistry:
         call: dict,
         dropped_tool_names: frozenset[str] = frozenset(),
         repeated_read_state: "RepeatedReadState | None" = None,
+        native_advisory_state: "NativeToolAdvisoryState | None" = None,
     ) -> CompletedToolCallDecision:
         name = call.get("name") if isinstance(call, dict) else None
 
@@ -227,6 +230,18 @@ class ProxyLocalToolRegistry:
                         signal_result=advisory,
                         signal_metadata=metadata,
                     )
+            
+            if native_advisory_state is not None:
+                nat_decision = check_native_advisories(call, native_advisory_state)
+                if nat_decision and nat_decision.should_signal:
+                    advisory = render_advisory_output(call, nat_decision.message)
+                    return CompletedToolCallDecision(
+                        kind="signal",
+                        call=call,
+                        signal_result=advisory,
+                        signal_metadata=nat_decision.metadata,
+                    )
+            
             public_item = self.tool_registry.output_to_codex(call)
             return CompletedToolCallDecision(
                 kind="public",

@@ -45,6 +45,7 @@ try:
     from .qz_codex_metadata import extract_codex_request_context
     from .qz_native_tool_output import classify_native_tool_output_signals
     from .qz_file_signal import record_tool_call, seed_repeated_read_state
+    from .qz_native_signal import record_native_tool_call, seed_native_advisory_state
     from .qz_responses_error import build_responses_error_payload, is_deprecated_alias
     from .qz_control_plane import build_control_plane_status
     from .qz_service_status import build_service_status
@@ -99,6 +100,7 @@ except ImportError:
     from qz_codex_metadata import extract_codex_request_context
     from qz_native_tool_output import classify_native_tool_output_signals
     from qz_file_signal import record_tool_call, seed_repeated_read_state
+    from qz_native_signal import record_native_tool_call, seed_native_advisory_state
     from qz_responses_error import build_responses_error_payload, is_deprecated_alias
     from qz_control_plane import build_control_plane_status
     from qz_service_status import build_service_status
@@ -2581,6 +2583,7 @@ class RequestRouter:
         web_runtime = self._web_runtime(selected_model)
         proxy_tool_registry = self._proxy_tool_registry(web_runtime)
         repeated_read_state = seed_repeated_read_state(working_body.get("input") or [])
+        native_advisory_state = seed_native_advisory_state(working_body.get("input") or [])
 
         for _hop in range(WEB_SEARCH_MAX_HOPS):
             hop_body = json.loads(json.dumps(working_body))
@@ -2619,13 +2622,20 @@ class RequestRouter:
                         item,
                         dropped_tool_names=dropped_tool_names,
                         repeated_read_state=repeated_read_state,
+                        native_advisory_state=native_advisory_state,
                     )
                     if rr_decision.kind == "signal":
                         next_input.append(rr_decision.signal_result)
                         try:
+                            # Determine telemetry event type based on metadata
+                            signal_payload = rr_decision.signal_metadata or {}
+                            event_type = "repeated_read_signal"
+                            if "advisory_reason" in signal_payload:
+                                event_type = "native_tool_advisory"
+                            
                             self.handler.telemetry.emit(
-                                "repeated_read_signal",
-                                {**(rr_decision.signal_metadata or {}), "request_id": request_id},
+                                event_type,
+                                {**signal_payload, "request_id": request_id},
                             )
                         except Exception:
                             pass
@@ -2645,6 +2655,7 @@ class RequestRouter:
                             pass
                     else:
                         record_tool_call(item, repeated_read_state)
+                        record_native_tool_call(item, native_advisory_state)
                         next_input.append(item)
                     continue
 

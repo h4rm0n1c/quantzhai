@@ -37,6 +37,7 @@ REQUEST_LIFECYCLE_EVENT_TYPES = {
     "tool_escalation_requested",
     "tool_sandbox_denied",
     "repeated_read_signal",
+    "native_tool_advisory",
     "responses_rejected_backend_unavailable",
     "responses_rejected_model_missing",
     "responses_rejected_proxy_not_ready",

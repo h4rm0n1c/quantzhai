@@ -3310,6 +3310,94 @@ class RepeatedReadStreamingTests(unittest.TestCase):
         from proxy.qz_telemetry import REQUEST_LIFECYCLE_EVENT_TYPES
         self.assertIn("repeated_read_signal", REQUEST_LIFECYCLE_EVENT_TYPES)
 
+class NativeToolAdvisoryStreamingTests(unittest.TestCase):
+    """Tests for native tool advisory in the streaming path."""
+
+    def _exec_stream(self, cmd, call_id="call_nat"):
+        arguments = json.dumps({"cmd": cmd})
+        return _named_function_call_stream(call_id, call_id, "exec_command", arguments)
+
+    def _run_with_native_history(self, history_items, stream_cmd, call_id="call_nat"):
+        """Build body with prior history, run stream, return telemetry events."""
+        stream_chunks = self._exec_stream(stream_cmd, call_id)
+        telemetry = TelemetryBus()
+
+        def opener(body):
+            has_advisory_output = any(
+                isinstance(item, dict) and item.get("type") == "function_call_output"
+                and item.get("call_id") == call_id
+                for item in (body.get("input") or [])
+            )
+            return FakeStream(_final_message_stream() if has_advisory_output else stream_chunks)
+
+        chunks = []
+        runtime = ResponsesStreamRuntime(
+            upstream="http://127.0.0.1:1",
+            authorization="Bearer local",
+            reasoning_stream_format="raw",
+            web_runtime=FakeWebRuntime(),
+            chunk_writer=chunks.append,
+            stream_opener=opener,
+            capture_enabled=False,
+            telemetry=telemetry,
+            request_id="req_nat_test",
+        )
+        body = {"model": "fake", "input": history_items, "tools": []}
+        runtime.run(body, "fake")
+        return telemetry.recent()
+
+    def test_stream_emits_native_tool_advisory_for_repeated_failure(self):
+        """3 failures in history -> repeated_failing_command advisory emitted."""
+        from proxy.qz_native_signal import QZ_NATIVE_FAIL_REPEAT_THRESHOLD
+        
+        history = []
+        for i in range(QZ_NATIVE_FAIL_REPEAT_THRESHOLD):
+            cid = f"fail_{i}"
+            history.append({
+                "type": "function_call", "name": "exec_command",
+                "call_id": cid, "arguments": json.dumps({"cmd": "fail"})
+            })
+            history.append({
+                "type": "function_call_output", "call_id": cid,
+                "output": "Process exited with code 1\nOutput: err"
+            })
+        
+        events = self._run_with_native_history(history, "fail")
+        nat_events = [e for e in events if e["type"] == "native_tool_advisory"]
+        self.assertTrue(len(nat_events) >= 1, f"No native_tool_advisory; events: {[e['type'] for e in events]}")
+        payload = nat_events[0]["payload"]
+        self.assertEqual(payload["advisory_reason"], "repeated_failing_command")
+        self.assertEqual(payload["tool_name"], "exec_command")
+
+    def test_stream_emits_native_tool_advisory_for_excessive_calls(self):
+        """Many calls in history -> excessive_call_count advisory emitted."""
+        from proxy.qz_native_signal import QZ_NATIVE_MAX_CALLS_PER_TURN
+        
+        history = []
+        for i in range(QZ_NATIVE_MAX_CALLS_PER_TURN):
+            history.append({
+                "type": "function_call", "name": "exec_command",
+                "call_id": f"hist_{i}", "arguments": json.dumps({"cmd": f"ls {i}"})
+            })
+            history.append({
+                "type": "function_call_output", "call_id": f"hist_{i}",
+                "output": "Process exited with code 0\nOutput: ok"
+            })
+        
+        events = self._run_with_native_history(history, "ls final")
+        nat_events = [e for e in events if e["type"] == "native_tool_advisory"]
+        self.assertTrue(len(nat_events) >= 1)
+        payload = nat_events[0]["payload"]
+        self.assertEqual(payload["advisory_reason"], "excessive_call_count")
+
+    def test_stream_native_tool_advisory_not_tool_call_error(self):
+        """Native advisory must not emit tool_call_error."""
+        from proxy.qz_native_signal import QZ_NATIVE_MAX_CALLS_PER_TURN
+        history = [{"type": "function_call", "name": "exec_command", "call_id": f"h{i}", "arguments": {"cmd": f"ls {i}"}} for i in range(QZ_NATIVE_MAX_CALLS_PER_TURN)]
+        events = self._run_with_native_history(history, "ls final")
+        error_events = [e for e in events if e["type"] == "tool_call_error"]
+        self.assertEqual(error_events, [])
+
 
 class StreamHopStateTests(unittest.TestCase):
     """Unit tests for StreamHopState — #37 Slice 1."""
