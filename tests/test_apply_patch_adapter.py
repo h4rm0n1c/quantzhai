@@ -1042,3 +1042,48 @@ class ApplyPatchAP3InspectTests(unittest.TestCase):
         self.assertEqual(meta["coercion_strategy"], "operation_object")
         self._assert_no_raw_content(meta, "delete_file case")
         self._assert_safe_types(meta)
+
+class ApplyPatchCoerceTests(unittest.TestCase):
+    """Tests for the new coerce() method on ApplyPatchToolAdapter."""
+
+    def _call(self, arguments: str) -> dict:
+        return {"type": "function_call", "name": "apply_patch",
+                "call_id": "test_call", "arguments": arguments}
+
+    def test_coerce_valid_operation_returns_corrected_arguments(self):
+        import json
+        call = self._call(json.dumps({"operation": {"type": "create_file", "path": "x.py", "diff": "x=1\n"}}))
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(call)
+        self.assertTrue(result.succeeded())
+        self.assertIsNone(result.error_message)
+        parsed = json.loads(result.corrected_arguments)
+        self.assertEqual(parsed["operation"]["type"], "create_file")
+
+    def test_coerce_sibling_patch_returns_corrected_arguments(self):
+        import json
+        call = self._call(json.dumps({"operation": {"type": "create_file", "path": "x.py"}, "patch": "x=1\n"}))
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(call)
+        self.assertTrue(result.succeeded())
+        parsed = json.loads(result.corrected_arguments)
+        self.assertEqual(parsed["operation"]["diff"], "x=1\n")
+
+    def test_coerce_bare_operation_returns_error_message(self):
+        import json
+        call = self._call(json.dumps({"operation": {"type": "create_file", "path": "x.py"}}))
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(call)
+        self.assertFalse(result.succeeded())
+        self.assertIsNotNone(result.error_message)
+        self.assertIn("diff", result.error_message)
+
+    def test_coerce_missing_destination_returns_error_message(self):
+        import json
+        call = self._call(json.dumps({"operation": {"type": "move_file", "path": "a.py"}}))
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(call)
+        self.assertFalse(result.succeeded())
+        self.assertIn("destination", result.error_message)
+
+    def test_coerce_bad_json_returns_error_message(self):
+        call = self._call("{not valid json}")
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(call)
+        self.assertFalse(result.succeeded())
+        self.assertIsNotNone(result.error_message)

@@ -3,21 +3,23 @@
 Date: 2026-05-26
 Status: active control sheet — #59 umbrella audit refreshed + closed; #61/#62 open; 3636 tests pass.
 
-## Recently completed — #62 Slice A audit complete (2026-05-26)
+## Recently completed — #62 Slice B.1 (test coverage) complete (2026-05-26)
 
 ```text
-Status: COMPLETE — Audit completed; docs/apply-patch-coercion-map.md created.
+Status: COMPLETE — tests added to tests/test_apply_patch_adapter.py.
 
-Problem (#62):
-  - apply_patch coercion stack was complex and undocumented.
-  - Telemetry and advisory gaps in coercion paths.
+Problem: Insufficient unit test coverage for coercion paths and telemetry safety.
 
-Audit findings:
-  - Canonical, Split, and Envelope shapes documented.
-  - Coercion/Failure paths mapped.
-  - Telemetry safety confirmed (metadata only).
+Changes:
+  - Added ApplyPatchAP3InspectTests:
+      - Validated all coercion strategies (canonical, sibling, envelope, etc.).
+      - Confirmed safe metadata-only telemetry.
+      - Confirmed telemetry exclusion of raw arguments, patch body, diff, and file paths.
+  - Added ApplyPatchCoerceTests:
+      - Validated success/error paths for valid, sibling-patch, bare-operation,
+        missing-destination, and invalid-JSON scenarios.
 
-See docs/apply-patch-coercion-map.md for full coercion map and Slice B recommendations.
+Remaining: Slice B implementation (add telemetry emission) and Slice C (advisory).
 ```
 
 ## Remaining open work (tracked in dedicated issues)                                                    
