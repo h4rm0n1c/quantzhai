@@ -1,7 +1,7 @@
 # Compaction Audit and Strategy
 
 Date: 2026-05-27
-Status: **Stage 6** — initial live dogfood completed; v3 remains opt-in and fell back safely.
+Status: **Stage 6.1** — live dogfood tuning produced accepted opt-in v3; default remains heuristic v2.
 
 ---
 
@@ -903,9 +903,36 @@ telemetry, and tune thresholds.
 - Prompt wording was tightened to require every schema heading through
   `## Next Actions`, with `- none observed` allowed when evidence is absent.
 
-**Next tuning target**: Stage 6.1 should investigate the narrowest safe way to
-make the direct backend produce complete final `message.content` for compaction
-requests. Keep v3 opt-in and keep v2 fallback mandatory.
+**Stage 6.1 follow-up**: The narrow final-output tuning pass completed and is
+recorded below. Continue dogfood before changing thresholds or defaults.
+
+#### Stage 6.1: Final-output handling for live LLM compaction
+
+**Status**: Completed on 2026-05-27. The direct llama.cpp backend on
+`127.0.0.1:18084` was reconfirmed and used for compactor calls; QuantZhai proxy
+URLs on `18180` and `18183` were not used as `QZ_LLM_COMPACT_BASE_URL`.
+
+**Observed and changed**:
+- Direct probes showed the backend could spend the compactor budget on
+  `reasoning_content` and omit final `message.content`.
+- The compactor request now explicitly asks for the anchored summary in final
+  `message.content`.
+- For compactor calls only, QuantZhai sends `thinking_budget_tokens: 0` and
+  `reasoning_budget_tokens: 0` by default. This can be disabled for backend
+  compatibility with `QZ_LLM_COMPACT_DISABLE_REASONING=0`.
+- `reasoning_content` is still ignored by response parsing and is not accepted
+  as a summary.
+- Live smoke against `/tmp/linuxstreamtools` produced an accepted
+  `localcmp:v3:` blob with required anchored headings through
+  `## Next Actions`.
+
+**Contract unchanged**:
+- default compaction remains heuristic `localcmp:v2:`;
+- `localcmp:v3:` remains opt-in through env/profile configuration;
+- invalid, partial, reasoning-only, timeout, or backend-error compactor results
+  fall back to `localcmp:v2:`;
+- no native tool routing, lifecycle event, profile routing, or memory behaviour
+  changed.
 
 **Files**:
 ```text
@@ -1151,6 +1178,7 @@ Stage 4               — complete       — LLM-generated v3 blobs
 Stage 4.1             — complete       — harden v3 fallback/config/safety path
 Stage 5               — complete       — compaction.json profile config
 Stage 6               — initial run    — direct-backend dogfood; v2 fallback observed
+Stage 6.1             — complete       — compactor final-output tuning; live v3 accepted
 ```
 
 Priority note: Stages 0–3 are pure docs/tests. No proxy changes.

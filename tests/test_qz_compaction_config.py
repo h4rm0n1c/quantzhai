@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from proxy.qz_responses import (
     COMPACTION_CONFIG,
+    _DEFAULT_LLM_DISABLE_REASONING,
     _DEFAULT_LLM_MAX_INPUT_CHARS,
     _DEFAULT_LLM_MAX_OUTPUT_TOKENS,
     _DEFAULT_LLM_TIMEOUT_SEC,
@@ -173,6 +174,32 @@ class TestCompactionConfig(unittest.TestCase):
         self.assertEqual(explicit["llm_timeout_sec"], 7)
         self.assertEqual(explicit["llm_max_input_chars"], 1234)
         self.assertEqual(explicit["llm_max_output_tokens"], 321)
+
+    def test_disable_reasoning_defaults_for_compactor_only(self):
+        cfg = self._config({"profiles": {"default": {"mode": "heuristic"}}})
+
+        self.assertEqual(cfg["llm_disable_reasoning"], _DEFAULT_LLM_DISABLE_REASONING)
+
+    def test_profile_disable_reasoning_is_ignored(self):
+        cfg = self._config({"profiles": {"default": {"llm_disable_reasoning": False}}})
+
+        self.assertEqual(cfg["llm_disable_reasoning"], _DEFAULT_LLM_DISABLE_REASONING)
+
+    def test_env_disable_reasoning_overrides_default(self):
+        cfg = self._config(
+            {"profiles": {"default": {"mode": "heuristic"}}},
+            env={"QZ_LLM_COMPACT_DISABLE_REASONING": "0"},
+        )
+
+        self.assertFalse(cfg["llm_disable_reasoning"])
+
+    def test_invalid_disable_reasoning_env_falls_back_safely(self):
+        cfg = self._config(
+            {"profiles": {"default": {"llm_disable_reasoning": False}}},
+            env={"QZ_LLM_COMPACT_DISABLE_REASONING": "maybe"},
+        )
+
+        self.assertEqual(cfg["llm_disable_reasoning"], _DEFAULT_LLM_DISABLE_REASONING)
 
     def test_invalid_profile_integer_values_fall_back_to_defaults(self):
         cfg = self._config({

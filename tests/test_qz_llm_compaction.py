@@ -7,6 +7,7 @@ import tempfile
 import urllib.error
 from unittest.mock import patch, MagicMock
 from proxy.qz_responses import (
+    _build_llm_compactor_payload,
     _DEFAULT_LLM_MAX_OUTPUT_TOKENS,
     _DEFAULT_LLM_TIMEOUT_SEC,
     _build_local_compaction_response,
@@ -14,6 +15,7 @@ from proxy.qz_responses import (
     _call_llm_compactor,
     _decode_local_compaction_blob,
     _expand_local_compaction_items,
+    _extract_llm_compactor_content,
     _get_env_int,
     _is_probably_quantzhai_proxy_url,
     _normalize_compaction_mode,
@@ -276,6 +278,29 @@ class TestLLMCompaction(unittest.TestCase):
         self._mock_backend_response(mock_urlopen, {"choices": [{"text": " legacy text "}]})
         self.assertEqual(_call_llm_compactor("prompt"), "legacy text")
 
+    def test_response_shape_reasoning_content_alone_is_ignored(self):
+        self.assertIsNone(
+            _extract_llm_compactor_content(
+                {"choices": [{"message": {"reasoning_content": "## Goal\nhidden"}}]}
+            )
+        )
+
+    def test_response_shape_message_content_wins_over_reasoning_content(self):
+        content = _extract_llm_compactor_content(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": " visible summary ",
+                            "reasoning_content": "hidden summary",
+                        }
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(content, "visible summary")
+
     @patch("urllib.request.urlopen")
     def test_response_shape_simple_content(self, mock_urlopen):
         self._mock_backend_response(mock_urlopen, {"content": " simple content "})
@@ -290,6 +315,23 @@ class TestLLMCompaction(unittest.TestCase):
     def test_response_shape_non_string_returns_none(self, mock_urlopen):
         self._mock_backend_response(mock_urlopen, {"choices": [{"message": {"content": ["no"]}}]})
         self.assertIsNone(_call_llm_compactor("prompt"))
+
+    def test_compactor_payload_requests_final_content_and_disables_reasoning(self):
+        payload = _build_llm_compactor_payload("prompt")
+        system_text = payload["messages"][0]["content"]
+
+        self.assertIn("message.content", system_text)
+        self.assertIn("reasoning_content", system_text)
+        self.assertEqual(payload["thinking_budget_tokens"], 0)
+        self.assertEqual(payload["reasoning_budget_tokens"], 0)
+
+    def test_compactor_payload_can_leave_reasoning_budget_fields_out(self):
+        COMPACTION_CONFIG["llm_disable_reasoning"] = False
+
+        payload = _build_llm_compactor_payload("prompt")
+
+        self.assertNotIn("thinking_budget_tokens", payload)
+        self.assertNotIn("reasoning_budget_tokens", payload)
 
     def test_prompt_includes_previous_summary_new_text_and_survival_hints(self):
         COMPACTION_CONFIG["prompt_file"] = "/tmp/qz-no-such-compact-template.md"
@@ -352,6 +394,15 @@ class TestLLMCompaction(unittest.TestCase):
 
     def test_validate_anchored_summary_rejects_missing_required_heading(self):
         self.assertFalse(_validate_anchored_summary(VALID_SUMMARY.replace("## Evidence Boundaries", "## Evidence")))
+
+    def test_validate_anchored_summary_rejects_partial_live_style_summary(self):
+        partial = """## Goal
+Complete Stage 6.1 live tuning.
+
+## Active Constraints & Guardrails
+- Do not accept reasoning_content.
+"""
+        self.assertFalse(_validate_anchored_summary(partial))
 
     def test_expand_v3_blob(self):
         payload = {

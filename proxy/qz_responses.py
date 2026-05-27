@@ -60,11 +60,13 @@ _VALID_COMPACTION_MODES = frozenset({"heuristic", "llm", "auto"})
 _DEFAULT_LLM_TIMEOUT_SEC = 30
 _DEFAULT_LLM_MAX_INPUT_CHARS = 100000
 _DEFAULT_LLM_MAX_OUTPUT_TOKENS = 1536
+_DEFAULT_LLM_DISABLE_REASONING = True
 _DEFAULT_SURVIVAL_PROFILE = "coding"
 _VALID_SURVIVAL_PROFILES = frozenset({_DEFAULT_SURVIVAL_PROFILE})
 _COMPACTION_CONFIG_ENV = "QZ_COMPACTION_CONFIG"
 _COMPACTION_PROFILE_ENV = "QZ_COMPACTION_PROFILE"
 _COMPACTION_SURVIVAL_PROFILE_ENV = "QZ_COMPACTION_SURVIVAL_PROFILE"
+_LLM_COMPACT_DISABLE_REASONING_ENV = "QZ_LLM_COMPACT_DISABLE_REASONING"
 _REQUIRED_ANCHORED_HEADINGS = (
     "## Goal",
     "## Active Constraints & Guardrails",
@@ -84,6 +86,25 @@ def _coerce_positive_int(value, default: int) -> int:
     if parsed <= 0:
         return default
     return parsed
+
+
+def _coerce_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+        return default
+    if not isinstance(value, str):
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def _get_env_int_from_mapping(env, key: str, default: int) -> int:
@@ -167,6 +188,7 @@ def _default_compaction_config(env=None) -> dict:
         "llm_timeout_sec": _DEFAULT_LLM_TIMEOUT_SEC,
         "llm_max_input_chars": _DEFAULT_LLM_MAX_INPUT_CHARS,
         "llm_max_output_tokens": _DEFAULT_LLM_MAX_OUTPUT_TOKENS,
+        "llm_disable_reasoning": _DEFAULT_LLM_DISABLE_REASONING,
         "prompt_file": _default_prompt_file(env),
     }
 
@@ -251,6 +273,11 @@ def _apply_env_compaction_overrides(merged: dict, env) -> dict:
     for env_key, (cfg_key, default) in int_env_map.items():
         if env_key in env:
             merged[cfg_key] = _get_env_int_from_mapping(env, env_key, default)
+    if _LLM_COMPACT_DISABLE_REASONING_ENV in env:
+        merged["llm_disable_reasoning"] = _coerce_bool(
+            env.get(_LLM_COMPACT_DISABLE_REASONING_ENV),
+            _DEFAULT_LLM_DISABLE_REASONING,
+        )
     return merged
 
 
@@ -697,6 +724,33 @@ def _extract_llm_compactor_content(data) -> Optional[str]:
     return None
 
 
+def _build_llm_compactor_payload(prompt: str) -> dict:
+    payload = {
+        "model": COMPACTION_CONFIG["llm_model"] or "local-model",
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a precise context compaction engine for a coding agent. "
+                    "Return only the final anchored summary in message.content. "
+                    "Do not put the summary in reasoning_content. "
+                    "Preserve exact technical atoms."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0,
+        "max_tokens": _positive_config_int("llm_max_output_tokens", _DEFAULT_LLM_MAX_OUTPUT_TOKENS),
+        "stream": False,
+    }
+    if _coerce_bool(COMPACTION_CONFIG.get("llm_disable_reasoning"), _DEFAULT_LLM_DISABLE_REASONING):
+        # llama.cpp's OAI path reads thinking_budget_tokens; mirror the newer
+        # name for backend compatibility. This is compactor-only and opt-in.
+        payload["thinking_budget_tokens"] = 0
+        payload["reasoning_budget_tokens"] = 0
+    return payload
+
+
 def _call_llm_compactor(prompt: str) -> Optional[str]:
     """Execute a direct call to the local LLM backend for compaction."""
     base_url = str(COMPACTION_CONFIG.get("llm_base_url", "") or "").rstrip("/")
@@ -705,18 +759,8 @@ def _call_llm_compactor(prompt: str) -> Optional[str]:
     if _is_probably_quantzhai_proxy_url(base_url):
         return None
 
-    # Use OpenAI-compatible chat completions endpoint
     url = _llm_chat_completions_url(base_url)
-    payload = {
-        "model": COMPACTION_CONFIG["llm_model"] or "local-model",
-        "messages": [
-            {"role": "system", "content": "You are a precise context compaction engine for a coding agent. Preserve exact technical atoms."},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0,
-        "max_tokens": _positive_config_int("llm_max_output_tokens", _DEFAULT_LLM_MAX_OUTPUT_TOKENS),
-        "stream": False
-    }
+    payload = _build_llm_compactor_payload(prompt)
 
     try:
         req = urllib.request.Request(

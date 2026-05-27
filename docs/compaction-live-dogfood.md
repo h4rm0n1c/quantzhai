@@ -1,11 +1,12 @@
 # Compaction Live Dogfood
 
 Date: 2026-05-27
-Status: **Stage 6 initial dogfood complete, v3 not yet accepted live**
-Base commit tested: `f72150a`
+Status: **Stage 6.1 live tuning complete, v3 accepted live**
+Base commits tested: `f72150a`, `8c0ddac`
 
-This note records the first live opt-in LLM compaction run for issue #8.
-It is a runbook and evidence summary, not a private capture dump.
+This note records the first live opt-in LLM compaction run and the Stage 6.1
+request-shape tuning for issue #8. It is a runbook and evidence summary, not a
+private capture dump.
 
 ## Backend Identification
 
@@ -140,9 +141,70 @@ native tool behaviour, lifecycle event shape, or compaction blob format changed.
 
 ## Next Step
 
-Stage 6.1 should tune live v3 acceptance against this backend. The likely
-fault line is the direct backend's thinking-mode behaviour for chat
-completions: compactor calls can return reasoning-only output or stop before
-the canonical headings complete. Investigate a narrowly gated compactor request
-policy or prompt strategy that causes final `message.content` to contain the
-complete anchored schema, while keeping v3 opt-in and preserving v2 fallback.
+Stage 6.1 completed the first narrow tuning pass against the same direct
+backend. Continue dogfood with more sessions and inspect summary quality and
+latency before changing thresholds or defaults.
+
+## Stage 6.1 Live Tuning
+
+Date: 2026-05-27
+
+Direct backend reconfirmed:
+
+```text
+http://127.0.0.1:18084
+```
+
+`127.0.0.1:18180` remained the normal QuantZhai proxy. `127.0.0.1:18183` was
+used only as a temporary capture proxy. Neither proxy URL was used as
+`QZ_LLM_COMPACT_BASE_URL`.
+
+Direct backend experiments against `/v1/chat/completions` showed:
+
+- Current small-budget compactor shape could stop with no final
+  `message.content` and only `reasoning_content`.
+- Increasing the output budget alone could produce final content, but earlier
+  live evidence showed this was not reliable enough.
+- Sending the compactor request with `thinking_budget_tokens: 0` made the
+  backend emit complete anchored summary text in final `message.content`.
+
+The Stage 6.1 code change is compactor-specific:
+
+- The LLM compactor request asks for final anchored output in
+  `message.content`, not `reasoning_content`.
+- By default, the compactor payload includes `thinking_budget_tokens: 0` and
+  `reasoning_budget_tokens: 0` for llama.cpp-compatible direct backends.
+- `reasoning_content` remains ignored by the parser and is not accepted as
+  `summary_text`.
+- `QZ_LLM_COMPACT_DISABLE_REASONING=0` can disable those budget fields for a
+  backend that rejects them. The fallback path remains `localcmp:v2:`.
+
+Live smoke used `/tmp/linuxstreamtools`, `QZ_COMPACTION_PROFILE=coding-llm`,
+`QZ_LLM_COMPACT_BASE_URL=http://127.0.0.1:18084`, and a temporary proxy on
+`127.0.0.1:18183`. The qz-codex repo-inspection smoke completed, and a forced
+compaction request produced an accepted `localcmp:v3:` blob.
+
+Decoded live v3 facts:
+
+- `version`: `3`
+- `engine`: `anchored-llm`
+- `schema_version`: `anchored-v0`
+- required headings through `## Next Actions`: present
+- placeholder leakage: not observed
+- `reasoning_content` used as summary: no
+- `metadata.fallback`: `false`
+- `metadata.prompt`: `compact-v0`
+
+Local capture dirs from Stage 6.1 include:
+
+```text
+var/captures/requests/qz_req_1779873503920_9250
+var/captures/requests/qz_req_1779873513662_e140
+var/captures/requests/qz_req_1779873614344_b650
+var/captures/requests/qz_req_1779873653386_e8a0
+```
+
+`/tmp/linuxstreamtools` remained clean after the smoke. The observed v3 latency
+on the larger forced compaction was about 80 seconds, so the next dogfood target
+is quality and latency tuning across more captured sessions, not a default-mode
+change.

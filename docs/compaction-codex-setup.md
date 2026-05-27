@@ -124,6 +124,7 @@ QZ_LLM_COMPACT_TIMEOUT_SEC
 QZ_LLM_COMPACT_MAX_INPUT_CHARS
 QZ_LLM_COMPACT_MAX_OUTPUT_TOKENS
 QZ_LLM_COMPACT_PROMPT_FILE
+QZ_LLM_COMPACT_DISABLE_REASONING
 QZ_COMPACTION_PROFILE
 QZ_COMPACTION_SURVIVAL_PROFILE
 ```
@@ -168,10 +169,13 @@ not configurable.
 - **Stage 6 is dogfood/live tuning.** Do not run a live LLM smoke through the
   QuantZhai proxy URL; use only a clearly identified direct backend.
 
-- **Stage 6 found a thinking-mode blocker.** The direct llama.cpp backend can
-  return reasoning-only chat-completion output or partial anchored content. The
-  v3 path correctly falls back to `localcmp:v2:` when no valid anchored summary
-  is present. See `docs/compaction-live-dogfood.md`.
+- **Stage 6.1 tunes thinking-mode backends narrowly.** The LLM compactor asks
+  for final anchored output in `message.content` and, by default, sends
+  `thinking_budget_tokens: 0` and `reasoning_budget_tokens: 0` on the
+  compactor-only backend call. `reasoning_content` is not accepted as a summary.
+  Set `QZ_LLM_COMPACT_DISABLE_REASONING=0` only if a direct backend rejects
+  those fields; invalid or missing summaries still fall back to `localcmp:v2:`.
+  See `docs/compaction-live-dogfood.md`.
 
 ---
 
