@@ -1,6 +1,6 @@
 # Model Selection and Compaction Correction Plan
 
-Status: proposed corrective plan
+Status: **Delivered** — see commit `fix: restore model-selection authority and startup self-heal`
 
 ## Why this exists
 

@@ -273,10 +273,16 @@ class ModelRouter:
         new_at = _iso_state_now()
         new_reason = reason or ""
         if source == "status_snapshot" and existing.selected_source in SELECTED_SOURCES:
-            # Observational reconciliation writes must not overwrite canonical sources.
+            # Observational reconciliation writes must not overwrite canonical selection
+            # authority.  Preserve both the source provenance AND the selection identity
+            # (key/backend_id/label) so that a status probe cannot swap the operator's
+            # chosen model for whatever the catalog currently reports as its default.
             new_source = existing.selected_source
             new_at = existing.selected_at or new_at
             new_reason = existing.selected_reason or new_reason
+            key = existing.selected_key
+            backend_id = existing.selected_backend_id
+            label = existing.selected_label
         elif (
             existing.selected_source in SELECTED_SOURCES
             and existing.selected_backend_id
@@ -513,6 +519,30 @@ class ModelRouter:
             # exists.  This prevents "status_snapshot" from creating authoritative
             # empty selections during startup/scan races.
             self._persist_model_state(selected, reason="status reconciliation", source="status_snapshot")
+        # Record last_good_backend_id when the backend is confirmed healthy and no
+        # recovery point has been written yet.  This runs on the first status probe
+        # after a successful load and provides the self-heal anchor for future restarts.
+        if health_status == 200 and backend_state == "loaded" and selected_backend_id:
+            try:
+                from .qz_model_state import (
+                    load_model_state as _lms,
+                    mark_load_success as _mls,
+                    write_model_state as _wms,
+                )
+            except ImportError:
+                from qz_model_state import (
+                    load_model_state as _lms,
+                    mark_load_success as _mls,
+                    write_model_state as _wms,
+                )
+            try:
+                _state_path = self.model_state_path()
+                _ms = _lms(_state_path).state
+                if not _ms.last_good_backend_id:
+                    _updated = _mls(_ms, loaded_model=loaded_model)
+                    _wms(_updated, _state_path)
+            except Exception:
+                pass
         if backend_drift:
             self._persist_backend_state(
                 selected=selected,

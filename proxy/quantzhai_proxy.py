@@ -725,6 +725,14 @@ def main():
         Precedence (post-cleanup): persisted qz.model_state.v1 selection >
         catalog.selected (which already honours QZ_MODEL_KEY seed > config
         default).  Returns the catalog entry dict or None.
+
+        Self-heal: if the persisted state is poisoned (selected_source is
+        observational, e.g. "status_snapshot"), recover in this order:
+          1. last_good_backend_id  — most recent confirmed-healthy selection
+          2. last_loaded_model     — one-time salvage when last_good is empty
+             and the model uniquely matches a catalog entry
+        After salvage the state file is rewritten in canonical form so the
+        poison is removed rather than carried forward on every restart.
         """
         catalog = getattr(ProxyHandler, "model_catalog", None)
         if not isinstance(catalog, ModelCatalog):
@@ -732,18 +740,103 @@ def main():
 
         # Load persisted selection with migration support.
         try:
-            from .qz_model_state import load_model_state, selected_identity_from_state
+            from .qz_model_state import (
+                SELECTED_SOURCES,
+                load_model_state,
+                selected_identity_from_state,
+                write_model_state,
+            )
+            from dataclasses import replace as _dc_replace
         except ImportError:
-            from qz_model_state import load_model_state, selected_identity_from_state
+            from qz_model_state import (
+                SELECTED_SOURCES,
+                load_model_state,
+                selected_identity_from_state,
+                write_model_state,
+            )
+            from dataclasses import replace as _dc_replace
 
         state_path = Path(ProxyHandler.model_state_path)
         state_result = load_model_state(state_path)
-        requested = selected_identity_from_state(state_result.state)
+        state = state_result.state
 
-        if requested:
-            entry, _reason = catalog.resolve(query=requested)
-            if entry is not None:
-                return entry
+        # Detect poisoned state: selection authority overwritten by an
+        # observational source (e.g. "status_snapshot").
+        _is_poisoned = (
+            state.has_selection()
+            and state.selected_source
+            and state.selected_source not in SELECTED_SOURCES
+        )
+
+        if _is_poisoned:
+            print(
+                f"QuantZhai: startup self-heal — persisted selection "
+                f"(key={state.selected_key!r}, source={state.selected_source!r}) "
+                "is observational; attempting recovery.",
+                flush=True,
+            )
+            # Recovery priority 1: last_good_backend_id
+            salvage_id = state.last_good_backend_id or state.last_good_key
+            if salvage_id:
+                _entry, _ = catalog.resolve(query=salvage_id)
+                if _entry is not None:
+                    print(
+                        f"QuantZhai: self-heal recovered via last_good: {salvage_id!r}",
+                        flush=True,
+                    )
+                    try:
+                        _healed = _dc_replace(
+                            state,
+                            selected_key=_entry.get("key") or _entry.get("slug") or salvage_id,
+                            selected_backend_id=_entry.get("backend_id") or salvage_id,
+                            selected_label=_entry.get("label") or "",
+                            selected_source="fallback",
+                            selected_reason="startup self-heal: last_good_backend_id",
+                        )
+                        write_model_state(_healed, state_path)
+                    except Exception as _exc:
+                        print(f"QuantZhai: self-heal state rewrite failed: {_exc}", flush=True)
+                    return _entry
+
+            # Recovery priority 2: last_loaded_model (one-time salvage)
+            salvage_model = state.last_loaded_model
+            if salvage_model:
+                _entry, _ = catalog.resolve(query=salvage_model)
+                if _entry is not None:
+                    _backend_id = _entry.get("backend_id") or salvage_model
+                    print(
+                        f"QuantZhai: self-heal recovered via last_loaded_model: "
+                        f"{salvage_model!r} → backend_id={_backend_id!r}",
+                        flush=True,
+                    )
+                    try:
+                        _healed = _dc_replace(
+                            state,
+                            selected_key=_entry.get("key") or _entry.get("slug") or salvage_model,
+                            selected_backend_id=_backend_id,
+                            selected_label=_entry.get("label") or "",
+                            selected_source="fallback",
+                            selected_reason="startup self-heal: last_loaded_model salvage",
+                        )
+                        write_model_state(_healed, state_path)
+                    except Exception as _exc:
+                        print(f"QuantZhai: self-heal state rewrite failed: {_exc}", flush=True)
+                    return _entry
+
+            print(
+                "QuantZhai: self-heal found no usable recovery anchor "
+                "(last_good empty, last_loaded_model unresolvable); "
+                "falling through to catalog default.",
+                flush=True,
+            )
+
+        # Normal path: use canonical persisted selection.
+        if not _is_poisoned:
+            requested = selected_identity_from_state(state)
+            if requested:
+                entry, _reason = catalog.resolve(query=requested)
+                if entry is not None:
+                    return entry
 
         # No valid persisted selection — fall back to catalog default
         # (which already incorporates QZ_MODEL_KEY seed).

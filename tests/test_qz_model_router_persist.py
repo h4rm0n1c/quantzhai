@@ -144,6 +144,164 @@ class PersistModelStateSourceTests(unittest.TestCase):
         self.assertEqual(self._read_source(), "operator",
                          "operator source must survive even when backend_id differs in status_snapshot write")
 
+    # ── Identity fields must also be preserved, not just source ──────────────
+
+    def test_status_snapshot_does_not_overwrite_selection_identity(self):
+        """status_snapshot must not overwrite selected_key/backend_id/label when canonical source exists.
+
+        Root cause of poisoned state: the guard preserved selected_source but
+        still overwrote selected_key and selected_backend_id with snapshot values.
+        """
+        self._write_state(
+            selected_key="Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf",
+            selected_backend_id="Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS",
+            selected_label="Qwen3.6 27B NEO",
+            selected_source="operator",
+            selected_reason="operator selected the real model",
+        )
+        router = _make_router(self._state_path)
+        # Simulate a status probe that sees "default" as the catalog selection
+        router._persist_model_state(
+            {"key": "default.gguf", "backend_id": "default", "label": "Default"},
+            reason="status reconciliation",
+            source="status_snapshot",
+        )
+        state = load_model_state(Path(self._state_path)).state
+        self.assertEqual(state.selected_key,
+                         "Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf",
+                         "status_snapshot must not overwrite selected_key with snapshot value")
+        self.assertEqual(state.selected_backend_id,
+                         "Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS",
+                         "status_snapshot must not overwrite selected_backend_id")
+        self.assertEqual(state.selected_label, "Qwen3.6 27B NEO",
+                         "status_snapshot must not overwrite selected_label")
+
+    def test_status_snapshot_with_fallback_source_preserves_identity(self):
+        """status_snapshot does not overwrite identity when existing source is 'fallback'."""
+        self._write_state(
+            selected_key="Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf",
+            selected_backend_id="Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS",
+            selected_source="fallback",
+        )
+        router = _make_router(self._state_path)
+        router._persist_model_state(
+            {"key": "default.gguf", "backend_id": "default"},
+            reason="status reconciliation",
+            source="status_snapshot",
+        )
+        state = load_model_state(Path(self._state_path)).state
+        self.assertEqual(state.selected_key,
+                         "Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf")
+        self.assertEqual(state.selected_backend_id,
+                         "Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS")
+
+    def test_status_snapshot_on_non_canonical_state_still_writes_snapshot_identity(self):
+        """status_snapshot may write identity when existing source is also non-canonical."""
+        self._write_state(
+            selected_key="default.gguf",
+            selected_backend_id="default",
+            selected_source="status_snapshot",  # non-canonical: guard does not fire
+        )
+        router = _make_router(self._state_path)
+        router._persist_model_state(
+            {"key": "other.gguf", "backend_id": "other"},
+            reason="status reconciliation",
+            source="status_snapshot",
+        )
+        state = load_model_state(Path(self._state_path)).state
+        # No canonical source → identity is overwritten (expected behavior)
+        self.assertEqual(state.selected_key, "other.gguf")
+
+
+class ReconcileStatusStateLastGoodTests(unittest.TestCase):
+    """Verify _reconcile_status_state records last_good_backend_id on confirmed healthy load."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._state_path = str(Path(self._tmp.name) / "model-state.json")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _write_state(self, **kwargs):
+        state = ModelState(**kwargs)
+        write_model_state(state, Path(self._state_path))
+
+    def _read_state(self) -> ModelState:
+        return load_model_state(Path(self._state_path)).state
+
+    def test_last_good_backend_id_recorded_when_backend_healthy(self):
+        """_reconcile_status_state records last_good_backend_id when backend is confirmed loaded."""
+        self._write_state(
+            selected_key="Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf",
+            selected_backend_id="Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS",
+            selected_source="operator",
+            last_good_backend_id="",  # empty — no recovery point yet
+        )
+        router = _make_router(self._state_path)
+        # Simulate confirmed-healthy backend state
+        router._reconcile_status_state(
+            selected={"key": "Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf",
+                      "backend_id": "Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS"},
+            health_status=200,
+            selected_backend_id="Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS",
+            selected_context_length=262144,
+            backend_context_length=262144,
+            backend_state="loaded",
+            loaded_model="Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS",
+        )
+        state = self._read_state()
+        self.assertEqual(state.last_good_backend_id,
+                         "Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS",
+                         "last_good_backend_id must be recorded after confirmed healthy load")
+
+    def test_last_good_not_overwritten_when_already_set(self):
+        """_reconcile_status_state does not overwrite last_good_backend_id if already set."""
+        self._write_state(
+            selected_key="Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf",
+            selected_backend_id="Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS",
+            selected_source="operator",
+            last_good_backend_id="Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS",  # already set
+        )
+        router = _make_router(self._state_path)
+        router._reconcile_status_state(
+            selected={"key": "Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf",
+                      "backend_id": "Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS"},
+            health_status=200,
+            selected_backend_id="Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS",
+            selected_context_length=262144,
+            backend_context_length=262144,
+            backend_state="loaded",
+            loaded_model="Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS",
+        )
+        state = self._read_state()
+        # Should remain unchanged (doesn't need to reload from scratch)
+        self.assertEqual(state.last_good_backend_id,
+                         "Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS")
+
+    def test_last_good_not_recorded_when_backend_not_loaded(self):
+        """_reconcile_status_state does not record last_good when backend is not confirmed loaded."""
+        self._write_state(
+            selected_key="Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf",
+            selected_backend_id="Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS",
+            selected_source="operator",
+            last_good_backend_id="",
+        )
+        router = _make_router(self._state_path)
+        router._reconcile_status_state(
+            selected={"key": "Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf",
+                      "backend_id": "Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS"},
+            health_status=503,   # backend not healthy
+            selected_backend_id="Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS",
+            selected_context_length=262144,
+            backend_context_length=262144,
+            backend_state="starting",  # not loaded
+            loaded_model="",
+        )
+        state = self._read_state()
+        self.assertEqual(state.last_good_backend_id, "",
+                         "last_good_backend_id must remain empty when backend is not loaded")
+
 
 if __name__ == "__main__":
     unittest.main()
