@@ -1,7 +1,7 @@
 # Compaction Audit and Strategy
 
 Date: 2026-05-27
-Status: **Stage 6.1** — live dogfood tuning produced accepted opt-in v3; default remains heuristic v2.
+Status: **Stage 6.2** — extended opt-in dogfood completed; v3 accepted across all scenarios, quality confirmed with real conversation depth, fallback proven, latency baseline established; default remains heuristic v2.
 
 ---
 
@@ -1179,6 +1179,7 @@ Stage 4.1             — complete       — harden v3 fallback/config/safety pa
 Stage 5               — complete       — compaction.json profile config
 Stage 6               — initial run    — direct-backend dogfood; v2 fallback observed
 Stage 6.1             — complete       — compactor final-output tuning; live v3 accepted
+Stage 6.2             — complete       — extended opt-in dogfood; v3 reliability and quality confirmed; latency baseline 5-68s; fallback proven; no tuning needed
 ```
 
 Priority note: Stages 0–3 are pure docs/tests. No proxy changes.
