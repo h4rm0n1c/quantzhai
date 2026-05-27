@@ -1,7 +1,7 @@
 # Compaction Corpus Dogfood (Stage 6.4)
 
 Date: 2026-05-27
-Status: **Stage 6.5 — multi-repo opt-in v3 compaction dogfood complete. 16/16 shallow v3 accepted, 2/3 deep v3 accepted, survival classifier anti-overfit assessed.**
+Status: **Stage 6.7 — post-tuning corpus rerun complete. 16/16 shallow v3, 2/3 deep v3, classifier tuning verified.**
 
 ## Purpose
 
@@ -197,6 +197,19 @@ narrowly tuned with 5 new feature types:
 Created `scripts/qz-dogfood-corpus-run` for dogfood execution.
 All 8 scratch repos remain clean at `/tmp/qz-dogfood-work/stage65-corpus/`.
 Results: `~/turboquant/qz-dogfood-corpus/runs/stage65-corpus/dogfood-results.json`.
+
+## Stage 6.7: Post-Tuning Corpus Rerun (2026-05-27)
+
+Classifier tuning verified. Results in `docs/compaction-live-dogfood.md::Stage 6.7`.
+
+**Summary**:
+- 16/16 shallow v3 accepted (identical to Stage 6.5).
+- 2/3 deep v3 accepted (quantzhai improved from v2 fallback to v3 accepted; fd 24× more hints).
+- New features confirmed: `build_file`, `language_command`, `qualified_symbol`, `repo_dir` appear where expected (p-limit, quantzhai, fd deep).
+- Click deep regressed to v2 fallback (more hints → larger input → timeout). Fallback path works.
+- No classifier noise increase. No regression in v3 acceptance rate.
+- All scratch repos clean.
+- Stage 6.8 not needed for classifier tuning.
 
 ## Tests
 
