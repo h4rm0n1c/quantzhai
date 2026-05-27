@@ -1,7 +1,7 @@
 # Compaction Codex Setup
 
 Date: 2026-05-28
-Status: **Stage 6.10** — v3/Zenkai promoted to default (mode=auto). 16.5% autocompact-buffer reserve policy. `model_auto_compact_token_limit` now emitted in Codex catalog at safe budget. v2 heuristic preserved as fallback. Stage 6 initial prompt/profile/dogfood runbook below.
+Status: **Stage 6.10.1** — OpenAI provider masquerade active. `CODEX_PROVIDER_NAME = "OpenAI"` causes Codex to use `POST /v1/responses/compact` remote compaction path (Zenkai v3 / heuristic v2 fallback). `model_auto_compact_token_limit` emitted at safe budget (16.5% reserve). Stage 6.10 promoted v3/Zenkai to default (mode=auto). v2 heuristic preserved as fallback.
 Codex audit SHA: `46f30d02828bd4c52827e5f0482a6f2a982cce5b`
 
 ---
@@ -147,12 +147,28 @@ not configurable.
   For a 256k context this is 218891 tokens. This enables Codex inline auto-compaction
   at the same threshold as QuantZhai's proxy-side budget policy.
 
-- **Both compaction paths may be active simultaneously.** `model_auto_compact_token_limit`
-  (Codex inline auto-compaction using Codex's built-in compaction prompt) and
-  `context_management.compact_threshold` (QuantZhai proxy-side compaction using v3/Zenkai)
-  use the same token budget but are otherwise independent. The interaction — Codex firing
-  its inline compaction AND QuantZhai firing a proxy compaction on the same session — has
-  not been live-tested. Monitor for double-compaction in production sessions.
+- **Stage 6.10.1: OpenAI provider masquerade enables remote compaction.** `CODEX_PROVIDER_NAME`
+  is now `"OpenAI"` in `proxy/qz_codex_client_config.py`. Codex's `supports_remote_compaction()`
+  gate checks `provider.name == "OpenAI"`, which routes auto-compaction (triggered by
+  `model_auto_compact_token_limit`) to `POST /v1/responses/compact` instead of inline local
+  compaction. QuantZhai handles this endpoint with Zenkai v3 / heuristic v2 fallback.
+  The generated `config.toml` provider block has `name = "OpenAI"` with `requires_openai_auth`
+  absent (defaults to false) — no real OpenAI credentials are needed.
+
+  **Double-compaction is not a risk with the remote path.** The `/v1/responses/compact` and
+  `/v1/responses` paths are separate. Inline proxy compaction (triggered by
+  `context_management.compact_threshold`) is not sent by Codex when it uses remote compaction.
+  The `RemoteCompactionV2` feature flag (default: false) is left disabled — this keeps Codex
+  on the `compact_remote::run_inline_remote_auto_compact_task` path, which calls
+  `/v1/responses/compact` (not the v2 path which sends `ContextCompaction` items to
+  `/v1/responses`). Do not enable `RemoteCompactionV2` in QuantZhai sessions.
+
+- **Both compaction paths may be active simultaneously (Stage 6.10 note, now superseded for auto-compact).**
+  With Stage 6.10.1 remote compaction active, Codex's auto-compact trigger uses
+  `/v1/responses/compact`. The `context_management.compact_threshold` proxy-side path remains
+  available for explicit inline compaction but is not triggered by auto-compact. Monitor for
+  unexpected `context_management.compact_threshold` requests if proxy-side auto-compact is
+  separately configured.
 
 - **Placeholder semantics are for future integration.** The `{{PREVIOUS_ANCHORED_SUMMARY}}`
   and `{{NEW_CONVERSATION}}` placeholders in `compact-v0.md` are for QuantZhai

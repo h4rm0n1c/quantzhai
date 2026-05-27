@@ -13,7 +13,11 @@ approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 
 [model_providers.quantzhai]
-name = "QuantZhai"
+# name = "OpenAI" is required for remote compaction (Stage 6.10.1).
+# Codex's supports_remote_compaction() checks provider.name == "OpenAI".
+# QuantZhai handles POST /v1/responses/compact with Zenkai v3 compaction.
+# requires_openai_auth is absent (defaults to false) — no real OpenAI auth needed.
+name = "OpenAI"
 base_url = "http://127.0.0.1:18180/v1"
 wire_api = "responses"
 env_key = "LOCAL_QWEN_API_KEY"

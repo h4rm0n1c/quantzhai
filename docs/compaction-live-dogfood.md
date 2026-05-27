@@ -678,3 +678,85 @@ var/captures/requests/qz_req_1779885040988_a5b0  — fd deep
 ```
 
 Do not paste full capture bodies into issue comments.
+
+---
+
+## Stage 6.10.1: Remote Compaction Endpoint Runbook
+
+### What Changed
+
+Stage 6.10.1 activates the `POST /v1/responses/compact` remote compaction path:
+
+1. `CODEX_PROVIDER_NAME = "OpenAI"` in `proxy/qz_codex_client_config.py` (masquerade).
+2. Codex config.toml receives `name = "OpenAI"` in the `[model_providers.quantzhai]` block.
+3. Codex's `supports_remote_compaction()` returns true → routes auto-compact to `/v1/responses/compact`.
+4. `_handle_responses_compact()` passes `selected_context_tokens` to the budget resolver.
+
+### Smoke Test (after qz-down / qz-up)
+
+Before running the corpus dogfood, validate the remote compaction endpoint manually:
+
+```bash
+# 1. Verify proxy is up and catalog is ready
+curl -s http://127.0.0.1:18180/qz/status | jq '.backend.selected_context_length, .catalog.model_count'
+
+# 2. Post a minimal CompactionInput to /v1/responses/compact
+curl -s -X POST http://127.0.0.1:18180/v1/responses/compact \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "Qwen3.6Turbo-27B",
+    "input": [
+      {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Tell me about Paris."}]},
+      {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Paris is the capital of France."}]},
+      {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "What is the Eiffel Tower?"}]},
+      {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "The Eiffel Tower is a landmark built in 1889."}]}
+    ],
+    "instructions": "Summarise the conversation.",
+    "tools": [],
+    "parallel_tool_calls": false
+  }' | jq '{
+    has_output: (.output != null),
+    output_len: (.output | length),
+    first_type: (.output[0].type),
+    blob_prefix: (.output[0].encrypted_content[:20])
+  }'
+```
+
+**Expected output:**
+```json
+{
+  "has_output": true,
+  "output_len": 1,
+  "first_type": "compaction",
+  "blob_prefix": "localcmp:v2:" or "localcmp:v3:"
+}
+```
+
+(v2 if LLM backend not configured for compaction, v3 if `QZ_LLM_COMPACT_BASE_URL` is set)
+
+### Acceptance Criteria
+
+- `/v1/responses/compact` returns HTTP 200.
+- Response body has `"output"` key with a list.
+- `output[0].type == "compaction"`.
+- `output[0].encrypted_content` starts with `"localcmp:"`.
+- `_decode_local_compaction_blob(output[0].encrypted_content)` produces a valid payload with `summary_text`.
+- `var/captures/latest-compact-request.json` written.
+- `var/captures/latest-compact-summary.txt` written.
+
+### Codex Session Verification
+
+After confirming the endpoint works, start a Codex session and build context to near the `model_auto_compact_token_limit` threshold (218891 tokens for 256k context). When auto-compact fires:
+
+1. Codex should POST to `http://127.0.0.1:18180/v1/responses/compact` (visible in proxy logs).
+2. `var/captures/latest-compact-request.json` updates.
+3. `var/captures/latest-compact-summary.txt` updates.
+4. Codex continues the session using the compacted history.
+
+If Codex still fires inline compaction (visible as the old checkpoint prompt in session), the masquerade may not have taken effect. Check:
+
+```bash
+grep "name" ~/.qz-codex/codex-home/config.toml | grep quantzhai -A3
+```
+
+The `name` field in `[model_providers.quantzhai]` must be `"OpenAI"`. If it's `"QuantZhai"`, run `./scripts/qz-codex` once to regenerate the config.

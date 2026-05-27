@@ -41,7 +41,15 @@ CODEX_MODEL_CATALOG_FILENAME = "qwenzhai-models.json"
 # QuantZhai-specific Codex provider constants.
 # model_provider identifies the [model_providers.*] block in Codex config.toml.
 CODEX_MODEL_PROVIDER = "quantzhai"
-CODEX_PROVIDER_NAME = "QuantZhai"
+
+# CODEX_PROVIDER_NAME = "OpenAI" is an OpenAI masquerade required for remote compaction.
+# Codex's supports_remote_compaction() returns true only when provider.name == "OpenAI"
+# (or the provider is Azure). With name = "OpenAI" and requires_openai_auth absent/false,
+# Codex selects the /v1/responses/compact remote compaction path. QuantZhai handles that
+# endpoint and runs Zenkai v3 compaction on the conversation history. No real OpenAI auth
+# is required because requires_openai_auth defaults to false in the generated config.toml.
+# See docs/compaction-codex-setup.md §Stage 6.10.1 and compact_remote.rs:should_use_remote_compact_task().
+CODEX_PROVIDER_NAME = "OpenAI"
 CODEX_WIRE_API = "responses"
 CODEX_ENV_KEY = "LOCAL_QWEN_API_KEY"   # env var name only — never the value
 

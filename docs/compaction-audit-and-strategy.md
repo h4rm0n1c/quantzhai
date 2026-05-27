@@ -1,7 +1,7 @@
 # Compaction Audit and Strategy
 
 Date: 2026-05-28
-Status: **Stage 6.10** — v3/Zenkai promoted to default (`mode=auto`); v2 preserved as fallback. Budget policy changed from 90% direct to 16.5% autocompact-buffer reserve (policy `context_window_autocompact_buffer_v1`). For 256k: safe budget = 218891 tokens. `model_auto_compact_token_limit` now emitted in Codex catalog. Request `compact_threshold` classified as force/budget_cap/capped/ignored. Stage 6.9: budget resolver derived from selected_model context_window. See `docs/compaction-stage68-coverage.md`.
+Status: **Stage 6.10.1** — OpenAI provider masquerade active. `CODEX_PROVIDER_NAME = "OpenAI"` causes Codex to route auto-compact to `POST /v1/responses/compact`. QuantZhai handles with Zenkai v3 / heuristic v2 fallback. `_handle_responses_compact()` now passes `selected_context_tokens` for budget-aware v3 compaction. Stage 6.10: v3/Zenkai default (`mode=auto`); 16.5% reserve budget; `model_auto_compact_token_limit` in Codex catalog. See `docs/compaction-stage68-coverage.md`.
 
 ---
 

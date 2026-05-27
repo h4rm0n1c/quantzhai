@@ -254,5 +254,107 @@ class SummarizeItemsTests(unittest.TestCase):
         self.assertEqual(summary, "")
 
 
+class RemoteCompactionEndpointShapeTests(unittest.TestCase):
+    """Unit tests for the /v1/responses/compact response shape (Stage 6.10.1).
+
+    These tests validate that _build_local_compaction_response() produces output
+    compatible with Codex's CompactHistoryResponse { output: Vec<ResponseItem> }
+    parser, which only reads the "output" field and ignores extra top-level keys.
+    """
+
+    def _make_history(self):
+        return [
+            _msg("user", "hello world"),
+            _msg("assistant", "I can help with that."),
+            _msg("user", "please summarise the earlier discussion"),
+            _msg("assistant", "Earlier we discussed X, Y, Z."),
+        ] * 3  # enough history to trigger real compaction
+
+    def test_response_has_output_list(self):
+        """Response must have an 'output' key containing a list."""
+        body = {"input": self._make_history(), "model": "test-model"}
+        result = _build_local_compaction_response(body)
+        self.assertIn("output", result)
+        self.assertIsInstance(result["output"], list)
+
+    def test_output_not_empty(self):
+        """Output list must not be empty — at least the compaction blob item."""
+        body = {"input": self._make_history(), "model": "test-model"}
+        result = _build_local_compaction_response(body)
+        self.assertGreater(len(result["output"]), 0)
+
+    def test_output_contains_compaction_item(self):
+        """Output must include exactly one compaction item with encrypted_content."""
+        body = {"input": self._make_history(), "model": "test-model"}
+        result = _build_local_compaction_response(body)
+        cmp_items = [
+            item for item in result["output"]
+            if isinstance(item, dict) and item.get("type") == "compaction"
+        ]
+        self.assertEqual(len(cmp_items), 1)
+        self.assertIn("encrypted_content", cmp_items[0])
+        self.assertTrue(cmp_items[0]["encrypted_content"].startswith("localcmp:"))
+
+    def test_compaction_item_blob_is_decodable(self):
+        """The compaction blob must decode to a valid payload."""
+        body = {"input": self._make_history(), "model": "test-model"}
+        result = _build_local_compaction_response(body)
+        cmp_items = [
+            item for item in result["output"]
+            if isinstance(item, dict) and item.get("type") == "compaction"
+        ]
+        payload = _decode_local_compaction_blob(cmp_items[0]["encrypted_content"])
+        self.assertIsNotNone(payload)
+        self.assertIn("summary_text", payload)
+        self.assertIn("version", payload)
+
+    def test_extra_top_level_keys_present_and_output_key_survives(self):
+        """Response may include extra keys (id, object, usage) — Codex ignores them."""
+        body = {"input": self._make_history(), "model": "test-model"}
+        result = _build_local_compaction_response(body)
+        # Codex only reads "output" — extra fields must not replace it
+        self.assertIn("output", result)
+        # These extra fields are expected and should not cause parse errors on the Codex side
+        for extra_key in ("id", "object", "created_at", "usage"):
+            self.assertIn(extra_key, result)
+
+    def test_compact_input_with_compaction_instruction_field(self):
+        """CompactionInput includes 'instructions' field — must not crash."""
+        body = {
+            "model": "test-model",
+            "input": self._make_history(),
+            "instructions": "Summarise the conversation, preserving key facts.",
+            "tools": [],
+            "parallel_tool_calls": False,
+        }
+        result = _build_local_compaction_response(body)
+        self.assertIn("output", result)
+        self.assertIsInstance(result["output"], list)
+
+    def test_compact_input_empty_history_returns_output(self):
+        """Empty input list must return valid output shape, not crash."""
+        body = {"model": "test-model", "input": [], "tools": []}
+        result = _build_local_compaction_response(body)
+        self.assertIn("output", result)
+        self.assertIsInstance(result["output"], list)
+
+    def test_compact_input_string_model_field_accepted(self):
+        """The 'model' field in CompactionInput is a string — must be accepted."""
+        body = {
+            "model": "Qwen3.6Turbo-27B",
+            "input": self._make_history(),
+        }
+        result = _build_local_compaction_response(body)
+        self.assertIn("output", result)
+
+    def test_selected_context_tokens_passed_to_budget_resolver(self):
+        """selected_context_tokens=256k passes through without error (v3 fallback to v2 ok)."""
+        body = {"input": self._make_history(), "model": "test-model"}
+        # Will fail_v3 (no LLM backend in unit test) but must not raise
+        result = _build_local_compaction_response(body, selected_context_tokens=262144)
+        self.assertIn("output", result)
+        self.assertIsInstance(result["output"], list)
+
+
 if __name__ == "__main__":
     unittest.main()

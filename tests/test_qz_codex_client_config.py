@@ -13,6 +13,7 @@ from proxy.qz_codex_client_config import (
     CODEX_ENV_KEY,
     CODEX_MODEL_CATALOG_FILENAME,
     CODEX_MODEL_PROVIDER,
+    CODEX_PROVIDER_NAME,
     CODEX_WIRE_API,
     codex_client_config_payload,
     codex_model_catalog_content,
@@ -544,6 +545,63 @@ class CatalogFreshnessTests(unittest.TestCase):
                 "stale_codex_catalog" in codes or "missing_codex_catalog" in codes,
                 f"expected stale/missing warning; got {codes}",
             )
+
+
+class CodexProviderNameMasqueradeTests(unittest.TestCase):
+    """Tests for Stage 6.10.1 OpenAI masquerade (supports_remote_compaction gate).
+
+    Codex's supports_remote_compaction() returns true only when provider.name == "OpenAI"
+    (or the provider is Azure). CODEX_PROVIDER_NAME must be "OpenAI" so that Codex uses
+    the /v1/responses/compact remote compaction path rather than inline local compaction.
+    See compact.rs:should_use_remote_compact_task() and compact_remote.rs.
+    """
+
+    def setUp(self):
+        self._saved = _save_env()
+
+    def tearDown(self):
+        _restore_env(self._saved)
+
+    def _set_env(self, tmp):
+        root = Path(tmp)
+        var_dir = root / "var"
+        var_dir.mkdir(parents=True)
+        os.environ["QZ_ROOT"] = str(root)
+        os.environ["QZ_VAR_DIR"] = str(var_dir)
+        os.environ.pop("CODEX_HOME", None)
+        return root, var_dir
+
+    def test_codex_provider_name_constant_is_openai(self):
+        """CODEX_PROVIDER_NAME must be "OpenAI" for supports_remote_compaction() gate."""
+        self.assertEqual(CODEX_PROVIDER_NAME, "OpenAI")
+
+    def test_provider_name_in_payload_is_openai(self):
+        """Provider name in client-config payload must be "OpenAI"."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._set_env(tmp)
+            payload = codex_client_config_payload()
+            self.assertEqual(payload["provider"]["name"], "OpenAI")
+
+    def test_provider_name_is_not_quantzhai(self):
+        """Provider name must not be 'QuantZhai' (old name before Stage 6.10.1 masquerade)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._set_env(tmp)
+            payload = codex_client_config_payload()
+            self.assertNotEqual(payload["provider"]["name"], "QuantZhai")
+
+    def test_provider_model_provider_slug_unchanged(self):
+        """model_provider slug must remain 'quantzhai' (only the display name changes)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._set_env(tmp)
+            payload = codex_client_config_payload()
+            self.assertEqual(payload["model_provider"], "quantzhai")
+
+    def test_wire_api_unchanged_by_masquerade(self):
+        """wire_api must remain 'responses' — only the name field changes."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._set_env(tmp)
+            payload = codex_client_config_payload()
+            self.assertEqual(payload["provider"]["wire_api"], "responses")
 
 
 if __name__ == "__main__":

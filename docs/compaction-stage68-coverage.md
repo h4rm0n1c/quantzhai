@@ -508,3 +508,71 @@ Added 20 new tests:
 - `model_auto_compact_token_limit` emitted only; Codex inline auto-compaction and
   QuantZhai proxy-side compaction may both activate if both thresholds are crossed.
   Known interaction, documented and left for future validation.
+
+---
+
+## Stage 6.10.1: OpenAI Provider Masquerade and Remote Compaction Endpoint (2026-05-28)
+
+### Changes
+
+**OpenAI Provider Masquerade:**
+
+- `proxy/qz_codex_client_config.py`: `CODEX_PROVIDER_NAME` changed from `"QuantZhai"` to `"OpenAI"`.
+- The generated Codex `config.toml` provider block now has `name = "OpenAI"` (with `requires_openai_auth` absent, defaulting to false).
+- Codex's `supports_remote_compaction()` in `model-provider-info/src/lib.rs:392` checks `self.name == "OpenAI"`. With the masquerade, this returns true.
+- When `supports_remote_compaction()` = true and `RemoteCompactionV2` feature is disabled (default), Codex routes auto-compact to `compact_remote::run_inline_remote_auto_compact_task()` which POSTs to `/v1/responses/compact`.
+
+**Remote Compaction Endpoint (`/v1/responses/compact`):**
+
+- Route was already registered at `qz_request_router.py:1567`.
+- `_handle_responses_compact()` in `quantzhai_proxy.py` improved to:
+  - Resolve the currently selected model's `context_window` from the catalog.
+  - Pass `selected_context_tokens` to `_build_local_compaction_response()` for budget-aware v3 compaction.
+- Response shape: `{ "output": [...], "id": ..., "object": "response.compaction", ... }`.
+  Codex only reads the `output` field (`CompactHistoryResponse { output: Vec<ResponseItem> }`).
+
+**Double-Compaction Safety:**
+
+- `/v1/responses/compact` and `/v1/responses` are separate paths. Codex does not send `context_management.compact_threshold` when using remote compaction.
+- `RemoteCompactionV2` feature is left at default (false), keeping Codex on the `/responses/compact` path rather than the v2 path (which sends `ContextCompaction` items to `/v1/responses`).
+
+**Source Audit Evidence:**
+
+- `codex-rs/core/src/compact.rs:65`: `should_use_remote_compact_task()` checks `supports_remote_compaction()`.
+- `codex-rs/core/src/session/turn.rs:816`: Remote path selected if `supports_remote_compaction()` is true.
+- `codex-rs/model-provider-info/src/lib.rs:384`: `is_openai()` checks `self.name == "OpenAI"`.
+- `codex-rs/codex-api/src/endpoint/compact.rs:32`: Path is `"responses/compact"`.
+- `codex-rs/codex-api/src/common.rs:25`: `CompactionInput` struct — `input: &[ResponseItem]` is the history.
+- `codex-rs/protocol/src/models.rs:883`: `Compaction { encrypted_content: String }` response item type.
+- `codex-rs/app-server/tests/suite/v2/compaction.rs:189`: Assert path is `/v1/responses/compact`.
+
+### Test Coverage (Stage 6.10.1)
+
+Added tests in:
+
+- `tests/test_qz_codex_client_config.py`: `CodexProviderNameMasqueradeTests` (5 tests)
+  - `CODEX_PROVIDER_NAME == "OpenAI"` constant check.
+  - Provider name in client-config payload is `"OpenAI"`.
+  - Provider name is not `"QuantZhai"`.
+  - model_provider slug unchanged (`"quantzhai"`).
+  - wire_api unchanged (`"responses"`).
+- `tests/test_qz_compaction.py`: `RemoteCompactionEndpointShapeTests` (9 tests)
+  - Response has `output` list.
+  - Output not empty.
+  - Output contains compaction item with `encrypted_content`.
+  - Blob decodable with `summary_text` and `version`.
+  - Extra top-level keys don't displace `output` field.
+  - `instructions` field in CompactionInput accepted.
+  - Empty history returns valid shape.
+  - `model` field string accepted.
+  - `selected_context_tokens=262144` passes without error (v3 fails to LLM but falls back to v2).
+
+### Safety Notes (Stage 6.10.1)
+
+- No session ledger created. No request history reconstructed from captures.
+- No `context_management` processing on `/v1/responses/compact` path.
+- `requires_openai_auth` defaults to false in generated config — no OpenAI API key needed.
+- `RemoteCompactionV2` feature left disabled. Do not enable it in QuantZhai sessions.
+- All Stage 6.10 safety notes remain in force.
+- `localcmp:v3` wire format name unchanged. "Zenkai Boost Compactor" is codename only.
+- `QZ_LLM_COMPACT_BASE_URL` must point at direct backend (18084), not proxy.

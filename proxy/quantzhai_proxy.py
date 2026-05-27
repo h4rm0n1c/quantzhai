@@ -416,6 +416,24 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
 
     def _handle_responses_compact(self):
+        """Handle POST /v1/responses/compact — QuantZhai remote compaction endpoint.
+
+        Codex calls this endpoint when supports_remote_compaction() is true (triggered
+        by provider.name == "OpenAI" in the Codex config.toml — Stage 6.10.1 masquerade).
+
+        Request body is CompactionInput: { model, input: [...ResponseItems], instructions,
+        tools, parallel_tool_calls, ... }.  QuantZhai runs Zenkai v3 (or heuristic v2
+        fallback) on request.input and returns:
+            { "output": [...compacted ResponseItems...] }
+
+        The "output" list starts with a compaction blob item followed by the preserved
+        recent items. Codex reads only the "output" field; extra top-level fields in
+        the response dict (id, object, created_at, usage) are ignored.
+
+        Double-compaction: this path is separate from the inline /v1/responses path.
+        The inline compaction only triggers when context_management.compact_threshold
+        is set in the request body. Codex does not set that when using remote compaction.
+        """
         length = int(self.headers.get("Content-Length", "0") or "0")
         raw = self.rfile.read(length) if length else b"{}"
 
@@ -430,10 +448,26 @@ class ProxyHandler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
-        out = _build_local_compaction_response(body)
+        # Resolve the currently selected model's context window for budget-aware
+        # v3 compaction. The CompactionInput body includes a "model" field that
+        # Codex passes for model identification, but we use the proxy-selected
+        # model as the authoritative context window source.
+        _ctx_tokens = None
+        try:
+            catalog = self._model_catalog()
+            client_model = body.get("model") or ""
+            if client_model:
+                selected_model, _ = catalog.resolve(query=client_model)
+            else:
+                selected_model = catalog.selected or (catalog.entries[0] if catalog.entries else None)
+            if selected_model is not None and isinstance(selected_model.get("context_window"), int):
+                _ctx_tokens = selected_model["context_window"]
+        except Exception:
+            pass
+
+        out = _build_local_compaction_response(body, selected_context_tokens=_ctx_tokens)
 
         try:
-            import pathlib
             cmp_item = next((item for item in out.get("output", []) if isinstance(item, dict) and item.get("type") == "compaction"), None)
             payload = _decode_local_compaction_blob(cmp_item.get("encrypted_content", "")) if cmp_item else None
             if payload:
