@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import re
+import socket
 import time
 import urllib.parse
 import urllib.request
@@ -966,29 +967,38 @@ def _call_llm_compactor(
     prompt: str,
     timeout_sec: Optional[int] = None,
     max_output_tokens: Optional[int] = None,
-) -> Optional[str]:
+    llm_base_url: str = "",
+) -> tuple:
     """Execute a direct call to the local LLM backend for compaction.
+
+    Returns a 2-tuple (content_or_None, reason_str).
+
+    Reason codes:
+      "ok"                   — success; content is the summary string
+      "no_backend"           — no usable base URL available
+      "proxy_url_rejected"   — base URL matches a known QuantZhai proxy port
+      "http_error:<code>"    — backend returned an HTTP error (e.g. "http_error:503")
+      "url_error:<type>"     — connection-level error (e.g. "url_error:ConnectionRefusedError")
+      "timeout"              — request timed out
+      "invalid_json"         — response body was not valid JSON
+      "empty_content"        — backend returned valid JSON but no extractable content
+      "exception:<ExcType>"  — unexpected exception
+
+    URL resolution priority (never falls back to _active_backend_base_url()):
+      1. explicit llm_base_url parameter (from BackendManager via caller)
+      2. COMPACTION_CONFIG["llm_base_url"] (QZ_LLM_COMPACT_BASE_URL debug override)
+      3. → (None, "no_backend")
 
     When timeout_sec / max_output_tokens are provided (from the budget resolver),
     they override COMPACTION_CONFIG values.  Pass None to fall back to COMPACTION_CONFIG.
-
-    Backend URL resolution (Stage 6.10.2):
-    1. QZ_LLM_COMPACT_BASE_URL env var or compaction.json llm_base_url — explicit override.
-    2. _active_backend_base_url() — derived from QZ_SERVER_HOST:QZ_SERVER_PORT, same as
-       the proxy's --upstream argument. This is the default for normal operation so that
-       Zenkai v3 LLM calls reach the llama-server directly without manual config.
-    3. Recursion guard: rejects any URL matching known QuantZhai proxy ports (18180, 18183)
-       or CODEX_OSS_BASE_URL. The proxy must never be its own compaction backend.
     """
-    base_url = str(COMPACTION_CONFIG.get("llm_base_url", "") or "").rstrip("/")
+    base_url = str(llm_base_url or "").rstrip("/")
     if not base_url:
-        # Fall back to the active llama-server backend derived from env vars.
-        # This allows v3 LLM compaction to work without explicit QZ_LLM_COMPACT_BASE_URL.
-        base_url = _active_backend_base_url()
+        base_url = str(COMPACTION_CONFIG.get("llm_base_url", "") or "").rstrip("/")
     if not base_url:
-        return None
+        return None, "no_backend"
     if _is_probably_quantzhai_proxy_url(base_url):
-        return None
+        return None, "proxy_url_rejected"
 
     url = _llm_chat_completions_url(base_url)
     payload = _build_llm_compactor_payload(prompt, max_output_tokens=max_output_tokens)
@@ -1006,11 +1016,26 @@ def _call_llm_compactor(
             method="POST"
         )
         with urllib.request.urlopen(req, timeout=effective_timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            return _extract_llm_compactor_content(data)
-    except Exception:
-        # Fallback to heuristic is handled by caller
-        return None
+            try:
+                data = json.loads(resp.read().decode("utf-8"))
+            except (json.JSONDecodeError, ValueError):
+                return None, "invalid_json"
+            content = _extract_llm_compactor_content(data)
+            if content is None:
+                return None, "empty_content"
+            return content, "ok"
+    except urllib.error.HTTPError as exc:
+        return None, f"http_error:{exc.code}"
+    except urllib.error.URLError as exc:
+        reason = exc.reason
+        if isinstance(reason, socket.timeout):
+            return None, "timeout"
+        reason_type = type(reason).__name__ if reason is not None else "URLError"
+        return None, f"url_error:{reason_type}"
+    except TimeoutError:
+        return None, "timeout"
+    except Exception as exc:
+        return None, f"exception:{type(exc).__name__}"
 
 
 def _build_local_compaction_response_v3(
@@ -1020,17 +1045,20 @@ def _build_local_compaction_response_v3(
     selected_context_tokens: Optional[int] = None,
     compact_threshold_tokens: Optional[int] = None,
     remote_compaction: bool = False,
+    llm_base_url: str = "",
+    backend_resolution_detail: Optional[dict] = None,
 ) -> tuple:
     """Attempt LLM-generated anchored compaction (v3).
 
     Returns a 2-tuple (result_dict, reason_str):
-      (result_dict, "ok")             — success
-      (None, "mode_not_llm_or_auto")  — compaction mode is not llm or auto
-      (None, "no_backend")            — no LLM backend configured or derivable
-      (None, "empty_llm_source_items") — nothing to summarise (e.g. short history)
-      (None, "missing_context_window") — context window unavailable; budget fail_v3
-      (None, "llm_call_failed")       — LLM backend returned no usable content
-      (None, "validation_failed")     — summary text failed anchored-v0 validation
+      (result_dict, "ok")                — success
+      (None, "mode_not_llm_or_auto")     — compaction mode is not llm or auto
+      (None, "no_backend")               — no LLM backend URL available
+      (None, "backend_not_ready")        — BackendManager URL rejected (proxy URL)
+      (None, "empty_llm_source_items")   — nothing to summarise (e.g. short history)
+      (None, "missing_context_window")   — context window unavailable; budget fail_v3
+      (None, "llm_call_failed:<detail>") — LLM backend returned no usable content
+      (None, "validation_failed")        — summary text failed anchored-v0 validation
 
     selected_context_tokens must be the context_window value from the selected model.
     If it is None or non-positive the budget resolver sets fail_v3=True → reason
@@ -1042,6 +1070,13 @@ def _build_local_compaction_response_v3(
     compact_threshold=1 from the dogfood runner) is treated as a force signal, not a
     1-token budget cap.
 
+    llm_base_url: LLM backend URL from BackendManager (preferred) or empty string.
+    Falls back to COMPACTION_CONFIG["llm_base_url"] debug override.
+    Never falls back to _active_backend_base_url().
+
+    backend_resolution_detail: diagnostic dict from BackendManager URL resolution in
+    _handle_responses_compact(). Recorded in v3 metadata for observability.
+
     remote_compaction=True: use all working_items as the LLM compaction source.
     Codex has already decided what to compact and sent it as request.input; no
     recent tail is preserved in the output (the compaction blob is the full replacement).
@@ -1052,10 +1087,13 @@ def _build_local_compaction_response_v3(
     """
     if _current_compaction_mode() not in ("llm", "auto"):
         return None, "mode_not_llm_or_auto"
-    # Allow v3 to proceed when no explicit llm_base_url is configured: _call_llm_compactor()
-    # will fall back to _active_backend_base_url() (QZ_SERVER_HOST:QZ_SERVER_PORT).
-    # Only bail out if neither configured nor active backend is reachable (both empty).
-    if not COMPACTION_CONFIG["llm_base_url"] and not _active_backend_base_url():
+    # URL resolution: caller-provided llm_base_url (from BackendManager) takes priority;
+    # fall back to COMPACTION_CONFIG["llm_base_url"] debug override.
+    # Never fall back to _active_backend_base_url() — that path is removed in Stage 6.11.
+    effective_llm_base_url = str(llm_base_url or "").rstrip("/")
+    if not effective_llm_base_url:
+        effective_llm_base_url = str(COMPACTION_CONFIG.get("llm_base_url", "") or "").rstrip("/")
+    if not effective_llm_base_url:
         return None, "no_backend"
 
     if remote_compaction:
@@ -1099,15 +1137,16 @@ def _build_local_compaction_response_v3(
     )
 
     start_ms = int(time.time() * 1000)
-    summary_text = _call_llm_compactor(
+    summary_text, llm_call_reason = _call_llm_compactor(
         prompt,
         timeout_sec=budget["effective_timeout_sec"],
         max_output_tokens=budget["effective_max_output_tokens"],
+        llm_base_url=effective_llm_base_url,
     )
     latency_ms = int(time.time() * 1000) - start_ms
 
     if not summary_text:
-        return None, "llm_call_failed"
+        return None, f"llm_call_failed:{llm_call_reason}"
     if not _validate_anchored_summary(summary_text):
         return None, "validation_failed"
 
@@ -1130,6 +1169,7 @@ def _build_local_compaction_response_v3(
             "llm_model": COMPACTION_CONFIG["llm_model"],
             "latency_ms": latency_ms,
             "remote_compaction": remote_compaction,
+            "backend_resolution_detail": backend_resolution_detail,
             "budget": {
                 "policy": budget["policy"],
                 "context_window_tokens": budget["context_window_tokens"],
@@ -1281,6 +1321,8 @@ def _build_local_compaction_response(
     compact_threshold_tokens: Optional[int] = None,
     remote_compaction: bool = False,
     context_resolution_reason: Optional[str] = None,
+    llm_base_url: str = "",
+    backend_resolution_detail: Optional[dict] = None,
 ) -> dict:
     """Build a compaction response blob.
 
@@ -1301,6 +1343,12 @@ def _build_local_compaction_response(
     context_resolution_reason: reason string from _resolve_compact_context_window() when
     called from _handle_responses_compact(). Recorded in v2 fallback metadata for diagnostics.
     None when the caller did not perform catalog-based context resolution (normal inline path).
+
+    llm_base_url: LLM backend URL resolved from BackendManager by the handler. Threaded
+    through to _build_local_compaction_response_v3() and _call_llm_compactor().
+
+    backend_resolution_detail: diagnostic dict from BackendManager URL resolution.
+    Recorded in v2 fallback metadata alongside v3_fallback_reason for observability.
     """
     input_items = body.get("input")
     if isinstance(input_items, str):
@@ -1342,17 +1390,25 @@ def _build_local_compaction_response(
         selected_context_tokens=selected_context_tokens,
         compact_threshold_tokens=compact_threshold_tokens,
         remote_compaction=remote_compaction,
+        llm_base_url=llm_base_url,
+        backend_resolution_detail=backend_resolution_detail,
     )
     if v3_resp:
         return v3_resp
 
     # Fallback / Default: Heuristic v2 compaction
-    tail_start = _tail_start_for_compaction(working_items)
-    older = working_items[:tail_start]
-    recent = working_items[tail_start:]
-    if len(recent) < COMPACTION_CONFIG["min_preserve_items"]:
-        recent = working_items[-COMPACTION_CONFIG["min_preserve_items"]:]
-        older = working_items[:-len(recent)] if recent else working_items
+    if remote_compaction:
+        # Remote compact path: Codex has already selected all items for compaction.
+        # Summarise everything — no recent tail to preserve in the output.
+        older = working_items
+        recent = []
+    else:
+        tail_start = _tail_start_for_compaction(working_items)
+        older = working_items[:tail_start]
+        recent = working_items[tail_start:]
+        if len(recent) < COMPACTION_CONFIG["min_preserve_items"]:
+            recent = working_items[-COMPACTION_CONFIG["min_preserve_items"]:]
+            older = working_items[:-len(recent)] if recent else working_items
 
     summary_text = _summarize_items_for_compaction(older)
     if not summary_text:
@@ -1372,6 +1428,7 @@ def _build_local_compaction_response(
             "format": "structured-markers-v2",
             "v3_fallback_reason": v3_reason,
             "context_resolution_reason": context_resolution_reason,
+            "backend_resolution_detail": backend_resolution_detail,
         }
     }
     encrypted = _encode_local_compaction_blob(payload)

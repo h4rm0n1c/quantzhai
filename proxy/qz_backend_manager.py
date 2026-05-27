@@ -272,6 +272,15 @@ class BackendManager:
     # Public state access
     # ------------------------------------------------------------------
 
+    def llm_base_url(self) -> str:
+        """Return the canonical host-side llama.cpp base URL managed by BackendManager.
+
+        For in-process proxy use only (e.g. Zenkai v3 compaction).  The URL is
+        never exposed in snapshots, logs, or /qz/* endpoints — callers that need
+        it for network access must call this method directly.
+        """
+        return f"http://{self._server_host}:{self._server_port}"
+
     def snapshot(self) -> dict:
         """Return a safe state snapshot — no secrets, paths, or Docker commands."""
         with self._lock:

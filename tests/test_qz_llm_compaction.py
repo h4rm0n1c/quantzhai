@@ -246,9 +246,10 @@ class TestLLMCompaction(unittest.TestCase):
             {"choices": [{"message": {"content": VALID_SUMMARY}}]},
         )
 
-        result = _call_llm_compactor("prompt")
+        content, reason = _call_llm_compactor("prompt", llm_base_url="http://127.0.0.1:19999")
 
-        self.assertEqual(result, VALID_SUMMARY.strip())
+        self.assertEqual(reason, "ok")
+        self.assertEqual(content, VALID_SUMMARY.strip())
         request = mock_urlopen.call_args.args[0]
         payload = json.loads(request.data.decode("utf-8"))
         self.assertEqual(payload["max_tokens"], _DEFAULT_LLM_MAX_OUTPUT_TOKENS)
@@ -258,7 +259,9 @@ class TestLLMCompaction(unittest.TestCase):
     def test_recursive_proxy_url_is_rejected_without_network_call(self, mock_urlopen):
         COMPACTION_CONFIG["llm_base_url"] = "http://127.0.0.1:18180"
         with patch.dict(os.environ, {"CODEX_OSS_BASE_URL": "http://127.0.0.1:18180/v1"}):
-            self.assertIsNone(_call_llm_compactor("prompt"))
+            content, reason = _call_llm_compactor("prompt")
+        self.assertIsNone(content)
+        self.assertEqual(reason, "proxy_url_rejected")
         mock_urlopen.assert_not_called()
 
     def test_proxy_url_guard_matches_known_proxy_env(self):
@@ -275,12 +278,16 @@ class TestLLMCompaction(unittest.TestCase):
             mock_urlopen,
             {"choices": [{"message": {"content": " chat content "}}]},
         )
-        self.assertEqual(_call_llm_compactor("prompt"), "chat content")
+        content, reason = _call_llm_compactor("prompt", llm_base_url="http://127.0.0.1:19999")
+        self.assertEqual(reason, "ok")
+        self.assertEqual(content, "chat content")
 
     @patch("urllib.request.urlopen")
     def test_response_shape_legacy_completions(self, mock_urlopen):
         self._mock_backend_response(mock_urlopen, {"choices": [{"text": " legacy text "}]})
-        self.assertEqual(_call_llm_compactor("prompt"), "legacy text")
+        content, reason = _call_llm_compactor("prompt", llm_base_url="http://127.0.0.1:19999")
+        self.assertEqual(reason, "ok")
+        self.assertEqual(content, "legacy text")
 
     def test_response_shape_reasoning_content_alone_is_ignored(self):
         self.assertIsNone(
@@ -308,17 +315,23 @@ class TestLLMCompaction(unittest.TestCase):
     @patch("urllib.request.urlopen")
     def test_response_shape_simple_content(self, mock_urlopen):
         self._mock_backend_response(mock_urlopen, {"content": " simple content "})
-        self.assertEqual(_call_llm_compactor("prompt"), "simple content")
+        content, reason = _call_llm_compactor("prompt", llm_base_url="http://127.0.0.1:19999")
+        self.assertEqual(reason, "ok")
+        self.assertEqual(content, "simple content")
 
     @patch("urllib.request.urlopen")
     def test_response_shape_simple_response(self, mock_urlopen):
         self._mock_backend_response(mock_urlopen, {"response": " simple response "})
-        self.assertEqual(_call_llm_compactor("prompt"), "simple response")
+        content, reason = _call_llm_compactor("prompt", llm_base_url="http://127.0.0.1:19999")
+        self.assertEqual(reason, "ok")
+        self.assertEqual(content, "simple response")
 
     @patch("urllib.request.urlopen")
     def test_response_shape_non_string_returns_none(self, mock_urlopen):
         self._mock_backend_response(mock_urlopen, {"choices": [{"message": {"content": ["no"]}}]})
-        self.assertIsNone(_call_llm_compactor("prompt"))
+        content, reason = _call_llm_compactor("prompt", llm_base_url="http://127.0.0.1:19999")
+        self.assertIsNone(content)
+        self.assertEqual(reason, "empty_content")
 
     def test_compactor_payload_requests_final_content_and_disables_reasoning(self):
         payload = _build_llm_compactor_payload("prompt")
@@ -847,13 +860,18 @@ class TestProxyRecursionGuardDefaultPorts(unittest.TestCase):
         )
 
 
-class TestCallLlmCompactorActiveBackend(unittest.TestCase):
-    """Stage 6.10.2 — _call_llm_compactor() uses active backend when llm_base_url is empty."""
+class TestCallLlmCompactorUrlResolution(unittest.TestCase):
+    """Stage 6.11 — _call_llm_compactor() URL resolution: explicit param → config override → no_backend.
+
+    _active_backend_base_url() must never be consulted by _call_llm_compactor().
+    BackendManager provides the URL via the explicit llm_base_url parameter.
+    """
 
     def setUp(self):
         self.original_config = COMPACTION_CONFIG.copy()
         COMPACTION_CONFIG["llm_model"] = "test-model"
         COMPACTION_CONFIG["llm_disable_reasoning"] = True
+        COMPACTION_CONFIG["llm_base_url"] = ""
 
     def tearDown(self):
         for k, v in self.original_config.items():
@@ -865,54 +883,123 @@ class TestCallLlmCompactorActiveBackend(unittest.TestCase):
         mock_resp.__enter__.return_value = mock_resp
         mock_urlopen.return_value = mock_resp
 
+    # Test B: explicit llm_base_url parameter is used for the request
     @patch("urllib.request.urlopen")
-    @patch("proxy.qz_responses._active_backend_base_url", return_value="http://127.0.0.1:19999")
-    def test_uses_active_backend_url_when_config_empty(self, _mock_active, mock_urlopen):
-        """When llm_base_url is empty, the URL from _active_backend_base_url() is used."""
-        COMPACTION_CONFIG["llm_base_url"] = ""
+    def test_explicit_llm_base_url_param_is_used(self, mock_urlopen):
+        """Test B: explicit llm_base_url param routes the request to the correct backend."""
         self._mock_backend_response(
             mock_urlopen,
             {"choices": [{"message": {"content": "summary"}}]},
         )
-        result = _call_llm_compactor("prompt")
-        self.assertEqual(result, "summary")
+        content, reason = _call_llm_compactor("prompt", llm_base_url="http://127.0.0.1:19999")
+        self.assertEqual(reason, "ok")
+        self.assertEqual(content, "summary")
         mock_urlopen.assert_called_once()
         called_url = mock_urlopen.call_args.args[0].full_url
         self.assertIn(":19999", called_url)
 
+    # Test B2: config override (COMPACTION_CONFIG["llm_base_url"]) used when param empty
     @patch("urllib.request.urlopen")
-    @patch("proxy.qz_responses._active_backend_base_url", return_value="http://127.0.0.1:19999")
-    def test_explicit_llm_base_url_wins_over_active_backend(self, _mock_active, mock_urlopen):
-        """Explicit llm_base_url (the QZ_LLM_COMPACT_BASE_URL override) takes precedence."""
-        COMPACTION_CONFIG["llm_base_url"] = "http://explicit-backend:8888"
+    def test_config_override_used_when_param_empty(self, mock_urlopen):
+        """Config debug override is used when explicit param is empty."""
+        COMPACTION_CONFIG["llm_base_url"] = "http://config-override:8888"
         self._mock_backend_response(
             mock_urlopen,
             {"choices": [{"message": {"content": "summary"}}]},
         )
-        result = _call_llm_compactor("prompt")
-        self.assertEqual(result, "summary")
+        content, reason = _call_llm_compactor("prompt", llm_base_url="")
+        self.assertEqual(reason, "ok")
+        self.assertEqual(content, "summary")
         mock_urlopen.assert_called_once()
         called_url = mock_urlopen.call_args.args[0].full_url
-        self.assertIn("explicit-backend:8888", called_url)
-        self.assertNotIn(":19999", called_url)
+        self.assertIn("config-override:8888", called_url)
 
+    # Test B3: explicit param takes precedence over config override
     @patch("urllib.request.urlopen")
-    @patch("proxy.qz_responses._active_backend_base_url", return_value="http://127.0.0.1:18180")
-    def test_active_backend_rejected_when_resolves_to_proxy_port(self, _mock_active, mock_urlopen):
-        """If active backend URL resolves to a proxy port, it must be rejected."""
+    def test_explicit_param_wins_over_config_override(self, mock_urlopen):
+        """Explicit llm_base_url param wins over COMPACTION_CONFIG debug override."""
+        COMPACTION_CONFIG["llm_base_url"] = "http://config-override:8888"
+        self._mock_backend_response(
+            mock_urlopen,
+            {"choices": [{"message": {"content": "summary"}}]},
+        )
+        content, reason = _call_llm_compactor("prompt", llm_base_url="http://backend-mgr:19999")
+        self.assertEqual(reason, "ok")
+        mock_urlopen.assert_called_once()
+        called_url = mock_urlopen.call_args.args[0].full_url
+        self.assertIn("backend-mgr:19999", called_url)
+        self.assertNotIn("config-override", called_url)
+
+    # Test A: no param and no config → "no_backend"; _active_backend_base_url never consulted
+    @patch("proxy.qz_responses._active_backend_base_url")
+    @patch("urllib.request.urlopen")
+    def test_no_url_returns_no_backend_reason(self, mock_urlopen, mock_active):
+        """Test A: when no URL available, returns (None, 'no_backend') without calling _active_backend_base_url."""
         COMPACTION_CONFIG["llm_base_url"] = ""
-        result = _call_llm_compactor("prompt")
-        self.assertIsNone(result)
+        content, reason = _call_llm_compactor("prompt", llm_base_url="")
+        self.assertIsNone(content)
+        self.assertEqual(reason, "no_backend")
+        mock_urlopen.assert_not_called()
+        mock_active.assert_not_called()
+
+    # Test C: proxy URL is rejected → "proxy_url_rejected"
+    @patch("urllib.request.urlopen")
+    def test_proxy_url_param_is_rejected(self, mock_urlopen):
+        """Test C: explicit llm_base_url matching a proxy port is rejected."""
+        content, reason = _call_llm_compactor("prompt", llm_base_url="http://127.0.0.1:18180")
+        self.assertIsNone(content)
+        self.assertEqual(reason, "proxy_url_rejected")
         mock_urlopen.assert_not_called()
 
+    # Test C2: config override with proxy port also rejected
     @patch("urllib.request.urlopen")
-    @patch("proxy.qz_responses._active_backend_base_url", return_value="")
-    def test_empty_active_backend_returns_none(self, _mock_active, mock_urlopen):
-        """If both llm_base_url and _active_backend_base_url() are empty, return None."""
-        COMPACTION_CONFIG["llm_base_url"] = ""
-        result = _call_llm_compactor("prompt")
-        self.assertIsNone(result)
+    def test_config_proxy_url_is_rejected(self, mock_urlopen):
+        """Config debug override matching a proxy port is rejected."""
+        COMPACTION_CONFIG["llm_base_url"] = "http://127.0.0.1:18183"
+        content, reason = _call_llm_compactor("prompt", llm_base_url="")
+        self.assertIsNone(content)
+        self.assertEqual(reason, "proxy_url_rejected")
         mock_urlopen.assert_not_called()
+
+    # Reason code: http_error
+    @patch("urllib.request.urlopen", side_effect=urllib.error.HTTPError(
+        url="http://127.0.0.1:19999/v1/chat/completions",
+        code=503,
+        msg="Service Unavailable",
+        hdrs=None,
+        fp=None,
+    ))
+    def test_http_error_returns_http_error_reason(self, _mock_urlopen):
+        content, reason = _call_llm_compactor("prompt", llm_base_url="http://127.0.0.1:19999")
+        self.assertIsNone(content)
+        self.assertEqual(reason, "http_error:503")
+
+    # Reason code: timeout
+    @patch("urllib.request.urlopen", side_effect=TimeoutError("timed out"))
+    def test_timeout_returns_timeout_reason(self, _mock_urlopen):
+        content, reason = _call_llm_compactor("prompt", llm_base_url="http://127.0.0.1:19999")
+        self.assertIsNone(content)
+        self.assertEqual(reason, "timeout")
+
+    # Reason code: invalid_json
+    def test_invalid_json_returns_invalid_json_reason(self):
+        bad_resp = MagicMock()
+        bad_resp.read.return_value = b"not json {"
+        bad_resp.__enter__.return_value = bad_resp
+        with patch("urllib.request.urlopen", return_value=bad_resp):
+            content, reason = _call_llm_compactor("prompt", llm_base_url="http://127.0.0.1:19999")
+        self.assertIsNone(content)
+        self.assertEqual(reason, "invalid_json")
+
+    # Reason code: empty_content
+    def test_empty_content_returns_empty_content_reason(self):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"choices": [{"message": {"content": None}}]}).encode()
+        mock_resp.__enter__.return_value = mock_resp
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            content, reason = _call_llm_compactor("prompt", llm_base_url="http://127.0.0.1:19999")
+        self.assertIsNone(content)
+        self.assertEqual(reason, "empty_content")
 
 
 if __name__ == "__main__":

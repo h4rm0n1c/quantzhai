@@ -1623,5 +1623,82 @@ class ProxyLoadOperationalStoreTests(unittest.TestCase):
             self.fail(f"repeated calls raised: {exc}")
 
 
+class TestBackendManagerLlmBaseUrl(unittest.TestCase):
+    """Test D (Stage 6.11) — BackendManager.llm_base_url() returns the correct URL."""
+
+    def _make_mgr(self, host="127.0.0.1", port=18084):
+        return BackendManager(
+            server_host=host,
+            server_port=port,
+            autostart=False,
+            runner=lambda *a, **kw: (0, "", ""),
+        )
+
+    def test_llm_base_url_default(self):
+        """Default host/port produces http://127.0.0.1:18084."""
+        mgr = self._make_mgr()
+        self.assertEqual(mgr.llm_base_url(), "http://127.0.0.1:18084")
+
+    def test_llm_base_url_custom_host_port(self):
+        """Custom host/port are reflected correctly."""
+        mgr = self._make_mgr(host="10.0.0.5", port=19001)
+        self.assertEqual(mgr.llm_base_url(), "http://10.0.0.5:19001")
+
+    def test_llm_base_url_not_in_snapshot(self):
+        """llm_base_url must not appear in snapshot() — it is not a public field."""
+        mgr = self._make_mgr()
+        snap = mgr.snapshot()
+        snap_str = str(snap)
+        self.assertNotIn("llm_base_url", snap_str)
+        self.assertNotIn("18084", snap_str)
+
+
+class TestBackendManagerStartupRestore(unittest.TestCase):
+    """Test G (Stage 6.11) — BackendManager.set_launch_model() correctly stores launch fields.
+
+    _preload_last_model() in the proxy reads catalog entry fields and calls
+    set_launch_model(key=..., backend_id=..., path_basename=...). This test
+    confirms the resulting snapshot() carries all three fields, which is the
+    precondition for backend_resolution_detail to show a valid launch_model_path_basename.
+    """
+
+    def _make_mgr(self):
+        return BackendManager(
+            autostart=False,
+            runner=lambda *a, **kw: (0, "", ""),
+        )
+
+    def test_set_launch_model_stores_key_backend_id_basename(self):
+        """Test G: set_launch_model stores all three fields accessible via snapshot."""
+        mgr = self._make_mgr()
+        mgr.set_launch_model(
+            key="Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS",
+            backend_id="qwen36turbo-27b-iq4",
+            path_basename="Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf",
+        )
+        snap = mgr.snapshot()
+        self.assertEqual(snap["launch_model_key"], "Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS")
+        self.assertEqual(snap["launch_model_backend_id"], "qwen36turbo-27b-iq4")
+        self.assertEqual(
+            snap["launch_model_path_basename"],
+            "Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf",
+        )
+
+    def test_set_launch_model_then_llm_base_url_consistent(self):
+        """llm_base_url() is unaffected by set_launch_model() — it reads host/port only."""
+        mgr = self._make_mgr()
+        mgr.set_launch_model(key="some-key", backend_id="some-id", path_basename="some.gguf")
+        self.assertEqual(mgr.llm_base_url(), "http://127.0.0.1:18084")
+
+    def test_empty_set_launch_model_clears_fields(self):
+        """set_launch_model with empty strings clears the fields in snapshot."""
+        mgr = self._make_mgr()
+        mgr.set_launch_model(key="old-key", backend_id="old-id", path_basename="old.gguf")
+        mgr.set_launch_model(key="", backend_id="", path_basename="")
+        snap = mgr.snapshot()
+        self.assertEqual(snap["launch_model_key"], "")
+        self.assertEqual(snap["launch_model_path_basename"], "")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -466,11 +466,56 @@ class ProxyHandler(BaseHTTPRequestHandler):
         except Exception as e:
             _ctx_reason = f"catalog_exception:{type(e).__name__}"
 
+        # Resolve the LLM backend URL from BackendManager.
+        # BackendManager owns the live backend runtime details; _call_llm_compactor()
+        # must never guess the URL from QZ_SERVER_HOST/QZ_SERVER_PORT.
+        mgr = getattr(self.__class__, "backend_manager", None)
+        llm_base_url = ""
+        backend_resolution_detail: dict = {
+            "source": "backend_manager",
+            "ok": False,
+            "reason": "backend_manager_missing",
+        }
+        if mgr is not None:
+            try:
+                snap = mgr.snapshot()
+                phase = snap.get("phase") or ""
+                launch_basename = snap.get("launch_model_path_basename") or ""
+                backend_resolution_detail = {
+                    "source": "backend_manager",
+                    "ok": False,
+                    "phase": phase,
+                    "backend_health_ok": snap.get("backend_health_ok"),
+                    "launch_model_key": snap.get("launch_model_key") or "",
+                    "launch_model_backend_id": snap.get("launch_model_backend_id") or "",
+                    "launch_model_path_basename": launch_basename,
+                    "reason": "",
+                }
+                if phase not in {"running", "healthy"}:
+                    backend_resolution_detail["reason"] = "backend_not_running"
+                elif not launch_basename:
+                    backend_resolution_detail["reason"] = "launch_model_missing"
+                elif not callable(getattr(mgr, "llm_base_url", None)):
+                    backend_resolution_detail["reason"] = "backend_manager_missing_llm_base_url"
+                else:
+                    llm_base_url = mgr.llm_base_url()
+                    backend_resolution_detail["ok"] = True
+                    backend_resolution_detail["base_url_source"] = "backend_manager"
+                    backend_resolution_detail["reason"] = "ok"
+            except Exception as exc:
+                backend_resolution_detail = {
+                    "source": "backend_manager",
+                    "ok": False,
+                    "reason": f"backend_manager_exception:{type(exc).__name__}",
+                }
+
         out = _build_local_compaction_response(
             body,
             selected_context_tokens=_ctx_tokens,
             remote_compaction=True,
             context_resolution_reason=_ctx_reason,
+            llm_base_url=llm_base_url,
+            backend_resolution_detail=backend_resolution_detail,
         )
 
         try:

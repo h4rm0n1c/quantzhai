@@ -722,5 +722,138 @@ class ContextWindowResolutionTests(unittest.TestCase):
         self.assertIsNone(payload["metadata"].get("context_resolution_reason"))
 
 
+class BackendManagerUrlThreadingTests(unittest.TestCase):
+    """Stage 6.11 Tests E, F, H — BackendManager URL threading and remote v2 fallback shape."""
+
+    VALID_SUMMARY = """## Goal
+Complete Stage 6.11 testing.
+
+## Active Constraints & Guardrails
+- BackendManager owns LLM URL.
+
+## Current Status
+### Done
+- URL threading implemented.
+
+## Key Decisions
+- Decision: BackendManager.llm_base_url() is authoritative.
+
+## Evidence Boundaries
+- Confirmed by unit tests.
+
+## Technical State
+- Backend manager routes compaction correctly.
+
+## Next Actions
+1. Verify smoke returns v3."""
+
+    def setUp(self):
+        self.original_config = COMPACTION_CONFIG.copy()
+        COMPACTION_CONFIG["mode"] = "llm"
+        COMPACTION_CONFIG["llm_base_url"] = ""
+        COMPACTION_CONFIG["llm_model"] = "test-model"
+        COMPACTION_CONFIG["llm_disable_reasoning"] = True
+
+    def tearDown(self):
+        for k, v in self.original_config.items():
+            COMPACTION_CONFIG[k] = v
+
+    def _make_history(self):
+        from proxy.qz_responses import _make_input_text_message
+        return [
+            _make_input_text_message("user", "Tell me about Paris."),
+            _make_input_text_message("assistant", "Paris is the capital of France."),
+            _make_input_text_message("user", "And Rome?"),
+            _make_input_text_message("assistant", "Rome is the capital of Italy."),
+        ]
+
+    def _mock_llm(self, mock_urlopen):
+        mock_resp = __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {"choices": [{"message": {"content": self.VALID_SUMMARY}}]}
+        ).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+        mock_urlopen.return_value = mock_resp
+
+    # Test E: llm_base_url param is threaded through to the LLM call
+    @unittest.mock.patch("urllib.request.urlopen")
+    def test_llm_base_url_param_routes_to_correct_backend(self, mock_urlopen):
+        """Test E: explicit llm_base_url param causes the LLM call to reach that backend."""
+        self._mock_llm(mock_urlopen)
+        backend_detail = {
+            "source": "backend_manager", "ok": True, "phase": "running",
+            "reason": "ok", "base_url_source": "backend_manager",
+        }
+        body = {"input": self._make_history(), "model": "test-model"}
+        result = _build_local_compaction_response(
+            body,
+            selected_context_tokens=262144,
+            remote_compaction=True,
+            llm_base_url="http://127.0.0.1:18084",
+            backend_resolution_detail=backend_detail,
+        )
+        # LLM must have been called and reached the specified backend
+        mock_urlopen.assert_called_once()
+        called_url = mock_urlopen.call_args.args[0].full_url
+        self.assertIn(":18084", called_url)
+        # Result must be v3
+        cmp_items = [i for i in result["output"] if isinstance(i, dict) and i.get("type") == "compaction"]
+        payload = _decode_local_compaction_blob(cmp_items[0]["encrypted_content"])
+        self.assertEqual(payload["version"], 3)
+
+    # Test F: backend not running → v3 fallback with backend_resolution_detail in v2 metadata
+    def test_idle_backend_produces_v2_with_backend_resolution_detail(self):
+        """Test F: idle BackendManager → v2 fallback metadata includes backend_resolution_detail."""
+        COMPACTION_CONFIG["llm_base_url"] = ""
+        backend_detail = {
+            "source": "backend_manager", "ok": False, "phase": "idle",
+            "reason": "backend_not_running",
+        }
+        body = {"input": self._make_history(), "model": "test-model"}
+        result = _build_local_compaction_response(
+            body,
+            selected_context_tokens=262144,
+            remote_compaction=True,
+            llm_base_url="",
+            backend_resolution_detail=backend_detail,
+        )
+        cmp_items = [i for i in result["output"] if isinstance(i, dict) and i.get("type") == "compaction"]
+        payload = _decode_local_compaction_blob(cmp_items[0]["encrypted_content"])
+        # Must fall back to v2 (no LLM backend)
+        self.assertEqual(payload["version"], 2)
+        # Metadata must include backend_resolution_detail, not a generic llm_call_failed
+        brd = payload["metadata"].get("backend_resolution_detail")
+        self.assertIsNotNone(brd, "backend_resolution_detail must be present in v2 metadata")
+        self.assertEqual(brd["source"], "backend_manager")
+        self.assertEqual(brd["phase"], "idle")
+        self.assertEqual(brd["reason"], "backend_not_running")
+
+    # Test H: remote v2 fallback (no LLM) → output is only compaction blob, no appended items
+    def test_remote_v2_fallback_output_is_only_compaction_blob(self):
+        """Test H: when v3 fails in remote mode, v2 fallback output is just the compaction blob."""
+        COMPACTION_CONFIG["llm_base_url"] = ""
+        body = {"input": self._make_history(), "model": "test-model"}
+        result = _build_local_compaction_response(
+            body,
+            selected_context_tokens=None,  # forces v3 fail → missing_context_window → v2
+            remote_compaction=True,
+            llm_base_url="",
+        )
+        # Remote v2 fallback: entire input is summarised; no recent tail in output
+        non_cmp = [
+            i for i in result["output"]
+            if isinstance(i, dict) and i.get("type") != "compaction"
+        ]
+        self.assertEqual(
+            non_cmp, [],
+            "Remote v2 fallback output must not contain non-compaction items"
+        )
+        self.assertEqual(len(result["output"]), 1)
+        cmp_item = result["output"][0]
+        self.assertEqual(cmp_item.get("type"), "compaction")
+        payload = _decode_local_compaction_blob(cmp_item["encrypted_content"])
+        self.assertEqual(payload["preserved_items"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
