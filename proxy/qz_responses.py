@@ -1315,6 +1315,38 @@ def _estimate_items_tokens(items):
     return total
 
 
+_V3_REASON_TO_PUBLIC: dict = {
+    "empty_llm_source_items": "no_source",
+    "mode_not_llm_or_auto":   "v3_unavailable",
+    "no_backend":             "v3_unavailable",
+    "backend_not_ready":      "v3_unavailable",
+    "missing_context_window": "v3_unavailable",
+    "validation_failed":      "invalid_summary",
+}
+
+
+def _normalize_v3_fallback_reason(internal_reason: str) -> str:
+    """Collapse internal v3 detail codes to the four public runtime reasons.
+
+    Public vocabulary:
+      no_source       — nothing to summarise (empty LLM source after filtering)
+      v3_unavailable  — backend missing, mode wrong, or context window absent
+      llm_failed      — backend reachable but returned no usable content
+      invalid_summary — content returned but failed anchored-v0 heading validation
+
+    All llm_call_failed:* variants (http_error, timeout, url_error, etc.) map to
+    llm_failed. Unknown codes default to v3_unavailable.
+    """
+    if not isinstance(internal_reason, str):
+        return "v3_unavailable"
+    mapped = _V3_REASON_TO_PUBLIC.get(internal_reason)
+    if mapped is not None:
+        return mapped
+    if internal_reason.startswith("llm_call_failed:"):
+        return "llm_failed"
+    return "v3_unavailable"
+
+
 def _build_local_compaction_response(
     body: dict,
     selected_context_tokens: Optional[int] = None,
@@ -1426,7 +1458,7 @@ def _build_local_compaction_response(
         "metadata": {
             "engine": "qwen3.6-bridge",
             "format": "structured-markers-v2",
-            "v3_fallback_reason": v3_reason,
+            "v3_fallback_reason": _normalize_v3_fallback_reason(v3_reason),
             "context_resolution_reason": context_resolution_reason,
             "backend_resolution_detail": backend_resolution_detail,
         }

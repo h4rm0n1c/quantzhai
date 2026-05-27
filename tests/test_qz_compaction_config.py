@@ -268,7 +268,9 @@ class TestCompactionConfig(unittest.TestCase):
         COMPACTION_CONFIG.update(cfg)
 
         with patch.dict(os.environ, {"CODEX_OSS_BASE_URL": "http://127.0.0.1:18180/v1"}):
-            self.assertIsNone(_call_llm_compactor("prompt"))
+            content, reason = _call_llm_compactor("prompt")
+        self.assertIsNone(content)
+        self.assertEqual(reason, "proxy_url_rejected")
         mock_urlopen.assert_not_called()
 
     def test_config_absent_still_produces_localcmp_v2(self):

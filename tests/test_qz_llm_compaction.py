@@ -120,11 +120,12 @@ class TestLLMCompaction(unittest.TestCase):
         )
 
         items = [{"type": "message", "role": "user", "content": "hello"}] * 50
-        result = _build_local_compaction_response(self._make_body(items))
-        
-        # Should fallback to v2
+        result = _build_local_compaction_response(self._make_body(items), selected_context_tokens=262144)
+
         blob = result["output"][0]["encrypted_content"]
         self.assertTrue(blob.startswith("localcmp:v2:"))
+        payload = _decode_local_compaction_blob(blob)
+        self.assertEqual(payload["metadata"]["v3_fallback_reason"], "invalid_summary")
 
     @patch("urllib.request.urlopen")
     def test_llm_compaction_fallback_on_error(self, mock_urlopen):
@@ -132,11 +133,12 @@ class TestLLMCompaction(unittest.TestCase):
         mock_urlopen.side_effect = Exception("Connection error")
 
         items = [{"type": "message", "role": "user", "content": "hello"}] * 50
-        result = _build_local_compaction_response(self._make_body(items))
-        
-        # Should fallback to v2
+        result = _build_local_compaction_response(self._make_body(items), selected_context_tokens=262144)
+
         blob = result["output"][0]["encrypted_content"]
         self.assertTrue(blob.startswith("localcmp:v2:"))
+        payload = _decode_local_compaction_blob(blob)
+        self.assertEqual(payload["metadata"]["v3_fallback_reason"], "llm_failed")
 
     @patch("urllib.request.urlopen")
     def test_heuristic_mode_does_not_call_backend(self, mock_urlopen):

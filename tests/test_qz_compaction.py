@@ -2,6 +2,7 @@ import base64
 import json
 import sys
 import unittest
+from unittest.mock import MagicMock
 
 sys.path.insert(0, str(__file__).rsplit("/tests/", 1)[0])
 
@@ -469,8 +470,8 @@ Complete Stage 6.10.3.
 
     # ── v3 fallback reason recorded in v2 metadata ───────────────────────────
 
-    def test_normal_compact_v3_fallback_reason_is_empty_llm_source_items(self):
-        """v2 blob for normal compact with 2-message history records the v3 reason."""
+    def test_fallback_reason_no_source_when_nothing_to_summarise(self):
+        """v2 blob for short normal history records normalized reason 'no_source'."""
         COMPACTION_CONFIG["mode"] = "auto"
         body = {"input": self._make_small_history(), "model": "test-model"}
         result = _build_local_compaction_response(
@@ -481,13 +482,10 @@ Complete Stage 6.10.3.
             if isinstance(item, dict) and item.get("type") == "compaction"
         ]
         payload = _decode_local_compaction_blob(cmp_items[0]["encrypted_content"])
-        self.assertEqual(
-            payload["metadata"].get("v3_fallback_reason"),
-            "empty_llm_source_items",
-        )
+        self.assertEqual(payload["metadata"].get("v3_fallback_reason"), "no_source")
 
-    def test_v2_fallback_reason_is_missing_context_window_when_no_tokens(self):
-        """v2 blob records 'missing_context_window' when selected_context_tokens=None."""
+    def test_fallback_reason_v3_unavailable_when_no_context_tokens(self):
+        """v2 blob records 'v3_unavailable' when selected_context_tokens=None."""
         COMPACTION_CONFIG["mode"] = "auto"
         big_history = [_msg("user", "hello " * 50), _msg("assistant", "world " * 50)] * 15
         body = {"input": big_history, "model": "test-model"}
@@ -497,13 +495,10 @@ Complete Stage 6.10.3.
             if isinstance(item, dict) and item.get("type") == "compaction"
         ]
         payload = _decode_local_compaction_blob(cmp_items[0]["encrypted_content"])
-        self.assertEqual(
-            payload["metadata"].get("v3_fallback_reason"),
-            "missing_context_window",
-        )
+        self.assertEqual(payload["metadata"].get("v3_fallback_reason"), "v3_unavailable")
 
-    def test_v2_fallback_reason_is_mode_not_llm_or_auto_for_heuristic_mode(self):
-        """Heuristic mode produces v2 with reason 'mode_not_llm_or_auto'."""
+    def test_fallback_reason_v3_unavailable_for_heuristic_mode(self):
+        """Heuristic mode produces v2 with normalized reason 'v3_unavailable'."""
         COMPACTION_CONFIG["mode"] = "heuristic"
         big_history = [_msg("user", "hello " * 50), _msg("assistant", "world " * 50)] * 15
         body = {"input": big_history, "model": "test-model"}
@@ -513,10 +508,7 @@ Complete Stage 6.10.3.
             if isinstance(item, dict) and item.get("type") == "compaction"
         ]
         payload = _decode_local_compaction_blob(cmp_items[0]["encrypted_content"])
-        self.assertEqual(
-            payload["metadata"].get("v3_fallback_reason"),
-            "mode_not_llm_or_auto",
-        )
+        self.assertEqual(payload["metadata"].get("v3_fallback_reason"), "v3_unavailable")
 
     @unittest.mock.patch("urllib.request.urlopen")
     def test_remote_compact_v3_metadata_records_remote_compaction_true(self, mock_urlopen):
@@ -852,6 +844,172 @@ Complete Stage 6.11 testing.
         cmp_item = result["output"][0]
         self.assertEqual(cmp_item.get("type"), "compaction")
         payload = _decode_local_compaction_blob(cmp_item["encrypted_content"])
+        self.assertEqual(payload["preserved_items"], 0)
+
+
+class CompactionFallbackContractTests(unittest.TestCase):
+    """Contract: v3 is the preferred hot path; v2 is last-ditch fallback.
+    Public v3_fallback_reason is exactly one of:
+      no_source | v3_unavailable | llm_failed | invalid_summary
+    """
+
+    def setUp(self):
+        self._orig = COMPACTION_CONFIG.copy()
+        COMPACTION_CONFIG["mode"] = "llm"
+        COMPACTION_CONFIG["llm_base_url"] = "http://mock-llm:8080"
+        COMPACTION_CONFIG["llm_model"] = "test-model"
+
+    def tearDown(self):
+        for k, v in self._orig.items():
+            COMPACTION_CONFIG[k] = v
+
+    def _big_history(self):
+        return [_msg("user", "hello " * 50), _msg("assistant", "world " * 50)] * 15
+
+    def _v2_payload(self, result):
+        cmp = [i for i in result["output"] if isinstance(i, dict) and i.get("type") == "compaction"]
+        return _decode_local_compaction_blob(cmp[0]["encrypted_content"])
+
+    # ── Contract 1: healthy backend + remote compact → v3, output_len = 1 ─────
+
+    @unittest.mock.patch("urllib.request.urlopen")
+    def test_v3_hot_path_output_len_is_1(self, mock_urlopen):
+        """Remote compact with healthy backend: blob is v3 and output contains exactly 1 item."""
+        summary = "\n".join([
+            "## Goal", "- Test.", "",
+            "## Active Constraints & Guardrails", "- none observed.", "",
+            "## Current Status", "### Done", "- none observed.", "",
+            "## Key Decisions", "- none observed.", "",
+            "## Evidence Boundaries", "- none observed.", "",
+            "## Technical State", "### Files / Paths", "- none observed.", "",
+            "## Next Actions", "1. Verify.", "",
+        ])
+        resp = MagicMock()
+        resp.read.return_value = json.dumps(
+            {"choices": [{"message": {"content": summary}}]}
+        ).encode()
+        resp.__enter__.return_value = resp
+        mock_urlopen.return_value = resp
+        body = {"input": self._big_history(), "model": "test-model"}
+        result = _build_local_compaction_response(
+            body, selected_context_tokens=262144, remote_compaction=True
+        )
+        blob = result["output"][0]["encrypted_content"]
+        self.assertTrue(blob.startswith("localcmp:v3:"), f"expected v3, got {blob[:25]}")
+        self.assertEqual(len(result["output"]), 1, "remote v3 output must be exactly 1 item")
+
+    # ── Contract 2: no_source ─────────────────────────────────────────────────
+
+    def test_no_llm_source_items_gives_no_source(self):
+        """Short normal history (everything in recent tail) → v2, reason no_source."""
+        COMPACTION_CONFIG["mode"] = "auto"
+        body = {"input": [_msg("user", "hi"), _msg("assistant", "hello")], "model": "test"}
+        result = _build_local_compaction_response(
+            body, selected_context_tokens=262144, remote_compaction=False
+        )
+        payload = self._v2_payload(result)
+        self.assertTrue(payload["version"] == 2)
+        self.assertEqual(payload["metadata"]["v3_fallback_reason"], "no_source")
+
+    # ── Contract 3: v3_unavailable ────────────────────────────────────────────
+
+    def test_no_backend_url_gives_v3_unavailable(self):
+        """No backend URL → v2, reason v3_unavailable."""
+        COMPACTION_CONFIG["llm_base_url"] = ""
+        body = {"input": self._big_history(), "model": "test"}
+        result = _build_local_compaction_response(
+            body, selected_context_tokens=262144
+        )
+        payload = self._v2_payload(result)
+        self.assertEqual(payload["metadata"]["v3_fallback_reason"], "v3_unavailable")
+
+    def test_no_context_window_gives_v3_unavailable(self):
+        """selected_context_tokens=None → v2, reason v3_unavailable."""
+        body = {"input": self._big_history(), "model": "test"}
+        result = _build_local_compaction_response(body, selected_context_tokens=None)
+        payload = self._v2_payload(result)
+        self.assertEqual(payload["metadata"]["v3_fallback_reason"], "v3_unavailable")
+
+    # ── Contract 4: llm_failed ────────────────────────────────────────────────
+
+    @unittest.mock.patch("urllib.request.urlopen")
+    def test_llm_call_error_gives_llm_failed(self, mock_urlopen):
+        """LLM backend connection error → v2, reason llm_failed."""
+        mock_urlopen.side_effect = Exception("connection refused")
+        body = {"input": self._big_history(), "model": "test"}
+        result = _build_local_compaction_response(
+            body, selected_context_tokens=262144
+        )
+        payload = self._v2_payload(result)
+        self.assertEqual(payload["metadata"]["v3_fallback_reason"], "llm_failed")
+
+    @unittest.mock.patch("urllib.request.urlopen")
+    def test_llm_http_error_gives_llm_failed(self, mock_urlopen):
+        """LLM backend HTTP 503 → v2, reason llm_failed."""
+        import urllib.error
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            url="http://mock-llm:8080/v1/chat/completions",
+            code=503, msg="Service Unavailable", hdrs=None, fp=None,
+        )
+        body = {"input": self._big_history(), "model": "test"}
+        result = _build_local_compaction_response(
+            body, selected_context_tokens=262144
+        )
+        payload = self._v2_payload(result)
+        self.assertEqual(payload["metadata"]["v3_fallback_reason"], "llm_failed")
+
+    # ── Contract 5: invalid_summary ───────────────────────────────────────────
+
+    @unittest.mock.patch("urllib.request.urlopen")
+    def test_invalid_anchored_output_gives_invalid_summary(self, mock_urlopen):
+        """LLM returns text missing required headings → v2, reason invalid_summary."""
+        resp = MagicMock()
+        resp.read.return_value = json.dumps(
+            {"choices": [{"message": {"content": "Looks good, nothing to see here."}}]}
+        ).encode()
+        resp.__enter__.return_value = resp
+        mock_urlopen.return_value = resp
+        body = {"input": self._big_history(), "model": "test"}
+        result = _build_local_compaction_response(
+            body, selected_context_tokens=262144
+        )
+        payload = self._v2_payload(result)
+        self.assertEqual(payload["metadata"]["v3_fallback_reason"], "invalid_summary")
+
+    # ── Contract 6: v2 fallback blob always decodes cleanly ───────────────────
+
+    def test_v2_blob_always_decodes(self):
+        """v2 fallback blob must always decode to a dict with a readable reason."""
+        for reason in ("no_source", "v3_unavailable", "llm_failed", "invalid_summary"):
+            with self.subTest(reason=reason):
+                COMPACTION_CONFIG["llm_base_url"] = ""
+                body = {"input": self._big_history(), "model": "test"}
+                result = _build_local_compaction_response(body, selected_context_tokens=None)
+                cmp = [i for i in result["output"] if isinstance(i, dict) and i.get("type") == "compaction"]
+                self.assertTrue(cmp, "output must contain a compaction item")
+                blob = cmp[0]["encrypted_content"]
+                self.assertTrue(blob.startswith("localcmp:v2:"), f"expected v2 prefix, got {blob[:25]}")
+                payload = _decode_local_compaction_blob(blob)
+                self.assertIsInstance(payload, dict, "v2 blob must decode to dict")
+                stored_reason = payload.get("metadata", {}).get("v3_fallback_reason", "")
+                self.assertIn(
+                    stored_reason,
+                    ("no_source", "v3_unavailable", "llm_failed", "invalid_summary"),
+                    f"unexpected reason: {stored_reason!r}",
+                )
+
+    # ── Contract 7: remote v2 fallback is replacement-only ───────────────────
+
+    def test_remote_v2_fallback_is_replacement_only(self):
+        """Remote v2 fallback must not append the original items (output_len == 1)."""
+        COMPACTION_CONFIG["llm_base_url"] = ""
+        body = {"input": self._big_history(), "model": "test"}
+        result = _build_local_compaction_response(
+            body, selected_context_tokens=None, remote_compaction=True
+        )
+        self.assertEqual(len(result["output"]), 1)
+        self.assertEqual(result["output"][0]["type"], "compaction")
+        payload = _decode_local_compaction_blob(result["output"][0]["encrypted_content"])
         self.assertEqual(payload["preserved_items"], 0)
 
 
