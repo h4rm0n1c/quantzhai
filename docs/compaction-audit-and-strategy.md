@@ -1,7 +1,7 @@
 # Compaction Audit and Strategy
 
 Date: 2026-05-27
-Status: **Stage 6.4** — multi-repo corpus staging harness complete; no compaction runtime changes; default remains heuristic v2.
+Status: **Stage 6.5** — multi-repo opt-in v3 compaction dogfood complete (16/16 shallow v3 accepted, 2/3 deep v3 accepted, survival classifier anti-overfit assessed); default remains heuristic v2.
 
 ---
 
@@ -1205,6 +1205,7 @@ Stage 6.1             — complete       — compactor final-output tuning; live
 Stage 6.2             — complete       — extended opt-in dogfood; v3 reliability and quality confirmed; latency baseline 5-68s; fallback proven; no tuning needed
 Stage 6.3             — complete       — extended real-session dogfood; 6/6 v3 accepted; quality scales with conversation depth; zero leakage; no tuning needed
 Stage 6.4             — complete       — multi-repo corpus staging harness; 8 repos, 4 scripts, 47 tests; no compaction runtime changes
+Stage 6.5             — complete       — multi-repo opt-in dogfood; 16/16 shallow v3, 2/3 deep v3 accepted; survival classifier anti-overfit assessed; no classifier/prompt tuning changes
 ```
 
 Priority note: Stages 0–3 are pure docs/tests. No proxy changes.

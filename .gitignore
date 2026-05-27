@@ -24,3 +24,6 @@ latest-*.json
 latest-*.log
 latest-*.txt
 *.bak*
+
+# Personal tool config directories
+.antigravitycli/

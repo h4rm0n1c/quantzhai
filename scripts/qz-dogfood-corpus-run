@@ -1,0 +1,521 @@
+#!/usr/bin/env python3
+"""
+Multi-repo opt-in v3 compaction dogfood runner for Stage 6.5.
+
+Drives the existing capture proxy directly over HTTP.
+Builds multi-turn conversations from scratch repo files,
+forces auto-compaction, and collects detailed evidence.
+"""
+
+import argparse
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from qz_dogfood_corpus_lib import (
+    corpus_root,
+    load_repos_config,
+    run_dir,
+    run_id,
+    scratch_path,
+    selected_repo_ids,
+    selected_repos,
+    work_root,
+    write_json,
+    write_md,
+)
+
+# --------------------------------------------------------------------------
+# HTTP helpers
+# --------------------------------------------------------------------------
+
+def _get_json(url, timeout=5):
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return json.loads(r.read().decode())
+    except Exception:
+        return None
+
+
+def _post_json(url, payload, timeout=120):
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=data, method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer local",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, json.loads(r.read().decode())
+    except urllib.error.HTTPError as exc:
+        try:
+            return exc.code, json.loads(exc.read().decode())
+        except Exception:
+            return exc.code, {"error": str(exc)}
+
+
+def _msg(role, text):
+    part_type = "output_text" if role == "assistant" else "input_text"
+    part = {"type": part_type, "text": text}
+    if role == "assistant":
+        part["annotations"] = []
+    return {"type": "message", "role": role, "content": [part]}
+
+
+def _readable_files(scratch: str, max_turns: int = 10) -> Tuple[List[dict], List[str]]:
+    """Read real files from scratch repo to build multi-turn history."""
+    turns = []
+    files_read = []
+    src = Path(scratch)
+    count = 0
+    for path in sorted(src.rglob("*")):
+        if not path.is_file():
+            continue
+        if ".git" in path.parts:
+            continue
+        if path.suffix in (".pyc", ".png", ".jpg", ".gif", ".mp3", ".ico", ".svg", ".woff2"):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        rel = path.relative_to(src)
+        preview = text[:200].replace("\n", " ").strip()
+        turns.append(_msg("user", f"Read this file — {rel}:\n\n{text[:1200]}"))
+        turns.append(_msg("assistant", f"I've read {rel}. It contains: {preview!r}..."))
+        files_read.append(str(rel))
+        count += 1
+        if count >= max_turns:
+            break
+    return turns, files_read
+
+
+def _extract_compaction(body: dict) -> Optional[dict]:
+    """Extract the compaction item from a response."""
+    for item in body.get("output", []):
+        if isinstance(item, dict) and item.get("type") == "compaction":
+            return item
+    return None
+
+
+def _decode_v3_blob(blob: str) -> Optional[dict]:
+    """Decode a localcmp:v3 blob using the proxy's decoder."""
+    from proxy.qz_responses import _decode_local_compaction_blob as decode
+    return decode(blob)
+
+
+# --------------------------------------------------------------------------
+# Evidence collection
+# --------------------------------------------------------------------------
+
+def _collect_survival_hints(text: str) -> dict:
+    """Score text and return survival hint summary."""
+    try:
+        from proxy.qz_survival_weight import score_text, format_survival_hints as fmt
+    except ImportError:
+        return {"error": "cannot import survival_weight"}
+    spans = score_text(text)
+    hint_text = fmt(spans, max_spans=999)
+    features: Dict[str, int] = {}
+    for s in spans:
+        for f in s.features:
+            features[f] = features.get(f, 0) + 1
+    return {
+        "spans_count": len(spans),
+        "features": features,
+        "hint_text": hint_text[:200] if hint_text else "",
+    }
+
+
+def _check_headings(v3_payload: dict) -> list:
+    """List which canonical headings are present in a v3 summary."""
+    required = [
+        "## Goal",
+        "## Active Constraints & Guardrails",
+        "## Current Status",
+        "## Key Decisions",
+        "## Technical State",
+        "## Files / Paths",
+        "## Rejected / Abandoned Approaches",
+        "## Open Questions / Uncertainties",
+        "## Next Actions",
+    ]
+    summary = v3_payload.get("summary_text", "")
+    headings_found = []
+    for h in required:
+        headings_found.append(h in summary)
+    return headings_found
+
+
+# --------------------------------------------------------------------------
+# Main scenarios
+# --------------------------------------------------------------------------
+
+SCENARIOS = {
+    "scenario1-repo-map": {
+        "label": "Repo map inspection",
+        "prompt": "Based on what you've read, produce a repo map with important top-level paths, likely purpose, and exact commands you would use. Do not modify files.",
+    },
+    "scenario2-build-docs": {
+        "label": "Build/docs inspection",
+        "prompt": "Based on what you've read, focus on docs, tests, build files, scripts, and package metadata. Preserve exact paths and commands. Identify safe next actions. Do not install dependencies, do not run network commands, do not modify files, and do not create commits.",
+    },
+}
+
+
+def run_scenario(
+    repo_id: str,
+    scenario_id: str,
+    scenario_label: str,
+    prompt: str,
+    scratch: str,
+    proxy_url: str,
+    model: str,
+) -> dict:
+    """Run one dogfood scenario and return evidence dict."""
+    evidence: Dict[str, Any] = {
+        "repo_id": repo_id,
+        "scenario": scenario_id,
+        "scenario_label": scenario_label,
+        "scratch": scratch,
+        "result": None,
+        "blob_prefix": None,
+        "v3_payload": None,
+        "latency_ms": None,
+        "headings_present": None,
+        "reasoning_leak": None,
+        "placeholder_leak": None,
+        "survival_hints": None,
+        "v3_summary_preview": None,
+        "error": None,
+        "capture_dir": None,
+        "scratch_clean": None,
+    }
+
+    responses_url = f"{proxy_url}/v1/responses"
+
+    # 1. Check the scratch repo exists
+    if not os.path.isdir(scratch):
+        evidence["error"] = f"scratch not found: {scratch}"
+        return evidence
+
+    # 2. Record scratch HEAD and initial clean state
+    try:
+        import subprocess
+        r = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=scratch, capture_output=True, text=True, timeout=10,
+        )
+        evidence["initial_head"] = r.stdout.strip() if r.returncode == 0 else "unknown"
+        r = subprocess.run(
+            ["git", "status", "--short"],
+            cwd=scratch, capture_output=True, text=True, timeout=10,
+        )
+        evidence["initial_clean"] = len(r.stdout.strip()) == 0
+    except Exception:
+        evidence["initial_head"] = "unknown"
+        evidence["initial_clean"] = False
+
+    # 3. Build multi-turn history from real files
+    history, files_read = _readable_files(scratch, max_turns=8)
+    if not history:
+        evidence["error"] = "no readable files"
+        return evidence
+    evidence["files_read"] = files_read[:10]
+    evidence["turn_count"] = len(history) // 2
+
+    # 4. Add the scenario prompt
+    history.append(_msg("user", prompt))
+
+    # 5. Collect survival hints from the input text (before compacting)
+    all_text = "\n".join(
+        m["content"][0]["text"] for m in history if m.get("content")
+    )
+    evidence["survival_hints"] = _collect_survival_hints(all_text)
+
+    # 6. POST with compact_threshold=1 to force compaction
+    start = time.time()
+    status, body = _post_json(responses_url, {
+        "model": model,
+        "stream": False,
+        "input": history,
+        "context_management": {"compact_threshold": 1},
+    }, timeout=180)
+    elapsed_ms = int((time.time() - start) * 1000)
+    evidence["latency_ms"] = elapsed_ms
+    evidence["http_status"] = status
+
+    # 7. Parse response
+    if status != 200:
+        evidence["error"] = f"HTTP {status}: {str(body)[:200]}"
+        return evidence
+
+    if body.get("object") == "response.compaction":
+        evidence["result"] = "compaction_response"
+        cmp_item = _extract_compaction(body)
+        if cmp_item:
+            blob = cmp_item.get("encrypted_content", "")
+            evidence["blob_prefix"] = blob[:30]
+            if blob.startswith("localcmp:v3:"):
+                v3 = _decode_v3_blob(blob)
+                if v3:
+                    evidence["result"] = "v3_accepted"
+                    evidence["v3_payload"] = {
+                        "version": v3.get("version"),
+                        "engine": v3.get("metadata", {}).get("engine"),
+                        "schema_version": v3.get("schema_version"),
+                        "fallback": v3.get("metadata", {}).get("fallback"),
+                        "survival_hint_count": v3.get("metadata", {}).get("survival_hint_count"),
+                        "depth": v3.get("depth"),
+                        "preserved_items": v3.get("preserved_items"),
+                        "created_at": v3.get("created_at"),
+                    }
+                    summary_text = v3.get("summary_text", "")
+                    evidence["v3_summary_preview"] = summary_text[:400]
+                    evidence["headings_present"] = _check_headings(v3)
+                    evidence["reasoning_leak"] = "reasoning_content" in summary_text.lower()
+                    evidence["placeholder_leak"] = (
+                        "{{NEW_CONVERSATION}}" in summary_text
+                        or "{{PREVIOUS_ANCHORED_SUMMARY}}" in summary_text
+                    )
+                else:
+                    evidence["result"] = "v3_decode_failed"
+            elif blob.startswith("localcmp:v2:"):
+                evidence["result"] = "v2_fallback"
+            else:
+                evidence["result"] = "unknown_blob"
+
+    elif body.get("object") == "response":
+        evidence["result"] = "model_response"
+        evidence["error"] = "model responded instead of compacting"
+    else:
+        evidence["result"] = f"unexpected_object:{body.get('object')}"
+
+    evidence["capture_dir"] = _detect_capture_dir(proxy_url)
+    evidence["scratch_clean"] = _check_scratch_clean(scratch)
+
+    return evidence
+
+
+def _detect_capture_dir(proxy_url: str) -> Optional[str]:
+    """Try to find the most recent capture dir."""
+    captures = Path(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "var", "captures", "requests"))
+    if not captures.is_dir():
+        return None
+    dirs = sorted(captures.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+    if dirs:
+        return str(dirs[0].name)
+    return None
+
+
+def _check_scratch_clean(scratch: str) -> Optional[bool]:
+    try:
+        import subprocess
+        r = subprocess.run(
+            ["git", "status", "--short"],
+            cwd=scratch, capture_output=True, text=True, timeout=10,
+        )
+        return len(r.stdout.strip()) == 0
+    except Exception:
+        return None
+
+
+# --------------------------------------------------------------------------
+# Main
+# --------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Run multi-repo compaction dogfood (Stage 6.5)."
+    )
+    parser.add_argument("--proxy-url", default="http://127.0.0.1:18183")
+    parser.add_argument("--config", default=None, help="Path to repos.json")
+    parser.add_argument(
+        "--scenario",
+        default="all",
+        choices=["all", "scenario1-repo-map", "scenario2-build-docs"],
+        help="Which scenario(s) to run",
+    )
+    parser.add_argument(
+        "--repo", default=None,
+        help="Single repo ID to test (overrides QZ_DOGFOOD_REPOS)",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Print what would be run without running",
+    )
+    args = parser.parse_args()
+
+    proxy_url = args.proxy_url.rstrip("/")
+
+    if args.repo:
+        os.environ["QZ_DOGFOOD_REPOS"] = args.repo
+
+    # 1. Check proxy health
+    status_data = _get_json(f"{proxy_url}/qz/status")
+    if not status_data:
+        print(f"ERROR: proxy not reachable at {proxy_url}")
+        sys.exit(1)
+    model = (
+        status_data.get("selected", {}).get("key")
+        or status_data.get("backend", {}).get("selected_backend_id")
+        or "Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf"
+    )
+    print(f"Proxy OK at {proxy_url}")
+    print(f"Model: {model}")
+    print(f"Status: {status_data.get('status')}")
+
+    # 2. Load repos
+    if args.repo:
+        selected = selected_repos(load_repos_config(args.config), [args.repo])
+    else:
+        ids = selected_repo_ids()
+        repos = load_repos_config(args.config)
+        selected = selected_repos(repos, ids)
+
+    if not selected:
+        print("No repos selected.")
+        sys.exit(1)
+
+    rid = run_id()
+    rdir = run_dir(rid)
+    os.makedirs(rdir, exist_ok=True)
+
+    wroot = work_root()
+
+    # Determine which scenarios to run
+    if args.scenario == "all":
+        scenario_keys = list(SCENARIOS.keys())
+    else:
+        scenario_keys = [args.scenario]
+
+    all_results = []
+
+    for repo in selected:
+        repo_id = repo["id"]
+        lang = repo.get("language", "?")
+        shape = repo.get("shape", "?")
+        scratch = scratch_path(repo, rid)
+
+        # Re-derive from --dry-run via env
+        if args.dry_run:
+            if args.repo:
+                scratch_from_config = os.path.join(wroot, rid, repo["scratch_name"])
+            else:
+                scratch_from_config = os.path.join(wroot, rid, repo["scratch_name"])
+            print(f"\n[DRY RUN] {repo_id} ({lang}, {shape})")
+            print(f"  Scratch: {scratch_from_config}")
+            for sk in scenario_keys:
+                s = SCENARIOS[sk]
+                print(f"  Scenario: {sk} — {s['label']}")
+            continue
+
+        for sk in scenario_keys:
+            s = SCENARIOS[sk]
+            print(f"\n{'='*70}")
+            print(f"[{repo_id}] Scenario: {sk} — {s['label']}")
+            print(f"  Language: {lang}  Shape: {shape}")
+            print(f"  Scratch: {scratch}")
+            print(f"  Prompt: {s['prompt'][:80]}...")
+
+            ev = run_scenario(
+                repo_id=repo_id,
+                scenario_id=sk,
+                scenario_label=s["label"],
+                prompt=s["prompt"],
+                scratch=scratch,
+                proxy_url=proxy_url,
+                model=model,
+            )
+
+            # Print summary
+            result = ev.get("result", "?")
+            latency = ev.get("latency_ms", "?")
+            hint_count = ev.get("survival_hints", {}).get("spans_count", "?")
+            v3_preview = ev.get("v3_summary_preview", "")
+
+            print(f"  Result: {result}")
+            print(f"  Latency: {latency}ms")
+            if ev.get("survival_hints"):
+                feats = ev["survival_hints"].get("features", {})
+                print(f"  Survival hints: {hint_count} spans, features: {dict(sorted(feats.items()))}")
+            if ev.get("headings_present"):
+                headings_ok = sum(1 for h in ev["headings_present"] if h)
+                print(f"  Headings: {headings_ok}/{len(ev['headings_present'])} present")
+            if ev.get("reasoning_leak") is not None:
+                print(f"  Reasoning leak: {ev['reasoning_leak']}")
+            if ev.get("placeholder_leak") is not None:
+                print(f"  Placeholder leak: {ev['placeholder_leak']}")
+            if ev.get("error"):
+                print(f"  ERROR: {ev['error']}")
+
+            if v3_preview:
+                print(f"  Summary preview: {v3_preview[:200]}...")
+
+            all_results.append(ev)
+
+            # Small delay between scenarios
+            time.sleep(0.5)
+
+    # Write results
+    if not args.dry_run:
+        write_json(os.path.join(rdir, "dogfood-results.json"), {
+            "run_id": rid,
+            "proxy_url": proxy_url,
+            "model": model,
+            "scenarios": scenario_keys,
+            "results": all_results,
+        })
+
+        md_lines = [
+            f"Run ID: {rid}",
+            f"Proxy: {proxy_url}",
+            f"Model: {model}",
+            "",
+            "## Results",
+        ]
+        summaries = []
+        v3_ok = 0
+        v2_fb = 0
+        failures = 0
+        for ev in all_results:
+            r = ev.get("result", "?")
+            if r == "v3_accepted":
+                v3_ok += 1
+            elif r == "v2_fallback":
+                v2_fb += 1
+            elif r != "compaction_response":
+                failures += 1
+            lat = ev.get("latency_ms", "?")
+            hint = ev.get("survival_hints", {}).get("spans_count", "?")
+            feats = ev.get("survival_hints", {}).get("features", {})
+            feats_str = ", ".join(f"{k}={v}" for k, v in sorted(feats.items()))
+            md_lines.append(
+                f"- {ev['repo_id']}/{ev['scenario']}: {r} ({lat}ms, hints={hint}, {feats_str})"
+            )
+        md_lines.append("")
+        md_lines.append(f"v3 accepted: {v3_ok}, v2 fallback: {v2_fb}, failures: {failures}")
+
+        write_md(os.path.join(rdir, "dogfood-results.md"), "Dogfood Results", md_lines)
+
+        print(f"\n{'='*70}")
+        print(f"Results: {os.path.join(rdir, 'dogfood-results.json')}")
+        print(f"v3 accepted: {v3_ok}, v2 fallback: {v2_fb}, failures: {failures}")
+        print(f"Total scenarios: {len(all_results)}")
+
+        if failures:
+            sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

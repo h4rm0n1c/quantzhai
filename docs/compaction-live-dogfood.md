@@ -376,3 +376,131 @@ No proxy module imports. No live compaction run.
 
 **Next**: Stage 6.5 will run actual multi-repo opt-in v3 compaction dogfood
 using staged scratch repos as Codex workspace targets.
+
+## Stage 6.5: Multi-Repo Opt-in LLM Compaction Dogfood
+
+Date: 2026-05-27
+Status: **Stage 6.5 complete — 16/16 shallow v3 accepted, 2/3 deep v3 accepted, survival classifier anti-overfit assessed**
+
+Direct backend reconfirmed:
+```text
+http://127.0.0.1:18084  — llama.cpp Qwen3.6-27B (Docker)
+127.0.0.1:18180         — normal QuantZhai proxy
+127.0.0.1:18183         — capture proxy (reused; env already correct from prior stages)
+```
+
+### Runner
+
+Created `scripts/qz-dogfood-corpus-run` — standalone Python script that reads
+real files from staged scratch repos and drives the proxy HTTP API directly.
+Validated on linuxstreamtools before full corpus run.
+
+### Shallow Scenarios
+
+All 8 repos × 2 scenarios (repo-map inspection + build/docs inspection) =
+16 productions:
+
+| Repo | Language | Scenario 1 | Scenario 2 | Latency | Survival Hints |
+|---|---|---|---|---|---|
+| linuxstreamtools | mixed | v3 accepted | v3 accepted | 5.4-5.5s | 37 (env_var=14, path=7, code_symbol=7, flag=5) |
+| quantzhai | python | v3 accepted | v3 accepted | 5.4s | 62 (env_var=20, command=18, code_symbol=10) |
+| click | python | v3 accepted | v3 accepted | 5.4s | 17 (code_symbol=9, flag=2, command=2) |
+| p-limit | javascript | v3 accepted | v3 accepted | 5.4s | 14 (code_symbol=10, path=2) |
+| bubbletea | go | v3 accepted | v3 accepted | 5.4s | 13 (path=6, code_symbol=4) |
+| fd | rust | v3 accepted | v3 accepted | 5.4s | 11 (flag=5, code_symbol=4) |
+| fmt | cpp | v3 accepted | v3 accepted | 5.4s | 20 (code_symbol=16, version=1) |
+| stb | c | v3 accepted | v3 accepted | 5.4s | 15 (code_symbol=7, negation=4) |
+
+**Results**: 16/16 v3 accepted, 0 v2 fallback, 0 failures.
+All blobs have 9/9 canonical headings present.
+Zero reasoning_content leakage. Zero placeholder leakage.
+All scratch repos remained clean.
+
+### Deep Scenarios
+
+Three repos (quantzhai, click, fd) exercised with 15-turn file-read histories
+to force the older-items compaction path:
+
+| Repo | Language | Turns | Result | Latency | Survival Hints | Notes |
+|---|---|---|---|---|---|---|
+| click | python | 15 | v3 accepted | 21,759ms | 16 | Non-sparse summary: Done items, version hints (9), issue tracker constraints |
+| fd | rust | 15 | v3 accepted | 21,829ms | 3 | Non-sparse: files read, 6 issue_ref hints from changelog |
+| quantzhai | python | 15 | **v2 FALLBACK** | 50,085ms | 76 | LLM compactor failed (largest input); auto-compaction correctly degraded to heuristic v2 |
+
+The quantzhai v2 fallback confirms the safety path: when the LLM compactor
+times out or returns invalid output for a large hint input (76 spans), the
+proxy degrades gracefully to heuristic `localcmp:v2:` instead of crashing or
+blocking the session.
+
+### Survival Classifier Anti-Overfit Evidence
+
+Per-repo feature totals across all 19 productions (16 shallow + 3 deep):
+
+| Feature | linuxstreamtools | quantzhai | click | p-limit | bubbletea | fd | fmt | stb |
+|---|---|---|---|---|---|---|---|---|
+| env_var | 14 | 20 | 0 | 0 | 0 | 1 | 0 | 0 |
+| command | 2 | 18 | 2 | 0 | 1 | 0 | 0 | 0 |
+| path | 7 | 2 | 0 | 2 | 6 | 0 | 1 | 2 |
+| code_symbol | 7 | 10 | 9 | 10 | 4 | 4 | 16 | 7 |
+| flag | 5 | 4 | 2 | 0 | 1 | 5 | 1 | 1 |
+| negation | 2 | 3 | 2 | 2 | 1 | 1 | 1 | 4 |
+| sha | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 0 |
+| version | 0 | 0 | 1 | 0 | 0 | 0 | 1 | 0 |
+| model_name | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
+| test_name | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
+| error_string | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 |
+| user_correction | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
+| issue_ref (deep) | — | 0 | 0 | — | — | 6 | — | — |
+
+**Key findings**:
+1. **env_var overfit**: 14-20 hits on shell/Python repos (linuxstreamtools, quantzhai), 0-1 on Go/JS/Rust/C++. Clear overfit to shell/Python patterns.
+2. **code_symbol**: Cross-language catch-all — snake_case/CamelCase found in all 8 repos. Works as intended.
+3. **path detector**: Conservative (requires path with extension or leading `./`). Misses bare directory references.
+4. **version detector**: Valuable for Python changelogs (9 hits on click shallow).
+5. **issue_ref**: Useful for Rust changelogs (6 hits on fd shallow).
+6. **Go/JS/Rust/C++ language-specific atoms** not captured by current patterns.
+7. **Deep scenarios with older-items path**: Still produce sparse "none observed" when no matching atoms exist in history — identical to Stage 6.2/6.3 behavior.
+
+### Fallback Confirmation
+
+- 3 unit tests pass: `test_llm_compaction_fallback_on_error`, `test_llm_compaction_fallback_on_invalid_output`, `test_missing_prompt_file_uses_safe_fallback_template`.
+- Live quantzhai deep scenario confirmed v2 fallback at 50,085ms when LLM compactor failed on 76-hint input.
+- Auto-compaction path degrades gracefully without crashing or blocking.
+
+### Stage 6.5 Files
+
+- `scripts/qz-dogfood-corpus-run`: dogfood runner (521 lines Python)
+- `~/turboquant/qz-dogfood-corpus/runs/stage65-corpus/dogfood-results.json`: 19-scenario results
+- All 8 scratch repos remain clean at `/tmp/qz-dogfood-work/stage65-corpus/`
+
+### Verdict
+
+Stage 6.5 confirms:
+- v3 works across 8 repos spanning 6 language ecosystems.
+- Survival classifier detects relevant atoms in all repos but has measurable overfit gaps (env_var to shell/Python, missing Go/JS/Rust/C++ atoms).
+- Fallback to v2 is reliable when LLM compactor fails (unit tests + live quantzhai evidence).
+- No tuning changes to classifier or prompt are justified — overfit evidence documents known gaps for future improvement.
+- Stage 6.5 completes the dogfood pass. Future compaction work depends on recurring quality gaps in real Codex usage, not lab scenarios.
+
+### Capture Dirs (Stage 6.5)
+
+```text
+var/captures/requests/qz_req_1779881889011_9a50  — linuxstreamtools s1
+var/captures/requests/qz_req_1779881895065_9a50  — linuxstreamtools s2
+var/captures/requests/qz_req_1779881901060_9a50  — quantzhai s1
+var/captures/requests/qz_req_1779881907014_9a50  — quantzhai s2
+var/captures/requests/qz_req_1779881912962_9a50  — click s1
+var/captures/requests/qz_req_1779881918896_9a50  — click s2
+var/captures/requests/qz_req_1779881924843_9a50  — p-limit s1
+var/captures/requests/qz_req_1779881930786_9a50  — p-limit s2
+var/captures/requests/qz_req_1779881936737_9a50  — bubbletea s1
+var/captures/requests/qz_req_1779881942671_9a50  — bubbletea s2
+var/captures/requests/qz_req_1779881948614_9a50  — fd s1
+var/captures/requests/qz_req_1779881954537_9a50  — fd s2
+var/captures/requests/qz_req_1779881960512_9a50  — fmt s1
+var/captures/requests/qz_req_1779881966427_9a50  — fmt s2
+var/captures/requests/qz_req_1779881972376_9a50  — stb s1
+var/captures/requests/qz_req_1779881978306_9a50  — stb s2
+```
+
+Do not paste full capture bodies into issue comments.

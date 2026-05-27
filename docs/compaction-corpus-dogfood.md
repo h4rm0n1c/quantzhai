@@ -1,7 +1,7 @@
 # Compaction Corpus Dogfood (Stage 6.4)
 
 Date: 2026-05-27
-Status: **Stage 6.4 — corpus staging harness complete, no multi-repo compaction run yet**
+Status: **Stage 6.5 — multi-repo opt-in v3 compaction dogfood complete. 16/16 shallow v3 accepted, 2/3 deep v3 accepted, survival classifier anti-overfit assessed.**
 
 ## Purpose
 
@@ -10,8 +10,11 @@ dogfood. This prevents overfitting to a single repo shape (linuxstreamtools) and
 expands test coverage across language ecosystems, project shapes, and code
 structures.
 
-Stage 6.4 is a staging-only stage. No compaction runtime changes are made.
-No default-mode changes. v3 remains opt-in only.
+Stage 6.5 runs actual multi-repo compaction dogfood using staged scratch repos
+as workspace targets and assesses survival classifier anti-overfit generalization.
+
+Both stages make no compaction runtime changes, no default-mode changes.
+v3 remains opt-in only.
 
 ## Why linuxstreamtools Alone Is Insufficient
 
@@ -156,11 +159,27 @@ scripts/qz-dogfood-corpus-clean --all --dry-run
 - No proxy URL is used as compactor backend.
 - All scripts use Python standard library only (no pip dependencies).
 
-## Stage Boundary
+## Stage 6.5: Multi-Repo Dogfood Results
 
-- **Stage 6.4** (this stage): corpus staging harness only. No compaction calls.
-- **Stage 6.5** (next): run multi-repo opt-in v3 compaction dogfood using staged
-  scratch repos as Codex workspace targets.
+Date: 2026-05-27
+
+Stage 6.5 ran actual multi-repo opt-in v3 compaction dogfood using the staged
+scratch repos as workspace targets. Details are in `docs/compaction-live-dogfood.md`.
+
+**Summary**:
+- 16/16 shallow scenarios (8 repos × 2) produced accepted `localcmp:v3:` blobs.
+- 2/3 deep scenarios (click, fd) produced accepted v3 with non-sparse summaries.
+- 1/3 deep scenario (quantzhai, 76 hint spans) fell back to v2 at 50s — safety path confirmed.
+- Zero reasoning_content leakage. Zero placeholder leakage. All headings present.
+- Survival classifier anti-overfit assessed: env_var overfit to shell/Python (14-20 hits vs 0-1 on others), code_symbol cross-language catch-all (all 8 repos), missing Go/JS/Rust/C++ specific atoms.
+- No classifier or prompt tuning changes justified — overfit evidence is documented for future improvement.
+- 19 total productions, all scratch repos clean.
+
+### Runner
+
+Created `scripts/qz-dogfood-corpus-run` for dogfood execution.
+All 8 scratch repos remain clean at `/tmp/qz-dogfood-work/stage65-corpus/`.
+Results: `~/turboquant/qz-dogfood-corpus/runs/stage65-corpus/dogfood-results.json`.
 
 ## Tests
 
