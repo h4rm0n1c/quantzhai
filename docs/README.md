@@ -64,10 +64,10 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 15. [Edge case and config contract plan](edge-case-config-contract-plan.md) — audit/refactor plan for config layout, compact errors, profile safety, and script sprawl.
 16. [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) — focused TODO/review plan for `/status`, `qz-top`, `qz-thoughts`, profiles, and streaming.
 17. [Runtime observability notes](runtime-observability-notes.md) — how to inspect live proxy/model behaviour.
-18. [Compaction audit and strategy](compaction-audit-and-strategy.md) — source-grounded audit of Codex and QuantZhai compaction, issue #8 promoted ideas, anchored summary schema v0, recommended prompt v0, and staged implementation roadmap. Stage 3.1.
-19. [Anchored compaction schema v0](compaction-anchored-schema-v0.md) — canonical schema spec: field rules, exact-atom preservation, evidence-to-decision retention, stale fact correction, uncertainty marking, non-goals, and versioning notes. Stage 3.1.
-20. [Compaction Codex setup](compaction-codex-setup.md) — how to wire `experimental_compact_prompt_file` to `config/default/prompts/compact-v0.md`; per-profile option; dual-path warnings; manual smoke guidance. Stage 3.1.
-21. [Compaction fixtures](fixtures/compaction/) — Stage 1 example input/output pairs: fixture-01 (basic coding session), fixture-02 (tool-heavy session), fixture-03 (rejected approaches and negative constraints). Stage 3.1 compatible.
+18. [Compaction audit and strategy](compaction-audit-and-strategy.md) — source-grounded audit of Codex and QuantZhai compaction, issue #8 promoted ideas, anchored summary schema v0, recommended prompt v0, and staged implementation roadmap. Stage 4.
+19. [Anchored compaction schema v0](compaction-anchored-schema-v0.md) — canonical schema spec: field rules, exact-atom preservation, evidence-to-decision retention, stale fact correction, uncertainty marking, non-goals, and versioning notes. Stage 4.
+20. [Compaction Codex setup](compaction-codex-setup.md) — how to wire `experimental_compact_prompt_file` to `config/default/prompts/compact-v0.md`; per-profile option; dual-path warnings; manual smoke guidance. Stage 4.
+21. [Compaction fixtures](fixtures/compaction/) — Stage 1 example input/output pairs: fixture-01 (basic coding session), fixture-02 (tool-heavy session), fixture-03 (rejected approaches and negative constraints). Stage 4 compatible.
 
 ## Documentation by area
 

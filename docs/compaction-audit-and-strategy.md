@@ -1,7 +1,7 @@
 # Compaction Audit and Strategy
 
 Date: 2026-05-27
-Status: **Stage 3.1** — eval harness hardened with expanded metrics.
+Status: **Stage 4** — LLM-generated anchored compaction (localcmp:v3) implemented.
 
 ---
 
@@ -1018,8 +1018,8 @@ Stage 1               — complete       — anchored schema + prompt template
 Stage 2               — complete       — deterministic survival-weight scorer
 Stage 3               — complete       — offline fixture/eval harness
 Stage 3.1             — complete       — hardened metrics scoreboard
-Stage 4               — next available  — LLM-generated v3 blobs
-Stage 5               — after Stage 4   — proxy integration, QZCOMPACT config
+Stage 4               — complete       — LLM-generated v3 blobs
+Stage 5               — next available  — proxy integration, QZCOMPACT config
 Stage 6               — after Stage 5   — dogfood/live tuning
 ```
 
