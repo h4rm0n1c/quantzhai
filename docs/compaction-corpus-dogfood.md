@@ -1,7 +1,7 @@
 # Compaction Corpus Dogfood (Stage 6.4)
 
 Date: 2026-05-27
-Status: **Stage 6.8 — runner improved, targeted file selection, full artifacts preserved. 8/8 targeted-coverage v3, 5/6 deep v3. See `docs/compaction-stage68-coverage.md`.**
+Status: **Stage 6.9 — context-aligned budget resolver (`_resolve_llm_compaction_budget`) landed; v3 now derives timeout/input/output limits from `selected_model.context_window`. Stage 6.8: runner improved, targeted file selection, full artifacts preserved. 8/8 targeted-coverage v3, 5/6 deep v3. See `docs/compaction-stage68-coverage.md`.**
 
 ## Purpose
 

@@ -8,9 +8,11 @@ import urllib.error
 from unittest.mock import patch, MagicMock
 from proxy.qz_responses import (
     _build_llm_compactor_payload,
+    _DEFAULT_LLM_MAX_INPUT_CHARS,
     _DEFAULT_LLM_MAX_OUTPUT_TOKENS,
     _DEFAULT_LLM_TIMEOUT_SEC,
     _build_local_compaction_response,
+    _build_local_compaction_response_v3,
     _build_survival_weighted_compaction_prompt,
     _call_llm_compactor,
     _decode_local_compaction_blob,
@@ -19,6 +21,7 @@ from proxy.qz_responses import (
     _get_env_int,
     _is_probably_quantzhai_proxy_url,
     _normalize_compaction_mode,
+    _resolve_llm_compaction_budget,
     _validate_anchored_summary,
     COMPACTION_CONFIG
 )
@@ -93,7 +96,7 @@ class TestLLMCompaction(unittest.TestCase):
         )
 
         items = [{"type": "message", "role": "user", "content": "hello"}] * 50
-        result = _build_local_compaction_response(self._make_body(items))
+        result = _build_local_compaction_response(self._make_body(items), selected_context_tokens=262144)
         
         blob = result["output"][0]["encrypted_content"]
         self.assertTrue(blob.startswith("localcmp:v3:"))
@@ -176,7 +179,7 @@ class TestLLMCompaction(unittest.TestCase):
         )
         items = [{"type": "message", "role": "user", "content": "hello"}] * 50
 
-        result = _build_local_compaction_response(self._make_body(items))
+        result = _build_local_compaction_response(self._make_body(items), selected_context_tokens=262144)
 
         self.assertTrue(result["output"][0]["encrypted_content"].startswith("localcmp:v3:"))
 
@@ -439,6 +442,227 @@ Complete Stage 6.1 live tuning.
         self.assertEqual(len(expanded), 2)
         self.assertIn("V1 Summary", expanded[0]["content"][0]["text"])
         self.assertIn("V2 Summary", expanded[1]["content"][0]["text"])
+
+class TestCompactionBudget(unittest.TestCase):
+    """Stage 6.9 — context-aligned budget resolver and v3 context threading."""
+
+    def setUp(self):
+        self.original_config = COMPACTION_CONFIG.copy()
+        COMPACTION_CONFIG["mode"] = "llm"
+        COMPACTION_CONFIG["llm_base_url"] = "http://mock-llm:8080"
+        COMPACTION_CONFIG["llm_model"] = "test-model"
+
+    def tearDown(self):
+        for k, v in self.original_config.items():
+            COMPACTION_CONFIG[k] = v
+
+    def _make_body(self, items):
+        return {
+            "input": items,
+            "model": "qwen3.6",
+            "context_management": {"compact_threshold": 10},
+        }
+
+    def _mock_backend_response(self, mock_urlopen, payload):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(payload).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+        mock_urlopen.return_value = mock_resp
+
+    # ── Budget resolver: fail-closed cases ────────────────────────────────────
+
+    def test_budget_resolver_fail_v3_when_context_window_none(self):
+        budget = _resolve_llm_compaction_budget(None)
+        self.assertTrue(budget["fail_v3"])
+        self.assertEqual(budget["budget_policy"], "missing_context_window")
+        self.assertIsNone(budget["context_window_tokens"])
+        self.assertIsNone(budget["compaction_budget_tokens"])
+        self.assertIsNone(budget["effective_max_input_chars"])
+        self.assertIsNone(budget["effective_max_output_tokens"])
+        self.assertIsNone(budget["effective_timeout_sec"])
+
+    def test_budget_resolver_fail_v3_when_context_window_zero(self):
+        budget = _resolve_llm_compaction_budget(0)
+        self.assertTrue(budget["fail_v3"])
+        self.assertEqual(budget["budget_policy"], "missing_context_window")
+
+    def test_budget_resolver_fail_v3_when_context_window_negative(self):
+        budget = _resolve_llm_compaction_budget(-8192)
+        self.assertTrue(budget["fail_v3"])
+        self.assertEqual(budget["budget_policy"], "missing_context_window")
+
+    def test_budget_resolver_fail_v3_when_context_window_string(self):
+        budget = _resolve_llm_compaction_budget("262144")  # type: ignore[arg-type]
+        self.assertTrue(budget["fail_v3"])
+
+    # ── Budget resolver: correct values for 256k context ─────────────────────
+
+    def test_budget_resolver_correct_policy_for_256k(self):
+        budget = _resolve_llm_compaction_budget(262144)
+        self.assertFalse(budget["fail_v3"])
+        self.assertEqual(budget["budget_policy"], "context_window_90")
+        self.assertEqual(budget["context_source"], "selected_model.context_window")
+        self.assertEqual(budget["context_window_tokens"], 262144)
+
+    def test_budget_resolver_correct_compaction_budget_for_256k(self):
+        budget = _resolve_llm_compaction_budget(262144)
+        # floor(262144 * 0.90) = 235929
+        self.assertEqual(budget["compaction_budget_tokens"], 235929)
+
+    def test_budget_resolver_max_output_tokens_capped_at_8192_for_256k(self):
+        budget = _resolve_llm_compaction_budget(262144)
+        self.assertEqual(budget["effective_max_output_tokens"], 8192)
+
+    def test_budget_resolver_timeout_is_between_30_and_120_for_256k(self):
+        budget = _resolve_llm_compaction_budget(262144)
+        self.assertGreaterEqual(budget["effective_timeout_sec"], 30)
+        self.assertLessEqual(budget["effective_timeout_sec"], 120)
+
+    def test_budget_resolver_max_input_chars_exceeds_static_default_for_256k(self):
+        budget = _resolve_llm_compaction_budget(262144)
+        self.assertGreater(budget["effective_max_input_chars"], _DEFAULT_LLM_MAX_INPUT_CHARS)
+
+    def test_budget_resolver_degrades_for_small_context(self):
+        # Tiny context (8k) — effective values should not exceed the static defaults.
+        budget = _resolve_llm_compaction_budget(8192)
+        self.assertFalse(budget["fail_v3"])
+        # output tokens: min(8192, max(1536, floor(7372 * 0.04)=294)) = 1536
+        self.assertGreaterEqual(budget["effective_max_output_tokens"], _DEFAULT_LLM_MAX_OUTPUT_TOKENS)
+        self.assertGreaterEqual(budget["effective_timeout_sec"], _DEFAULT_LLM_TIMEOUT_SEC)
+        self.assertGreaterEqual(budget["effective_max_input_chars"], _DEFAULT_LLM_MAX_INPUT_CHARS)
+
+    def test_budget_resolver_metadata_fields_populated(self):
+        budget = _resolve_llm_compaction_budget(262144, old_history_estimated_tokens=5000, survival_hint_count=12)
+        self.assertEqual(budget["old_history_estimated_tokens"], 5000)
+        self.assertEqual(budget["survival_hint_count"], 12)
+        self.assertIn("env_overrides", budget)
+
+    # ── Budget resolver: env overrides ────────────────────────────────────────
+
+    def test_budget_resolver_env_timeout_wins(self):
+        with patch.dict(os.environ, {"QZ_LLM_COMPACT_TIMEOUT_SEC": "45"}):
+            budget = _resolve_llm_compaction_budget(262144)
+        self.assertEqual(budget["effective_timeout_sec"], 45)
+        self.assertTrue(budget["env_overrides"]["timeout_sec"])
+
+    def test_budget_resolver_env_max_input_chars_wins(self):
+        with patch.dict(os.environ, {"QZ_LLM_COMPACT_MAX_INPUT_CHARS": "55000"}):
+            budget = _resolve_llm_compaction_budget(262144)
+        self.assertEqual(budget["effective_max_input_chars"], 55000)
+        self.assertTrue(budget["env_overrides"]["max_input_chars"])
+
+    def test_budget_resolver_env_max_output_tokens_wins(self):
+        with patch.dict(os.environ, {"QZ_LLM_COMPACT_MAX_OUTPUT_TOKENS": "2048"}):
+            budget = _resolve_llm_compaction_budget(262144)
+        self.assertEqual(budget["effective_max_output_tokens"], 2048)
+        self.assertTrue(budget["env_overrides"]["max_output_tokens"])
+
+    def test_budget_resolver_env_override_flags_false_when_not_set(self):
+        # Remove the env vars if present so we test the default path.
+        clean = {k: v for k, v in os.environ.items()
+                 if k not in ("QZ_LLM_COMPACT_TIMEOUT_SEC", "QZ_LLM_COMPACT_MAX_INPUT_CHARS",
+                              "QZ_LLM_COMPACT_MAX_OUTPUT_TOKENS")}
+        with patch.dict(os.environ, clean, clear=True):
+            budget = _resolve_llm_compaction_budget(262144)
+        self.assertFalse(budget["env_overrides"]["timeout_sec"])
+        self.assertFalse(budget["env_overrides"]["max_input_chars"])
+        self.assertFalse(budget["env_overrides"]["max_output_tokens"])
+
+    # ── v3 context threading: fail-closed to v2 when no context ──────────────
+
+    @patch("urllib.request.urlopen")
+    def test_v3_fails_to_v2_when_context_window_missing(self, mock_urlopen):
+        """Without selected_context_tokens, v3 must fail closed to v2."""
+        self._mock_backend_response(
+            mock_urlopen,
+            {"choices": [{"message": {"content": VALID_SUMMARY}}]},
+        )
+        items = [{"type": "message", "role": "user", "content": "hello"}] * 50
+        # No selected_context_tokens — v3 should not be attempted.
+        result = _build_local_compaction_response(self._make_body(items))
+        blob = result["output"][0]["encrypted_content"]
+        self.assertTrue(blob.startswith("localcmp:v2:"),
+                        f"Expected v2 fallback without context, got: {blob[:30]}")
+        # urlopen must NOT have been called (fail closed before network).
+        mock_urlopen.assert_not_called()
+
+    @patch("urllib.request.urlopen")
+    def test_v3_accepted_with_valid_context_window(self, mock_urlopen):
+        """v3 is accepted when selected_context_tokens is provided."""
+        self._mock_backend_response(
+            mock_urlopen,
+            {"choices": [{"message": {"content": VALID_SUMMARY}}]},
+        )
+        items = [{"type": "message", "role": "user", "content": "hello"}] * 50
+        result = _build_local_compaction_response(self._make_body(items), selected_context_tokens=262144)
+        blob = result["output"][0]["encrypted_content"]
+        self.assertTrue(blob.startswith("localcmp:v3:"))
+
+    # ── v3 context threading: budget values propagated ────────────────────────
+
+    @patch("urllib.request.urlopen")
+    def test_v3_uses_budget_timeout_sec(self, mock_urlopen):
+        """The effective_timeout_sec from the resolver is passed to urlopen."""
+        self._mock_backend_response(
+            mock_urlopen,
+            {"choices": [{"message": {"content": VALID_SUMMARY}}]},
+        )
+        items = [{"type": "message", "role": "user", "content": "hello"}] * 50
+        _build_local_compaction_response(self._make_body(items), selected_context_tokens=262144)
+        effective_timeout = mock_urlopen.call_args.kwargs["timeout"]
+        # For 256k, derived timeout > 30s (the old static default).
+        self.assertGreater(effective_timeout, _DEFAULT_LLM_TIMEOUT_SEC)
+        self.assertLessEqual(effective_timeout, 120)
+
+    @patch("urllib.request.urlopen")
+    def test_v3_uses_budget_max_output_tokens(self, mock_urlopen):
+        """The effective_max_output_tokens from the resolver is in the request payload."""
+        self._mock_backend_response(
+            mock_urlopen,
+            {"choices": [{"message": {"content": VALID_SUMMARY}}]},
+        )
+        items = [{"type": "message", "role": "user", "content": "hello"}] * 50
+        _build_local_compaction_response(self._make_body(items), selected_context_tokens=262144)
+        payload = json.loads(mock_urlopen.call_args.args[0].data.decode("utf-8"))
+        # For 256k, max_tokens in the request should be 8192 (budget cap).
+        self.assertEqual(payload["max_tokens"], 8192)
+
+    @patch("urllib.request.urlopen")
+    def test_v3_metadata_records_budget(self, mock_urlopen):
+        """The v3 blob's metadata.budget field records resolver output."""
+        self._mock_backend_response(
+            mock_urlopen,
+            {"choices": [{"message": {"content": VALID_SUMMARY}}]},
+        )
+        items = [{"type": "message", "role": "user", "content": "hello"}] * 50
+        result = _build_local_compaction_response(self._make_body(items), selected_context_tokens=262144)
+        blob = result["output"][0]["encrypted_content"]
+        payload = _decode_local_compaction_blob(blob)
+        budget_meta = payload["metadata"]["budget"]
+        self.assertEqual(budget_meta["policy"], "context_window_90")
+        self.assertEqual(budget_meta["context_window_tokens"], 262144)
+        self.assertEqual(budget_meta["compaction_budget_tokens"], 235929)
+        self.assertEqual(budget_meta["effective_max_output_tokens"], 8192)
+        self.assertGreater(budget_meta["effective_timeout_sec"], _DEFAULT_LLM_TIMEOUT_SEC)
+        self.assertIn("env_overrides", budget_meta)
+
+    @patch("urllib.request.urlopen")
+    def test_v3_budget_for_128k_context_window(self, mock_urlopen):
+        """Budget values scale correctly for a 128k context window."""
+        self._mock_backend_response(
+            mock_urlopen,
+            {"choices": [{"message": {"content": VALID_SUMMARY}}]},
+        )
+        items = [{"type": "message", "role": "user", "content": "hello"}] * 50
+        result = _build_local_compaction_response(self._make_body(items), selected_context_tokens=131072)
+        blob = result["output"][0]["encrypted_content"]
+        self.assertTrue(blob.startswith("localcmp:v3:"))
+        payload = _decode_local_compaction_blob(blob)
+        bm = payload["metadata"]["budget"]
+        self.assertEqual(bm["context_window_tokens"], 131072)
+        # floor(131072 * 0.90) = 117964
+        self.assertEqual(bm["compaction_budget_tokens"], 117964)
+
 
 if __name__ == "__main__":
     unittest.main()

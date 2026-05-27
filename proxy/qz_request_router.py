@@ -3075,7 +3075,11 @@ class RequestRouter:
                     if isinstance(threshold, int) and threshold > 0:
                         current_tokens = _estimate_items_tokens(body.get("input", []))
                         if current_tokens > threshold:
-                            out = _build_local_compaction_response(body)
+                            # Extract context window from the resolved model for budget-aware v3.
+                            _ctx_tokens = None
+                            if selected_model is not None and isinstance(selected_model.get("context_window"), int):
+                                _ctx_tokens = selected_model["context_window"]
+                            out = _build_local_compaction_response(body, selected_context_tokens=_ctx_tokens)
                             self.handler._send_json(200, out)
                             self._emit_request_telemetry(
                                 "request_completed",

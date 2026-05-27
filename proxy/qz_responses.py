@@ -368,6 +368,100 @@ def _approx_tokens(text: str) -> int:
     return max(1, len(text or "") // 4)
 
 
+def _resolve_llm_compaction_budget(
+    context_window_tokens: Optional[int],
+    old_history_estimated_tokens: int = 0,
+    survival_hint_count: int = 0,
+    env=None,
+) -> dict:
+    """Derive effective LLM compaction limits from the selected model's context window.
+
+    Budget policy: compaction_budget_tokens = floor(context_window_tokens * 0.90).
+    Env overrides (QZ_LLM_COMPACT_TIMEOUT_SEC, QZ_LLM_COMPACT_MAX_INPUT_CHARS,
+    QZ_LLM_COMPACT_MAX_OUTPUT_TOKENS) win over derived values when set.
+
+    Returns a dict with all effective limits plus metadata. If context_window_tokens is
+    missing or non-positive, fail_v3=True is set and v3 compaction must not proceed.
+    """
+    env = os.environ if env is None else env
+
+    base: dict = {
+        "old_history_estimated_tokens": old_history_estimated_tokens,
+        "survival_hint_count": survival_hint_count,
+        "env_overrides": {"timeout_sec": False, "max_input_chars": False, "max_output_tokens": False},
+    }
+
+    if not isinstance(context_window_tokens, int) or context_window_tokens <= 0:
+        return {
+            **base,
+            "budget_policy": "missing_context_window",
+            "fail_v3": True,
+            "context_source": None,
+            "context_window_tokens": None,
+            "compaction_budget_tokens": None,
+            "effective_max_input_tokens": None,
+            "effective_max_input_chars": None,
+            "effective_max_output_tokens": None,
+            "effective_timeout_sec": None,
+        }
+
+    compaction_budget_tokens = int(context_window_tokens * 0.90)
+
+    # Derived limits — scale with context, degrade gracefully for small windows.
+    # 4% of budget for output tokens, capped at 8192, floored at the static default.
+    derived_max_output_tokens = min(8192, max(
+        _DEFAULT_LLM_MAX_OUTPUT_TOKENS,
+        int(compaction_budget_tokens * 0.04),
+    ))
+    # 20% of budget (in token-count) → converted to chars for the prompt input.
+    derived_max_input_tokens = max(
+        _DEFAULT_LLM_MAX_INPUT_CHARS // 4,
+        int(compaction_budget_tokens * 0.20),
+    )
+    derived_max_input_chars = derived_max_input_tokens * 4
+    # Timeout scales between 30 and 120 seconds.
+    derived_timeout_sec = max(
+        _DEFAULT_LLM_TIMEOUT_SEC,
+        min(int(compaction_budget_tokens / 2000), 120),
+    )
+
+    # Env overrides still win over all derived values.
+    timeout_override = "QZ_LLM_COMPACT_TIMEOUT_SEC" in env
+    input_override = "QZ_LLM_COMPACT_MAX_INPUT_CHARS" in env
+    output_override = "QZ_LLM_COMPACT_MAX_OUTPUT_TOKENS" in env
+
+    if timeout_override:
+        effective_timeout_sec = _get_env_int_from_mapping(env, "QZ_LLM_COMPACT_TIMEOUT_SEC", derived_timeout_sec)
+    else:
+        effective_timeout_sec = derived_timeout_sec
+    if input_override:
+        effective_max_input_chars = _get_env_int_from_mapping(env, "QZ_LLM_COMPACT_MAX_INPUT_CHARS", derived_max_input_chars)
+    else:
+        effective_max_input_chars = derived_max_input_chars
+    if output_override:
+        effective_max_output_tokens = _get_env_int_from_mapping(env, "QZ_LLM_COMPACT_MAX_OUTPUT_TOKENS", derived_max_output_tokens)
+    else:
+        effective_max_output_tokens = derived_max_output_tokens
+
+    return {
+        **base,
+        "budget_policy": "context_window_90",
+        "fail_v3": False,
+        "context_source": "selected_model.context_window",
+        "context_window_tokens": context_window_tokens,
+        "compaction_budget_tokens": compaction_budget_tokens,
+        "effective_max_input_tokens": effective_max_input_chars // 4,
+        "effective_max_input_chars": effective_max_input_chars,
+        "effective_max_output_tokens": effective_max_output_tokens,
+        "effective_timeout_sec": effective_timeout_sec,
+        "env_overrides": {
+            "timeout_sec": timeout_override,
+            "max_input_chars": input_override,
+            "max_output_tokens": output_override,
+        },
+    }
+
+
 def _decode_local_compaction_blob(blob: str):
     if not isinstance(blob, str):
         return None
@@ -581,8 +675,16 @@ def _extract_previous_anchored_summary(items: list) -> str:
     return ""
 
 
-def _build_survival_weighted_compaction_prompt(previous_summary: str, new_items: list) -> str:
-    """Construct the LLM prompt using the Stage 1 template and Stage 2.1 hints."""
+def _build_survival_weighted_compaction_prompt(
+    previous_summary: str,
+    new_items: list,
+    max_input_chars: Optional[int] = None,
+) -> str:
+    """Construct the LLM prompt using the Stage 1 template and Stage 2.1 hints.
+
+    When max_input_chars is provided (from the budget resolver), it overrides the
+    COMPACTION_CONFIG value.  Pass None to fall back to COMPACTION_CONFIG as before.
+    """
     prompt_file = COMPACTION_CONFIG["prompt_file"]
     template = ""
     try:
@@ -598,14 +700,15 @@ def _build_survival_weighted_compaction_prompt(previous_summary: str, new_items:
         text = _item_text(item)
         if text:
             new_convo_text.append(text)
-    
+
     raw_convo_body = "\n".join(new_convo_text)
-    
+
     # Generate hints from the full normalized body, then cap the raw body while
     # keeping those exact-atom hints at the end of the prompt.
     spans = _score_survival_text(raw_convo_body)
     hints = format_survival_hints(spans, max_spans=40)
-    max_input_chars = _positive_config_int("llm_max_input_chars", _DEFAULT_LLM_MAX_INPUT_CHARS)
+    if max_input_chars is None or not (isinstance(max_input_chars, int) and max_input_chars > 0):
+        max_input_chars = _positive_config_int("llm_max_input_chars", _DEFAULT_LLM_MAX_INPUT_CHARS)
     if hints:
         hint_block = f"\n\n### Preservation Hints (Survival Weighting)\n{hints}"
         if len(hint_block) >= max_input_chars:
@@ -724,7 +827,16 @@ def _extract_llm_compactor_content(data) -> Optional[str]:
     return None
 
 
-def _build_llm_compactor_payload(prompt: str) -> dict:
+def _build_llm_compactor_payload(prompt: str, max_output_tokens: Optional[int] = None) -> dict:
+    """Build the chat-completions payload for the LLM compactor.
+
+    When max_output_tokens is provided (from the budget resolver), it overrides the
+    COMPACTION_CONFIG value.  Pass None to fall back to COMPACTION_CONFIG as before.
+    """
+    if isinstance(max_output_tokens, int) and max_output_tokens > 0:
+        tokens = max_output_tokens
+    else:
+        tokens = _positive_config_int("llm_max_output_tokens", _DEFAULT_LLM_MAX_OUTPUT_TOKENS)
     payload = {
         "model": COMPACTION_CONFIG["llm_model"] or "local-model",
         "messages": [
@@ -740,7 +852,7 @@ def _build_llm_compactor_payload(prompt: str) -> dict:
             {"role": "user", "content": prompt},
         ],
         "temperature": 0,
-        "max_tokens": _positive_config_int("llm_max_output_tokens", _DEFAULT_LLM_MAX_OUTPUT_TOKENS),
+        "max_tokens": tokens,
         "stream": False,
     }
     if _coerce_bool(COMPACTION_CONFIG.get("llm_disable_reasoning"), _DEFAULT_LLM_DISABLE_REASONING):
@@ -751,8 +863,16 @@ def _build_llm_compactor_payload(prompt: str) -> dict:
     return payload
 
 
-def _call_llm_compactor(prompt: str) -> Optional[str]:
-    """Execute a direct call to the local LLM backend for compaction."""
+def _call_llm_compactor(
+    prompt: str,
+    timeout_sec: Optional[int] = None,
+    max_output_tokens: Optional[int] = None,
+) -> Optional[str]:
+    """Execute a direct call to the local LLM backend for compaction.
+
+    When timeout_sec / max_output_tokens are provided (from the budget resolver),
+    they override COMPACTION_CONFIG values.  Pass None to fall back to COMPACTION_CONFIG.
+    """
     base_url = str(COMPACTION_CONFIG.get("llm_base_url", "") or "").rstrip("/")
     if not base_url:
         return None
@@ -760,7 +880,12 @@ def _call_llm_compactor(prompt: str) -> Optional[str]:
         return None
 
     url = _llm_chat_completions_url(base_url)
-    payload = _build_llm_compactor_payload(prompt)
+    payload = _build_llm_compactor_payload(prompt, max_output_tokens=max_output_tokens)
+
+    if isinstance(timeout_sec, int) and timeout_sec > 0:
+        effective_timeout = timeout_sec
+    else:
+        effective_timeout = _positive_config_int("llm_timeout_sec", _DEFAULT_LLM_TIMEOUT_SEC)
 
     try:
         req = urllib.request.Request(
@@ -769,8 +894,7 @@ def _call_llm_compactor(prompt: str) -> Optional[str]:
             headers={"Content-Type": "application/json"},
             method="POST"
         )
-        timeout = _positive_config_int("llm_timeout_sec", _DEFAULT_LLM_TIMEOUT_SEC)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=effective_timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             return _extract_llm_compactor_content(data)
     except Exception:
@@ -778,8 +902,18 @@ def _call_llm_compactor(prompt: str) -> Optional[str]:
         return None
 
 
-def _build_local_compaction_response_v3(body: dict, working_items: list, existing_depth: int) -> Optional[dict]:
-    """Attempt LLM-generated anchored compaction (v3)."""
+def _build_local_compaction_response_v3(
+    body: dict,
+    working_items: list,
+    existing_depth: int,
+    selected_context_tokens: Optional[int] = None,
+) -> Optional[dict]:
+    """Attempt LLM-generated anchored compaction (v3).
+
+    selected_context_tokens must be the context_window value from the selected model.
+    If it is None or non-positive the budget resolver sets fail_v3=True and this
+    function returns None, falling through to heuristic v2.
+    """
     if _current_compaction_mode() not in ("llm", "auto"):
         return None
     if not COMPACTION_CONFIG["llm_base_url"]:
@@ -788,27 +922,43 @@ def _build_local_compaction_response_v3(body: dict, working_items: list, existin
     tail_start = _tail_start_for_compaction(working_items)
     older = working_items[:tail_start]
     recent = working_items[tail_start:]
-    
+
     if len(recent) < COMPACTION_CONFIG["min_preserve_items"]:
         recent = working_items[-COMPACTION_CONFIG["min_preserve_items"]:]
         older = working_items[:-len(recent)] if recent else working_items
 
+    # Resolve compaction budget from selected model's context window.
+    combined_older_text = "\n".join(_item_text(it) for it in older)
+    spans = _score_survival_text(combined_older_text)
+    budget = _resolve_llm_compaction_budget(
+        selected_context_tokens,
+        old_history_estimated_tokens=_estimate_items_tokens(older),
+        survival_hint_count=len(spans),
+    )
+    if budget["fail_v3"]:
+        # Context window metadata unavailable — fail closed to v2.
+        return None
+
     previous_summary = _extract_previous_anchored_summary(older)
-    prompt = _build_survival_weighted_compaction_prompt(previous_summary, older)
-    
+    prompt = _build_survival_weighted_compaction_prompt(
+        previous_summary,
+        older,
+        max_input_chars=budget["effective_max_input_chars"],
+    )
+
     start_ms = int(time.time() * 1000)
-    summary_text = _call_llm_compactor(prompt)
+    summary_text = _call_llm_compactor(
+        prompt,
+        timeout_sec=budget["effective_timeout_sec"],
+        max_output_tokens=budget["effective_max_output_tokens"],
+    )
     latency_ms = int(time.time() * 1000) - start_ms
 
     if not summary_text or not _validate_anchored_summary(summary_text):
-        return None # Fallback to v2
+        return None  # Fallback to v2
 
     depth = min(existing_depth + 1, COMPACTION_CONFIG["max_compaction_depth"])
-    
-    # Calculate survival hint count for metadata
-    combined_older_text = "\n".join(_item_text(it) for it in older)
-    spans = _score_survival_text(combined_older_text)
-    
+
     payload = {
         "version": 3,
         "source": "turboquant-local",
@@ -824,8 +974,17 @@ def _build_local_compaction_response_v3(body: dict, working_items: list, existin
             "prompt": "compact-v0",
             "survival_hint_count": len(spans),
             "llm_model": COMPACTION_CONFIG["llm_model"],
-            "latency_ms": latency_ms
-        }
+            "latency_ms": latency_ms,
+            "budget": {
+                "policy": budget["budget_policy"],
+                "context_window_tokens": budget["context_window_tokens"],
+                "compaction_budget_tokens": budget["compaction_budget_tokens"],
+                "effective_max_input_chars": budget["effective_max_input_chars"],
+                "effective_max_output_tokens": budget["effective_max_output_tokens"],
+                "effective_timeout_sec": budget["effective_timeout_sec"],
+                "env_overrides": budget["env_overrides"],
+            },
+        },
     }
     encrypted = _encode_local_compaction_blob(payload)
 
@@ -881,7 +1040,16 @@ def _estimate_items_tokens(items):
     return total
 
 
-def _build_local_compaction_response(body: dict) -> dict:
+def _build_local_compaction_response(
+    body: dict,
+    selected_context_tokens: Optional[int] = None,
+) -> dict:
+    """Build a compaction response blob.
+
+    selected_context_tokens should be the context_window value from the currently
+    selected model (available in qz_request_router at the compaction call site).
+    When None or non-positive the v3 LLM path fails closed to heuristic v2.
+    """
     input_items = body.get("input")
     if isinstance(input_items, str):
         input_items = [_make_input_text_message("user", input_items)]
@@ -916,7 +1084,10 @@ def _build_local_compaction_response(body: dict) -> dict:
 
     # Stage 4: Opt-in LLM-generated anchored compaction
     if _current_compaction_mode() in ("llm", "auto") and COMPACTION_CONFIG["llm_base_url"]:
-        v3_resp = _build_local_compaction_response_v3(body, working_items, existing_depth)
+        v3_resp = _build_local_compaction_response_v3(
+            body, working_items, existing_depth,
+            selected_context_tokens=selected_context_tokens,
+        )
         if v3_resp:
             return v3_resp
 

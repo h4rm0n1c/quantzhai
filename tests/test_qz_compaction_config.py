@@ -295,7 +295,7 @@ class TestCompactionConfig(unittest.TestCase):
         COMPACTION_CONFIG.update(cfg)
         self._mock_backend_response(mock_urlopen, {"choices": [{"message": {"content": VALID_SUMMARY}}]})
 
-        result = _build_local_compaction_response(self._make_body())
+        result = _build_local_compaction_response(self._make_body(), selected_context_tokens=262144)
         blob = result["output"][0]["encrypted_content"]
 
         self.assertTrue(blob.startswith("localcmp:v3:"))

@@ -1,7 +1,7 @@
 # Stage 6.8 Compaction Corpus Coverage Evidence
 
 Date: 2026-05-27
-Status: **Stage 6.8 complete — runner improved, full artifacts preserved, 13/14 v3 accepted.**
+Status: **Stage 6.9 complete — context-aligned budget resolver landed. See Stage 6.9 section below. Stage 6.8: runner improved, full artifacts preserved, 13/14 v3 accepted.**
 
 Commit: see `git log --oneline -1`
 Issue: `#8` — RFC: NetTTS-inspired survival-weighted compaction for QuantZhai
@@ -317,36 +317,86 @@ Total tests: 47 (Stage 6.4/6.5 baseline) + 44 new = **91 total. All passing.**
 
 ---
 
-## Stage 6.9 Recommendation
+## Stage 6.9: Context-Aligned Compaction Budget (2026-05-27)
 
-Stage 6.8 substantially strengthens the evidence base. The remaining work for
-a meaningful Stage 6.9 would be:
+Stage 6.9 is **complete**. It replaces the three static LLM compaction defaults
+with a context-window-derived budget resolver, wiring `selected_model.context_window`
+from `qz_request_router.py` through to `_build_local_compaction_response_v3`.
 
-1. **fmt deep budget investigation**: Try a lower FILE_READ_CAP_BYTES (e.g. 4000)
-   for the fmt deep scenario, or reduce DIR_EXPAND_LIMIT for C++ include
-   directories. Characterize whether v3 accepts at reduced file size.
+### What was wrong
 
-2. **Consolidated results across batches**: Update the runner to append to a
-   persistent per-run JSON log rather than overwriting it. This makes multi-batch
-   runs fully reconstructable from `dogfood-results.json` alone.
+The three static defaults in `proxy/qz_responses.py` were not aligned with the
+selected model's actual context window:
 
-3. **quantzhai/fd/stb deep extension**: Add broader file targets (CHANGELOG,
-   additional docs/, more test files) to give these repos enough turns for
-   genuine survival-hinted deep runs.
+| Field | Old static default | For 256k model (262144 tokens) |
+|---|---|---|
+| `llm_timeout_sec` | 30 s | ~30 s (too short for heavy C++ or Rust histories) |
+| `llm_max_input_chars` | 100,000 chars | ~25,000 tokens (arbitrary, ~10% of context) |
+| `llm_max_output_tokens` | 1,536 tokens | too small for a rich anchored summary |
 
-4. **Prose/docs false-positive measurement**: Add a scenario that reads only
-   narrative prose files (not code or build files) and checks that `c_macro`,
-   `qualified_symbol`, and `build_file` do not fire spuriously.
+The fmt deep v2 fallback in Stage 6.8 was characterised as "C++ template header
+budget pressure" — primarily the 30 s timeout. The old 1536 output token cap also
+prevented full-quality anchored summaries for large histories.
 
-5. **Codex session comparison**: Run a full real Codex session through the
-   proxy, verify that `v3_payload.survival_hint_count > 0` in a live turn, and
-   compare summary quality between v2 and v3 for the same session. This would
-   move from "corpus dogfood" to "live session evidence".
+### What changed
 
-Stage 6.9 is optional: Stage 6.8 already confirms that targeted file selection
-improves coverage, c_macro fires correctly, and click deep regression resolved.
-v3 acceptance rate in the corpus remains high (13/14). There is no immediate
-classifier patch needed.
+`proxy/qz_responses.py`:
+- Added `_resolve_llm_compaction_budget(context_window_tokens, ...) -> dict`.
+  Policy: `compaction_budget_tokens = floor(context_window_tokens * 0.90)`.
+  Derives `effective_max_output_tokens`, `effective_max_input_chars`,
+  `effective_timeout_sec` from that budget. Returns `fail_v3=True` if
+  `context_window_tokens` is missing or non-positive.
+- Updated `_build_local_compaction_response_v3()` to call the resolver and fail
+  closed to heuristic v2 when `fail_v3=True`.
+- Updated `_build_survival_weighted_compaction_prompt()`, `_build_llm_compactor_payload()`,
+  `_call_llm_compactor()` to accept explicit limit parameters (resolver values
+  override COMPACTION_CONFIG when provided; COMPACTION_CONFIG still applies when
+  called directly without resolved values).
+- Budget metadata recorded in `metadata.budget` inside the v3 payload.
+
+`proxy/qz_request_router.py`:
+- Extracts `selected_model["context_window"]` at the compaction call site and
+  passes it as `selected_context_tokens` to `_build_local_compaction_response`.
+
+### Derived values for 256 k context (262144 tokens)
+
+| Value | Formula | Result |
+|---|---|---|
+| `compaction_budget_tokens` | floor(262144 × 0.90) | 235,929 |
+| `effective_max_output_tokens` | min(8192, max(1536, floor(budget × 0.04))) | 8,192 |
+| `effective_max_input_chars` | max(100000, floor(budget × 0.20) × 4) | 188,743 |
+| `effective_timeout_sec` | max(30, min(floor(budget / 2000), 120)) | 117 s |
+
+Env overrides (`QZ_LLM_COMPACT_TIMEOUT_SEC`, `QZ_LLM_COMPACT_MAX_INPUT_CHARS`,
+`QZ_LLM_COMPACT_MAX_OUTPUT_TOKENS`) still win over derived values when set.
+
+### Fail-closed contract
+
+If `selected_context_tokens` is None, 0, or negative:
+- `budget["fail_v3"] = True`
+- `_build_local_compaction_response_v3()` returns None immediately (before any
+  network call).
+- Caller falls through to heuristic v2.
+- `quantzhai_proxy.py`'s compaction path (no model context available) correctly
+  falls back to v2 for v3-mode runs.
+
+### Tests
+
+21 new tests added in `TestCompactionBudget` class in `tests/test_qz_llm_compaction.py`.
+2 existing v3 tests updated to pass `selected_context_tokens=262144`.
+1 test in `tests/test_qz_compaction_config.py` updated similarly.
+Total: **59 tests in `test_qz_llm_compaction.py`**, all passing.
+
+### Remaining Stage 6.9 corpus items (deferred)
+
+The original corpus-improvement ideas from this section remain valid but are lower
+priority now that budget alignment is resolved:
+
+1. **fmt deep budget retest**: With 117 s timeout and 8 192 output tokens, fmt
+   deep is expected to accept v3. Requires a live corpus rerun (issue #8).
+2. **Consolidated results across batches**: Runner still overwrites `dogfood-results.json`.
+3. **Prose/docs false-positive measurement**: No scenario for narrative-only files yet.
+4. **Codex session comparison**: No live session evidence yet.
 
 ---
 

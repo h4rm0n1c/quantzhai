@@ -1,7 +1,7 @@
 # Compaction Audit and Strategy
 
 Date: 2026-05-27
-Status: **Stage 6.8** — coverage/runner hardening complete (8/8 targeted-coverage v3, 5/6 deep v3, c_macro confirmed, full artifacts preserved); default remains heuristic v2. See `docs/compaction-stage68-coverage.md`.
+Status: **Stage 6.9** — context-aligned compaction budget resolver landed; v3 now reads `context_window` from `selected_model` and derives timeout/input/output budgets at 90% of window. Stage 6.8 coverage: 8/8 targeted-coverage v3, 5/6 deep v3, c_macro confirmed. Default remains heuristic v2. See `docs/compaction-stage68-coverage.md`.
 
 ---
 
@@ -722,11 +722,17 @@ proxy/qz_responses.py   — new _summarize_items_for_compaction_llm()
 5. Parse structured response.
 6. Encode as `localcmp:v3:` blob with anchored summary sections.
 
-**Token budget**: Target 512-1024 output tokens for the summary. This is a
-deliberate tradeoff: high quality within budget.
+**Token budget** (Stage 6.9+): derived from the selected model's context window.
+`compaction_budget_tokens = floor(context_window_tokens * 0.90)`.
+For a 256 k model: ~235 929 budget tokens.
+`effective_max_output_tokens = min(8192, max(default, floor(budget * 0.04)))`.
+`effective_max_input_chars = max(default, floor(budget * 0.20) * 4)`.
+If `context_window` metadata is missing, v3 fails closed to heuristic v2.
+Env overrides (`QZ_LLM_COMPACT_TIMEOUT_SEC`, `QZ_LLM_COMPACT_MAX_INPUT_CHARS`,
+`QZ_LLM_COMPACT_MAX_OUTPUT_TOKENS`) still win over derived values when set.
 
-**Latency budget**: Compaction should complete in < 30s for 95% of sessions.
-Heuristic fallback if LLM call fails.
+**Latency budget** (Stage 6.9+): `effective_timeout_sec = max(30, min(floor(budget / 2000), 120))`.
+For 256 k: 117 s. Heuristic fallback if LLM call fails or times out.
 
 **Tests**:
 - Unit test `_build_local_compaction_response_v3` with mock LLM call.
