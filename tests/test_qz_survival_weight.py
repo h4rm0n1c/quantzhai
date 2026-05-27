@@ -220,6 +220,177 @@ class TestSurvivalWeight(unittest.TestCase):
         parts = hints.split(": ")
         self.assertEqual(len(parts[1]), 120)
 
+    # ------------------------------------------------------------------
+    # Stage 6.6: corpus-driven classifier improvements
+    # ------------------------------------------------------------------
+
+    def test_detects_build_files(self):
+        text = "Found package.json and pyproject.toml plus Cargo.toml with Cargo.lock go.mod go.sum CMakeLists.txt Makefile"
+        spans = score_text(text)
+        texts = [s.text for s in spans]
+        for f in ("package.json", "pyproject.toml", "Cargo.toml", "Cargo.lock", "go.mod", "go.sum", "CMakeLists.txt", "Makefile"):
+            self.assertIn(f, texts)
+        for s in spans:
+            if s.text in ("package.json", "pyproject.toml", "Cargo.toml", "Cargo.lock", "go.mod", "go.sum", "CMakeLists.txt", "Makefile"):
+                self.assertEqual(s.features, ("build_file",))
+                self.assertEqual(s.weight, "heavy")
+
+    def test_detects_repo_dirs_with_slash(self):
+        text = "Look in src/ and tests/ and docs/ examples/ include/ completions/"
+        spans = score_text(text)
+        texts = [s.text for s in spans]
+        for d in ("src/", "tests/", "docs/", "examples/", "include/", "completions/"):
+            self.assertIn(d, texts)
+        for s in spans:
+            if s.text in ("src/", "tests/", "docs/"):
+                self.assertEqual(s.features, ("repo_dir",))
+                self.assertEqual(s.weight, "medium")
+
+    def test_ignores_generic_prose_words(self):
+        text = "The source code includes test coverage. The view should update the package build."
+        spans = score_text(text)
+        for s in spans:
+            self.assertNotIn(s.text.lower(), ["source", "test", "include", "view", "update", "package", "build"])
+
+    def test_detects_js_commands(self):
+        text = "Run npm test or pnpm test and yarn test or npm run test"
+        spans = score_text(text)
+        texts = [s.text for s in spans]
+        self.assertIn("npm test", texts)
+        self.assertIn("pnpm test", texts)
+        self.assertIn("yarn test", texts)
+        self.assertIn("npm run test", texts)
+        for s in spans:
+            if s.text in ("npm test", "pnpm test", "yarn test", "npm run test"):
+                self.assertEqual(s.features, ("language_command",))
+                self.assertEqual(s.weight, "heavy")
+
+    def test_detects_go_atoms(self):
+        text = "Found go.mod and go.sum and run go test ./..."
+        spans = score_text(text)
+        texts = [s.text for s in spans]
+        self.assertIn("go.mod", texts)
+        self.assertIn("go.sum", texts)
+        self.assertIn("go test ./...", texts)
+        for s in spans:
+            if s.text == "go.mod":
+                self.assertEqual(s.features, ("build_file",))
+            if s.text == "go test ./...":
+                self.assertEqual(s.features, ("language_command",))
+
+    def test_detects_rust_atoms(self):
+        text = "Found Cargo.toml Cargo.lock and run cargo test or cargo build"
+        spans = score_text(text)
+        texts = [s.text for s in spans]
+        self.assertIn("Cargo.toml", texts)
+        self.assertIn("Cargo.lock", texts)
+        self.assertIn("cargo test", texts)
+        self.assertIn("cargo build", texts)
+
+    def test_detects_cmake_atoms(self):
+        text = "Found CMakeLists.txt and run cmake --build then ctest"
+        spans = score_text(text)
+        texts = [s.text for s in spans]
+        self.assertIn("CMakeLists.txt", texts)
+        self.assertIn("cmake --build", texts)
+        self.assertIn("ctest", texts)
+        for s in spans:
+            if s.text == "CMakeLists.txt":
+                self.assertEqual(s.features, ("build_file",))
+
+    def test_detects_c_macros(self):
+        text = "Found #define STB_IMAGE_IMPLEMENTATION and stb_image.h and #define STB_TRUETYPE_IMPLEMENTATION"
+        spans = score_text(text)
+        texts = [s.text for s in spans]
+        self.assertIn("#define", texts)
+        self.assertIn("STB_IMAGE_IMPLEMENTATION", texts)
+        self.assertIn("stb_image.h", texts)
+        self.assertIn("STB_TRUETYPE_IMPLEMENTATION", texts)
+        for s in spans:
+            if s.text in ("#define", "STB_IMAGE_IMPLEMENTATION", "STB_TRUETYPE_IMPLEMENTATION"):
+                self.assertEqual(s.features, ("c_macro",))
+
+    def test_detects_qualified_symbols(self):
+        text = "Use tea.Model and call Update() or View() for rendering"
+        spans = score_text(text)
+        texts = [s.text for s in spans]
+        self.assertIn("Update()", texts)
+        self.assertIn("View()", texts)
+        for s in spans:
+            if s.text in ("Update()", "View()"):
+                self.assertEqual(s.features, ("qualified_symbol",))
+                self.assertEqual(s.weight, "medium")
+
+    def test_preserves_existing_shell_python_detections(self):
+        text = "QZ_COMPACTION_PROFILE=coding-llm QZ_LLM_COMPACT_BASE_URL=http://127.0.0.1:18084 python3 -m pytest tests/test_qz_survival_weight.py proxy/qz_responses.py"
+        spans = score_text(text)
+        texts = [s.text for s in spans]
+        self.assertIn("QZ_COMPACTION_PROFILE=coding-llm", texts)
+        self.assertIn("QZ_LLM_COMPACT_BASE_URL=http://127.0.0.1:18084", texts)
+        # The command pattern captures the full python3 invocation including paths
+        full_cmd = [t for t in texts if "python3 -m pytest" in t]
+        self.assertTrue(len(full_cmd) > 0)
+        self.assertTrue(any("proxy/qz_responses.py" in t for t in full_cmd))
+
+    def test_dedupes_repo_dirs_and_build_files(self):
+        text = "src/ and src/ and package.json and package.json"
+        spans = score_text(text)
+        texts = [s.text for s in spans]
+        self.assertEqual(texts.count("src/"), 1)
+        self.assertEqual(texts.count("package.json"), 1)
+
+    def test_overlapping_build_file_over_code_symbol(self):
+        text = "Build with CMakeLists.txt configuration"
+        spans = score_text(text)
+        # CMakeLists.txt should be build_file not code_symbol
+        for s in spans:
+            if s.text == "CMakeLists.txt":
+                self.assertEqual(s.features, ("build_file",))
+
+    def test_corpus_snippets_mini_hit_check(self):
+        """One snippet per non-Python repo, check expected atoms and non-code_symbol features."""
+        cases = [
+            # p-limit (JS)
+            ("package.json and index.js with npm test",
+             {"build_file": ["package.json"], "language_command": ["npm test"]}),
+            # bubbletea (Go)
+            ("go.mod go.sum and run go test ./... with Update() View()",
+             {"build_file": ["go.mod", "go.sum"], "language_command": ["go test ./..."], "qualified_symbol": ["Update()", "View()"]}),
+            # fd (Rust)
+            ("Cargo.toml Cargo.lock and cargo test or cargo build",
+             {"build_file": ["Cargo.toml", "Cargo.lock"], "language_command": ["cargo test", "cargo build"]}),
+            # fmt (C++)
+            ("CMakeLists.txt and cmake --build then ctest",
+             {"build_file": ["CMakeLists.txt"], "language_command": ["cmake --build", "ctest"]}),
+            # stb (C)
+            ("#define STB_IMAGE_IMPLEMENTATION and stb_image.h",
+             {"c_macro": ["#define", "STB_IMAGE_IMPLEMENTATION"]}),
+        ]
+        for snippet, expected in cases:
+            spans = score_text(snippet)
+            texts = [s.text for s in spans]
+            feat_by_text = {s.text: s.features[0] for s in spans}
+            for feat_name, expected_texts in expected.items():
+                for et in expected_texts:
+                    self.assertIn(et, texts, f"Missing {et} in {snippet!r}")
+                    self.assertEqual(feat_by_text[et], feat_name, f"{et} should be {feat_name} not {feat_by_text.get(et)}")
+            # At least one non-code_symbol feature per snippet
+            non_cs = [f for f in feat_by_text.values() if f != "code_symbol"]
+            self.assertTrue(non_cs, f"No non-code_symbol feature in {snippet!r}")
+
+    def test_format_survival_hints_deterministic_with_new_features(self):
+        spans = [
+            SurvivalSpan("src/", "medium", "medium", ("repo_dir",)),
+            SurvivalSpan("package.json", "heavy", "high", ("build_file",)),
+            SurvivalSpan("npm test", "heavy", "high", ("language_command",)),
+            SurvivalSpan("#define X", "heavy", "high", ("c_macro",)),
+            SurvivalSpan("Update()", "medium", "medium", ("qualified_symbol",)),
+            SurvivalSpan("aa.py", "heavy", "high", ("path",)),
+        ]
+        hints1 = format_survival_hints(spans)
+        hints2 = format_survival_hints(list(reversed(spans)))
+        self.assertEqual(hints1, hints2)
+
     def _read_fixture(self, name):
         path = f"docs/fixtures/compaction/{name}.md"
         if os.path.exists(path):

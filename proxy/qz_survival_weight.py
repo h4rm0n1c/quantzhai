@@ -29,7 +29,10 @@ class SurvivalSpan:
 # Group 3: Suffix (non-consuming lookahead)
 PATTERNS = {
     "path": re.compile(r'(^|[\s"\'\(])((?:\.?\.?/[a-zA-Z0-9._\-\[\]]+)+|(?:\w+[/\\])+[a-zA-Z0-9._\-\[\]]+\.\w+)(?=($|[\s"\'\):,;]))'),
+    "build_file": re.compile(r'(^|[\s"\'\(])((?:package\.json|pyproject\.toml|Cargo\.toml|Cargo\.lock|go\.mod|go\.sum|CMakeLists\.txt|Makefile))(?=($|[\s"\'\):,;]))'),
+    "repo_dir": re.compile(r'(^|[\s"\'\(])((?:src|tests?|docs?|examples|include|cmake|completions|scripts|config)/)(?=($|[\s"\'\):,;]))'),
     "command": re.compile(r'(^|[\s"\'\(])((?:git|python3?|rg|curl|bash|sudo)\b(?:\s+(?!(?:and|or)\b)[^\s"\'\(\)\)\:,;]+)*)(?=($|[\s"\'\(\)\)\:,;]|(?:\s+and\b|\s+or\b)))'),
+    "language_command": re.compile(r'(^|[\s"\'\(])((?:npm|pnpm|yarn)\s+(?:test|run\s+test)|go\s+test\s+\./\.\.\.|cargo\s+(?:test|build|run)|cmake\s+--build|ctest|pytest)(?=($|[\s"\'\):,;]))'),
     "flag": re.compile(r'(^|\s)(--[a-z0-9_-]+|-[a-z0-9])(?=($|[\s:,;]))'),
     "env_var": re.compile(r'(^|\s)([A-Z0-9_]{3,}=[^ \s]+|\$[A-Z0-9_]{3,})(?=($|[\s:,;]))'),
     "sha": re.compile(r'(^|[\s"\'\(])([0-9a-f]{7,64})(?=($|[\s"\'\):,;]))'),
@@ -41,14 +44,16 @@ PATTERNS = {
     "decision_boundary": re.compile(r'(^|[\s"\'\(])(therefore|decided|deferred|blocked because|evidence-to-decision|evidence|source-backed|inferred|concluded)(?=($|[\s"\'\):,;]))', re.IGNORECASE),
     "test_name": re.compile(r'(^|[\s"\'\(])(test_[a-z0-9_]+|[A-Z][a-zA-Z0-9]+Tests|[a-z0-9_]+\.py)(?=($|[\s"\'\):,;]))'),
     "model_name": re.compile(r'(^|[\s"\'\(])(Qwen[a-zA-Z0-9\._\-\[\]]+|gemini-[a-z0-9\.-]+|GPT-[a-z0-9\.-]+)(?=($|[\s"\'\):,;]))', re.IGNORECASE),
+    "c_macro": re.compile(r'(^|[\s"\'\(])(#define|[A-Z][A-Z0-9_]+_IMPLEMENTATION)(?=($|[\s"\'\):,;]))'),
+    "qualified_symbol": re.compile(r'(^|[\s"\'\(])([A-Z][a-z0-9]+\(\))(?=($|[\s"\'\):,;]))'),
     "code_symbol": re.compile(r'(^|[\s"\'\(])([a-z_][a-z0-9_]{2,}_[a-z0-9_]+|[a-z_][a-z0-9_]*\(\)|[A-Z][a-z0-9]+[A-Z][a-zA-Z0-9]+|[a-z0-9_]+\.[a-z0-9_]+)(?=($|[\s"\'\):,;]))'),
 }
 
 # Weighting overrides
-HEAVY_FEATURES = {"path", "command", "env_var", "sha", "issue_ref", "version", "error_string", "negation", "user_correction"}
-MEDIUM_FEATURES = {"flag", "test_name", "code_symbol", "model_name", "decision_boundary"}
+HEAVY_FEATURES = {"path", "command", "env_var", "sha", "issue_ref", "version", "error_string", "negation", "user_correction", "build_file", "language_command", "c_macro"}
+MEDIUM_FEATURES = {"flag", "test_name", "code_symbol", "model_name", "decision_boundary", "repo_dir", "qualified_symbol"}
 
-HIGH_RISK_FEATURES = {"path", "command", "env_var", "sha", "issue_ref", "version", "error_string", "negation", "user_correction", "decision_boundary"}
+HIGH_RISK_FEATURES = {"path", "command", "env_var", "sha", "issue_ref", "version", "error_string", "negation", "user_correction", "decision_boundary", "build_file", "language_command", "c_macro"}
 
 def score_text(text: str) -> list[SurvivalSpan]:
     if not text or not text.strip():

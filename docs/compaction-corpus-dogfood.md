@@ -175,6 +175,23 @@ scratch repos as workspace targets. Details are in `docs/compaction-live-dogfood
 - No classifier or prompt tuning changes justified — overfit evidence is documented for future improvement.
 - 19 total productions, all scratch repos clean.
 
+### Stage 6.6: Classifier Tuning (2026-05-27)
+
+Based on the Stage 6.5 anti-overfit evidence, the survival classifier was
+narrowly tuned with 5 new feature types:
+
+- `build_file` (heavy/high): `package.json`, `Cargo.toml`, `go.mod`, `CMakeLists.txt`
+- `repo_dir` (medium/medium): `src/`, `tests/`, `docs/`, `include/` with slash context
+- `language_command` (heavy/high): `npm test`, `cargo build`, `go test ./...`, `cmake --build`
+- `c_macro` (heavy/high): `#define`, `STB_IMAGE_IMPLEMENTATION`-style macros
+- `qualified_symbol` (medium/medium): `Update()`, `View()` PascalCase function calls
+
+**What remains**:
+- Go/JS/Rust/C++ language-specific atoms (struct names, module paths, class names)
+  still fall through to `code_symbol` — no per-language profile yet.
+- `stb_image.h` without directory context is not path-detected — acceptable heuristic.
+- Per-language coding profiles not justified by current evidence.
+
 ### Runner
 
 Created `scripts/qz-dogfood-corpus-run` for dogfood execution.

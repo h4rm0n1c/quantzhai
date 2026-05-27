@@ -504,3 +504,61 @@ var/captures/requests/qz_req_1779881978306_9a50  — stb s2
 ```
 
 Do not paste full capture bodies into issue comments.
+
+## Stage 6.6: Survival Classifier Corpus Tuning
+
+Date: 2026-05-27
+Status: **Complete — 5 new feature types added, 14 new tests, all 3894 tests pass**
+
+Stage 6.6 tuned the survival-weight classifier (`proxy/qz_survival_weight.py`)
+based on Stage 6.5 multi-repo corpus evidence. No compaction runtime changes.
+No default changes. v3 remains opt-in.
+
+### Gaps Addressed
+
+The Stage 6.5 corpus revealed missing or weak detection for non-Python/shell
+language atoms. The following new feature types were added:
+
+| Feature | Weight/Risk | Detects | Example |
+|---|---|---|---|
+| `build_file` | heavy/high | Exact build/package files | `package.json`, `Cargo.toml`, `go.mod`, `CMakeLists.txt` |
+| `repo_dir` | medium/medium | Repo directory names with slash | `src/`, `tests/`, `docs/`, `include/` |
+| `language_command` | heavy/high | Build/test commands | `npm test`, `cargo build`, `go test ./...`, `cmake --build` |
+| `c_macro` | heavy/high | C preprocessor macros | `#define`, `STB_IMAGE_IMPLEMENTATION` |
+| `qualified_symbol` | medium/medium | PascalCase function calls | `Update()`, `View()` |
+
+### What Did Not Change
+
+- Existing shell/Python detection preserved (env_var, command, path, etc.)
+- Existing features unchanged
+- Classifier API stable: `score_text`, `score_items`, `format_survival_hints` unchanged
+- No classifier config or profile changes
+- No compaction runtime changes
+- No qz_responses.py changes
+- No new survival profiles
+
+### Tests Added
+
+14 new tests in `test_qz_survival_weight.py`:
+- Build file detection (package.json, Cargo.toml, go.mod, CMakeLists.txt etc.)
+- Repo directory detection with slash (src/, tests/, docs/, include/ etc.)
+- Generic prose word exclusion (source, test, include, view, update, etc.)
+- JS/npm commands (npm test, pnpm test, npm run test)
+- Go atoms (go.mod, go.sum, go test ./...)
+- Rust atoms (Cargo.toml, cargo test, cargo build)
+- C++/CMake atoms (CMakeLists.txt, cmake --build, ctest)
+- C macro atoms (#define, STB_IMAGE_IMPLEMENTATION)
+- Qualified symbols (Update(), View())
+- Existing shell/Python preserved
+- Dedup, overlapping priority, determinism
+- Mini corpus snippet per non-Python repo
+
+### Remaining Gaps
+
+- Still missing Go/JS/Rust/C++ language-specific atoms beyond build files and
+  commands. `go.mod` and `cargo test` are detected, but individual Go struct
+  names, Rust module paths, and C++ class names fall through to `code_symbol`.
+- `stb_image.h` without directory context is not detected as a path (no leading
+  `./` or `/`). This is acceptable heuristic behavior.
+- Future survival profiles (per-language coding profile, research profile, etc.)
+  would need more evidence before creation. Not justified by current data.

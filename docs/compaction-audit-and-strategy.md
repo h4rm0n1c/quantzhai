@@ -1206,6 +1206,7 @@ Stage 6.2             — complete       — extended opt-in dogfood; v3 reliabi
 Stage 6.3             — complete       — extended real-session dogfood; 6/6 v3 accepted; quality scales with conversation depth; zero leakage; no tuning needed
 Stage 6.4             — complete       — multi-repo corpus staging harness; 8 repos, 4 scripts, 47 tests; no compaction runtime changes
 Stage 6.5             — complete       — multi-repo opt-in dogfood; 16/16 shallow v3, 2/3 deep v3 accepted; survival classifier anti-overfit assessed; no classifier/prompt tuning changes
+Stage 6.6             — complete       — survival classifier corpus tuning; 5 new feature types (build_file, repo_dir, language_command, c_macro, qualified_symbol); 14 new tests; no compaction runtime changes; v3 remains opt-in
 ```
 
 Priority note: Stages 0–3 are pure docs/tests. No proxy changes.
