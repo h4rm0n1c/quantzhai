@@ -22,6 +22,7 @@ try:
     from .qz_request_router import RequestRouter
     from .qz_responses import (
         _build_local_compaction_response,
+        _resolve_compact_context_window,
         _custom_apply_patch_call_to_function_call,
         _custom_apply_patch_output_to_function_output,
         _decode_local_compaction_blob,
@@ -68,6 +69,7 @@ except ImportError:
     from qz_request_router import RequestRouter
     from qz_responses import (
         _build_local_compaction_response,
+        _resolve_compact_context_window,
         _custom_apply_patch_call_to_function_call,
         _custom_apply_patch_output_to_function_output,
         _decode_local_compaction_blob,
@@ -450,22 +452,26 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         # Resolve the currently selected model's context window for budget-aware
         # v3 compaction. The CompactionInput body includes a "model" field that
-        # Codex passes for model identification, but we use the proxy-selected
-        # model as the authoritative context window source.
+        # Codex passes for model identification. We use _resolve_compact_context_window()
+        # which checks catalog fields 'runtime_context_length' and 'context_length'
+        # (ModelCatalog entries do NOT have a 'context_window' field — that is only
+        # in the Codex-facing catalog JSON). The resolution reason is forwarded into
+        # the v2 blob metadata for diagnostics when v3 falls back.
         _ctx_tokens = None
+        _ctx_reason = None
         try:
             catalog = self._model_catalog()
-            client_model = body.get("model") or ""
-            if client_model:
-                selected_model, _ = catalog.resolve(query=client_model)
-            else:
-                selected_model = catalog.selected or (catalog.entries[0] if catalog.entries else None)
-            if selected_model is not None and isinstance(selected_model.get("context_window"), int):
-                _ctx_tokens = selected_model["context_window"]
-        except Exception:
-            pass
+            client_model = str(body.get("model") or "").strip()
+            _ctx_tokens, _ctx_reason, _ctx_label = _resolve_compact_context_window(catalog, client_model)
+        except Exception as e:
+            _ctx_reason = f"catalog_exception:{type(e).__name__}"
 
-        out = _build_local_compaction_response(body, selected_context_tokens=_ctx_tokens, remote_compaction=True)
+        out = _build_local_compaction_response(
+            body,
+            selected_context_tokens=_ctx_tokens,
+            remote_compaction=True,
+            context_resolution_reason=_ctx_reason,
+        )
 
         try:
             cmp_item = next((item for item in out.get("output", []) if isinstance(item, dict) and item.get("type") == "compaction"), None)

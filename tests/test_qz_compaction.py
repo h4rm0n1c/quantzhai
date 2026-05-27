@@ -14,6 +14,7 @@ from proxy.qz_responses import (
     _estimate_items_tokens,
     _expand_local_compaction_items,
     _make_input_text_message,
+    _resolve_compact_context_window,
     _summarize_items_for_compaction,
 )
 
@@ -552,6 +553,173 @@ Complete Stage 6.10.3.
 
 
 import unittest.mock  # noqa: E402 — needed for @unittest.mock.patch decorators above
+
+
+class _MockCatalog:
+    """Minimal mock for ModelCatalog sufficient to test _resolve_compact_context_window."""
+
+    def __init__(self, entries=None, selected=None, resolve_result=None):
+        self.entries = entries or []
+        self.selected = selected
+        self._resolve_result = resolve_result  # (entry_or_None, reason_str) tuple
+
+    def resolve(self, query=None):
+        if self._resolve_result is not None:
+            return self._resolve_result
+        # Default: try to find by stem/label match
+        for e in self.entries:
+            if isinstance(e, dict) and (
+                e.get("stem") == query or e.get("label") == query or e.get("key") == query
+            ):
+                return e, f"matched {query}"
+        return None, f"no match for {query}"
+
+
+def _make_entry(stem, context_length=None, runtime_context_length=None):
+    entry = {
+        "key": f"{stem}.gguf",
+        "filename": f"{stem}.gguf",
+        "stem": stem,
+        "label": stem,
+        "name": stem,
+        "context_length": context_length,
+        "runtime_context_length": runtime_context_length,
+    }
+    return entry
+
+
+class ContextWindowResolutionTests(unittest.TestCase):
+    """Stage 6.10.4 — _resolve_compact_context_window() uses correct catalog fields."""
+
+    # ── Field name correctness ────────────────────────────────────────────────
+
+    def test_uses_runtime_context_length_first(self):
+        """runtime_context_length takes priority over context_length."""
+        entry = _make_entry("Qwen3.6-27B", context_length=131072, runtime_context_length=262144)
+        catalog = _MockCatalog(entries=[entry], selected=entry)
+        ctx, reason, label = _resolve_compact_context_window(catalog, "")
+        self.assertEqual(ctx, 262144)
+
+    def test_falls_back_to_context_length(self):
+        """context_length used when runtime_context_length is absent/zero."""
+        entry = _make_entry("Qwen3.6-27B", context_length=131072, runtime_context_length=None)
+        catalog = _MockCatalog(entries=[entry], selected=entry)
+        ctx, reason, label = _resolve_compact_context_window(catalog, "")
+        self.assertEqual(ctx, 131072)
+
+    def test_does_not_use_context_window_field(self):
+        """context_window field (Codex catalog only) must NOT be used — catalog entries don't have it."""
+        entry = _make_entry("Qwen3.6-27B", context_length=None, runtime_context_length=None)
+        entry["context_window"] = 999999  # wrong field — should be ignored
+        catalog = _MockCatalog(entries=[entry], selected=entry)
+        ctx, reason, _ = _resolve_compact_context_window(catalog, "")
+        self.assertIsNone(ctx)
+        self.assertEqual(reason, "selected_model_no_context_window")
+
+    # ── Resolution order ─────────────────────────────────────────────────────
+
+    def test_query_slug_resolves_by_query(self):
+        """When client_model matches a catalog entry, reason is 'resolved_by_query'."""
+        slug = "Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS"
+        entry = _make_entry(slug, runtime_context_length=262144)
+        catalog = _MockCatalog(
+            entries=[entry],
+            selected=None,
+            resolve_result=(entry, f"matched {slug}"),
+        )
+        ctx, reason, label = _resolve_compact_context_window(catalog, slug)
+        self.assertEqual(ctx, 262144)
+        self.assertEqual(reason, "resolved_by_query")
+
+    def test_falls_back_to_selected_when_query_misses(self):
+        """Falls back to catalog.selected when query does not match any entry."""
+        selected_entry = _make_entry("default-model", runtime_context_length=131072)
+        catalog = _MockCatalog(
+            entries=[selected_entry],
+            selected=selected_entry,
+            resolve_result=(None, "no match for wrong-slug"),
+        )
+        ctx, reason, label = _resolve_compact_context_window(catalog, "wrong-slug")
+        self.assertEqual(ctx, 131072)
+        self.assertEqual(reason, "resolved_from_selected")
+
+    def test_falls_back_to_first_entry_when_no_selected(self):
+        """Falls back to entries[0] when neither query nor selected resolves."""
+        entry = _make_entry("only-model", context_length=65536)
+        catalog = _MockCatalog(
+            entries=[entry],
+            selected=None,
+            resolve_result=(None, "no match"),
+        )
+        ctx, reason, label = _resolve_compact_context_window(catalog, "unknown")
+        self.assertEqual(ctx, 65536)
+        self.assertEqual(reason, "resolved_from_first_entry")
+
+    # ── Failure paths ─────────────────────────────────────────────────────────
+
+    def test_catalog_empty_returns_catalog_empty_reason(self):
+        catalog = _MockCatalog(entries=[], selected=None)
+        ctx, reason, label = _resolve_compact_context_window(catalog, "any")
+        self.assertIsNone(ctx)
+        self.assertEqual(reason, "catalog_empty")
+        self.assertIsNone(label)
+
+    def test_entry_with_no_context_length_returns_no_context_window_reason(self):
+        entry = _make_entry("bare-entry", context_length=None, runtime_context_length=None)
+        catalog = _MockCatalog(entries=[entry], selected=entry)
+        ctx, reason, label = _resolve_compact_context_window(catalog, "")
+        self.assertIsNone(ctx)
+        self.assertEqual(reason, "selected_model_no_context_window")
+        self.assertEqual(label, "bare-entry")
+
+    def test_catalog_exception_returns_catalog_exception_reason(self):
+        class BrokenCatalog:
+            @property
+            def entries(self):
+                raise RuntimeError("disk failure")
+        ctx, reason, label = _resolve_compact_context_window(BrokenCatalog(), "any")
+        self.assertIsNone(ctx)
+        self.assertTrue(reason.startswith("catalog_exception:"), reason)
+        self.assertIsNone(label)
+
+    def test_zero_context_length_treated_as_missing(self):
+        """Zero context_length is not a valid window — treated as missing."""
+        entry = _make_entry("zero-ctx", context_length=0, runtime_context_length=0)
+        catalog = _MockCatalog(entries=[entry], selected=entry)
+        ctx, reason, _ = _resolve_compact_context_window(catalog, "")
+        self.assertIsNone(ctx)
+        self.assertEqual(reason, "selected_model_no_context_window")
+
+    # ── Integration: context_resolution_reason in v2 metadata ────────────────
+
+    def test_context_resolution_reason_recorded_in_v2_metadata(self):
+        """context_resolution_reason is stored in v2 blob metadata for diagnostics."""
+        items = [_msg("user", "hello"), _msg("assistant", "world")]
+        body = {"input": items, "model": "test"}
+        result = _build_local_compaction_response(
+            body,
+            selected_context_tokens=None,  # forces missing_context_window
+            remote_compaction=True,
+            context_resolution_reason="model_not_found",
+        )
+        cmp_items = [
+            i for i in result["output"]
+            if isinstance(i, dict) and i.get("type") == "compaction"
+        ]
+        payload = _decode_local_compaction_blob(cmp_items[0]["encrypted_content"])
+        self.assertEqual(payload["metadata"].get("context_resolution_reason"), "model_not_found")
+
+    def test_context_resolution_reason_none_when_not_set(self):
+        """context_resolution_reason is None (not set) when not provided."""
+        items = [_msg("user", "hello"), _msg("assistant", "world")]
+        body = {"input": items, "model": "test"}
+        result = _build_local_compaction_response(body, selected_context_tokens=None)
+        cmp_items = [
+            i for i in result["output"]
+            if isinstance(i, dict) and i.get("type") == "compaction"
+        ]
+        payload = _decode_local_compaction_blob(cmp_items[0]["encrypted_content"])
+        self.assertIsNone(payload["metadata"].get("context_resolution_reason"))
 
 
 if __name__ == "__main__":

@@ -1179,6 +1179,79 @@ def _build_local_compaction_response_v3(
     }, "ok"
 
 
+def _resolve_compact_context_window(catalog, client_model: str) -> tuple:
+    """Resolve the effective context window for /v1/responses/compact.
+
+    ModelCatalog entries use 'runtime_context_length' and 'context_length' —
+    NOT 'context_window' (that field exists only in the Codex-facing catalog JSON).
+    The priority is:
+      1. runtime_context_length (override from manifest/model-overrides.json)
+      2. context_length         (inferred from GGUF metadata)
+
+    Resolution order:
+      1. Query-based: catalog.resolve(query=client_model) if client_model is non-empty.
+      2. Fallback: catalog.selected (the currently selected model in the proxy session).
+      3. Fallback: catalog.entries[0] (first available entry).
+
+    Returns (ctx_tokens_or_None, reason_str, selected_label_or_None).
+
+    reason values:
+      "resolved_by_query"               — matched on client_model slug/key/alias
+      "resolved_from_selected"          — fell back to catalog.selected
+      "resolved_from_first_entry"       — fell back to catalog.entries[0]
+      "model_not_found"                 — no match and no catalog selection available
+      "selected_model_no_context_window" — entry found but no usable context_length
+      "catalog_empty"                   — catalog has no entries
+      "catalog_exception:<ExcType>"     — unexpected exception during resolution
+    """
+    try:
+        entries = getattr(catalog, "entries", None)
+        if not entries:
+            return None, "catalog_empty", None
+
+        entry = None
+        resolution_reason = None
+
+        # 1. Query-based resolution on client slug/key/alias.
+        if client_model:
+            try:
+                resolved, _reason_str = catalog.resolve(query=client_model)
+                if resolved is not None:
+                    entry = resolved
+                    resolution_reason = "resolved_by_query"
+            except Exception:
+                pass  # query resolution failed; fall through to selected
+
+        # 2. Fall back to catalog.selected (proxy's currently active model).
+        if entry is None:
+            selected = getattr(catalog, "selected", None)
+            if isinstance(selected, dict) and selected:
+                entry = selected
+                resolution_reason = "resolved_from_selected"
+
+        # 3. Fall back to first available entry.
+        if entry is None:
+            entry = entries[0]
+            resolution_reason = "resolved_from_first_entry"
+
+        if not isinstance(entry, dict):
+            return None, "model_not_found", None
+
+        # Extract effective context length using catalog field priority.
+        ctx = entry.get("runtime_context_length")
+        if not isinstance(ctx, int) or ctx <= 0:
+            ctx = entry.get("context_length")
+        if not isinstance(ctx, int) or ctx <= 0:
+            label = entry.get("label") or entry.get("name") or entry.get("stem")
+            return None, "selected_model_no_context_window", label
+
+        label = entry.get("label") or entry.get("name") or entry.get("stem")
+        return ctx, resolution_reason, label
+
+    except Exception as e:
+        return None, f"catalog_exception:{type(e).__name__}", None
+
+
 def _summarize_items_for_compaction(items):
     lines = []
     for item in items:
@@ -1207,6 +1280,7 @@ def _build_local_compaction_response(
     selected_context_tokens: Optional[int] = None,
     compact_threshold_tokens: Optional[int] = None,
     remote_compaction: bool = False,
+    context_resolution_reason: Optional[str] = None,
 ) -> dict:
     """Build a compaction response blob.
 
@@ -1223,6 +1297,10 @@ def _build_local_compaction_response(
     Codex has already identified all items for compaction; the entire input is summarised.
     remote_compaction=False (default): normal inline path from /v1/responses; only the
     pre-recent-tail slice is summarised.
+
+    context_resolution_reason: reason string from _resolve_compact_context_window() when
+    called from _handle_responses_compact(). Recorded in v2 fallback metadata for diagnostics.
+    None when the caller did not perform catalog-based context resolution (normal inline path).
     """
     input_items = body.get("input")
     if isinstance(input_items, str):
@@ -1293,6 +1371,7 @@ def _build_local_compaction_response(
             "engine": "qwen3.6-bridge",
             "format": "structured-markers-v2",
             "v3_fallback_reason": v3_reason,
+            "context_resolution_reason": context_resolution_reason,
         }
     }
     encrypted = _encode_local_compaction_blob(payload)

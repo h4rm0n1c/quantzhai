@@ -1,7 +1,7 @@
 # Stage 6.8/6.9/6.10 Compaction Corpus Coverage Evidence
 
 Date: 2026-05-28
-Status: **Stage 6.10.3 — remote compaction source selection fixed; v3 fallback diagnostics added. Stage 6.10.2: Codex config path cleanup, backend auto-resolution. Stage 6.10.1: OpenAI masquerade, remote compaction endpoint. Stage 6.10: v3/Zenkai default, 16.5% autocompact-buffer. Stage 6.9: budget resolver. Stage 6.8: runner improved.**
+Status: **Stage 6.10.4 — remote compact context resolution fixed (runtime_context_length field, no silent except). Stage 6.10.3: source selection, fallback diagnostics. Stage 6.10.2: Codex config path cleanup. Stage 6.10.1: OpenAI masquerade. Stage 6.10: v3/Zenkai default.**
 
 Commit: see `git log --oneline -1`
 Issue: `#8` — RFC: NetTTS-inspired survival-weighted compaction for QuantZhai
@@ -729,3 +729,73 @@ Added `RemoteCompactionSourceSelectionTests` class in `tests/test_qz_compaction.
 - OpenAI masquerade and `model_auto_compact_token_limit` unchanged.
 - No session ledger. No history reconstruction.
 - All Stage 6.10, 6.10.1, and 6.10.2 safety notes remain in force.
+
+## Stage 6.10.4: Remote Compact Context Resolution Fix (2026-05-28)
+
+### Problem
+
+After Stage 6.10.3, `/v1/responses/compact` smoke returned `localcmp:v2` with
+`v3_fallback_reason = "missing_context_window"`. The remote compaction source
+selection was working but context window resolution was silently failing.
+
+Root cause: `_handle_responses_compact()` called `selected_model.get("context_window")`
+which always returns `None` — ModelCatalog entries use `context_length` and
+`runtime_context_length` (from GGUF metadata and manifest overrides). The field
+`context_window` only exists in the Codex-facing JSON catalog, not in ModelCatalog
+entries. The silent `except Exception: pass` block swallowed both the wrong-field
+miss and any lookup errors, leaving `_ctx_tokens = None`.
+
+### Changes
+
+**`_resolve_compact_context_window(catalog, client_model)` (proxy/qz_responses.py):**
+
+Added helper that correctly resolves context window for /v1/responses/compact:
+- Reads `runtime_context_length` first (manifest override), then `context_length` (GGUF).
+- Never reads `context_window` (that field does not exist in ModelCatalog entries).
+- Resolution order: query match → catalog.selected → entries[0].
+- Returns `(ctx_tokens_or_None, reason_str, selected_label_or_None)`.
+- Reason codes: `resolved_by_query`, `resolved_from_selected`, `resolved_from_first_entry`,
+  `model_not_found`, `selected_model_no_context_window`, `catalog_empty`,
+  `catalog_exception:<ExcType>`.
+- No broad `except Exception: pass` — exceptions are caught and reason-coded.
+
+**`_build_local_compaction_response()` (proxy/qz_responses.py):**
+
+Added `context_resolution_reason: Optional[str] = None` parameter. When provided
+(from `_handle_responses_compact()`), the value is stored in v2 blob metadata as
+`"context_resolution_reason"` alongside `"v3_fallback_reason"`.
+
+**`_handle_responses_compact()` (proxy/quantzhai_proxy.py):**
+
+Replaced the silent `try/except Exception: pass` block with a call to
+`_resolve_compact_context_window(catalog, client_model)`. The resolution reason is
+forwarded as `context_resolution_reason` to `_build_local_compaction_response()`.
+The outer `except` now captures the exception type as `"catalog_exception:<type>"`.
+
+### Test Coverage (Stage 6.10.4)
+
+Added `ContextWindowResolutionTests` class in `tests/test_qz_compaction.py` (12 tests):
+
+- `runtime_context_length` takes priority over `context_length`.
+- `context_length` used when `runtime_context_length` is absent or zero.
+- `context_window` field (Codex catalog only) is NOT used — correctly treated as missing.
+- Query slug (`Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS`) resolves to `resolved_by_query`.
+- Falls back to `catalog.selected` with `resolved_from_selected` when query misses.
+- Falls back to `entries[0]` with `resolved_from_first_entry` when no selection.
+- `catalog_empty` returned for empty catalog.
+- `selected_model_no_context_window` returned when entry has no context length.
+- `catalog_exception:<type>` returned on exception — no silent swallowing.
+- Zero context length treated as missing (not valid).
+- `context_resolution_reason` recorded in v2 metadata when provided.
+- `context_resolution_reason` is `None` in v2 metadata when not provided (normal path).
+
+### Safety Notes (Stage 6.10.4)
+
+- The helper accesses only `catalog.entries`, `catalog.selected`, and `catalog.resolve()`.
+  No new catalog state is written or cached.
+- Outer `except Exception` in `_handle_responses_compact()` is still present to guard
+  against catalog initialisation failure (e.g. proxy not ready) — but now it records the
+  exception type as `catalog_exception:<type>` rather than silently discarding it.
+- OpenAI masquerade, remote compaction source selection, anchored summary validation,
+  v2 fallback, and session ledger policy all unchanged.
+- All Stage 6.10, 6.10.1, 6.10.2, and 6.10.3 safety notes remain in force.
