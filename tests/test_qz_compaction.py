@@ -356,5 +356,203 @@ class RemoteCompactionEndpointShapeTests(unittest.TestCase):
         self.assertIsInstance(result["output"], list)
 
 
+class RemoteCompactionSourceSelectionTests(unittest.TestCase):
+    """Stage 6.10.3 — remote_compaction=True uses all working_items as LLM source."""
+
+    VALID_SUMMARY = """## Goal
+Complete Stage 6.10.3.
+
+## Active Constraints & Guardrails
+- remote_compaction uses all items as source.
+
+## Current Status
+### Done
+- Source selection fixed.
+
+## Key Decisions
+- Decision: use working_items in remote mode.
+
+## Evidence Boundaries
+- Confirmed by unit tests.
+
+## Technical State
+### Files / Paths
+- proxy/qz_responses.py
+
+## Next Actions
+1. Verify smoke returns v3.
+"""
+
+    def setUp(self):
+        self.original_config = COMPACTION_CONFIG.copy()
+        COMPACTION_CONFIG["mode"] = "llm"
+        COMPACTION_CONFIG["llm_base_url"] = "http://mock-llm:8080"
+        COMPACTION_CONFIG["llm_model"] = "test-model"
+
+    def tearDown(self):
+        for k, v in self.original_config.items():
+            COMPACTION_CONFIG[k] = v
+
+    def _make_small_history(self):
+        """Only 2 messages — well below keep_recent_items (20), so older is empty
+        under normal compaction but all items are used under remote_compaction."""
+        return [
+            _msg("user", "Describe Paris."),
+            _msg("assistant", "Paris is the capital of France."),
+        ]
+
+    def _mock_llm(self, mock_urlopen):
+        mock_resp = __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {"choices": [{"message": {"content": self.VALID_SUMMARY}}]}
+        ).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+        mock_urlopen.return_value = mock_resp
+
+    # ── Remote compact source selection ──────────────────────────────────────
+
+    @unittest.mock.patch("urllib.request.urlopen")
+    def test_remote_compact_with_2_messages_calls_llm(self, mock_urlopen):
+        """remote_compaction=True must not skip LLM even with only 2 messages."""
+        self._mock_llm(mock_urlopen)
+        body = {"input": self._make_small_history(), "model": "test-model"}
+        result = _build_local_compaction_response(
+            body, selected_context_tokens=262144, remote_compaction=True
+        )
+        # LLM should have been called — remote mode passes all items as source
+        mock_urlopen.assert_called_once()
+
+    @unittest.mock.patch("urllib.request.urlopen")
+    def test_remote_compact_with_2_messages_returns_v3(self, mock_urlopen):
+        """remote_compaction=True with a valid LLM response must produce localcmp:v3."""
+        self._mock_llm(mock_urlopen)
+        body = {"input": self._make_small_history(), "model": "test-model"}
+        result = _build_local_compaction_response(
+            body, selected_context_tokens=262144, remote_compaction=True
+        )
+        cmp_items = [
+            item for item in result["output"]
+            if isinstance(item, dict) and item.get("type") == "compaction"
+        ]
+        self.assertEqual(len(cmp_items), 1)
+        self.assertTrue(
+            cmp_items[0]["encrypted_content"].startswith("localcmp:v3:"),
+            f"Expected localcmp:v3, got: {cmp_items[0]['encrypted_content'][:30]}",
+        )
+
+    @unittest.mock.patch("urllib.request.urlopen")
+    def test_normal_compact_with_2_messages_falls_back_to_v2(self, mock_urlopen):
+        """Normal compaction with 2 messages must not call LLM (older is empty).
+
+        This preserves the existing behaviour: for small histories under
+        keep_recent_items, the normal path keeps all items in 'recent' and
+        has nothing to summarise in 'older', so v3 falls back to v2.
+        """
+        self._mock_llm(mock_urlopen)
+        body = {"input": self._make_small_history(), "model": "test-model"}
+        result = _build_local_compaction_response(
+            body, selected_context_tokens=262144, remote_compaction=False
+        )
+        cmp_items = [
+            item for item in result["output"]
+            if isinstance(item, dict) and item.get("type") == "compaction"
+        ]
+        self.assertEqual(len(cmp_items), 1)
+        blob = cmp_items[0]["encrypted_content"]
+        self.assertTrue(
+            blob.startswith("localcmp:v2:"),
+            f"Expected v2 fallback for small normal history, got: {blob[:30]}",
+        )
+        # LLM must NOT have been called
+        mock_urlopen.assert_not_called()
+
+    # ── v3 fallback reason recorded in v2 metadata ───────────────────────────
+
+    def test_normal_compact_v3_fallback_reason_is_empty_llm_source_items(self):
+        """v2 blob for normal compact with 2-message history records the v3 reason."""
+        COMPACTION_CONFIG["mode"] = "auto"
+        body = {"input": self._make_small_history(), "model": "test-model"}
+        result = _build_local_compaction_response(
+            body, selected_context_tokens=262144, remote_compaction=False
+        )
+        cmp_items = [
+            item for item in result["output"]
+            if isinstance(item, dict) and item.get("type") == "compaction"
+        ]
+        payload = _decode_local_compaction_blob(cmp_items[0]["encrypted_content"])
+        self.assertEqual(
+            payload["metadata"].get("v3_fallback_reason"),
+            "empty_llm_source_items",
+        )
+
+    def test_v2_fallback_reason_is_missing_context_window_when_no_tokens(self):
+        """v2 blob records 'missing_context_window' when selected_context_tokens=None."""
+        COMPACTION_CONFIG["mode"] = "auto"
+        big_history = [_msg("user", "hello " * 50), _msg("assistant", "world " * 50)] * 15
+        body = {"input": big_history, "model": "test-model"}
+        result = _build_local_compaction_response(body, selected_context_tokens=None)
+        cmp_items = [
+            item for item in result["output"]
+            if isinstance(item, dict) and item.get("type") == "compaction"
+        ]
+        payload = _decode_local_compaction_blob(cmp_items[0]["encrypted_content"])
+        self.assertEqual(
+            payload["metadata"].get("v3_fallback_reason"),
+            "missing_context_window",
+        )
+
+    def test_v2_fallback_reason_is_mode_not_llm_or_auto_for_heuristic_mode(self):
+        """Heuristic mode produces v2 with reason 'mode_not_llm_or_auto'."""
+        COMPACTION_CONFIG["mode"] = "heuristic"
+        big_history = [_msg("user", "hello " * 50), _msg("assistant", "world " * 50)] * 15
+        body = {"input": big_history, "model": "test-model"}
+        result = _build_local_compaction_response(body, selected_context_tokens=262144)
+        cmp_items = [
+            item for item in result["output"]
+            if isinstance(item, dict) and item.get("type") == "compaction"
+        ]
+        payload = _decode_local_compaction_blob(cmp_items[0]["encrypted_content"])
+        self.assertEqual(
+            payload["metadata"].get("v3_fallback_reason"),
+            "mode_not_llm_or_auto",
+        )
+
+    @unittest.mock.patch("urllib.request.urlopen")
+    def test_remote_compact_v3_metadata_records_remote_compaction_true(self, mock_urlopen):
+        """v3 blob from remote_compaction=True records remote_compaction: True in metadata."""
+        self._mock_llm(mock_urlopen)
+        body = {"input": self._make_small_history(), "model": "test-model"}
+        result = _build_local_compaction_response(
+            body, selected_context_tokens=262144, remote_compaction=True
+        )
+        cmp_items = [
+            item for item in result["output"]
+            if isinstance(item, dict) and item.get("type") == "compaction"
+        ]
+        payload = _decode_local_compaction_blob(cmp_items[0]["encrypted_content"])
+        self.assertEqual(payload["version"], 3)
+        self.assertTrue(payload["metadata"].get("remote_compaction"))
+
+    # ── remote compact output shape ───────────────────────────────────────────
+
+    @unittest.mock.patch("urllib.request.urlopen")
+    def test_remote_compact_output_is_only_compaction_blob(self, mock_urlopen):
+        """Remote compact output must be just the compaction blob (no recent tail)."""
+        self._mock_llm(mock_urlopen)
+        body = {"input": self._make_small_history(), "model": "test-model"}
+        result = _build_local_compaction_response(
+            body, selected_context_tokens=262144, remote_compaction=True
+        )
+        # In remote mode all items are summarised; no recent tail preserved.
+        non_cmp = [
+            item for item in result["output"]
+            if isinstance(item, dict) and item.get("type") != "compaction"
+        ]
+        self.assertEqual(non_cmp, [], "Remote compact output must not contain non-compaction items")
+
+
+import unittest.mock  # noqa: E402 — needed for @unittest.mock.patch decorators above
+
+
 if __name__ == "__main__":
     unittest.main()

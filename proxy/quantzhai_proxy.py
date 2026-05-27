@@ -465,7 +465,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
-        out = _build_local_compaction_response(body, selected_context_tokens=_ctx_tokens)
+        out = _build_local_compaction_response(body, selected_context_tokens=_ctx_tokens, remote_compaction=True)
 
         try:
             cmp_item = next((item for item in out.get("output", []) if isinstance(item, dict) and item.get("type") == "compaction"), None)

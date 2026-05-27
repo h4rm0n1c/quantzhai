@@ -1019,52 +1019,82 @@ def _build_local_compaction_response_v3(
     existing_depth: int,
     selected_context_tokens: Optional[int] = None,
     compact_threshold_tokens: Optional[int] = None,
-) -> Optional[dict]:
+    remote_compaction: bool = False,
+) -> tuple:
     """Attempt LLM-generated anchored compaction (v3).
 
+    Returns a 2-tuple (result_dict, reason_str):
+      (result_dict, "ok")             — success
+      (None, "mode_not_llm_or_auto")  — compaction mode is not llm or auto
+      (None, "no_backend")            — no LLM backend configured or derivable
+      (None, "empty_llm_source_items") — nothing to summarise (e.g. short history)
+      (None, "missing_context_window") — context window unavailable; budget fail_v3
+      (None, "llm_call_failed")       — LLM backend returned no usable content
+      (None, "validation_failed")     — summary text failed anchored-v0 validation
+
     selected_context_tokens must be the context_window value from the selected model.
-    If it is None or non-positive the budget resolver sets fail_v3=True and this
-    function returns None, falling through to heuristic v2.
+    If it is None or non-positive the budget resolver sets fail_v3=True → reason
+    "missing_context_window", falling through to heuristic v2.
 
     compact_threshold_tokens is the raw value from context_management.compact_threshold
     in the request body. It is classified by the budget resolver (force_compaction_only,
     budget_cap, capped_to_safe_budget, or ignored_invalid). A value below 1024 (e.g.
     compact_threshold=1 from the dogfood runner) is treated as a force signal, not a
     1-token budget cap.
+
+    remote_compaction=True: use all working_items as the LLM compaction source.
+    Codex has already decided what to compact and sent it as request.input; no
+    recent tail is preserved in the output (the compaction blob is the full replacement).
+
+    remote_compaction=False (default): normal incremental compaction — only the
+    pre-recent-tail slice ("older") is summarised; the recent tail is preserved
+    verbatim in the output.
     """
     if _current_compaction_mode() not in ("llm", "auto"):
-        return None
+        return None, "mode_not_llm_or_auto"
     # Allow v3 to proceed when no explicit llm_base_url is configured: _call_llm_compactor()
     # will fall back to _active_backend_base_url() (QZ_SERVER_HOST:QZ_SERVER_PORT).
     # Only bail out if neither configured nor active backend is reachable (both empty).
     if not COMPACTION_CONFIG["llm_base_url"] and not _active_backend_base_url():
-        return None
+        return None, "no_backend"
 
-    tail_start = _tail_start_for_compaction(working_items)
-    older = working_items[:tail_start]
-    recent = working_items[tail_start:]
+    if remote_compaction:
+        # Remote compact path (/v1/responses/compact): Codex has already selected all
+        # items for compaction. Summarise everything; no recent tail to preserve.
+        llm_source = working_items
+        recent = []
+    else:
+        # Normal incremental path (/v1/responses via compact_threshold): only compress
+        # the pre-recent-tail "older" slice; keep the recent tail verbatim.
+        tail_start = _tail_start_for_compaction(working_items)
+        llm_source = working_items[:tail_start]
+        recent = working_items[tail_start:]
+        if len(recent) < COMPACTION_CONFIG["min_preserve_items"]:
+            recent = working_items[-COMPACTION_CONFIG["min_preserve_items"]:]
+            llm_source = working_items[:-len(recent)] if recent else working_items
 
-    if len(recent) < COMPACTION_CONFIG["min_preserve_items"]:
-        recent = working_items[-COMPACTION_CONFIG["min_preserve_items"]:]
-        older = working_items[:-len(recent)] if recent else working_items
+    if not llm_source:
+        # Nothing to summarise — the entire history falls within the preserved recent
+        # tail (normal mode) or the input was empty (remote mode). Fall back to v2.
+        return None, "empty_llm_source_items"
 
     # Resolve compaction budget from selected model's context window.
-    combined_older_text = "\n".join(_item_text(it) for it in older)
-    spans = _score_survival_text(combined_older_text)
+    combined_source_text = "\n".join(_item_text(it) for it in llm_source)
+    spans = _score_survival_text(combined_source_text)
     budget = _resolve_llm_compaction_budget(
         selected_context_tokens,
-        old_history_estimated_tokens=_estimate_items_tokens(older),
+        old_history_estimated_tokens=_estimate_items_tokens(llm_source),
         survival_hint_count=len(spans),
         compact_threshold_tokens=compact_threshold_tokens,
     )
     if budget["fail_v3"]:
         # Context window metadata unavailable — fail closed to v2.
-        return None
+        return None, "missing_context_window"
 
-    previous_summary = _extract_previous_anchored_summary(older)
+    previous_summary = _extract_previous_anchored_summary(llm_source)
     prompt = _build_survival_weighted_compaction_prompt(
         previous_summary,
-        older,
+        llm_source,
         max_input_chars=budget["effective_max_input_chars"],
     )
 
@@ -1076,8 +1106,10 @@ def _build_local_compaction_response_v3(
     )
     latency_ms = int(time.time() * 1000) - start_ms
 
-    if not summary_text or not _validate_anchored_summary(summary_text):
-        return None  # Fallback to v2
+    if not summary_text:
+        return None, "llm_call_failed"
+    if not _validate_anchored_summary(summary_text):
+        return None, "validation_failed"
 
     depth = min(existing_depth + 1, COMPACTION_CONFIG["max_compaction_depth"])
 
@@ -1097,6 +1129,7 @@ def _build_local_compaction_response_v3(
             "survival_hint_count": len(spans),
             "llm_model": COMPACTION_CONFIG["llm_model"],
             "latency_ms": latency_ms,
+            "remote_compaction": remote_compaction,
             "budget": {
                 "policy": budget["policy"],
                 "context_window_tokens": budget["context_window_tokens"],
@@ -1143,7 +1176,7 @@ def _build_local_compaction_response_v3(
             "output_tokens": _estimate_items_tokens(output_items),
             "total_tokens": _estimate_items_tokens(working_items) + _estimate_items_tokens(output_items),
         },
-    }
+    }, "ok"
 
 
 def _summarize_items_for_compaction(items):
@@ -1173,6 +1206,7 @@ def _build_local_compaction_response(
     body: dict,
     selected_context_tokens: Optional[int] = None,
     compact_threshold_tokens: Optional[int] = None,
+    remote_compaction: bool = False,
 ) -> dict:
     """Build a compaction response blob.
 
@@ -1184,6 +1218,11 @@ def _build_local_compaction_response(
     in the request body. It is passed to the budget resolver to determine the effective
     compaction budget. Values below 1024 (e.g. compact_threshold=1 used by the dogfood
     corpus runner to force compaction) are treated as force signals, not token budgets.
+
+    remote_compaction=True: caller is _handle_responses_compact() (POST /v1/responses/compact).
+    Codex has already identified all items for compaction; the entire input is summarised.
+    remote_compaction=False (default): normal inline path from /v1/responses; only the
+    pre-recent-tail slice is summarised.
     """
     input_items = body.get("input")
     if isinstance(input_items, str):
@@ -1218,18 +1257,16 @@ def _build_local_compaction_response(
                 existing_depth = max(existing_depth, int(payload.get("depth", 1)))
 
     # Stage 4: Opt-in LLM-generated anchored compaction (v3/Zenkai default).
-    # llm_base_url may be empty if not explicitly configured — _build_local_compaction_response_v3
-    # will fall back to _active_backend_base_url() (QZ_SERVER_HOST:QZ_SERVER_PORT).
-    if _current_compaction_mode() in ("llm", "auto") and (
-        COMPACTION_CONFIG["llm_base_url"] or _active_backend_base_url()
-    ):
-        v3_resp = _build_local_compaction_response_v3(
-            body, working_items, existing_depth,
-            selected_context_tokens=selected_context_tokens,
-            compact_threshold_tokens=compact_threshold_tokens,
-        )
-        if v3_resp:
-            return v3_resp
+    # _build_local_compaction_response_v3 returns (result, reason_str). The reason
+    # is propagated into the v2 blob metadata for diagnostics when v3 falls back.
+    v3_resp, v3_reason = _build_local_compaction_response_v3(
+        body, working_items, existing_depth,
+        selected_context_tokens=selected_context_tokens,
+        compact_threshold_tokens=compact_threshold_tokens,
+        remote_compaction=remote_compaction,
+    )
+    if v3_resp:
+        return v3_resp
 
     # Fallback / Default: Heuristic v2 compaction
     tail_start = _tail_start_for_compaction(working_items)
@@ -1254,7 +1291,8 @@ def _build_local_compaction_response(
         "preserved_items": len(recent),
         "metadata": {
             "engine": "qwen3.6-bridge",
-            "format": "structured-markers-v2"
+            "format": "structured-markers-v2",
+            "v3_fallback_reason": v3_reason,
         }
     }
     encrypted = _encode_local_compaction_blob(payload)

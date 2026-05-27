@@ -1,7 +1,7 @@
 # Stage 6.8/6.9/6.10 Compaction Corpus Coverage Evidence
 
 Date: 2026-05-28
-Status: **Stage 6.10.2 — Codex config path cleanup, compactor backend auto-resolution, recursion guard hardened. Stage 6.10.1: OpenAI masquerade, remote compaction endpoint. Stage 6.10: v3/Zenkai default, 16.5% autocompact-buffer. Stage 6.9: budget resolver. Stage 6.8: runner improved, 13/14 v3 accepted.**
+Status: **Stage 6.10.3 — remote compaction source selection fixed; v3 fallback diagnostics added. Stage 6.10.2: Codex config path cleanup, backend auto-resolution. Stage 6.10.1: OpenAI masquerade, remote compaction endpoint. Stage 6.10: v3/Zenkai default, 16.5% autocompact-buffer. Stage 6.9: budget resolver. Stage 6.8: runner improved.**
 
 Commit: see `git log --oneline -1`
 Issue: `#8` — RFC: NetTTS-inspired survival-weighted compaction for QuantZhai
@@ -665,3 +665,67 @@ Added 3 new test classes in `tests/test_qz_llm_compaction.py` (18 tests):
   `_QZ_PROXY_DEFAULT_PORTS` and the guard tests.
 - No compaction logic, survival heuristics, or session ledger affected.
 - All Stage 6.10 and 6.10.1 safety notes remain in force.
+
+## Stage 6.10.3: Remote Compaction Source Selection and v3 Fallback Diagnostics (2026-05-28)
+
+### Problem
+
+Direct `/v1/responses/compact` smoke returned `localcmp:v2` even with a valid model slug and
+context metadata. Root cause: `_build_local_compaction_response_v3()` used
+`older = working_items[:tail_start]` as the LLM compaction source. For small remote compact
+requests (e.g. the 2-message smoke), `_tail_start_for_compaction()` returns 0 because
+`len(items) <= keep_recent_items` (20), so `older` is empty. With nothing to summarise,
+v3 fell back to v2 immediately (now reported as `"empty_llm_source_items"`).
+
+### Changes
+
+**Source selection fix (`proxy/qz_responses.py`):**
+
+- Added `remote_compaction: bool = False` parameter to `_build_local_compaction_response_v3()`
+  and `_build_local_compaction_response()`.
+- When `remote_compaction=True`: `llm_source = working_items` (all items Codex sent for
+  compaction), `recent = []`. Codex has already decided what to compact; the compaction blob
+  is the full replacement with no preserved tail.
+- When `remote_compaction=False` (default): existing tail-split behaviour unchanged
+  (`llm_source = older`, `recent = tail`).
+- Added `if not llm_source: return (None, "empty_llm_source_items")` guard in both modes.
+
+**v3 return type changed to tuple:**
+
+- `_build_local_compaction_response_v3()` now returns `tuple[Optional[dict], str]`:
+  - `(result_dict, "ok")` on success.
+  - `(None, reason_str)` on failure. Reason codes:
+    `"mode_not_llm_or_auto"`, `"no_backend"`, `"empty_llm_source_items"`,
+    `"missing_context_window"`, `"llm_call_failed"`, `"validation_failed"`.
+- `_build_local_compaction_response()` captures the reason and includes it in v2 blob
+  metadata as `"v3_fallback_reason"`. Diagnostics are now visible in every v2 response
+  (both remote and normal paths).
+- v3 blob metadata now includes `"remote_compaction": true/false`.
+
+**Caller updated (`proxy/quantzhai_proxy.py`):**
+
+- `_handle_responses_compact()` now calls
+  `_build_local_compaction_response(..., remote_compaction=True)`.
+
+### Test Coverage (Stage 6.10.3)
+
+Added `RemoteCompactionSourceSelectionTests` class in `tests/test_qz_compaction.py` (8 tests):
+
+- Remote compact with 2 messages calls LLM (source is non-empty).
+- Remote compact with 2 messages returns `localcmp:v3` with valid mock LLM response.
+- Normal compact with 2 messages does NOT call LLM (falls back to v2 — `older` is empty).
+- Normal compact v3 fallback reason `"empty_llm_source_items"` recorded in v2 metadata.
+- v2 fallback reason `"missing_context_window"` recorded when `selected_context_tokens=None`.
+- v2 fallback reason `"mode_not_llm_or_auto"` recorded for heuristic mode.
+- v3 blob from remote compact records `"remote_compaction": True` in metadata.
+- Remote compact output contains only the compaction blob (no preserved tail items).
+
+### Safety Notes (Stage 6.10.3)
+
+- Normal `/v1/responses` compaction semantics unchanged. Only the remote path is affected.
+- Anchored summary validation (`_validate_anchored_summary`) unchanged and still required.
+- `reasoning_content` still not accepted as summary content.
+- v2 fallback is preserved. `_validate_anchored_summary` failure still triggers v2.
+- OpenAI masquerade and `model_auto_compact_token_limit` unchanged.
+- No session ledger. No history reconstruction.
+- All Stage 6.10, 6.10.1, and 6.10.2 safety notes remain in force.
