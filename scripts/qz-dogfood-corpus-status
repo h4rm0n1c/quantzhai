@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""
+Show status of corpus mirrors and staged repos.
+"""
+
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from qz_dogfood_corpus_lib import (
+    corpus_root,
+    default_corpus_root,
+    default_work_root,
+    load_repos_config,
+    mirror_path,
+    repo_scratch_status,
+    run_dir,
+    run_id,
+    scratch_path,
+    selected_repo_ids,
+    selected_repos,
+    work_root,
+)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Show corpus and scratch status."
+    )
+    parser.add_argument("--config", default=None, help="Path to repos.json")
+    args = parser.parse_args()
+
+    root = corpus_root()
+    wroot = work_root()
+    rid = run_id()
+
+    print(f"QZ_DOGFOOD_CORPUS_ROOT: {root}")
+    print(f"QZ_DOGFOOD_WORK_ROOT:   {wroot}")
+    print(f"QZ_DOGFOOD_RUN_ID:      {rid}")
+    print(f"QZ_DOGFOOD_KEEP_SCRATCH: {os.environ.get('QZ_DOGFOOD_KEEP_SCRATCH', '(unset)')}")
+    print()
+
+    repos = load_repos_config(args.config)
+    ids = selected_repo_ids()
+    selected = selected_repos(repos, ids)
+
+    print("=== Cache Status ===")
+    for repo in selected:
+        cp = mirror_path(repo)
+        exists = os.path.isdir(cp)
+        size = ""
+        if exists:
+            result = __import__("subprocess").run(
+                ["du", "-sh", cp], capture_output=True, text=True
+            )
+            size = f" ({result.stdout.strip().split()[0]})" if result.returncode == 0 else ""
+        print(f"  {repo['id']:<20} {'EXISTS' if exists else 'MISSING'}{size}")
+
+    print()
+    print("=== Scratch Status ===")
+    any_scratch = False
+    for repo in selected:
+        sp = scratch_path(repo, rid)
+        if not os.path.isdir(sp):
+            continue
+        any_scratch = True
+        status = repo_scratch_status(sp)
+        dirty_label = "DIRTY" if status["dirty"] else "clean"
+        n_status = len(status.get("status_lines", []))
+        print(f"  {repo['id']:<20} {status['head'][:12]}  {dirty_label}" + (f" ({n_status} changes)" if n_status else ""))
+
+    if not any_scratch:
+        print("  (no staged repos for this run id)")
+
+    rdir = run_dir(rid)
+    if os.path.isdir(rdir):
+        print()
+        print(f"Run results dir: {rdir}")
+        for fn in sorted(os.listdir(rdir)):
+            print(f"  {fn}")
+
+
+if __name__ == "__main__":
+    main()

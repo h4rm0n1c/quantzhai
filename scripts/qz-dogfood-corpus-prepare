@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+"""
+Prepare corpus mirrors for compaction dogfood.
+Clones/updates bare mirror git repos, resolves refs, writes prepare results.
+"""
+
+import argparse
+import os
+import sys
+
+# Ensure we can import from scripts/
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from qz_dogfood_corpus_lib import (
+    corpus_root,
+    ensure_dir,
+    load_repos_config,
+    mirror_path,
+    run_dir,
+    run_id,
+    selected_repo_ids,
+    selected_repos,
+    ensure_mirror,
+    update_mirror,
+    resolve_ref,
+    write_json,
+    write_md,
+)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Prepare multi-repo corpus for compaction dogfood."
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to repos.json (default: config/dogfood/repos.json)",
+    )
+    parser.add_argument(
+        "--update",
+        action="store_true",
+        default=True,
+        help="Update existing mirrors (default: true)",
+    )
+    parser.add_argument(
+        "--no-update",
+        action="store_false",
+        dest="update",
+        help="Skip updating existing mirrors",
+    )
+    args = parser.parse_args()
+
+    root = corpus_root()
+    ensure_dir(root)
+    ensure_dir(os.path.join(root, "cache"))
+    ensure_dir(os.path.join(root, "runs"))
+
+    repos = load_repos_config(args.config)
+    ids = selected_repo_ids()
+    selected = selected_repos(repos, ids)
+
+    if not selected:
+        print("No repos selected. Check QZ_DOGFOOD_REPOS or repos.json.")
+        sys.exit(1)
+
+    rid = run_id()
+    rdir = run_dir(rid)
+    ensure_dir(rdir)
+
+    results = []
+    failures = 0
+
+    print(f"\nCorpus root: {root}")
+    print(f"Run ID: {rid}")
+    print(f"Repos: {len(selected)}\n")
+
+    for repo in selected:
+        rid_ = repo["id"]
+        url = repo["url"]
+        ref_config = repo.get("ref", "HEAD")
+        cache_path = mirror_path(repo)
+
+        print(f"[{rid_}]")
+        print(f"  URL:  {url}")
+        print(f"  Ref:  {ref_config}")
+        print(f"  Cache: {cache_path}")
+
+        if os.path.isdir(cache_path) and args.update:
+            ok = update_mirror(repo)
+            created = False
+        else:
+            mp = ensure_mirror(repo)
+            ok = mp is not None
+            created = ok
+
+        if not ok:
+            print(f"  FAILED to prepare mirror for {rid_}")
+            failures += 1
+            results.append({
+                "id": rid_,
+                "url": url,
+                "configured_ref": ref_config,
+                "resolved_ref": None,
+                "resolved_sha": None,
+                "cache_path": cache_path,
+                "mirror_ok": False,
+                "mirror_created": created,
+                "language": repo.get("language", ""),
+                "shape": repo.get("shape", ""),
+                "role": repo.get("role", ""),
+            })
+            continue
+
+        ref_used, sha = resolve_ref(repo)
+        sha_short = sha[:12] if sha else "unknown"
+
+        print(f"  Resolved ref: {ref_used}")
+        print(f"  SHA: {sha_short}")
+        print("  OK")
+
+        results.append({
+            "id": rid_,
+            "url": url,
+            "configured_ref": ref_config,
+            "resolved_ref": ref_used,
+            "resolved_sha": sha,
+            "cache_path": cache_path,
+            "mirror_ok": True,
+            "mirror_created": created,
+            "language": repo.get("language", ""),
+            "shape": repo.get("shape", ""),
+            "role": repo.get("role", ""),
+        })
+
+    summary = "OK" if failures == 0 else f"FAILURES: {failures}"
+    write_json(os.path.join(rdir, "prepare-results.json"), {
+        "run_id": rid,
+        "summary": summary,
+        "repos": results,
+    })
+
+    md_lines = [
+        f"Run ID: {rid}",
+        f"Corpus root: {root}",
+        f"Summary: {summary}",
+        "",
+        "## Repos",
+    ]
+    for r in results:
+        sha_display = r["resolved_sha"][:12] if r["resolved_sha"] else "FAILED"
+        status = "OK" if r["mirror_ok"] else "FAILED"
+        md_lines.append(f"- {r['id']} ({r['role']}): {sha_display} [{status}]")
+    write_md(os.path.join(rdir, "prepare-results.md"), "Prepare Results", md_lines)
+
+    print(f"\nResults: {os.path.join(rdir, 'prepare-results.json')}")
+    print(f"Summary: {summary}")
+
+    if failures:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

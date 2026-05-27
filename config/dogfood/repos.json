@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "description": "Multi-repo corpus for QuantZhai compaction dogfood anti-overfit testing.",
+  "repos": [
+    {
+      "id": "linuxstreamtools",
+      "url": "https://github.com/h4rm0n1c/linuxstreamtools.git",
+      "ref": "main",
+      "cache_name": "linuxstreamtools.git",
+      "scratch_name": "linuxstreamtools",
+      "language": "mixed",
+      "shape": "owned-shell-media-docs",
+      "role": "internal-baseline"
+    },
+    {
+      "id": "quantzhai",
+      "url": "https://github.com/h4rm0n1c/quantzhai.git",
+      "ref": "main",
+      "cache_name": "quantzhai.git",
+      "scratch_name": "quantzhai",
+      "language": "python",
+      "shape": "proxy-tests-docs-config",
+      "role": "target-system"
+    },
+    {
+      "id": "click",
+      "url": "https://github.com/pallets/click.git",
+      "ref": "main",
+      "cache_name": "click.git",
+      "scratch_name": "click",
+      "language": "python",
+      "shape": "library-cli-docs-tests",
+      "role": "external"
+    },
+    {
+      "id": "p-limit",
+      "url": "https://github.com/sindresorhus/p-limit.git",
+      "ref": "main",
+      "cache_name": "p-limit.git",
+      "scratch_name": "p-limit",
+      "language": "javascript",
+      "shape": "npm-package",
+      "role": "external"
+    },
+    {
+      "id": "bubbletea",
+      "url": "https://github.com/charmbracelet/bubbletea.git",
+      "ref": "main",
+      "cache_name": "bubbletea.git",
+      "scratch_name": "bubbletea",
+      "language": "go",
+      "shape": "tui-framework-docs-examples",
+      "role": "external"
+    },
+    {
+      "id": "fd",
+      "url": "https://github.com/sharkdp/fd.git",
+      "ref": "master",
+      "cache_name": "fd.git",
+      "scratch_name": "fd",
+      "language": "rust",
+      "shape": "cli-cargo-completions",
+      "role": "external"
+    },
+    {
+      "id": "fmt",
+      "url": "https://github.com/fmtlib/fmt.git",
+      "ref": "master",
+      "cache_name": "fmt.git",
+      "scratch_name": "fmt",
+      "language": "cpp",
+      "shape": "library-cmake-include-src-tests-docs",
+      "role": "external"
+    },
+    {
+      "id": "stb",
+      "url": "https://github.com/nothings/stb.git",
+      "ref": "master",
+      "cache_name": "stb.git",
+      "scratch_name": "stb",
+      "language": "c",
+      "shape": "single-header-libraries",
+      "role": "external"
+    }
+  ]
+}

@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+"""
+Clean scratch repos for a given run.
+Records dirty status before deletion.
+Respects QZ_DOGFOOD_KEEP_SCRATCH=1 to skip deletion.
+"""
+
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from qz_dogfood_corpus_lib import (
+    corpus_root,
+    ensure_dir,
+    keep_scratch,
+    load_repos_config,
+    repo_scratch_status,
+    run_dir,
+    run_id,
+    safe_remove,
+    scratch_path,
+    selected_repo_ids,
+    selected_repos,
+    work_root,
+    write_json,
+    write_md,
+)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Clean scratch repos for a run."
+    )
+    parser.add_argument("--config", default=None, help="Path to repos.json")
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Clean all runs (requires confirmation)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be deleted without deleting",
+    )
+    args = parser.parse_args()
+
+    if keep_scratch():
+        print("QZ_DOGFOOD_KEEP_SCRATCH=1: cleanup skipped.")
+        sys.exit(0)
+
+    wroot = work_root()
+    rid = os.environ.get("QZ_DOGFOOD_RUN_ID")
+
+    if rid is None:
+        if args.all:
+            print("--all: cleaning all runs (no explicit run id)")
+        else:
+            print(
+                "QZ_DOGFOOD_RUN_ID is not set. Set it or use --all.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    repos = load_repos_config(args.config)
+    ids = selected_repo_ids()
+    selected = selected_repos(repos, ids)
+
+    results = []
+    if args.all:
+        print(f"Cleaning ALL runs under {wroot}")
+        if not args.dry_run and os.path.isdir(wroot):
+            for entry in sorted(os.listdir(wroot)):
+                full = os.path.join(wroot, entry)
+                if os.path.isdir(full):
+                    for repo in selected:
+                        sp = os.path.join(full, repo["scratch_name"])
+                        if os.path.isdir(sp):
+                            status = repo_scratch_status(sp)
+                            results.append({
+                                "run_id": entry,
+                                "id": repo["id"],
+                                "scratch_path": sp,
+                                "head_sha": status["head"],
+                                "dirty": status["dirty"],
+                                "status_lines": status["status_lines"],
+                                "deleted": not args.dry_run,
+                            })
+                            if not args.dry_run:
+                                safe_remove(sp)
+                    if not args.dry_run:
+                        safe_remove(full)
+        if results:
+            rdir = run_dir("cleanup-global")
+            ensure_dir(rdir)
+            write_json(os.path.join(rdir, "cleanup-results.json"), {
+                "action": "clean-all",
+                "dry_run": args.dry_run,
+                "repos": results,
+            })
+            md_lines = ["## Cleaned"]
+            for r in results:
+                md_lines.append(
+                    f"- {r['run_id']}/{r['id']}: {'DIRTY' if r['dirty'] else 'clean'} -> deleted"
+                )
+            write_md(
+                os.path.join(rdir, "cleanup-results.md"),
+                "Global Cleanup Results",
+                md_lines,
+            )
+        print("Done.")
+        return
+
+    rdir = run_dir(rid)
+    print(f"Cleaning run: {rid}")
+    print(f"Work root: {wroot}")
+
+    for repo in selected:
+        sp = scratch_path(repo, rid)
+        if not os.path.isdir(sp):
+            print(f"  {repo['id']}: no scratch dir found")
+            results.append({
+                "id": repo["id"],
+                "scratch_path": sp,
+                "found": False,
+                "dirty": False,
+            })
+            continue
+
+        status = repo_scratch_status(sp)
+        dirty_label = "DIRTY" if status["dirty"] else "clean"
+        n_status = len(status.get("status_lines", []))
+        print(f"  {repo['id']}: {status['head'][:12]} {dirty_label}" + (f" ({n_status} changes)" if n_status else ""))
+
+        if not args.dry_run:
+            safe_remove(sp)
+
+        results.append({
+            "id": repo["id"],
+            "scratch_path": sp,
+            "found": True,
+            "head_sha": status["head"],
+            "dirty": status["dirty"],
+            "status_lines": status["status_lines"],
+            "deleted": not args.dry_run,
+        })
+
+    # Remove the run scratch parent if empty
+    run_scratch_parent = os.path.join(wroot, rid)
+    if not args.dry_run and os.path.isdir(run_scratch_parent):
+        remaining = os.listdir(run_scratch_parent)
+        if not remaining:
+            safe_remove(run_scratch_parent)
+
+    ensure_dir(rdir)
+    write_json(os.path.join(rdir, "cleanup-results.json"), {
+        "run_id": rid,
+        "dry_run": args.dry_run,
+        "repos": results,
+    })
+
+    md_lines = [
+        f"Run ID: {rid}",
+        f"Dry run: {args.dry_run}",
+        "",
+        "## Cleaned Repos",
+    ]
+    for r in results:
+        if not r.get("found"):
+            md_lines.append(f"- {r['id']}: not found, skipped")
+            continue
+        dirty_label = "DIRTY" if r.get("dirty") else "clean"
+        action = "would delete" if args.dry_run else "deleted"
+        sha_short = r.get("head_sha", "?")[:12]
+        md_lines.append(f"- {r['id']} @ {sha_short} ({dirty_label}) -> {action}")
+    write_md(os.path.join(rdir, "cleanup-results.md"), "Cleanup Results", md_lines)
+
+    print(f"\nResults: {os.path.join(rdir, 'cleanup-results.json')}")
+    print("Done.")
+
+
+if __name__ == "__main__":
+    main()

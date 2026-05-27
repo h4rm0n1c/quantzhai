@@ -354,3 +354,25 @@ Do not paste full capture bodies into issue comments.
 ### /tmp/linuxstreamtools Status
 
 Clean — no files were modified, no commits created, no network commands issued.
+
+## Stage 6.4: Multi-Repo Corpus Staging Harness
+
+Date: 2026-05-27
+Status: **Corpus staging harness complete, no multi-repo compaction run yet**
+
+Stage 6.4 built a repeatable multi-repo corpus staging harness to prevent
+overfitting compaction to a single repo shape. See `docs/compaction-corpus-dogfood.md`.
+
+**Delivered**:
+- `config/dogfood/repos.json` — 8 repos (2 internal, 6 external)
+- 4 scripts: `qz-dogfood-corpus-prepare`, `qz-dogfood-corpus-stage`,
+  `qz-dogfood-corpus-status`, `qz-dogfood-corpus-clean`
+- Shared helper: `scripts/qz_dogfood_corpus_lib.py`
+- 47 tests in `tests/test_qz_dogfood_corpus.py`
+- `docs/compaction-corpus-dogfood.md`
+
+**Hard boundary observed**: No compaction runtime changes. No v3 default toggle.
+No proxy module imports. No live compaction run.
+
+**Next**: Stage 6.5 will run actual multi-repo opt-in v3 compaction dogfood
+using staged scratch repos as Codex workspace targets.

@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""
+Stage scratch clones from corpus mirrors for compaction dogfood.
+Clones from local mirrors into disposable scratch dirs with detached SHAs.
+"""
+
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from qz_dogfood_corpus_lib import (
+    corpus_root,
+    ensure_dir,
+    load_repos_config,
+    resolve_ref,
+    run_dir,
+    run_id,
+    scratch_path,
+    selected_repo_ids,
+    selected_repos,
+    stage_repo,
+    work_root,
+    write_json,
+    write_md,
+)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Stage scratch clones from corpus mirrors."
+    )
+    parser.add_argument("--config", default=None, help="Path to repos.json")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing scratch dirs",
+    )
+    args = parser.parse_args()
+
+    wroot = work_root()
+    ensure_dir(wroot)
+
+    repos = load_repos_config(args.config)
+    ids = selected_repo_ids()
+    selected = selected_repos(repos, ids)
+
+    if not selected:
+        print("No repos selected. Check QZ_DOGFOOD_REPOS or repos.json.")
+        sys.exit(1)
+
+    rid = run_id()
+    rdir = run_dir(rid)
+    ensure_dir(rdir)
+
+    results = []
+    failures = 0
+    existing = []
+
+    print(f"\nWork root: {wroot}")
+    print(f"Run ID: {rid}")
+    print(f"Repos: {len(selected)}\n")
+
+    for repo in selected:
+        rid_ = repo["id"]
+        sp = scratch_path(repo, rid)
+
+        print(f"[{rid_}]")
+        print(f"  Scratch: {sp}")
+
+        if os.path.isdir(sp):
+            existing.append(rid_)
+            if not args.force:
+                print(f"  EXISTS (use --force or clean first)")
+                ref_used, sha = resolve_ref(repo)
+                sha_short = sha[:12] if sha else "unknown"
+                results.append({
+                    "id": rid_,
+                    "scratch_path": sp,
+                    "staged": False,
+                    "reason": "exists",
+                    "head_sha": sha_short,
+                })
+                continue
+
+        sp_result = stage_repo(repo, rid, force=args.force)
+        if sp_result is None:
+            print(f"  FAILED to stage")
+            failures += 1
+            results.append({
+                "id": rid_,
+                "scratch_path": sp,
+                "staged": False,
+                "reason": "stage_failed",
+                "head_sha": None,
+            })
+            continue
+
+        ref_used, sha = resolve_ref(repo)
+        sha_short = sha[:12] if sha else "unknown"
+        print(f"  HEAD: {sha_short}")
+        print("  OK")
+
+        results.append({
+            "id": rid_,
+            "scratch_path": sp,
+            "staged": True,
+            "reason": "ok",
+            "head_sha": sha,
+        })
+
+    summary_parts = []
+    total_ok = sum(1 for r in results if r.get("staged"))
+    if existing:
+        summary_parts.append(f"{len(existing)} skipped (already exist)")
+    if failures:
+        summary_parts.append(f"{failures} failed")
+    summary_parts.append(f"{total_ok} staged")
+    summary = "; ".join(summary_parts)
+
+    write_json(os.path.join(rdir, "stage-results.json"), {
+        "run_id": rid,
+        "summary": summary,
+        "repos": results,
+    })
+
+    md_lines = [
+        f"Run ID: {rid}",
+        f"Work root: {wroot}",
+        f"Summary: {summary}",
+        "",
+        "## Staged Repos",
+    ]
+    for r in results:
+        sha_display = r["head_sha"][:12] if r["head_sha"] else "FAILED"
+        status = "STAGED" if r.get("staged") else r.get("reason", "UNKNOWN")
+        md_lines.append(f"- {r['id']}: {sha_display} [{status}]")
+    write_md(os.path.join(rdir, "stage-results.md"), "Stage Results", md_lines)
+
+    print(f"\nResults: {os.path.join(rdir, 'stage-results.json')}")
+    print(f"Summary: {summary}")
+
+    if failures:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
