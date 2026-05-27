@@ -1,0 +1,362 @@
+# Stage 6.8 Compaction Corpus Coverage Evidence
+
+Date: 2026-05-27
+Status: **Stage 6.8 complete — runner improved, full artifacts preserved, 13/14 v3 accepted.**
+
+Commit: see `git log --oneline -1`
+Issue: `#8` — RFC: NetTTS-inspired survival-weighted compaction for QuantZhai
+
+---
+
+## Purpose
+
+Stage 6.8 is a coverage and evidence-hardening pass following the Stage 6.7
+adversarial audit (commit `1076444`).
+
+The audit found that Stage 6.7's shallow corpus was biased by alphabetical file
+traversal (picking dotfiles before Go, Rust, or C++ source), that c_macro was
+never exercised in the corpus, that full v3 decoded summaries were not preserved,
+and that deep runs did not exceed `keep_recent_items=20` uniformly.
+
+Stage 6.8 does not tune the classifier, change the prompt, change compaction
+defaults, or make v3 the default. It improves the corpus runner and evidence
+layer only.
+
+---
+
+## What Changed in the Runner
+
+### Targeted file selection (`REPO_TARGET_PATHS`)
+
+Added `select_targeted_files()` to `scripts/qz_dogfood_corpus_lib.py`.
+
+Each of the 8 corpus repos now has a configured target list:
+- **Exact paths**: `go.mod`, `Cargo.toml`, `CMakeLists.txt`, `stb_image.h`, etc.
+- **Directory targets**: `src/`, `include/fmt/`, `tests/`, `examples/` etc.
+  Expand to up to `DIR_EXPAND_LIMIT=4` files in deterministic sorted order.
+- **Glob patterns**: `*.go`, `*.sh` applied to repo root.
+- **Fallback**: if no targets match (unconfigured or all absent), reverts to
+  original sorted-rglob traversal.
+
+Target files are deduplicated and capped at `TARGETED_FILE_CAP=15`.
+Binary extensions and NUL-byte files are skipped.
+Large files are capped at `FILE_READ_CAP_BYTES=8000` characters.
+
+### New scenarios
+
+Added to `scripts/qz-dogfood-corpus-run`:
+
+| Scenario | max_turns | use_targeted | Purpose |
+|---|---|---|---|
+| `scenario1-repo-map` | 8 | No | Legacy sorted baseline |
+| `scenario2-build-docs` | 8 | No | Legacy sorted baseline |
+| `scenario3-targeted-coverage` | 12 | Yes | Targeted per-repo files |
+| `deep-coverage` | 25 | Yes | Deep with targeted files, >20 turns for survival-hinted runs |
+
+### Artifact preservation
+
+Each scenario result now writes three artifact files in the run directory:
+
+```
+runs/stage68-corpus/
+  dogfood-results.json
+  dogfood-results.md
+  summaries/
+    <repo>-<scenario>.summary.md      ← full decoded v3 summary_text
+  survival-hints/
+    <repo>-<scenario>.hints.json      ← pre-compact hint spans, features, top-10
+  selected-files/
+    <repo>-<scenario>.files.json      ← selected files with path, reason, bytes_read
+```
+
+`summary_text_path`, `survival_hints_path`, `selected_files_path` are recorded
+in each evidence dict.
+
+`v3_summary_preview` (400 chars) is preserved for backward compatibility.
+
+---
+
+## Stage 6.8 Run Coverage
+
+Run ID: `stage68-corpus`
+Proxy: `http://127.0.0.1:18183` (QZ_COMPACTION_PROFILE=coding-llm,
+QZ_LLM_COMPACT_BASE_URL=http://127.0.0.1:18084, QZ_CAPTURE_MODE=full)
+Model: `Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf`
+Date: 2026-05-27
+
+### Targeted-coverage results (8/8 repos)
+
+| Repo | Result | Files | Latency | Hints | c_macro | build_file | lang_cmd | Selected targets |
+|---|---|---|---|---|---|---|---|---|
+| linuxstreamtools | v3 ✓ | 4 | 5561ms | 13 | 0 | 0 | 0 | README.md + docs/ |
+| quantzhai | v3 ✓ | 7 | 5536ms | 80 | 0 | 0 | 0 | proxy/, tests/, config/ |
+| click | v3 ✓ | 12 | 21122ms | 69 | 0 | 1 | 1 | pyproject.toml + src/click/ + tests/ |
+| p-limit | v3 ✓ | 5 | 6975ms | 14 | 0 | 1 | 0 | package.json + index.js + test.js + readme |
+| bubbletea | v3 ✓ | 12 | 29772ms | 57 | 0 | 2 | 0 | go.mod + tea.go + examples/ |
+| fd | v3 ✓ | 9 | 6935ms | 59 | 0 | 2 | 0 | Cargo.toml + Cargo.lock + src/ |
+| fmt | v3 ✓ | 12 | 14885ms | 62 | **1** | 1 | 0 | CMakeLists.txt + include/fmt/ |
+| stb | v3 ✓ | 8 | 6628ms | 44 | **3** | 0 | 0 | README + stb_image.h + stb_truetype.h + stb_sprintf.h |
+
+**All 8/8 targeted-coverage: v3 accepted.**
+
+Notes:
+- All 8/9 canonical headings present in every accepted summary.
+- No reasoning leak, no placeholder leak in any run.
+- All shallow runs had `survival_hint_count=0` because file count < keep_recent_items=20.
+  These runs validate acceptance mechanics and targeted file selection, not
+  survival-hinted summarization quality.
+- `c_macro` confirmed exercised: fmt=1 hit (from `#define FMT_VERSION 120101` in
+  base.h), stb=3 hits (from stb_image.h, stb_truetype.h, stb_sprintf.h headers).
+- `build_file` fired on bubbletea (go.mod, go.sum), fd (Cargo.toml, Cargo.lock),
+  click (pyproject.toml), p-limit (package.json), fmt (CMakeLists.txt).
+- `language_command` fired on click (pytest) and p-limit (npm test reference).
+
+### Deep-coverage results (6 repos)
+
+| Repo | Result | Files | Latency | Pre-compact hints | survival_hint_count | Notes |
+|---|---|---|---|---|---|---|
+| bubbletea | v3 ✓ | 25 | 54373ms | 150 | confirmed >0 (25 turns) | Rich summary with full go.mod deps |
+| fmt | v2 fallback | 18 | 50788ms | 79 | — | C++ template header budget pressure |
+| stb | v3 ✓ | 8 | 6742ms | 44 | 0 | Only 8 target files available; equivalent to shallow |
+| click | v3 ✓ | 15 | 48165ms | 76 | **42** | Regression from Stage 6.7 resolved |
+| quantzhai | v3 ✓ | 7 | 6702ms | 80 | 0 | 7 < 20 turns; sparse summary (no older items to compact) |
+| fd | v3 ✓ | 9 | 5366ms | 59 | 0 | 9 < 20 turns; sparse summary |
+
+**5/6 deep-coverage: v3 accepted. 1/6: v2 fallback (fmt).**
+
+**Total Stage 6.8: 13/14 v3 accepted, 1/14 v2 fallback.**
+
+---
+
+## Key Findings
+
+### c_macro confirmed exercised
+
+Stage 6.7 could not confirm `c_macro` because sorted traversal never reached
+stb headers or fmt C++ headers. Stage 6.8 targeted selection placed
+`stb_image.h`, `stb_truetype.h`, `stb_sprintf.h` as direct targets and
+`include/fmt/base.h` via directory expansion. Both repos exercised c_macro in
+the pre-compaction hints: stb=3 hits, fmt=1 hit. Unit test coverage was already
+present; corpus confirmation now added.
+
+### Go / bubbletea coverage confirmed
+
+Stage 6.7 shallow bubbletea never reached `go.mod` or `.go` source files. Stage
+6.8 targeted selection placed `go.mod`, `go.sum`, `tea.go`, and `examples/`
+explicitly. The deep-coverage run selected 25 files including Go test files
+(`commands_test.go`, `cursed_renderer_test.go`) and clipboard/color/commands
+source files. The accepted v3 summary preserves the full dependency list from
+go.sum, exact module path (`charm.land/bubbletea/v2`), Go version (`1.25.0`),
+test function names, and env vars (`$TERM`, `TERM_PROGRAM`). This is a
+meaningfully richer summary than Stage 6.7 could produce.
+
+### C++ / fmt deep fallback
+
+fmt deep with 18 files fell back to v2. The selected fmt files were heavily
+capped (CMakeLists.txt, base.h, chrono.h, color.h all hit the 8KB cap). With
+18 file turns = 37 total messages and 17 messages to compress, the compaction
+context was still very large (dense C++ template content). Latency was 50s.
+fmt targeted-coverage (12 files) accepted v3 at 15s.
+
+This suggests a file budget interaction for C++ repos with large headers. The
+targeted-coverage scenario is a safer operating point. The deep fallback is not
+evidence of classifier failure — it is evidence of budget pressure from large
+C++ content per file.
+
+### click deep regression resolved
+
+In Stage 6.7, click deep fell back to v2. In Stage 6.8, click deep accepted v3
+with `survival_hint_count=42` (15 files → 31 turns > keep_recent_items=20).
+The change: targeted selection picked `pyproject.toml`, `src/click/` source
+files, and `tests/` in a defined order, rather than alphabetical rglob which
+may have produced a different input shape. Causality between targeted selection
+and v3 acceptance is plausible but not proven — input shape, turn ordering, and
+backend state remain confounders.
+
+### Repos with few targets run shallow regardless of deep scenario
+
+quantzhai (7 targets), fd (9 targets), stb (8 targets) produced sparse summaries
+on deep-coverage because their available target files are fewer than
+`keep_recent_items=20`. With no older items to compact, the compactor has
+nothing to summarize. These runs still confirm v3 acceptance mechanics and
+targeted file selection, but they do not exercise survival-hinted summarization.
+For genuine deep runs on these repos, additional file sources would be needed
+(e.g. more docs/, changelog, or additional source expansions).
+
+### Full summaries now preserved
+
+All accepted v3 summaries are in `runs/stage68-corpus/summaries/`. The bubbletea
+deep summary (the most information-dense result) includes: full module path,
+exact Go version, all direct and indirect dependency SHAs/versions from go.sum,
+test function names, env var names from environ.go, and a "Heavy/high paths"
+section showing hint-influenced path preservation. This level of detail was not
+available in Stage 6.7 (only 400-char previews).
+
+### Pre-compact hint evidence preserved
+
+All pre-compact hint spans, feature counts, and top-10 hint texts are in
+`runs/stage68-corpus/survival-hints/`. These are the hints computed from
+the full input before the compaction request fires, not the subset passed to the
+LLM (which is capped/prioritized by the proxy). Future audits can compare
+pre-compact feature counts against the `survival_hint_count` in the v3 payload
+to measure hint budget utilization.
+
+### Selected-files evidence preserved
+
+All `runs/stage68-corpus/selected-files/*.files.json` record which files were
+selected, by what mechanism (exact/dir/glob/fallback), and how many bytes were
+read. This replaces the Stage 6.7 `files_read` list which lacked reasons.
+
+---
+
+## Multi-Batch Run Note
+
+Stage 6.8 ran in two batches:
+1. All 8 repos: `scenario3-targeted-coverage`
+2. bubbletea, fmt, stb: `deep-coverage`
+3. click, quantzhai, fd: `deep-coverage`
+
+Each batch overwrote `dogfood-results.json` with only that batch's results
+(by runner design). The per-scenario artifact files (summaries/, hints/,
+selected-files/) survived all batches because they are named
+`<repo>-<scenario>.*`. The `dogfood-results.json` reflects only the last batch.
+This is a known limitation. A future improvement would append to a consolidated
+results file across batches.
+
+---
+
+## Runner and Test Changes Summary
+
+### `scripts/qz_dogfood_corpus_lib.py`
+
+Added:
+- `BINARY_EXTENSIONS`, `FILE_READ_CAP_BYTES`, `DIR_EXPAND_LIMIT`, `TARGETED_FILE_CAP`
+- `REPO_TARGET_PATHS` — per-repo targeted file specs (exact, dir/, glob)
+- `is_binary_path()`, `is_readable_text_file()`, `_has_binary_bytes()`
+- `select_targeted_files()` — stdlib-only, no proxy imports
+- `summaries_dir()`, `hints_dir()`, `selected_files_dir()` — artifact subdirectory helpers
+- `scenario_artifact_name()`, `write_text_artifact()`
+
+No existing functions changed. Library remains stdlib-only. No proxy imports.
+
+### `scripts/qz-dogfood-corpus-run`
+
+- Added `scenario3-targeted-coverage` and `deep-coverage` to `SCENARIOS`
+- Each scenario dict includes `max_turns` and `use_targeted`
+- Added `_readable_files_targeted()` using `select_targeted_files()`
+- Preserved legacy `_readable_files_sorted()` for scenario1/scenario2 parity
+- `run_scenario()` now accepts `rdir`, `max_turns`, `use_targeted`
+- Writes full summary artifact to `summaries/<repo>-<scenario>.summary.md`
+- Writes pre-compact hints to `survival-hints/<repo>-<scenario>.hints.json`
+- Writes selected-files to `selected-files/<repo>-<scenario>.files.json`
+- Records `selected_files`, `selected_files_count`, `*_path` fields in evidence
+- Creates artifact subdirs at run start
+
+### `tests/test_qz_dogfood_corpus.py`
+
+Added test classes:
+- `TestBinaryPathDetection` — extension and text-file detection
+- `TestTargetedFileSelection` — 15 required tests (1–14 plus lib safety checks)
+- `TestTargetedFileSelectionEdgeCases` — empty scratch, nonexistent scratch, cap, .git skip
+- `TestArtifactHelpers` — subdirectory paths, artifact naming, write helpers
+- `TestRepoTargetPaths` — all 8 repos configured, stb/bubbletea/fmt/fd key targets present
+- `TestRunnerScenarioStructure` — scenario dict fields, deep-coverage turns and targeted flag
+
+Total tests: 47 (Stage 6.4/6.5 baseline) + 44 new = **91 total. All passing.**
+
+---
+
+## Coverage Verdict
+
+| Category | Stage 6.7 | Stage 6.8 | Change |
+|---|---|---|---|
+| c_macro exercised in corpus | No | Yes (stb=3, fmt=1) | ✓ Fixed |
+| Go source files read | No (sorted missed .go) | Yes (go.mod, tea.go, examples) | ✓ Fixed |
+| C++ source files read | No | Yes (CMakeLists.txt, include/fmt/) | ✓ Fixed |
+| C header files read | No | Yes (stb_image.h, stb_truetype.h) | ✓ Fixed |
+| Full v3 summaries preserved | No (400-char preview only) | Yes | ✓ Fixed |
+| Hint spans/features preserved | Partial (200-char text) | Yes (full JSON, top-10) | ✓ Fixed |
+| Selected file reasons recorded | No | Yes | ✓ Fixed |
+| click deep v3 acceptance | v2 fallback | v3 accepted | ✓ Improved |
+| bubbletea deep coverage | Not run | v3, 25 files, rich summary | ✓ Added |
+| fmt deep | Not run | v2 fallback (C++ budget pressure) | New finding |
+| survival_hint_count > 0 confirmed | No (all 0 in Stage 6.7) | Yes (click=42, bubbletea confirmed) | ✓ Fixed |
+
+---
+
+## Remaining Uncertainty
+
+1. **fmt deep fallback causality**: v2 fallback likely budget pressure from C++
+   template headers at 8KB cap × 18 files. Not proven to be classifier noise or
+   schema failure. A reduced file cap or lower max_turns for C++ may help.
+   Documented; not patched in Stage 6.8.
+
+2. **quantzhai deep sparse summary**: Only 7 target files available. Real deep
+   survival-hinted coverage of quantzhai would need more files in the turn
+   history. The current 7 targets are correct for targeted-coverage; deep-coverage
+   degrades to the same input shape.
+
+3. **stb deep sparse summary**: Only 8 stb target files exist. Same issue as
+   quantzhai. The c_macro feature fires correctly in both shallow and deep, but
+   the compactor has nothing old to summarize.
+
+4. **click deep causality**: The Stage 6.7 v2 fallback and Stage 6.8 v3
+   acceptance are correlated with the targeted vs. sorted file selection change,
+   but other confounders remain (input ordering, turn structure, backend state).
+   Directional evidence is positive.
+
+5. **No false-positive rate measurement**: The corpus does not measure classifier
+   noise (false positives) systematically. No Stage 6.8 result shows obvious
+   noise, but c_macro, code_symbol, and path feature counts are high in some
+   runs. A future adversarial corpus targeting prose-heavy repos or documentation-
+   only repos would give stronger noise bounds.
+
+6. **Multi-batch results.json**: `dogfood-results.json` reflects only the last
+   batch run. Per-scenario artifact files are the authoritative evidence store
+   for Stage 6.8.
+
+---
+
+## Stage 6.9 Recommendation
+
+Stage 6.8 substantially strengthens the evidence base. The remaining work for
+a meaningful Stage 6.9 would be:
+
+1. **fmt deep budget investigation**: Try a lower FILE_READ_CAP_BYTES (e.g. 4000)
+   for the fmt deep scenario, or reduce DIR_EXPAND_LIMIT for C++ include
+   directories. Characterize whether v3 accepts at reduced file size.
+
+2. **Consolidated results across batches**: Update the runner to append to a
+   persistent per-run JSON log rather than overwriting it. This makes multi-batch
+   runs fully reconstructable from `dogfood-results.json` alone.
+
+3. **quantzhai/fd/stb deep extension**: Add broader file targets (CHANGELOG,
+   additional docs/, more test files) to give these repos enough turns for
+   genuine survival-hinted deep runs.
+
+4. **Prose/docs false-positive measurement**: Add a scenario that reads only
+   narrative prose files (not code or build files) and checks that `c_macro`,
+   `qualified_symbol`, and `build_file` do not fire spuriously.
+
+5. **Codex session comparison**: Run a full real Codex session through the
+   proxy, verify that `v3_payload.survival_hint_count > 0` in a live turn, and
+   compare summary quality between v2 and v3 for the same session. This would
+   move from "corpus dogfood" to "live session evidence".
+
+Stage 6.9 is optional: Stage 6.8 already confirms that targeted file selection
+improves coverage, c_macro fires correctly, and click deep regression resolved.
+v3 acceptance rate in the corpus remains high (13/14). There is no immediate
+classifier patch needed.
+
+---
+
+## Safety Notes
+
+- Default compaction remains `heuristic` (localcmp:v2). Unchanged.
+- v3 (`localcmp:v3`) remains opt-in. Unchanged.
+- No proxy routing, lifecycle event, or tool changes made in Stage 6.8.
+- No `response.custom_tool_call_input.done` emitted.
+- `reasoning_content` not accepted as `summary_text`. Unchanged.
+- `localcmp:v3` is the stable wire format name. "Zenkai Boost Compactor" is a
+  codename/nickname only; it does not appear in protocol fields.
+- `QZ_LLM_COMPACT_BASE_URL` pointed at direct backend (18084), not proxy.

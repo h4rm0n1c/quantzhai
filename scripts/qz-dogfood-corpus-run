@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """
-Multi-repo opt-in v3 compaction dogfood runner for Stage 6.5.
+Multi-repo opt-in v3 compaction dogfood runner.
 
-Drives the existing capture proxy directly over HTTP.
+Stage 6.5: initial runner (sorted file traversal, 8 turns, 2 scenarios).
+Stage 6.8: targeted file selection per repo, full artifact preservation,
+           deep scenarios for survival-hinted compaction coverage.
+
+Drives the capture proxy directly over HTTP.
 Builds multi-turn conversations from scratch repo files,
 forces auto-compaction, and collects detailed evidence.
 """
@@ -22,15 +26,22 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from qz_dogfood_corpus_lib import (
     corpus_root,
+    ensure_dir,
+    hints_dir,
     load_repos_config,
     run_dir,
     run_id,
+    scenario_artifact_name,
     scratch_path,
+    select_targeted_files,
+    selected_files_dir,
     selected_repo_ids,
     selected_repos,
+    summaries_dir,
     work_root,
     write_json,
     write_md,
+    write_text_artifact,
 )
 
 # --------------------------------------------------------------------------
@@ -72,10 +83,14 @@ def _msg(role, text):
     return {"type": "message", "role": role, "content": [part]}
 
 
-def _readable_files(scratch: str, max_turns: int = 10) -> Tuple[List[dict], List[str]]:
-    """Read real files from scratch repo to build multi-turn history."""
+def _readable_files_sorted(scratch: str, max_turns: int = 10) -> Tuple[List[dict], List[dict]]:
+    """Legacy sorted file traversal — for scenario1 and scenario2 baseline parity.
+
+    Returns (turns, selected_file_dicts).
+    selected_file_dicts have: rel_path, reason, bytes_read.
+    """
     turns = []
-    files_read = []
+    files_info = []
     src = Path(scratch)
     count = 0
     for path in sorted(src.rglob("*")):
@@ -93,11 +108,47 @@ def _readable_files(scratch: str, max_turns: int = 10) -> Tuple[List[dict], List
         preview = text[:200].replace("\n", " ").strip()
         turns.append(_msg("user", f"Read this file — {rel}:\n\n{text[:1200]}"))
         turns.append(_msg("assistant", f"I've read {rel}. It contains: {preview!r}..."))
-        files_read.append(str(rel))
+        files_info.append({
+            "rel_path": str(rel),
+            "reason": "fallback:sorted",
+            "bytes_read": min(len(text), 1200),
+        })
         count += 1
         if count >= max_turns:
             break
-    return turns, files_read
+    return turns, files_info
+
+
+def _readable_files_targeted(repo_id: str, scratch: str, max_turns: int = 15) -> Tuple[List[dict], List[dict]]:
+    """Targeted file selection — Stage 6.8.
+
+    Uses per-repo REPO_TARGET_PATHS from qz_dogfood_corpus_lib.
+    Falls back to sorted traversal if no targets match.
+
+    Returns (turns, selected_file_dicts).
+    selected_file_dicts have: rel_path, reason, bytes_read, capped, path.
+    """
+    file_records = select_targeted_files(
+        repo_id=repo_id,
+        scratch=scratch,
+        max_files=max_turns,
+    )
+    turns = []
+    files_info = []
+    for rec in file_records:
+        rel = rec["rel_path"]
+        text = rec["text"]
+        preview = text[:200].replace("\n", " ").strip()
+        turns.append(_msg("user", f"Read this file — {rel}:\n\n{text[:1200]}"))
+        turns.append(_msg("assistant", f"I've read {rel}. It contains: {preview!r}..."))
+        files_info.append({
+            "path": rec["path"],
+            "rel_path": rel,
+            "reason": rec["reason"],
+            "bytes_read": rec["bytes_read"],
+            "capped": rec["capped"],
+        })
+    return turns, files_info
 
 
 def _extract_compaction(body: dict) -> Optional[dict]:
@@ -119,7 +170,7 @@ def _decode_v3_blob(blob: str) -> Optional[dict]:
 # --------------------------------------------------------------------------
 
 def _collect_survival_hints(text: str) -> dict:
-    """Score text and return survival hint summary."""
+    """Score text and return full survival hint evidence."""
     try:
         from proxy.qz_survival_weight import score_text, format_survival_hints as fmt
     except ImportError:
@@ -130,10 +181,21 @@ def _collect_survival_hints(text: str) -> dict:
     for s in spans:
         for f in s.features:
             features[f] = features.get(f, 0) + 1
+    # Include top-10 hint spans for structured audit
+    top_spans = []
+    for s in spans[:10]:
+        top_spans.append({
+            "text": s.text,
+            "weight": s.weight,
+            "features": list(s.features),
+        })
     return {
         "spans_count": len(spans),
         "features": features,
-        "hint_text": hint_text[:200] if hint_text else "",
+        "top_spans": top_spans,
+        "hint_text_full": hint_text or "",
+        # Legacy preview field kept for backwards compat
+        "hint_text": (hint_text or "")[:200],
     }
 
 
@@ -158,20 +220,71 @@ def _check_headings(v3_payload: dict) -> list:
 
 
 # --------------------------------------------------------------------------
-# Main scenarios
+# Scenario definitions
 # --------------------------------------------------------------------------
 
-SCENARIOS = {
+# Each scenario dict:
+#   label        – human-readable name
+#   prompt       – final user prompt
+#   max_turns    – max files to include as history turns
+#   use_targeted – True: use targeted file selection; False: sorted traversal
+#   deep         – True: deep scenario (>20 turns → survival_hint_count > 0)
+
+SCENARIOS: Dict[str, Dict[str, Any]] = {
     "scenario1-repo-map": {
-        "label": "Repo map inspection",
-        "prompt": "Based on what you've read, produce a repo map with important top-level paths, likely purpose, and exact commands you would use. Do not modify files.",
+        "label": "Repo map inspection (sorted traversal)",
+        "max_turns": 8,
+        "use_targeted": False,
+        "deep": False,
+        "prompt": (
+            "Based on what you've read, produce a repo map with important "
+            "top-level paths, likely purpose, and exact commands you would use. "
+            "Do not modify files."
+        ),
     },
     "scenario2-build-docs": {
-        "label": "Build/docs inspection",
-        "prompt": "Based on what you've read, focus on docs, tests, build files, scripts, and package metadata. Preserve exact paths and commands. Identify safe next actions. Do not install dependencies, do not run network commands, do not modify files, and do not create commits.",
+        "label": "Build/docs inspection (sorted traversal)",
+        "max_turns": 8,
+        "use_targeted": False,
+        "deep": False,
+        "prompt": (
+            "Based on what you've read, focus on docs, tests, build files, "
+            "scripts, and package metadata. Preserve exact paths and commands. "
+            "Identify safe next actions. Do not install dependencies, do not run "
+            "network commands, do not modify files, and do not create commits."
+        ),
+    },
+    "scenario3-targeted-coverage": {
+        "label": "Targeted coverage inspection",
+        "max_turns": 12,
+        "use_targeted": True,
+        "deep": False,
+        "prompt": (
+            "Based on the files you've read, summarise the repo purpose, key "
+            "source files and their roles, build or package metadata, and any "
+            "test or docs layout. Identify language-specific patterns. "
+            "Preserve exact file paths. Do not modify files."
+        ),
+    },
+    "deep-coverage": {
+        "label": "Deep targeted coverage (survival-hinted)",
+        "max_turns": 25,
+        "use_targeted": True,
+        "deep": True,
+        "prompt": (
+            "You have read many files from this repository. Produce a thorough "
+            "understanding of the codebase: its purpose, architecture, key "
+            "technical constraints, build system, test setup, and any notable "
+            "patterns or unusual choices. Highlight the most important files and "
+            "paths. Do not modify files, do not run network commands."
+        ),
     },
 }
 
+
+# --------------------------------------------------------------------------
+# Main scenario runner
+# --------------------------------------------------------------------------
 
 def run_scenario(
     repo_id: str,
@@ -181,6 +294,9 @@ def run_scenario(
     scratch: str,
     proxy_url: str,
     model: str,
+    max_turns: int = 10,
+    use_targeted: bool = True,
+    rdir: Optional[str] = None,
 ) -> dict:
     """Run one dogfood scenario and return evidence dict."""
     evidence: Dict[str, Any] = {
@@ -188,6 +304,8 @@ def run_scenario(
         "scenario": scenario_id,
         "scenario_label": scenario_label,
         "scratch": scratch,
+        "use_targeted": use_targeted,
+        "max_turns": max_turns,
         "result": None,
         "blob_prefix": None,
         "v3_payload": None,
@@ -197,6 +315,12 @@ def run_scenario(
         "placeholder_leak": None,
         "survival_hints": None,
         "v3_summary_preview": None,
+        # Stage 6.8 additions
+        "selected_files": None,
+        "selected_files_count": None,
+        "summary_text_path": None,
+        "survival_hints_path": None,
+        "selected_files_path": None,
         "error": None,
         "capture_dir": None,
         "scratch_clean": None,
@@ -226,12 +350,21 @@ def run_scenario(
         evidence["initial_head"] = "unknown"
         evidence["initial_clean"] = False
 
-    # 3. Build multi-turn history from real files
-    history, files_read = _readable_files(scratch, max_turns=8)
+    # 3. Build multi-turn history from repo files
+    if use_targeted:
+        history, files_info = _readable_files_targeted(repo_id, scratch, max_turns=max_turns)
+    else:
+        history, files_info = _readable_files_sorted(scratch, max_turns=max_turns)
+
     if not history:
         evidence["error"] = "no readable files"
         return evidence
-    evidence["files_read"] = files_read[:10]
+
+    # Record selected files in evidence
+    evidence["selected_files"] = files_info
+    evidence["selected_files_count"] = len(files_info)
+    # Legacy field for backward compat
+    evidence["files_read"] = [f["rel_path"] for f in files_info[:10]]
     evidence["turn_count"] = len(history) // 2
 
     # 4. Add the scenario prompt
@@ -241,21 +374,54 @@ def run_scenario(
     all_text = "\n".join(
         m["content"][0]["text"] for m in history if m.get("content")
     )
-    evidence["survival_hints"] = _collect_survival_hints(all_text)
+    hints_data = _collect_survival_hints(all_text)
+    evidence["survival_hints"] = hints_data
 
-    # 6. POST with compact_threshold=1 to force compaction
+    # 6. Write selected-files artifact
+    if rdir:
+        artifact_name_base = scenario_artifact_name(repo_id, scenario_id, "")
+        sf_dir = selected_files_dir(rdir)
+        sf_path = os.path.join(sf_dir, f"{artifact_name_base}.files.json")
+        try:
+            ensure_dir(sf_dir)
+            write_json(sf_path, {
+                "repo_id": repo_id,
+                "scenario_id": scenario_id,
+                "use_targeted": use_targeted,
+                "files": files_info,
+            })
+            evidence["selected_files_path"] = sf_path
+        except Exception as e:
+            evidence["selected_files_path"] = f"error:{e}"
+
+        # Write survival hints artifact (pre-compact hints)
+        h_dir = hints_dir(rdir)
+        h_path = os.path.join(h_dir, f"{artifact_name_base}.hints.json")
+        try:
+            ensure_dir(h_dir)
+            write_json(h_path, {
+                "repo_id": repo_id,
+                "scenario_id": scenario_id,
+                "phase": "pre_compact",
+                "hints": hints_data,
+            })
+            evidence["survival_hints_path"] = h_path
+        except Exception as e:
+            evidence["survival_hints_path"] = f"error:{e}"
+
+    # 7. POST with compact_threshold=1 to force compaction
     start = time.time()
     status, body = _post_json(responses_url, {
         "model": model,
         "stream": False,
         "input": history,
         "context_management": {"compact_threshold": 1},
-    }, timeout=180)
+    }, timeout=240)
     elapsed_ms = int((time.time() - start) * 1000)
     evidence["latency_ms"] = elapsed_ms
     evidence["http_status"] = status
 
-    # 7. Parse response
+    # 8. Parse response
     if status != 200:
         evidence["error"] = f"HTTP {status}: {str(body)[:200]}"
         return evidence
@@ -288,6 +454,18 @@ def run_scenario(
                         "{{NEW_CONVERSATION}}" in summary_text
                         or "{{PREVIOUS_ANCHORED_SUMMARY}}" in summary_text
                     )
+
+                    # Stage 6.8: write full summary artifact
+                    if rdir and summary_text:
+                        artifact_name_base = scenario_artifact_name(repo_id, scenario_id, "")
+                        s_dir = summaries_dir(rdir)
+                        s_path = os.path.join(s_dir, f"{artifact_name_base}.summary.md")
+                        try:
+                            ensure_dir(s_dir)
+                            write_text_artifact(s_path, summary_text)
+                            evidence["summary_text_path"] = s_path
+                        except Exception as e:
+                            evidence["summary_text_path"] = f"error:{e}"
                 else:
                     evidence["result"] = "v3_decode_failed"
             elif blob.startswith("localcmp:v2:"):
@@ -335,15 +513,16 @@ def _check_scratch_clean(scratch: str) -> Optional[bool]:
 # --------------------------------------------------------------------------
 
 def main():
+    all_scenario_keys = list(SCENARIOS.keys())
     parser = argparse.ArgumentParser(
-        description="Run multi-repo compaction dogfood (Stage 6.5)."
+        description="Run multi-repo compaction dogfood (Stage 6.5/6.8)."
     )
     parser.add_argument("--proxy-url", default="http://127.0.0.1:18183")
     parser.add_argument("--config", default=None, help="Path to repos.json")
     parser.add_argument(
         "--scenario",
         default="all",
-        choices=["all", "scenario1-repo-map", "scenario2-build-docs"],
+        choices=["all"] + all_scenario_keys,
         help="Which scenario(s) to run",
     )
     parser.add_argument(
@@ -391,11 +570,15 @@ def main():
     rdir = run_dir(rid)
     os.makedirs(rdir, exist_ok=True)
 
+    # Create Stage 6.8 artifact subdirectories upfront
+    for subdir in [summaries_dir(rdir), hints_dir(rdir), selected_files_dir(rdir)]:
+        os.makedirs(subdir, exist_ok=True)
+
     wroot = work_root()
 
     # Determine which scenarios to run
     if args.scenario == "all":
-        scenario_keys = list(SCENARIOS.keys())
+        scenario_keys = all_scenario_keys
     else:
         scenario_keys = [args.scenario]
 
@@ -407,17 +590,16 @@ def main():
         shape = repo.get("shape", "?")
         scratch = scratch_path(repo, rid)
 
-        # Re-derive from --dry-run via env
         if args.dry_run:
-            if args.repo:
-                scratch_from_config = os.path.join(wroot, rid, repo["scratch_name"])
-            else:
-                scratch_from_config = os.path.join(wroot, rid, repo["scratch_name"])
+            scratch_from_config = os.path.join(wroot, rid, repo["scratch_name"])
             print(f"\n[DRY RUN] {repo_id} ({lang}, {shape})")
             print(f"  Scratch: {scratch_from_config}")
             for sk in scenario_keys:
                 s = SCENARIOS[sk]
-                print(f"  Scenario: {sk} — {s['label']}")
+                print(
+                    f"  Scenario: {sk} — {s['label']} "
+                    f"(max_turns={s['max_turns']}, targeted={s['use_targeted']})"
+                )
             continue
 
         for sk in scenario_keys:
@@ -426,6 +608,7 @@ def main():
             print(f"[{repo_id}] Scenario: {sk} — {s['label']}")
             print(f"  Language: {lang}  Shape: {shape}")
             print(f"  Scratch: {scratch}")
+            print(f"  Max turns: {s['max_turns']}  Targeted: {s['use_targeted']}")
             print(f"  Prompt: {s['prompt'][:80]}...")
 
             ev = run_scenario(
@@ -436,6 +619,9 @@ def main():
                 scratch=scratch,
                 proxy_url=proxy_url,
                 model=model,
+                max_turns=s["max_turns"],
+                use_targeted=s["use_targeted"],
+                rdir=rdir,
             )
 
             # Print summary
@@ -443,9 +629,16 @@ def main():
             latency = ev.get("latency_ms", "?")
             hint_count = ev.get("survival_hints", {}).get("spans_count", "?")
             v3_preview = ev.get("v3_summary_preview", "")
+            sf_count = ev.get("selected_files_count", "?")
 
             print(f"  Result: {result}")
             print(f"  Latency: {latency}ms")
+            print(f"  Files selected: {sf_count}")
+            if ev.get("selected_files"):
+                for sf in ev["selected_files"][:5]:
+                    print(f"    {sf['rel_path']} ({sf['reason']})")
+                if len(ev["selected_files"]) > 5:
+                    print(f"    ... and {len(ev['selected_files'])-5} more")
             if ev.get("survival_hints"):
                 feats = ev["survival_hints"].get("features", {})
                 print(f"  Survival hints: {hint_count} spans, features: {dict(sorted(feats.items()))}")
@@ -456,6 +649,10 @@ def main():
                 print(f"  Reasoning leak: {ev['reasoning_leak']}")
             if ev.get("placeholder_leak") is not None:
                 print(f"  Placeholder leak: {ev['placeholder_leak']}")
+            if ev.get("summary_text_path"):
+                print(f"  Summary artifact: {ev['summary_text_path']}")
+            if ev.get("survival_hints_path"):
+                print(f"  Hints artifact: {ev['survival_hints_path']}")
             if ev.get("error"):
                 print(f"  ERROR: {ev['error']}")
 
@@ -484,7 +681,6 @@ def main():
             "",
             "## Results",
         ]
-        summaries = []
         v3_ok = 0
         v2_fb = 0
         failures = 0
@@ -500,9 +696,14 @@ def main():
             hint = ev.get("survival_hints", {}).get("spans_count", "?")
             feats = ev.get("survival_hints", {}).get("features", {})
             feats_str = ", ".join(f"{k}={v}" for k, v in sorted(feats.items()))
+            sf_count = ev.get("selected_files_count", "?")
+            summary_path = ev.get("summary_text_path", "")
             md_lines.append(
-                f"- {ev['repo_id']}/{ev['scenario']}: {r} ({lat}ms, hints={hint}, {feats_str})"
+                f"- {ev['repo_id']}/{ev['scenario']}: {r} ({lat}ms, "
+                f"files={sf_count}, hints={hint}, {feats_str})"
             )
+            if summary_path and not summary_path.startswith("error:"):
+                md_lines.append(f"  - summary: {summary_path}")
         md_lines.append("")
         md_lines.append(f"v3 accepted: {v3_ok}, v2 fallback: {v2_fb}, failures: {failures}")
 
@@ -510,6 +711,9 @@ def main():
 
         print(f"\n{'='*70}")
         print(f"Results: {os.path.join(rdir, 'dogfood-results.json')}")
+        print(f"Summaries: {summaries_dir(rdir)}/")
+        print(f"Hints: {hints_dir(rdir)}/")
+        print(f"Selected files: {selected_files_dir(rdir)}/")
         print(f"v3 accepted: {v3_ok}, v2 fallback: {v2_fb}, failures: {failures}")
         print(f"Total scenarios: {len(all_results)}")
 

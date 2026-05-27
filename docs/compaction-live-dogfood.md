@@ -1,8 +1,8 @@
 # Compaction Live Dogfood
 
 Date: 2026-05-27
-Status: **Stage 6.1 live tuning complete, v3 accepted live**
-Base commits tested: `f72150a`, `8c0ddac`
+Status: **Stage 6.8 complete — corpus runner improved, targeted file selection, 13/14 v3 accepted.**
+Base commits tested: `f72150a`, `8c0ddac`. Stage 6.8 corpus: see `docs/compaction-stage68-coverage.md`.
 
 This note records the first live opt-in LLM compaction run and the Stage 6.1
 request-shape tuning for issue #8. It is a runbook and evidence summary, not a

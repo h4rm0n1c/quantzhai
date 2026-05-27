@@ -237,5 +237,276 @@ def safe_remove(path: str) -> None:
         print(f"Failed to remove {path}: {e}", file=sys.stderr)
 
 
+# ---------------------------------------------------------------------------
+# Stage 6.8: targeted file selection helpers
+# Standard library only. No proxy imports.
+# ---------------------------------------------------------------------------
+
+# Extensions that indicate binary content — skip these entirely.
+BINARY_EXTENSIONS: frozenset = frozenset([
+    ".pyc", ".pyo", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico",
+    ".svg", ".woff", ".woff2", ".ttf", ".eot", ".otf",
+    ".mp3", ".mp4", ".ogg", ".wav", ".avi", ".mov",
+    ".bin", ".so", ".a", ".o", ".class", ".jar",
+    ".zip", ".tar", ".gz", ".xz", ".bz2", ".7z", ".rar",
+    ".pdf", ".exe", ".dll", ".dylib",
+    ".db", ".sqlite", ".sqlite3",
+])
+
+# Max bytes read from any single file in targeted selection.
+FILE_READ_CAP_BYTES: int = 8000
+
+# Max files expanded from one directory target.
+DIR_EXPAND_LIMIT: int = 4
+
+# Total max files selected (targeted + fallback combined).
+TARGETED_FILE_CAP: int = 15
+
+# Per-repo targeted paths.
+# Each entry: (path_spec, category_label)
+# path_spec rules:
+#   ends with "/"   → directory; expand recursively up to DIR_EXPAND_LIMIT files
+#   contains "*"    → glob pattern applied to repo root only
+#   otherwise       → exact relative path from repo root
+REPO_TARGET_PATHS: Dict[str, List[Tuple[str, str]]] = {
+    "linuxstreamtools": [
+        ("README.md",   "docs"),
+        ("docs/",       "docs"),
+        ("scripts/",    "scripts"),
+        ("*.sh",        "scripts"),
+    ],
+    "quantzhai": [
+        ("proxy/qz_responses.py",           "source"),
+        ("proxy/qz_survival_weight.py",     "source"),
+        ("tests/test_qz_survival_weight.py","tests"),
+        ("tests/test_qz_llm_compaction.py", "tests"),
+        ("config/default/compaction.json",  "config"),
+        ("config/dogfood/repos.json",       "config"),
+        ("docs/compaction-live-dogfood.md", "docs"),
+    ],
+    "click": [
+        ("pyproject.toml",  "build"),
+        ("src/click/",      "source"),
+        ("tests/",          "tests"),
+        ("docs/",           "docs"),
+        ("README.rst",      "docs"),
+        ("README.md",       "docs"),
+        ("CHANGES.rst",     "changelog"),
+    ],
+    "p-limit": [
+        ("package.json",    "build"),
+        ("index.js",        "source"),
+        ("index.d.ts",      "source"),
+        ("test.js",         "tests"),
+        ("readme.md",       "docs"),
+        ("README.md",       "docs"),
+    ],
+    "bubbletea": [
+        ("go.mod",          "build"),
+        ("go.sum",          "build"),
+        ("tea.go",          "source"),
+        ("examples/",       "examples"),
+        ("README.md",       "docs"),
+        ("*.go",            "source"),
+    ],
+    "fd": [
+        ("Cargo.toml",      "build"),
+        ("Cargo.lock",      "build"),
+        ("src/",            "source"),
+        ("tests/",          "tests"),
+        ("completions/",    "completions"),
+        ("README.md",       "docs"),
+    ],
+    "fmt": [
+        ("CMakeLists.txt",  "build"),
+        ("include/fmt/",    "source"),
+        ("src/",            "source"),
+        ("test/",           "tests"),
+        ("doc/",            "docs"),
+        ("README.rst",      "docs"),
+        ("README.md",       "docs"),
+    ],
+    "stb": [
+        ("README.md",           "docs"),
+        ("stb_image.h",         "source"),
+        ("stb_truetype.h",      "source"),
+        ("stb_sprintf.h",       "source"),
+        ("docs/",               "docs"),
+    ],
+}
+
+
+def is_binary_path(path: "Path") -> bool:
+    """Return True if the file extension indicates binary content."""
+    return Path(path).suffix.lower() in BINARY_EXTENSIONS
+
+
+def is_readable_text_file(path: "Path") -> bool:
+    """Return True if the path looks like a readable text file.
+
+    Checks extension and ignores .git internals.
+    Does NOT read the file; use _has_binary_bytes for content-based detection.
+    """
+    p = Path(path)
+    if ".git" in p.parts:
+        return False
+    if is_binary_path(p):
+        return False
+    return True
+
+
+def _has_binary_bytes(raw: bytes, check_bytes: int = 512) -> bool:
+    """Return True if raw bytes contain a NUL, suggesting binary content."""
+    return b"\x00" in raw[:check_bytes]
+
+
+def select_targeted_files(
+    repo_id: str,
+    scratch: str,
+    max_files: int = TARGETED_FILE_CAP,
+    max_bytes_per_file: int = FILE_READ_CAP_BYTES,
+    dir_expand_limit: int = DIR_EXPAND_LIMIT,
+) -> List[Dict[str, Any]]:
+    """Select files for a corpus scenario using per-repo targeted paths.
+
+    Returns a list of dicts:
+        path         – absolute path string
+        rel_path     – relative to scratch root
+        reason       – "exact:<category>", "dir:<category>",
+                       "glob:<category>", or "fallback:sorted"
+        bytes_read   – characters read (may be capped)
+        capped       – True if file was truncated to max_bytes_per_file
+        text         – file text (possibly truncated)
+
+    File selection strategy:
+    1. Try configured REPO_TARGET_PATHS for the repo.
+    2. For each target spec, expand files in deterministic sorted order.
+    3. Skip .git paths, binary-extension files, and NUL-byte content.
+    4. Deduplicate: each file path appears at most once.
+    5. Stop when max_files reached.
+    6. Fallback: if nothing was selected (no targets configured or all
+       missing), use generic sorted rglob traversal.
+
+    Standard library only. No proxy imports.
+    """
+    import fnmatch
+
+    src = Path(scratch)
+    if not src.is_dir():
+        return []
+
+    targets = REPO_TARGET_PATHS.get(repo_id, [])
+    selected: List[Tuple["Path", str]] = []  # (abs_path, reason)
+    seen: set = set()
+
+    def _add(f: "Path", reason: str) -> bool:
+        """Attempt to add file; return True if added."""
+        key = str(f.resolve())
+        if key in seen:
+            return False
+        if not is_readable_text_file(f):
+            return False
+        seen.add(key)
+        selected.append((f, reason))
+        return True
+
+    if targets:
+        for spec, category in targets:
+            if len(selected) >= max_files:
+                break
+            if spec.endswith("/"):
+                # Directory: sorted recursive expansion up to dir_expand_limit
+                d = src / spec.rstrip("/")
+                if d.is_dir():
+                    count = 0
+                    for f in sorted(d.rglob("*")):
+                        if len(selected) >= max_files:
+                            break
+                        if not f.is_file():
+                            continue
+                        if _add(f, f"dir:{category}"):
+                            count += 1
+                            if count >= dir_expand_limit:
+                                break
+            elif "*" in spec:
+                # Glob: match files in repo root only (deterministic)
+                for f in sorted(src.iterdir()):
+                    if len(selected) >= max_files:
+                        break
+                    if f.is_file() and fnmatch.fnmatch(f.name, spec):
+                        _add(f, f"glob:{category}")
+            else:
+                # Exact relative path
+                f = src / spec
+                if f.is_file():
+                    _add(f, f"exact:{category}")
+
+    # Fallback: generic sorted traversal if nothing was selected
+    if not selected:
+        for f in sorted(src.rglob("*")):
+            if len(selected) >= max_files:
+                break
+            if not f.is_file():
+                continue
+            if _add(f, "fallback:sorted"):
+                pass  # continue until cap
+
+    # Read file contents
+    result: List[Dict[str, Any]] = []
+    for f, reason in selected:
+        try:
+            raw = f.read_bytes()
+        except Exception:
+            continue
+        if _has_binary_bytes(raw):
+            continue
+        text = raw.decode("utf-8", errors="replace")
+        capped = False
+        if len(text) > max_bytes_per_file:
+            text = text[:max_bytes_per_file]
+            capped = True
+        result.append({
+            "path": str(f),
+            "rel_path": str(f.relative_to(src)),
+            "reason": reason,
+            "bytes_read": len(text),
+            "capped": capped,
+            "text": text,
+        })
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Stage 6.8: artifact subdirectory helpers
+# ---------------------------------------------------------------------------
+
+def summaries_dir(rdir: str) -> str:
+    """Return path to summaries/ subdir under run_dir."""
+    return os.path.join(rdir, "summaries")
+
+
+def hints_dir(rdir: str) -> str:
+    """Return path to survival-hints/ subdir under run_dir."""
+    return os.path.join(rdir, "survival-hints")
+
+
+def selected_files_dir(rdir: str) -> str:
+    """Return path to selected-files/ subdir under run_dir."""
+    return os.path.join(rdir, "selected-files")
+
+
+def scenario_artifact_name(repo_id: str, scenario_id: str, suffix: str) -> str:
+    """Return artifact filename for a repo/scenario pair, e.g. click-deep-coverage.summary.md"""
+    return f"{repo_id}-{scenario_id}{suffix}"
+
+
+def write_text_artifact(path: str, content: str) -> None:
+    """Write a text artifact file, creating parent directories as needed."""
+    ensure_dir(os.path.dirname(path))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
 if __name__ == "__main__":
     print("Shared helpers module - not a standalone script.")

@@ -1,7 +1,7 @@
 # Compaction Audit and Strategy
 
 Date: 2026-05-27
-Status: **Stage 6.7** — post-tuning corpus rerun complete (16/16 shallow v3, 2/3 deep v3, classifier tuning verified); default remains heuristic v2.
+Status: **Stage 6.8** — coverage/runner hardening complete (8/8 targeted-coverage v3, 5/6 deep v3, c_macro confirmed, full artifacts preserved); default remains heuristic v2. See `docs/compaction-stage68-coverage.md`.
 
 ---
 

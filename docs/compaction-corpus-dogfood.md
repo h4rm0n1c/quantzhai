@@ -1,7 +1,7 @@
 # Compaction Corpus Dogfood (Stage 6.4)
 
 Date: 2026-05-27
-Status: **Stage 6.7 — post-tuning corpus rerun complete. 16/16 shallow v3, 2/3 deep v3, classifier tuning verified.**
+Status: **Stage 6.8 — runner improved, targeted file selection, full artifacts preserved. 8/8 targeted-coverage v3, 5/6 deep v3. See `docs/compaction-stage68-coverage.md`.**
 
 ## Purpose
 
@@ -202,14 +202,31 @@ Results: `~/turboquant/qz-dogfood-corpus/runs/stage65-corpus/dogfood-results.jso
 
 Classifier tuning verified. Results in `docs/compaction-live-dogfood.md::Stage 6.7`.
 
+**Summary** (audit-corrected — see `docs/compaction-stage67-audit.md`):
+- 16/16 shallow v3 accepted (schema/acceptance validation; all had survival_hint_count=0).
+- 2/3 deep v3 accepted (quantzhai and fd); click deep regressed to v2 fallback.
+- New features confirmed fired in corpus text (build_file, language_command, qualified_symbol, repo_dir).
+- c_macro not exercised (sorted traversal never reached stb headers or fmt C++ files).
+- Full decoded summaries not preserved; only 400-char previews.
+- Stage 6.8 runner-coverage audit justified; see conclusions in Stage 6.8.
+
+## Stage 6.8: Runner Coverage and Evidence Hardening (2026-05-27)
+
+Coverage and evidence-hardening pass. See `docs/compaction-stage68-coverage.md` for full details.
+
 **Summary**:
-- 16/16 shallow v3 accepted (identical to Stage 6.5).
-- 2/3 deep v3 accepted (quantzhai improved from v2 fallback to v3 accepted; fd 24× more hints).
-- New features confirmed: `build_file`, `language_command`, `qualified_symbol`, `repo_dir` appear where expected (p-limit, quantzhai, fd deep).
-- Click deep regressed to v2 fallback (more hints → larger input → timeout). Fallback path works.
-- No classifier noise increase. No regression in v3 acceptance rate.
+- Added per-repo targeted file selection (REPO_TARGET_PATHS) to `scripts/qz_dogfood_corpus_lib.py`.
+- Added `scenario3-targeted-coverage` (targeted, 12 turns) and `deep-coverage` (targeted, 25 turns).
+- Added full artifact preservation: summaries/, survival-hints/, selected-files/ per scenario.
+- **8/8 targeted-coverage: v3 accepted.** All 8 repos confirmed.
+- **5/6 deep-coverage: v3 accepted.** fmt deep v2 fallback (C++ header budget pressure).
+- **Total Stage 6.8: 13/14 v3 accepted.**
+- c_macro confirmed exercised: stb=3 hits, fmt=1 hit.
+- Go coverage confirmed: bubbletea deep selected go.mod, tea.go, examples/ → rich summary.
+- C++ coverage confirmed: fmt CMakeLists.txt + include/fmt/ headers.
+- click deep regression (Stage 6.7 v2 fallback) resolved: Stage 6.8 v3 accepted, survival_hint_count=42.
 - All scratch repos clean.
-- Stage 6.8 not needed for classifier tuning.
+- Default compaction unchanged (heuristic v2). v3 remains opt-in.
 
 ## Tests
 
@@ -217,9 +234,11 @@ Classifier tuning verified. Results in `docs/compaction-live-dogfood.md::Stage 6
 tests/test_qz_dogfood_corpus.py
 ```
 
-47 tests covering: config loading, selection, env knobs, mirror create/update,
-ref resolution, scratch staging, status detection, dirty recording, cleanup,
-script structure, import safety, and write helpers.
+91 tests (Stage 6.4/6.5 baseline 47 + Stage 6.8 additions 44) covering:
+config loading, selection, env knobs, mirror create/update, ref resolution,
+scratch staging, status detection, dirty recording, cleanup, script structure,
+import safety, write helpers, binary path detection, targeted file selection,
+artifact helpers, REPO_TARGET_PATHS config, runner scenario structure.
 
 Run:
 
