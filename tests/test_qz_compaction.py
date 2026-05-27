@@ -28,6 +28,12 @@ def _make_v1_blob(payload):
     return "localcmp:v1:" + encoded
 
 
+def _make_v3_blob(payload):
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return "localcmp:v3:" + encoded
+
+
 def _make_compaction_item(blob):
     return {
         "type": "compaction",
@@ -61,6 +67,9 @@ class EncodeDecodeTests(unittest.TestCase):
 
     def test_decode_returns_none_for_corrupt_blob(self):
         self.assertIsNone(_decode_local_compaction_blob("localcmp:v2:!!!notbase64!!!"))
+
+    def test_decode_returns_none_for_corrupt_v3_blob(self):
+        self.assertIsNone(_decode_local_compaction_blob("localcmp:v3:!!!notbase64!!!"))
 
     def test_decode_returns_none_for_non_dict_payload(self):
         raw = json.dumps(["list", "not", "dict"]).encode("utf-8")
@@ -111,6 +120,25 @@ class ExpandCompactionItemsTests(unittest.TestCase):
         expanded = _expand_local_compaction_items(items)
         types = [i.get("type") for i in expanded]
         self.assertNotIn("compaction", types)
+
+    def test_v3_compaction_expands(self):
+        payload = {"version": 3, "summary_text": "v3 anchored summary", "depth": 1}
+        blob = _make_v3_blob(payload)
+        items = [_make_compaction_item(blob)]
+        expanded = _expand_local_compaction_items(items)
+        self.assertEqual(expanded[0]["type"], "message")
+        self.assertIn("v3 anchored summary", expanded[0]["content"][0]["text"])
+
+    def test_local_compaction_without_summary_text_passes_through(self):
+        payload = {"version": 3, "metadata": {"engine": "anchored-llm"}}
+        item = _make_compaction_item(_make_v3_blob(payload))
+        expanded = _expand_local_compaction_items([item])
+        self.assertEqual(expanded, [item])
+
+    def test_malformed_local_compaction_passes_through(self):
+        item = _make_compaction_item("localcmp:v3:!!!notbase64!!!")
+        expanded = _expand_local_compaction_items([item])
+        self.assertEqual(expanded, [item])
 
     def test_native_compaction_passthrough(self):
         native = {

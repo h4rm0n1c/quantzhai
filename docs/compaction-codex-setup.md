@@ -107,6 +107,13 @@ prompt files. Prefer `experimental_compact_prompt_file` for QuantZhai sessions.
   literal text in the prompt. Codex appends the full session context from its
   conversation state.
 
+- **LLM compaction backend URL must be direct.** If using the opt-in
+  QuantZhai `localcmp:v3:` path, `QZ_LLM_COMPACT_BASE_URL` must point at the
+  actual model backend, not the QuantZhai proxy or its `/v1` endpoint. For
+  example, use `QZ_LLM_COMPACT_BASE_URL=http://127.0.0.1:8080` only when that
+  is the direct llama.cpp/OpenAI-compatible backend. Do not set it to
+  `CODEX_OSS_BASE_URL` or `http://127.0.0.1:18180`.
+
 ---
 
 ## Suggested Manual Smoke Test

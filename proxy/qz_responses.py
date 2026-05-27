@@ -4,6 +4,7 @@ import json
 import os
 import re
 import time
+import urllib.parse
 import urllib.request
 import urllib.error
 from typing import Optional, List, Dict, Any
@@ -55,14 +56,54 @@ except ImportError:
     from qz_tool_request import normalize_tools_for_llamacpp
     from qz_survival_weight import score_text, format_survival_hints
 
+_VALID_COMPACTION_MODES = frozenset({"heuristic", "llm", "auto"})
+_DEFAULT_LLM_TIMEOUT_SEC = 30
+_DEFAULT_LLM_MAX_INPUT_CHARS = 100000
+_DEFAULT_LLM_MAX_OUTPUT_TOKENS = 1536
+_REQUIRED_ANCHORED_HEADINGS = (
+    "## Goal",
+    "## Active Constraints & Guardrails",
+    "## Current Status",
+    "## Key Decisions",
+    "## Evidence Boundaries",
+    "## Technical State",
+    "## Next Actions",
+)
+
+
+def _coerce_positive_int(value, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (ValueError, TypeError):
+        return default
+    if parsed <= 0:
+        return default
+    return parsed
+
+
 def _get_env_int(key: str, default: int) -> int:
     try:
         val = os.environ.get(key)
         if val is None:
             return default
-        return int(val)
+        return _coerce_positive_int(val, default)
     except (ValueError, TypeError):
         return default
+
+
+def _normalize_compaction_mode(mode) -> str:
+    if not isinstance(mode, str):
+        return "heuristic"
+    normalized = mode.strip().lower()
+    return normalized if normalized in _VALID_COMPACTION_MODES else "heuristic"
+
+
+def _current_compaction_mode() -> str:
+    return _normalize_compaction_mode(COMPACTION_CONFIG.get("mode"))
+
+
+def _positive_config_int(key: str, default: int) -> int:
+    return _coerce_positive_int(COMPACTION_CONFIG.get(key), default)
 
 # Item types that are proxy-generated and should be excluded from old-history
 # compaction summaries and microcompaction replays. Proxy-local tool types are
@@ -88,12 +129,12 @@ COMPACTION_CONFIG = {
     "target_output_tokens": _get_env_int("QZ_COMPACT_TARGET_TOKENS", 56000),
     
     # Stage 4 LLM Compaction (opt-in)
-    "mode": os.environ.get("QZCOMPACT", "heuristic").lower(), # heuristic | llm | auto
+    "mode": _normalize_compaction_mode(os.environ.get("QZCOMPACT", "heuristic")), # heuristic | llm | auto
     "llm_base_url": os.environ.get("QZ_LLM_COMPACT_BASE_URL", "").rstrip("/"),
     "llm_model": os.environ.get("QZ_LLM_COMPACT_MODEL", ""),
-    "llm_timeout_sec": _get_env_int("QZ_LLM_COMPACT_TIMEOUT_SEC", 30),
-    "llm_max_input_chars": _get_env_int("QZ_LLM_COMPACT_MAX_INPUT_CHARS", 100000),
-    "llm_max_output_tokens": _get_env_int("QZ_LLM_COMPACT_MAX_OUTPUT_TOKENS", 1536),
+    "llm_timeout_sec": _get_env_int("QZ_LLM_COMPACT_TIMEOUT_SEC", _DEFAULT_LLM_TIMEOUT_SEC),
+    "llm_max_input_chars": _get_env_int("QZ_LLM_COMPACT_MAX_INPUT_CHARS", _DEFAULT_LLM_MAX_INPUT_CHARS),
+    "llm_max_output_tokens": _get_env_int("QZ_LLM_COMPACT_MAX_OUTPUT_TOKENS", _DEFAULT_LLM_MAX_OUTPUT_TOKENS),
     "prompt_file": os.environ.get("QZ_LLM_COMPACT_PROMPT_FILE") or os.path.join(os.environ.get("QZ_ROOT", ""), "config/default/prompts/compact-v0.md"),
 }
 
@@ -339,6 +380,8 @@ def _expand_local_compaction_items(items):
                         "user",
                         summary_text,
                     ))
+                    continue
+                expanded.append(item)
                 continue
         expanded.append(item)
     return expanded
@@ -366,23 +409,29 @@ def _build_survival_weighted_compaction_prompt(previous_summary: str, new_items:
         # Fallback to a minimal built-in template if file is missing
         template = "Previous anchored summary, if any:\n{{PREVIOUS_ANCHORED_SUMMARY}}\n\nNew conversation/items to compact:\n{{NEW_CONVERSATION}}"
 
-    # Format new conversation items for the prompt
+    # Format new conversation items for the prompt.
     new_convo_text = []
     for item in new_items:
         text = _item_text(item)
         if text:
             new_convo_text.append(text)
     
-    convo_body = "\n".join(new_convo_text)
+    raw_convo_body = "\n".join(new_convo_text)
     
-    # Generate and inject survival hints
-    spans = score_text(convo_body)
+    # Generate hints from the full normalized body, then cap the raw body while
+    # keeping those exact-atom hints at the end of the prompt.
+    spans = score_text(raw_convo_body)
     hints = format_survival_hints(spans, max_spans=40)
+    max_input_chars = _positive_config_int("llm_max_input_chars", _DEFAULT_LLM_MAX_INPUT_CHARS)
     if hints:
-        convo_body += f"\n\n### Preservation Hints (Survival Weighting)\n{hints}"
-
-    # Truncate input to avoid context overflow
-    convo_body = _truncate(convo_body, COMPACTION_CONFIG["llm_max_input_chars"])
+        hint_block = f"\n\n### Preservation Hints (Survival Weighting)\n{hints}"
+        if len(hint_block) >= max_input_chars:
+            convo_body = _truncate(hint_block, max_input_chars)
+        else:
+            body_limit = max_input_chars - len(hint_block)
+            convo_body = _truncate(raw_convo_body, body_limit) + hint_block
+    else:
+        convo_body = _truncate(raw_convo_body, max_input_chars)
 
     prompt = template.replace("{{PREVIOUS_ANCHORED_SUMMARY}}", previous_summary or "(none)")
     prompt = prompt.replace("{{NEW_CONVERSATION}}", convo_body)
@@ -392,28 +441,116 @@ def _build_survival_weighted_compaction_prompt(previous_summary: str, new_items:
 
 def _validate_anchored_summary(text: str) -> bool:
     """Verify that the LLM output contains required canonical headings."""
-    if not text or len(text.strip()) < 50:
+    if not isinstance(text, str):
         return False
-    
-    # Required top-level headings from Stage 1 schema
-    required = ["## Goal", "## Current Status", "## Key Decisions", "## Technical State", "## Next Actions"]
-    found_all = all(h in text for h in required)
+
+    stripped = text.strip()
+    if not stripped or len(stripped) < 80:
+        return False
+
+    if stripped.startswith("```") and stripped.endswith("```"):
+        return False
     
     # Reject if it's just repeating the template placeholders
-    if "{{NEW_CONVERSATION}}" in text or "{{PREVIOUS_ANCHORED_SUMMARY}}" in text:
+    if "{{NEW_CONVERSATION}}" in stripped or "{{PREVIOUS_ANCHORED_SUMMARY}}" in stripped:
         return False
-        
-    return found_all
+
+    return all(
+        re.search(rf"(?m)^{re.escape(heading)}\s*$", stripped)
+        for heading in _REQUIRED_ANCHORED_HEADINGS
+    )
+
+
+def _strip_openai_v1_path(path: str) -> str:
+    stripped = (path or "").rstrip("/")
+    if stripped.endswith("/v1"):
+        stripped = stripped[:-3].rstrip("/")
+    return stripped
+
+
+def _canonical_url_identity(raw_url: str):
+    if not isinstance(raw_url, str) or not raw_url.strip():
+        return None
+    try:
+        parsed = urllib.parse.urlparse(raw_url.strip().rstrip("/"))
+        if not parsed.scheme or not parsed.hostname:
+            return None
+        scheme = parsed.scheme.lower()
+        hostname = parsed.hostname.lower()
+        port = parsed.port
+    except ValueError:
+        return None
+
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    return (scheme, hostname, port, _strip_openai_v1_path(parsed.path))
+
+
+def _is_probably_quantzhai_proxy_url(base_url: str, env=None) -> bool:
+    """Conservatively reject known QuantZhai proxy URLs to avoid recursion."""
+    env = os.environ if env is None else env
+    base_identity = _canonical_url_identity(base_url)
+    if not base_identity:
+        return False
+
+    candidate_urls = [
+        env.get("CODEX_OSS_BASE_URL", ""),
+        env.get("QZ_PROXY_BASE_URL", ""),
+    ]
+    proxy_host = env.get("QZ_PROXY_HOST", "")
+    proxy_port = env.get("QZ_PROXY_PORT", "")
+    if proxy_host and proxy_port:
+        candidate_urls.append(f"http://{proxy_host}:{proxy_port}")
+
+    for candidate_url in candidate_urls:
+        candidate_identity = _canonical_url_identity(candidate_url)
+        if candidate_identity and base_identity == candidate_identity:
+            return True
+    return False
+
+
+def _llm_chat_completions_url(base_url: str) -> str:
+    base = (base_url or "").rstrip("/")
+    parsed = urllib.parse.urlparse(base)
+    if _strip_openai_v1_path(parsed.path) != (parsed.path or "").rstrip("/"):
+        return f"{base}/chat/completions"
+    return f"{base}/v1/chat/completions"
+
+
+def _extract_llm_compactor_content(data) -> Optional[str]:
+    if not isinstance(data, dict):
+        return None
+
+    choices = data.get("choices")
+    if isinstance(choices, list) and choices:
+        first = choices[0]
+        if isinstance(first, dict):
+            message = first.get("message")
+            if isinstance(message, dict) and isinstance(message.get("content"), str):
+                content = message["content"].strip()
+                return content or None
+            if isinstance(first.get("text"), str):
+                content = first["text"].strip()
+                return content or None
+
+    for key in ("content", "response"):
+        if isinstance(data.get(key), str):
+            content = data[key].strip()
+            return content or None
+
+    return None
 
 
 def _call_llm_compactor(prompt: str) -> Optional[str]:
     """Execute a direct call to the local LLM backend for compaction."""
-    base_url = COMPACTION_CONFIG["llm_base_url"]
+    base_url = str(COMPACTION_CONFIG.get("llm_base_url", "") or "").rstrip("/")
     if not base_url:
+        return None
+    if _is_probably_quantzhai_proxy_url(base_url):
         return None
 
     # Use OpenAI-compatible chat completions endpoint
-    url = f"{base_url}/v1/chat/completions"
+    url = _llm_chat_completions_url(base_url)
     payload = {
         "model": COMPACTION_CONFIG["llm_model"] or "local-model",
         "messages": [
@@ -421,7 +558,7 @@ def _call_llm_compactor(prompt: str) -> Optional[str]:
             {"role": "user", "content": prompt}
         ],
         "temperature": 0,
-        "max_tokens": COMPACTION_CONFIG["llm_max_output_tokens"],
+        "max_tokens": _positive_config_int("llm_max_output_tokens", _DEFAULT_LLM_MAX_OUTPUT_TOKENS),
         "stream": False
     }
 
@@ -432,11 +569,10 @@ def _call_llm_compactor(prompt: str) -> Optional[str]:
             headers={"Content-Type": "application/json"},
             method="POST"
         )
-        timeout = COMPACTION_CONFIG["llm_timeout_sec"]
+        timeout = _positive_config_int("llm_timeout_sec", _DEFAULT_LLM_TIMEOUT_SEC)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            content = data["choices"][0]["message"]["content"]
-            return content.strip()
+            return _extract_llm_compactor_content(data)
     except Exception:
         # Fallback to heuristic is handled by caller
         return None
@@ -444,7 +580,7 @@ def _call_llm_compactor(prompt: str) -> Optional[str]:
 
 def _build_local_compaction_response_v3(body: dict, working_items: list, existing_depth: int) -> Optional[dict]:
     """Attempt LLM-generated anchored compaction (v3)."""
-    if COMPACTION_CONFIG["mode"] not in ("llm", "auto"):
+    if _current_compaction_mode() not in ("llm", "auto"):
         return None
     if not COMPACTION_CONFIG["llm_base_url"]:
         return None
@@ -579,7 +715,7 @@ def _build_local_compaction_response(body: dict) -> dict:
                 existing_depth = max(existing_depth, int(payload.get("depth", 1)))
 
     # Stage 4: Opt-in LLM-generated anchored compaction
-    if COMPACTION_CONFIG["mode"] in ("llm", "auto") and COMPACTION_CONFIG["llm_base_url"]:
+    if _current_compaction_mode() in ("llm", "auto") and COMPACTION_CONFIG["llm_base_url"]:
         v3_resp = _build_local_compaction_response_v3(body, working_items, existing_depth)
         if v3_resp:
             return v3_resp

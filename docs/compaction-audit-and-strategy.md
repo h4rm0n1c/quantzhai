@@ -1,7 +1,7 @@
 # Compaction Audit and Strategy
 
 Date: 2026-05-27
-Status: **Stage 4** — LLM-generated anchored compaction (localcmp:v3) implemented.
+Status: **Stage 4.1** — LLM anchored compaction fallback path hardened.
 
 ---
 
@@ -773,6 +773,49 @@ QZCOMPACT=auto → use LLM if available, heuristic fallback
 
 ---
 
+#### Stage 4.1: LLM compaction hardening pass
+
+**Goal**: Harden the Stage 4 opt-in runtime path without changing the basic
+contract.
+
+**Status**: Complete as of 2026-05-27.
+
+**Contract preserved**:
+- `QZCOMPACT` unset/default remains heuristic `localcmp:v2:`.
+- `localcmp:v3:` remains opt-in through `QZCOMPACT=llm` or `QZCOMPACT=auto`
+  plus `QZ_LLM_COMPACT_BASE_URL`.
+- LLM errors, timeouts, invalid JSON, missing backend URLs, invalid summaries,
+  and rejected recursive proxy URLs fall back to v2.
+- The LLM compactor calls a direct backend URL only. It must not point at the
+  QuantZhai proxy or its `/v1` endpoint.
+- No profile-level config was added in this pass.
+- No native tool routing, request permission handling, lifecycle event shapes,
+  or BrainCaseDB/memory behavior changed.
+
+**Hardened areas**:
+- Env/config parsing: invalid `QZCOMPACT` disables v3; invalid, zero, or
+  negative integer env/config values fall back to safe defaults.
+- Backend response parsing: supports `choices[0].message.content`,
+  `choices[0].text`, top-level `content`, and top-level `response`; non-string
+  content returns `None`.
+- Recursive proxy guard: rejects URLs matching `CODEX_OSS_BASE_URL`,
+  `QZ_PROXY_BASE_URL`, or explicit `QZ_PROXY_HOST:QZ_PROXY_PORT` identities,
+  with `/v1` normalized for comparison.
+- Prompt construction: caps raw conversation input while keeping survival
+  hints after the cap, so exact atoms remain visible even when tool output is
+  large.
+- Validation: rejects empty/short output, full markdown-fence wrappers, raw
+  template placeholders, and summaries missing canonical top-level headings.
+- Blob safety: malformed `localcmp:v3:` blobs and v3 payloads without
+  `summary_text` do not crash expansion and are passed through safely.
+
+**Validation**:
+- Unit tests use mocked network calls only.
+- Live smoke is optional and was skipped for this hardening slice unless a
+  clearly safe direct backend is configured outside the QuantZhai proxy.
+
+---
+
 #### Stage 6: Dogfood/live capture and threshold tuning
 
 **Goal**: Run live qz-codex sessions with LLM compaction enabled, capture
@@ -1019,7 +1062,8 @@ Stage 2               — complete       — deterministic survival-weight score
 Stage 3               — complete       — offline fixture/eval harness
 Stage 3.1             — complete       — hardened metrics scoreboard
 Stage 4               — complete       — LLM-generated v3 blobs
-Stage 5               — next available  — proxy integration, QZCOMPACT config
+Stage 4.1             — complete       — harden v3 fallback/config/safety path
+Stage 5               — next available  — profile-level compaction config
 Stage 6               — after Stage 5   — dogfood/live tuning
 ```
 
