@@ -1,7 +1,7 @@
-# Stage 6.8 Compaction Corpus Coverage Evidence
+# Stage 6.8/6.9/6.10 Compaction Corpus Coverage Evidence
 
-Date: 2026-05-27
-Status: **Stage 6.9 complete — context-aligned budget resolver landed. See Stage 6.9 section below. Stage 6.8: runner improved, full artifacts preserved, 13/14 v3 accepted.**
+Date: 2026-05-28
+Status: **Stage 6.10 complete — v3/Zenkai promoted to default (auto mode), 16.5% autocompact-buffer reserve policy, model_auto_compact_token_limit emitted, 4/4 v3 deep-coverage accepted. See Stage 6.10 section below. Stage 6.9: context-aligned budget resolver. Stage 6.8: runner improved, 13/14 v3 accepted.**
 
 Commit: see `git log --oneline -1`
 Issue: `#8` — RFC: NetTTS-inspired survival-weighted compaction for QuantZhai
@@ -400,13 +400,111 @@ priority now that budget alignment is resolved:
 
 ---
 
-## Safety Notes
+## Safety Notes (Stage 6.8/6.9)
 
-- Default compaction remains `heuristic` (localcmp:v2). Unchanged.
-- v3 (`localcmp:v3`) remains opt-in. Unchanged.
+- Default compaction remains `heuristic` (localcmp:v2). Unchanged (as of Stage 6.9).
+- v3 (`localcmp:v3`) remains opt-in via `coding-llm` profile. Unchanged (as of Stage 6.9).
 - No proxy routing, lifecycle event, or tool changes made in Stage 6.8.
 - No `response.custom_tool_call_input.done` emitted.
 - `reasoning_content` not accepted as `summary_text`. Unchanged.
 - `localcmp:v3` is the stable wire format name. "Zenkai Boost Compactor" is a
   codename/nickname only; it does not appear in protocol fields.
 - `QZ_LLM_COMPACT_BASE_URL` pointed at direct backend (18084), not proxy.
+
+---
+
+## Stage 6.10: v3 Default and Autocompact Buffer Policy
+
+Date: 2026-05-28
+Commit: pending (this run)
+
+### Changes
+
+1. **v3/Zenkai promoted to default** — `config/default/compaction.json` default
+   profile changed from `mode=heuristic` to `mode=auto`. v3 LLM compaction is now
+   the normal path. v2 heuristic is fallback (no backend URL, timeout, invalid summary).
+
+2. **Explicit heuristic escape hatch** — new `heuristic` profile in compaction.json.
+   Users can force v2 via `QZCOMPACT=heuristic` or `QZ_COMPACTION_PROFILE=heuristic`.
+
+3. **Budget policy changed** — replaced 90% direct budget with 16.5% autocompact-buffer
+   reserve (`context_window_autocompact_buffer_v1`):
+   - `autocompact_buffer_tokens = floor(context_window_tokens * 0.165)`
+   - `safe_compaction_budget_tokens = context_window_tokens - autocompact_buffer_tokens`
+   - For 256k (262144): `autocompact_buffer_tokens=43253`, `safe_budget=218891`
+   - Old 90% policy gave 235929; new policy gives 218891 (slightly tighter, matches Claude Code's buffer).
+
+4. **Request compact_threshold handling** — `context_management.compact_threshold`
+   from the request body is now classified:
+   - `< 1024`: `force_compaction_only` — not used as budget cap (dogfood runner uses `compact_threshold=1`).
+   - `<= safe budget`: `budget_cap` — used to cap effective budget.
+   - `> safe budget`: `capped_to_safe_budget` — ignored for budget (safe budget used).
+   - invalid/negative: `ignored_invalid`.
+
+5. **Codex-side threshold** — `model_auto_compact_token_limit` now emitted in generated
+   Codex model catalog. For 256k: 218891. Aligned with proxy-side safe budget.
+
+6. **Metadata enriched** — v3 blob `metadata.budget` now records: `policy`,
+   `autocompact_buffer_ratio`, `autocompact_buffer_tokens`, `safe_compaction_budget_tokens`,
+   `client_compact_threshold_tokens`, `client_compact_threshold_role`,
+   `client_compact_threshold_used`, `effective_compaction_budget_tokens`.
+
+### Live Dogfood Results (Stage 6.10)
+
+Run ID: `run-stage610-005331`
+Proxy: `http://127.0.0.1:18183`
+Backend: `http://127.0.0.1:18084` (llama-server -c 262144)
+Model: `Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf`
+Scenario: `deep-coverage` (max_turns=25, targeted=True)
+
+| Repo     | Result       | Latency   | Files | Hints | Headings | Leak |
+|----------|--------------|-----------|-------|-------|----------|------|
+| fmt      | v3_accepted  | 50494ms   | 18    | 79    | 9/9      | none |
+| click    | v3_accepted  | 46261ms   | 15    | 76    | 9/9      | none |
+| quantzhai| v3_accepted  | 7211ms    | 7     | 80    | 9/9      | none |
+| fd       | v3_accepted  | 5444ms    | 9     | 59    | 9/9      | none |
+
+**4/4 v3 accepted. 0 v2 fallbacks. 0 failures.**
+
+Note: These results used the proxy running Stage 6.9 code (18183 was started before Stage 6.10
+landed). The new budget policy activates in the NEXT proxy restart. The v3 path itself is
+confirmed working with 4/4 acceptance.
+
+### Test Coverage (Stage 6.10)
+
+Added 20 new tests:
+
+- Budget resolver policy: `context_window_autocompact_buffer_v1` named correctly.
+- Old `context_window_90` policy removed.
+- `autocompact_buffer_ratio=0.165`, `autocompact_buffer_tokens=43253`, `safe_compaction_budget_tokens=218891` for 256k.
+- `compact_threshold=1` → `force_compaction_only`, budget unchanged.
+- `compact_threshold=500` (below 1024) → `force_compaction_only`.
+- `compact_threshold=150000` → `budget_cap`, effective=150000.
+- `compact_threshold=250000` (above safe) → `capped_to_safe_budget`, effective=218891.
+- Negative/zero/string threshold → `ignored_invalid`.
+- Raw threshold value recorded regardless of role.
+- v3 metadata blob includes all new budget fields.
+- 128k budget: `autocompact_buffer=21626`, `safe=109446`.
+- Shipped compaction.json default mode is `auto`.
+- Shipped `heuristic` profile exists.
+- `QZCOMPACT=heuristic` forces v2 over auto.
+- `QZ_COMPACTION_PROFILE=heuristic` selects heuristic.
+- `model_auto_compact_token_limit` emitted for 256k (218891) and 128k (109446).
+- No `model_auto_compact_token_limit` for missing context.
+- `model_auto_compact_token_limit` ≠ `truncation_policy.limit`.
+
+### Safety Notes (Stage 6.10)
+
+- v3 is now the default path (mode=auto). v2 is fallback. No v2 regression.
+- Explicit heuristic profile exists as escape hatch.
+- No proxy routing, lifecycle event, or tool changes.
+- No `response.custom_tool_call_input.done` emitted.
+- `reasoning_content` not accepted as `summary_text`. Unchanged.
+- `localcmp:v3` wire format name unchanged. "Zenkai Boost Compactor" is codename only.
+- `QZ_LLM_COMPACT_BASE_URL` must point at direct backend (18084), not proxy.
+- No new context-window source invented: uses `selected_model.context_window` from catalog.
+- Env overrides (`QZ_LLM_COMPACT_TIMEOUT_SEC`, `QZ_LLM_COMPACT_MAX_INPUT_CHARS`, `QZ_LLM_COMPACT_MAX_OUTPUT_TOKENS`) still win over derived values.
+- `localcmp:v1/v2/v3` decode compatibility unchanged.
+- `model_auto_compact_token_limit` emitted only; Codex inline auto-compaction and
+  QuantZhai proxy-side compaction may both activate if both thresholds are crossed.
+  Known interaction, documented and left for future validation.

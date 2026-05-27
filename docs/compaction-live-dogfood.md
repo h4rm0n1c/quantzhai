@@ -1,8 +1,8 @@
 # Compaction Live Dogfood
 
-Date: 2026-05-27
-Status: **Stage 6.9 complete — context-aligned budget resolver landed. Stage 6.8: corpus runner improved, targeted file selection, 13/14 v3 accepted.**
-Base commits tested: `f72150a`, `8c0ddac`. Stage 6.8 corpus: see `docs/compaction-stage68-coverage.md`. Stage 6.9: see `docs/compaction-stage68-coverage.md#stage-69-context-aligned-compaction-budget`.
+Date: 2026-05-28
+Status: **Stage 6.10 complete — v3/Zenkai promoted to default (auto mode). Stage 6.9: context-aligned budget resolver. Stage 6.8: corpus runner improved, targeted file selection, 13/14 v3 accepted.**
+Base commits tested: `f72150a`, `8c0ddac`. Stage 6.8 corpus: see `docs/compaction-stage68-coverage.md`. Stage 6.9: see `docs/compaction-stage68-coverage.md#stage-69-context-aligned-compaction-budget`. Stage 6.10: see `docs/compaction-stage68-coverage.md#stage-610-v3-default-and-autocompact-buffer-policy`.
 
 This note records the first live opt-in LLM compaction run and the Stage 6.1
 request-shape tuning for issue #8. It is a runbook and evidence summary, not a

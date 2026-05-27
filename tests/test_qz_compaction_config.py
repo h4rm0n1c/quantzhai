@@ -365,6 +365,56 @@ class TestCompactionConfig(unittest.TestCase):
 
         self.assertEqual(decoded["summary_text"], "v3 summary")
 
+    # ── Stage 6.10: default promotion and heuristic escape hatch ─────────────
+
+    def test_shipped_default_profile_mode_is_auto(self):
+        """The shipped config/default/compaction.json must have mode=auto as default."""
+        import os as _os
+        repo_root = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
+        shipped = _os.path.join(repo_root, "config", "default", "compaction.json")
+        with open(shipped, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        default_profile = data.get("profiles", {}).get("default", {})
+        self.assertEqual(default_profile.get("mode"), "auto",
+                         "config/default/compaction.json default profile mode must be 'auto'")
+
+    def test_shipped_heuristic_profile_exists(self):
+        """The shipped config must have an explicit 'heuristic' profile for the escape hatch."""
+        import os as _os
+        repo_root = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
+        shipped = _os.path.join(repo_root, "config", "default", "compaction.json")
+        with open(shipped, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        heuristic_profile = data.get("profiles", {}).get("heuristic", {})
+        self.assertEqual(heuristic_profile.get("mode"), "heuristic",
+                         "config/default/compaction.json must have a 'heuristic' profile")
+
+    def test_auto_mode_config_selects_auto(self):
+        """mode=auto in profile config is read correctly."""
+        cfg = self._config({"profiles": {"default": {"mode": "auto"}}})
+        self.assertEqual(cfg["mode"], "auto")
+
+    def test_qzcompact_heuristic_forces_v2_over_auto(self):
+        """QZCOMPACT=heuristic env override forces heuristic mode."""
+        cfg = self._config(
+            {"profiles": {"default": {"mode": "auto"}}},
+            env={"QZCOMPACT": "heuristic"},
+        )
+        self.assertEqual(cfg["mode"], "heuristic")
+
+    def test_heuristic_profile_name_selects_heuristic(self):
+        """QZ_COMPACTION_PROFILE=heuristic selects the heuristic escape hatch profile."""
+        cfg = self._config(
+            {
+                "profiles": {
+                    "default": {"mode": "auto"},
+                    "heuristic": {"mode": "heuristic"},
+                }
+            },
+            profile_name="heuristic",
+        )
+        self.assertEqual(cfg["mode"], "heuristic")
+
 
 if __name__ == "__main__":
     unittest.main()

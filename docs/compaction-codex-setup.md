@@ -1,7 +1,7 @@
 # Compaction Codex Setup
 
-Date: 2026-05-27
-Status: **Stage 6** — prompt file, profile config, and direct-backend dogfood runbook.
+Date: 2026-05-28
+Status: **Stage 6.10** — v3/Zenkai promoted to default (mode=auto). 16.5% autocompact-buffer reserve policy. `model_auto_compact_token_limit` now emitted in Codex catalog at safe budget. v2 heuristic preserved as fallback. Stage 6 initial prompt/profile/dogfood runbook below.
 Codex audit SHA: `46f30d02828bd4c52827e5f0482a6f2a982cce5b`
 
 ---
@@ -141,16 +141,18 @@ not configurable.
   QuantZhai's `localcmp:v2:` heuristic compaction in `proxy/qz_responses.py`.
   Both paths are separate.
 
-- **This does not enable auto-compaction by itself.** Auto-compaction still
-  requires `model_auto_compact_token_limit` to be set in the Qwen model catalog,
-  or the user to invoke `/compact` manually in the Codex TUI.
+- **`model_auto_compact_token_limit` is now emitted (Stage 6.10).** The generated
+  Codex model catalog now includes `model_auto_compact_token_limit` set to
+  `safe_compaction_budget_tokens` (= `context_window - floor(context_window * 0.165)`).
+  For a 256k context this is 218891 tokens. This enables Codex inline auto-compaction
+  at the same threshold as QuantZhai's proxy-side budget policy.
 
-- **Do not enable multiple compaction paths blindly.** If both
-  `model_auto_compact_token_limit` (Codex auto-compact) and
-  `context_management.compact_threshold` (QuantZhai proxy auto-compact) are
-  active simultaneously, both paths may fire with different thresholds. This
-  interaction has not been tested. Leave `model_auto_compact_token_limit` unset
-  until Stage 1 prompt is validated and Stage 3 eval confirms no regression.
+- **Both compaction paths may be active simultaneously.** `model_auto_compact_token_limit`
+  (Codex inline auto-compaction using Codex's built-in compaction prompt) and
+  `context_management.compact_threshold` (QuantZhai proxy-side compaction using v3/Zenkai)
+  use the same token budget but are otherwise independent. The interaction — Codex firing
+  its inline compaction AND QuantZhai firing a proxy compaction on the same session — has
+  not been live-tested. Monitor for double-compaction in production sessions.
 
 - **Placeholder semantics are for future integration.** The `{{PREVIOUS_ANCHORED_SUMMARY}}`
   and `{{NEW_CONVERSATION}}` placeholders in `compact-v0.md` are for QuantZhai

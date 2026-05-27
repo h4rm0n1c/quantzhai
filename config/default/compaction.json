@@ -2,6 +2,11 @@
   "version": 1,
   "profiles": {
     "default": {
+      "mode": "auto",
+      "survival_profile": "coding",
+      "prompt_file": "config/default/prompts/compact-v0.md"
+    },
+    "heuristic": {
       "mode": "heuristic",
       "survival_profile": "coding",
       "prompt_file": "config/default/prompts/compact-v0.md"

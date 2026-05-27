@@ -112,6 +112,40 @@ class BuildLiveModelTests(unittest.TestCase):
         model = build_live_model(self._entry(runtime_context_length=262144), 0)
         self.assertEqual(model["truncation_policy"]["limit"], int(262144 * 0.95))
 
+    def test_model_auto_compact_token_limit_set_for_256k(self):
+        # Stage 6.10: model_auto_compact_token_limit = context - floor(context * 0.165)
+        # For 256k: 262144 - floor(262144 * 0.165) = 262144 - 43253 = 218891
+        model = build_live_model(self._entry(runtime_context_length=262144), 0)
+        self.assertIn("model_auto_compact_token_limit", model)
+        self.assertEqual(model["model_auto_compact_token_limit"], 218891)
+
+    def test_model_auto_compact_token_limit_set_for_128k(self):
+        # For 128k: 131072 - floor(131072 * 0.165) = 131072 - 21626 = 109446
+        model = build_live_model(self._entry(runtime_context_length=131072), 0)
+        self.assertEqual(model["model_auto_compact_token_limit"], 109446)
+
+    def test_model_auto_compact_token_limit_absent_without_context(self):
+        # No context_length → no model_auto_compact_token_limit.
+        entry = {
+            "stem": "no-ctx",
+            "label": "No Context",
+            "backend_id": "no-ctx",
+            "overrides": {"system_prompt": "prompt"},
+        }
+        model = build_live_model(entry, 0)
+        self.assertIsNotNone(model)
+        self.assertNotIn("model_auto_compact_token_limit", model)
+
+    def test_model_auto_compact_token_limit_distinct_from_truncation(self):
+        # model_auto_compact_token_limit ≠ truncation_policy.limit (95%).
+        model = build_live_model(self._entry(runtime_context_length=262144), 0)
+        compact_limit = model["model_auto_compact_token_limit"]
+        trunc_limit = model["truncation_policy"]["limit"]
+        self.assertNotEqual(compact_limit, trunc_limit,
+                            "auto_compact_token_limit and truncation limit must be distinct")
+        # Compact limit uses 16.5% buffer; truncation uses 5% buffer.
+        self.assertLess(compact_limit, trunc_limit)
+
     def test_priority_assigned(self):
         model = build_live_model(self._entry(), 1500)
         self.assertEqual(model["priority"], 1500)

@@ -368,15 +368,35 @@ def _approx_tokens(text: str) -> int:
     return max(1, len(text or "") // 4)
 
 
+_AUTOCOMPACT_BUFFER_RATIO = 0.165
+_COMPACT_THRESHOLD_PLAUSIBILITY_FLOOR = 1024
+
+
 def _resolve_llm_compaction_budget(
     context_window_tokens: Optional[int],
     old_history_estimated_tokens: int = 0,
     survival_hint_count: int = 0,
+    compact_threshold_tokens: Optional[int] = None,
     env=None,
 ) -> dict:
     """Derive effective LLM compaction limits from the selected model's context window.
 
-    Budget policy: compaction_budget_tokens = floor(context_window_tokens * 0.90).
+    Budget policy (context_window_autocompact_buffer_v1):
+      autocompact_buffer_tokens = floor(context_window_tokens * 0.165)
+      safe_compaction_budget_tokens = context_window_tokens - autocompact_buffer_tokens
+
+    For a 256k window (262144 tokens):
+      autocompact_buffer_tokens = 43253
+      safe_compaction_budget_tokens = 218891
+
+    Request compact_threshold handling (compact_threshold_tokens):
+      - None: no client threshold; effective = safe_compaction_budget_tokens.
+      - < 1024: treated as force/test signal (e.g. compact_threshold=1 from dogfood
+                runner); not used as a budget cap.
+      - <= safe budget: used as a budget cap (role "budget_cap").
+      - > safe budget: capped to safe budget (role "capped_to_safe_budget").
+      - <= 0 or non-int: ignored (role "ignored_invalid").
+
     Env overrides (QZ_LLM_COMPACT_TIMEOUT_SEC, QZ_LLM_COMPACT_MAX_INPUT_CHARS,
     QZ_LLM_COMPACT_MAX_OUTPUT_TOKENS) win over derived values when set.
 
@@ -394,10 +414,18 @@ def _resolve_llm_compaction_budget(
     if not isinstance(context_window_tokens, int) or context_window_tokens <= 0:
         return {
             **base,
+            "policy": "missing_context_window",
             "budget_policy": "missing_context_window",
             "fail_v3": True,
             "context_source": None,
             "context_window_tokens": None,
+            "autocompact_buffer_ratio": None,
+            "autocompact_buffer_tokens": None,
+            "safe_compaction_budget_tokens": None,
+            "client_compact_threshold_tokens": None,
+            "client_compact_threshold_role": None,
+            "client_compact_threshold_used": False,
+            "effective_compaction_budget_tokens": None,
             "compaction_budget_tokens": None,
             "effective_max_input_tokens": None,
             "effective_max_input_chars": None,
@@ -405,24 +433,49 @@ def _resolve_llm_compaction_budget(
             "effective_timeout_sec": None,
         }
 
-    compaction_budget_tokens = int(context_window_tokens * 0.90)
+    autocompact_buffer_tokens = int(context_window_tokens * _AUTOCOMPACT_BUFFER_RATIO)
+    safe_compaction_budget_tokens = context_window_tokens - autocompact_buffer_tokens
 
-    # Derived limits — scale with context, degrade gracefully for small windows.
+    # Determine compact_threshold role and effective budget.
+    client_compact_threshold_tokens_out: Optional[int] = None
+    client_compact_threshold_role: Optional[str] = None
+    client_compact_threshold_used: bool = False
+    effective_compaction_budget_tokens: int = safe_compaction_budget_tokens
+
+    if compact_threshold_tokens is not None:
+        if not isinstance(compact_threshold_tokens, int) or compact_threshold_tokens <= 0:
+            client_compact_threshold_tokens_out = (
+                compact_threshold_tokens if isinstance(compact_threshold_tokens, int) else None
+            )
+            client_compact_threshold_role = "ignored_invalid"
+        elif compact_threshold_tokens < _COMPACT_THRESHOLD_PLAUSIBILITY_FLOOR:
+            client_compact_threshold_tokens_out = compact_threshold_tokens
+            client_compact_threshold_role = "force_compaction_only"
+        elif compact_threshold_tokens > safe_compaction_budget_tokens:
+            client_compact_threshold_tokens_out = compact_threshold_tokens
+            client_compact_threshold_role = "capped_to_safe_budget"
+        else:
+            client_compact_threshold_tokens_out = compact_threshold_tokens
+            client_compact_threshold_role = "budget_cap"
+            effective_compaction_budget_tokens = compact_threshold_tokens
+            client_compact_threshold_used = True
+
+    # Derived limits — scale with effective budget, degrade gracefully for small windows.
     # 4% of budget for output tokens, capped at 8192, floored at the static default.
     derived_max_output_tokens = min(8192, max(
         _DEFAULT_LLM_MAX_OUTPUT_TOKENS,
-        int(compaction_budget_tokens * 0.04),
+        int(effective_compaction_budget_tokens * 0.04),
     ))
     # 20% of budget (in token-count) → converted to chars for the prompt input.
     derived_max_input_tokens = max(
         _DEFAULT_LLM_MAX_INPUT_CHARS // 4,
-        int(compaction_budget_tokens * 0.20),
+        int(effective_compaction_budget_tokens * 0.20),
     )
     derived_max_input_chars = derived_max_input_tokens * 4
     # Timeout scales between 30 and 120 seconds.
     derived_timeout_sec = max(
         _DEFAULT_LLM_TIMEOUT_SEC,
-        min(int(compaction_budget_tokens / 2000), 120),
+        min(int(effective_compaction_budget_tokens / 2000), 120),
     )
 
     # Env overrides still win over all derived values.
@@ -445,11 +498,19 @@ def _resolve_llm_compaction_budget(
 
     return {
         **base,
-        "budget_policy": "context_window_90",
+        "policy": "context_window_autocompact_buffer_v1",
+        "budget_policy": "context_window_autocompact_buffer_v1",
         "fail_v3": False,
         "context_source": "selected_model.context_window",
         "context_window_tokens": context_window_tokens,
-        "compaction_budget_tokens": compaction_budget_tokens,
+        "autocompact_buffer_ratio": _AUTOCOMPACT_BUFFER_RATIO,
+        "autocompact_buffer_tokens": autocompact_buffer_tokens,
+        "safe_compaction_budget_tokens": safe_compaction_budget_tokens,
+        "client_compact_threshold_tokens": client_compact_threshold_tokens_out,
+        "client_compact_threshold_role": client_compact_threshold_role,
+        "client_compact_threshold_used": client_compact_threshold_used,
+        "effective_compaction_budget_tokens": effective_compaction_budget_tokens,
+        "compaction_budget_tokens": effective_compaction_budget_tokens,
         "effective_max_input_tokens": effective_max_input_chars // 4,
         "effective_max_input_chars": effective_max_input_chars,
         "effective_max_output_tokens": effective_max_output_tokens,
@@ -907,12 +968,19 @@ def _build_local_compaction_response_v3(
     working_items: list,
     existing_depth: int,
     selected_context_tokens: Optional[int] = None,
+    compact_threshold_tokens: Optional[int] = None,
 ) -> Optional[dict]:
     """Attempt LLM-generated anchored compaction (v3).
 
     selected_context_tokens must be the context_window value from the selected model.
     If it is None or non-positive the budget resolver sets fail_v3=True and this
     function returns None, falling through to heuristic v2.
+
+    compact_threshold_tokens is the raw value from context_management.compact_threshold
+    in the request body. It is classified by the budget resolver (force_compaction_only,
+    budget_cap, capped_to_safe_budget, or ignored_invalid). A value below 1024 (e.g.
+    compact_threshold=1 from the dogfood runner) is treated as a force signal, not a
+    1-token budget cap.
     """
     if _current_compaction_mode() not in ("llm", "auto"):
         return None
@@ -934,6 +1002,7 @@ def _build_local_compaction_response_v3(
         selected_context_tokens,
         old_history_estimated_tokens=_estimate_items_tokens(older),
         survival_hint_count=len(spans),
+        compact_threshold_tokens=compact_threshold_tokens,
     )
     if budget["fail_v3"]:
         # Context window metadata unavailable — fail closed to v2.
@@ -976,8 +1045,15 @@ def _build_local_compaction_response_v3(
             "llm_model": COMPACTION_CONFIG["llm_model"],
             "latency_ms": latency_ms,
             "budget": {
-                "policy": budget["budget_policy"],
+                "policy": budget["policy"],
                 "context_window_tokens": budget["context_window_tokens"],
+                "autocompact_buffer_ratio": budget["autocompact_buffer_ratio"],
+                "autocompact_buffer_tokens": budget["autocompact_buffer_tokens"],
+                "safe_compaction_budget_tokens": budget["safe_compaction_budget_tokens"],
+                "client_compact_threshold_tokens": budget["client_compact_threshold_tokens"],
+                "client_compact_threshold_role": budget["client_compact_threshold_role"],
+                "client_compact_threshold_used": budget["client_compact_threshold_used"],
+                "effective_compaction_budget_tokens": budget["effective_compaction_budget_tokens"],
                 "compaction_budget_tokens": budget["compaction_budget_tokens"],
                 "effective_max_input_chars": budget["effective_max_input_chars"],
                 "effective_max_output_tokens": budget["effective_max_output_tokens"],
@@ -1043,12 +1119,18 @@ def _estimate_items_tokens(items):
 def _build_local_compaction_response(
     body: dict,
     selected_context_tokens: Optional[int] = None,
+    compact_threshold_tokens: Optional[int] = None,
 ) -> dict:
     """Build a compaction response blob.
 
     selected_context_tokens should be the context_window value from the currently
     selected model (available in qz_request_router at the compaction call site).
     When None or non-positive the v3 LLM path fails closed to heuristic v2.
+
+    compact_threshold_tokens is the raw value from context_management.compact_threshold
+    in the request body. It is passed to the budget resolver to determine the effective
+    compaction budget. Values below 1024 (e.g. compact_threshold=1 used by the dogfood
+    corpus runner to force compaction) are treated as force signals, not token budgets.
     """
     input_items = body.get("input")
     if isinstance(input_items, str):
@@ -1082,11 +1164,12 @@ def _build_local_compaction_response(
             if payload:
                 existing_depth = max(existing_depth, int(payload.get("depth", 1)))
 
-    # Stage 4: Opt-in LLM-generated anchored compaction
+    # Stage 4: Opt-in LLM-generated anchored compaction (v3/Zenkai default)
     if _current_compaction_mode() in ("llm", "auto") and COMPACTION_CONFIG["llm_base_url"]:
         v3_resp = _build_local_compaction_response_v3(
             body, working_items, existing_depth,
             selected_context_tokens=selected_context_tokens,
+            compact_threshold_tokens=compact_threshold_tokens,
         )
         if v3_resp:
             return v3_resp

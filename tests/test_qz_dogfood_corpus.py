@@ -813,8 +813,8 @@ class TestTargetedFileSelection(unittest.TestCase):
                 )
 
     # Test 13: runner does not change compaction defaults.
-    def test_compaction_defaults_unchanged(self):
-        """config/default/compaction.json default profile must remain heuristic."""
+    def test_compaction_defaults_v3_auto_promoted(self):
+        """config/default/compaction.json default profile must be 'auto' (v3/Zenkai default, Stage 6.10)."""
         config_path = os.path.join(
             os.path.dirname(__file__), "..", "config", "default", "compaction.json"
         )
@@ -822,12 +822,15 @@ class TestTargetedFileSelection(unittest.TestCase):
             cfg = json.load(f)
         default_profile = cfg.get("profiles", {}).get("default", {})
         self.assertEqual(
-            default_profile.get("mode"), "heuristic",
-            "Default compaction mode must remain 'heuristic'",
+            default_profile.get("mode"), "auto",
+            "Default compaction mode must be 'auto' (v3/Zenkai primary, v2 fallback)",
         )
-        # v3 / localcmp:v3 must not be the default mode
-        self.assertNotIn("v3", default_profile.get("mode", ""))
-        self.assertNotIn("llm", default_profile.get("mode", ""))
+        # A separate 'heuristic' profile must exist as the explicit escape hatch.
+        heuristic_profile = cfg.get("profiles", {}).get("heuristic", {})
+        self.assertEqual(
+            heuristic_profile.get("mode"), "heuristic",
+            "Explicit 'heuristic' profile must exist as a v2 escape hatch",
+        )
 
     # Test 14: runner output remains JSON serializable.
     def test_evidence_dict_json_serializable(self):

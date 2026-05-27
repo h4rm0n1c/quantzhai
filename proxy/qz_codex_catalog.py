@@ -261,6 +261,13 @@ def build_live_model(entry, priority):
     if runtime_context is not None:
         model["context_window"] = runtime_context
         model["max_context_window"] = runtime_context
+        # Set Codex-side auto-compact threshold to the safe compaction budget:
+        #   autocompact_buffer_tokens = floor(context * 0.165)
+        #   model_auto_compact_token_limit = context - autocompact_buffer_tokens
+        # This aligns Codex's inline auto-compaction trigger with QuantZhai's
+        # proxy-side compaction budget (context_window_autocompact_buffer_v1).
+        _autocompact_buffer = int(runtime_context * 0.165)
+        model["model_auto_compact_token_limit"] = runtime_context - _autocompact_buffer
     model["truncation_policy"] = {
         "mode": "tokens",
         "limit": truncation_limit(entry, overrides, runtime_context),

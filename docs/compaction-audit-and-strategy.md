@@ -1,7 +1,7 @@
 # Compaction Audit and Strategy
 
-Date: 2026-05-27
-Status: **Stage 6.9** — context-aligned compaction budget resolver landed; v3 now reads `context_window` from `selected_model` and derives timeout/input/output budgets at 90% of window. Stage 6.8 coverage: 8/8 targeted-coverage v3, 5/6 deep v3, c_macro confirmed. Default remains heuristic v2. See `docs/compaction-stage68-coverage.md`.
+Date: 2026-05-28
+Status: **Stage 6.10** — v3/Zenkai promoted to default (`mode=auto`); v2 preserved as fallback. Budget policy changed from 90% direct to 16.5% autocompact-buffer reserve (policy `context_window_autocompact_buffer_v1`). For 256k: safe budget = 218891 tokens. `model_auto_compact_token_limit` now emitted in Codex catalog. Request `compact_threshold` classified as force/budget_cap/capped/ignored. Stage 6.9: budget resolver derived from selected_model context_window. See `docs/compaction-stage68-coverage.md`.
 
 ---
 

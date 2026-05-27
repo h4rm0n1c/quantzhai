@@ -78,11 +78,11 @@ class TestLLMCompaction(unittest.TestCase):
         mock_resp.__enter__.return_value = mock_resp
         mock_urlopen.return_value = mock_resp
 
-    def test_default_is_heuristic_v2(self):
-        # Reset mode to default
+    def test_heuristic_mode_produces_v2(self):
+        # Explicit heuristic mode must always produce v2, even with a backend URL.
         COMPACTION_CONFIG["mode"] = "heuristic"
         items = [{"type": "message", "role": "user", "content": "hello"}] * 50
-        
+
         result = _build_local_compaction_response(self._make_body(items))
         blob = result["output"][0]["encrypted_content"]
         self.assertTrue(blob.startswith("localcmp:v2:"))
@@ -444,7 +444,7 @@ Complete Stage 6.1 live tuning.
         self.assertIn("V2 Summary", expanded[1]["content"][0]["text"])
 
 class TestCompactionBudget(unittest.TestCase):
-    """Stage 6.9 — context-aligned budget resolver and v3 context threading."""
+    """Stage 6.9/6.10 — context-aligned budget resolver and v3 context threading."""
 
     def setUp(self):
         self.original_config = COMPACTION_CONFIG.copy()
@@ -496,18 +496,36 @@ class TestCompactionBudget(unittest.TestCase):
         self.assertTrue(budget["fail_v3"])
 
     # ── Budget resolver: correct values for 256k context ─────────────────────
+    # Stage 6.10 policy: context_window_autocompact_buffer_v1
+    #   autocompact_buffer_tokens = floor(262144 * 0.165) = 43253
+    #   safe_compaction_budget_tokens = 262144 - 43253 = 218891
 
     def test_budget_resolver_correct_policy_for_256k(self):
         budget = _resolve_llm_compaction_budget(262144)
         self.assertFalse(budget["fail_v3"])
-        self.assertEqual(budget["budget_policy"], "context_window_90")
+        self.assertEqual(budget["policy"], "context_window_autocompact_buffer_v1")
+        self.assertEqual(budget["budget_policy"], "context_window_autocompact_buffer_v1")
         self.assertEqual(budget["context_source"], "selected_model.context_window")
         self.assertEqual(budget["context_window_tokens"], 262144)
 
-    def test_budget_resolver_correct_compaction_budget_for_256k(self):
+    def test_budget_resolver_90_policy_not_used(self):
+        # The old 90% direct-budget policy must not be active.
         budget = _resolve_llm_compaction_budget(262144)
-        # floor(262144 * 0.90) = 235929
-        self.assertEqual(budget["compaction_budget_tokens"], 235929)
+        self.assertNotEqual(budget.get("policy"), "context_window_90")
+        self.assertNotEqual(budget.get("budget_policy"), "context_window_90")
+
+    def test_budget_resolver_autocompact_buffer_for_256k(self):
+        budget = _resolve_llm_compaction_budget(262144)
+        self.assertEqual(budget["autocompact_buffer_ratio"], 0.165)
+        # floor(262144 * 0.165) = 43253
+        self.assertEqual(budget["autocompact_buffer_tokens"], 43253)
+        self.assertEqual(budget["safe_compaction_budget_tokens"], 218891)
+
+    def test_budget_resolver_correct_compaction_budget_for_256k(self):
+        # effective_compaction_budget_tokens = safe_compaction_budget_tokens = 218891
+        budget = _resolve_llm_compaction_budget(262144)
+        self.assertEqual(budget["effective_compaction_budget_tokens"], 218891)
+        self.assertEqual(budget["compaction_budget_tokens"], 218891)
 
     def test_budget_resolver_max_output_tokens_capped_at_8192_for_256k(self):
         budget = _resolve_llm_compaction_budget(262144)
@@ -523,10 +541,10 @@ class TestCompactionBudget(unittest.TestCase):
         self.assertGreater(budget["effective_max_input_chars"], _DEFAULT_LLM_MAX_INPUT_CHARS)
 
     def test_budget_resolver_degrades_for_small_context(self):
-        # Tiny context (8k) — effective values should not exceed the static defaults.
+        # Tiny context (8k) — effective values must floor to static defaults.
+        # safe = floor(8192 * (1-0.165)) = 8192 - 1351 = 6841
         budget = _resolve_llm_compaction_budget(8192)
         self.assertFalse(budget["fail_v3"])
-        # output tokens: min(8192, max(1536, floor(7372 * 0.04)=294)) = 1536
         self.assertGreaterEqual(budget["effective_max_output_tokens"], _DEFAULT_LLM_MAX_OUTPUT_TOKENS)
         self.assertGreaterEqual(budget["effective_timeout_sec"], _DEFAULT_LLM_TIMEOUT_SEC)
         self.assertGreaterEqual(budget["effective_max_input_chars"], _DEFAULT_LLM_MAX_INPUT_CHARS)
@@ -536,6 +554,79 @@ class TestCompactionBudget(unittest.TestCase):
         self.assertEqual(budget["old_history_estimated_tokens"], 5000)
         self.assertEqual(budget["survival_hint_count"], 12)
         self.assertIn("env_overrides", budget)
+        self.assertIn("autocompact_buffer_ratio", budget)
+        self.assertIn("autocompact_buffer_tokens", budget)
+        self.assertIn("safe_compaction_budget_tokens", budget)
+        self.assertIn("client_compact_threshold_tokens", budget)
+        self.assertIn("client_compact_threshold_role", budget)
+        self.assertIn("client_compact_threshold_used", budget)
+        self.assertIn("effective_compaction_budget_tokens", budget)
+
+    # ── Budget resolver: compact_threshold handling ───────────────────────────
+
+    def test_budget_resolver_no_threshold_uses_safe_budget(self):
+        # No compact_threshold → effective = safe_compaction_budget_tokens.
+        budget = _resolve_llm_compaction_budget(262144)
+        self.assertEqual(budget["effective_compaction_budget_tokens"], 218891)
+        self.assertIsNone(budget["client_compact_threshold_tokens"])
+        self.assertIsNone(budget["client_compact_threshold_role"])
+        self.assertFalse(budget["client_compact_threshold_used"])
+
+    def test_budget_resolver_threshold_1_is_force_compaction_only(self):
+        # compact_threshold=1 (dogfood runner) must not shrink the budget.
+        budget = _resolve_llm_compaction_budget(262144, compact_threshold_tokens=1)
+        self.assertEqual(budget["client_compact_threshold_tokens"], 1)
+        self.assertEqual(budget["client_compact_threshold_role"], "force_compaction_only")
+        self.assertFalse(budget["client_compact_threshold_used"])
+        self.assertEqual(budget["effective_compaction_budget_tokens"], 218891)
+
+    def test_budget_resolver_threshold_below_1024_is_force_compaction_only(self):
+        # Any threshold below 1024 is a force/test signal.
+        budget = _resolve_llm_compaction_budget(262144, compact_threshold_tokens=500)
+        self.assertEqual(budget["client_compact_threshold_role"], "force_compaction_only")
+        self.assertEqual(budget["effective_compaction_budget_tokens"], 218891)
+
+    def test_budget_resolver_plausible_threshold_used_as_budget_cap(self):
+        # A plausible threshold <= safe budget is used as budget_cap.
+        budget = _resolve_llm_compaction_budget(262144, compact_threshold_tokens=150000)
+        self.assertEqual(budget["client_compact_threshold_tokens"], 150000)
+        self.assertEqual(budget["client_compact_threshold_role"], "budget_cap")
+        self.assertTrue(budget["client_compact_threshold_used"])
+        self.assertEqual(budget["effective_compaction_budget_tokens"], 150000)
+
+    def test_budget_resolver_threshold_above_safe_budget_is_capped(self):
+        # A threshold above safe budget is capped to safe_compaction_budget_tokens.
+        budget = _resolve_llm_compaction_budget(262144, compact_threshold_tokens=250000)
+        self.assertEqual(budget["client_compact_threshold_tokens"], 250000)
+        self.assertEqual(budget["client_compact_threshold_role"], "capped_to_safe_budget")
+        self.assertFalse(budget["client_compact_threshold_used"])
+        self.assertEqual(budget["effective_compaction_budget_tokens"], 218891)
+
+    def test_budget_resolver_invalid_negative_threshold_ignored(self):
+        # Non-positive threshold is ignored.
+        budget = _resolve_llm_compaction_budget(262144, compact_threshold_tokens=-100)
+        self.assertEqual(budget["client_compact_threshold_role"], "ignored_invalid")
+        self.assertFalse(budget["client_compact_threshold_used"])
+        self.assertEqual(budget["effective_compaction_budget_tokens"], 218891)
+
+    def test_budget_resolver_zero_threshold_ignored(self):
+        budget = _resolve_llm_compaction_budget(262144, compact_threshold_tokens=0)
+        self.assertEqual(budget["client_compact_threshold_role"], "ignored_invalid")
+        self.assertEqual(budget["effective_compaction_budget_tokens"], 218891)
+
+    def test_budget_resolver_string_threshold_ignored(self):
+        # A string threshold (not coerced) must be ignored as invalid.
+        budget = _resolve_llm_compaction_budget(262144, compact_threshold_tokens="150000")  # type: ignore[arg-type]
+        self.assertEqual(budget["client_compact_threshold_role"], "ignored_invalid")
+        self.assertFalse(budget["client_compact_threshold_used"])
+        self.assertEqual(budget["effective_compaction_budget_tokens"], 218891)
+
+    def test_budget_resolver_threshold_raw_value_recorded(self):
+        # Raw client_compact_threshold_tokens is recorded regardless of role.
+        budget = _resolve_llm_compaction_budget(262144, compact_threshold_tokens=1)
+        self.assertEqual(budget["client_compact_threshold_tokens"], 1)
+        budget2 = _resolve_llm_compaction_budget(262144, compact_threshold_tokens=150000)
+        self.assertEqual(budget2["client_compact_threshold_tokens"], 150000)
 
     # ── Budget resolver: env overrides ────────────────────────────────────────
 
@@ -639,16 +730,26 @@ class TestCompactionBudget(unittest.TestCase):
         blob = result["output"][0]["encrypted_content"]
         payload = _decode_local_compaction_blob(blob)
         budget_meta = payload["metadata"]["budget"]
-        self.assertEqual(budget_meta["policy"], "context_window_90")
+        # Stage 6.10 policy.
+        self.assertEqual(budget_meta["policy"], "context_window_autocompact_buffer_v1")
         self.assertEqual(budget_meta["context_window_tokens"], 262144)
-        self.assertEqual(budget_meta["compaction_budget_tokens"], 235929)
+        self.assertEqual(budget_meta["autocompact_buffer_ratio"], 0.165)
+        self.assertEqual(budget_meta["autocompact_buffer_tokens"], 43253)
+        self.assertEqual(budget_meta["safe_compaction_budget_tokens"], 218891)
+        self.assertEqual(budget_meta["effective_compaction_budget_tokens"], 218891)
+        self.assertEqual(budget_meta["compaction_budget_tokens"], 218891)
         self.assertEqual(budget_meta["effective_max_output_tokens"], 8192)
         self.assertGreater(budget_meta["effective_timeout_sec"], _DEFAULT_LLM_TIMEOUT_SEC)
         self.assertIn("env_overrides", budget_meta)
+        self.assertIn("client_compact_threshold_tokens", budget_meta)
+        self.assertIn("client_compact_threshold_role", budget_meta)
+        self.assertIn("client_compact_threshold_used", budget_meta)
 
     @patch("urllib.request.urlopen")
     def test_v3_budget_for_128k_context_window(self, mock_urlopen):
         """Budget values scale correctly for a 128k context window."""
+        # 128k: autocompact_buffer = floor(131072 * 0.165) = 21626
+        #        safe = 131072 - 21626 = 109446
         self._mock_backend_response(
             mock_urlopen,
             {"choices": [{"message": {"content": VALID_SUMMARY}}]},
@@ -660,8 +761,11 @@ class TestCompactionBudget(unittest.TestCase):
         payload = _decode_local_compaction_blob(blob)
         bm = payload["metadata"]["budget"]
         self.assertEqual(bm["context_window_tokens"], 131072)
-        # floor(131072 * 0.90) = 117964
-        self.assertEqual(bm["compaction_budget_tokens"], 117964)
+        self.assertEqual(bm["autocompact_buffer_tokens"], 21626)
+        self.assertEqual(bm["safe_compaction_budget_tokens"], 109446)
+        # No threshold provided → effective = safe budget.
+        self.assertEqual(bm["compaction_budget_tokens"], 109446)
+        self.assertEqual(bm["effective_compaction_budget_tokens"], 109446)
 
 
 if __name__ == "__main__":

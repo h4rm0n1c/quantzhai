@@ -3079,7 +3079,14 @@ class RequestRouter:
                             _ctx_tokens = None
                             if selected_model is not None and isinstance(selected_model.get("context_window"), int):
                                 _ctx_tokens = selected_model["context_window"]
-                            out = _build_local_compaction_response(body, selected_context_tokens=_ctx_tokens)
+                            # Pass compact_threshold to budget resolver for classification.
+                            # Values below 1024 (e.g. threshold=1 from dogfood runner) are
+                            # treated as force signals, not token budgets.
+                            out = _build_local_compaction_response(
+                                body,
+                                selected_context_tokens=_ctx_tokens,
+                                compact_threshold_tokens=threshold,
+                            )
                             self.handler._send_json(200, out)
                             self._emit_request_telemetry(
                                 "request_completed",
