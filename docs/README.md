@@ -68,7 +68,8 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 19. [Anchored compaction schema v0](compaction-anchored-schema-v0.md) — canonical schema spec: field rules, exact-atom preservation, evidence-to-decision retention, stale fact correction, uncertainty marking, non-goals, and versioning notes. Stage 4.
 20. [Compaction Codex setup](compaction-codex-setup.md) — how to wire `experimental_compact_prompt_file`, use `compaction.json`, keep env overrides explicit, and run manual smoke checks. Stage 6.1.
 21. [Compaction live dogfood](compaction-live-dogfood.md) — Stage 6/6.1 direct-backend smoke runbook, live evidence, observed v2 fallback, and accepted opt-in v3 tuning.
-22. [Compaction fixtures](fixtures/compaction/) — Stage 1 example input/output pairs: fixture-01 (basic coding session), fixture-02 (tool-heavy session), fixture-03 (rejected approaches and negative constraints). Stage 4 compatible.
+22. [Stage 6.7 compaction dogfood audit](compaction-stage67-audit.md) — adversarial audit of Stage 6.7 claims, runner bias, classifier evidence, v3 summary quality, and Stage 6.8 recommendation.
+23. [Compaction fixtures](fixtures/compaction/) — Stage 1 example input/output pairs: fixture-01 (basic coding session), fixture-02 (tool-heavy session), fixture-03 (rejected approaches and negative constraints). Stage 4 compatible.
 
 ## Documentation by area
 
@@ -99,8 +100,9 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 | Compaction strategy | [Compaction audit and strategy](compaction-audit-and-strategy.md) | Codex audit (SHA 46f30d0), QuantZhai current behaviour, #8 promoted ideas, anchored schema v0, prompt v0, staged plan Stages 0–6.2. |
 | Compaction schema | [Anchored compaction schema v0](compaction-anchored-schema-v0.md) | Schema spec: 14 fixed sections, exact-atom rules, evidence-to-decision retention, stale fact correction, uncertainty marking, Codex prompt-file relationship. Stage 1. |
 | Compaction setup | [Compaction Codex setup](compaction-codex-setup.md) | Wire `experimental_compact_prompt_file`, use `compaction.json`, preserve safe defaults, and run manual /compact smoke checks. Stage 6.1. |
-| Compaction dogfood | [Compaction live dogfood](compaction-live-dogfood.md) | Stage 6/6.1/6.2/6.3/6.5 live smoke and extended dogfood: direct backend runbook, v3 reliability/quality confirmed, latency baseline, fallback proven, corpus staging harness, multi-repo anti-overfit. |
-| Compaction corpus | [Compaction corpus dogfood](compaction-corpus-dogfood.md) | Stage 6.4/6.5: multi-repo staging harness for anti-overfit compaction testing. 8 repos, 4 scripts, 47 tests. 16/16 shallow v3, 2/3 deep v3, survival classifier anti-overfit assessed. |
+| Compaction dogfood | [Compaction live dogfood](compaction-live-dogfood.md) | Stage 6/6.1/6.2/6.3/6.5/6.7 live smoke and extended dogfood notes: direct backend runbook, v3 acceptance/fallback evidence, latency baseline, corpus staging harness, multi-repo anti-overfit. Read the Stage 6.7 audit before relying on broad quality claims. |
+| Compaction corpus | [Compaction corpus dogfood](compaction-corpus-dogfood.md) | Stage 6.4/6.5/6.7: multi-repo staging harness for anti-overfit compaction testing. 8 repos, 4 scripts, 47 tests. Read the Stage 6.7 audit for runner-bias and overclaim caveats. |
+| Compaction audit | [Stage 6.7 compaction dogfood audit](compaction-stage67-audit.md) | Adversarial audit of Stage 6.7 evidence, overclaims, runner bias, classifier feature support, final v3 quality gaps, and Stage 6.8 scope. |
 | Compaction fixtures | [fixtures/compaction/](fixtures/compaction/) | Stage 1 example input/output pairs testing exact atom retention, tool signal retention, rejected-approach preservation, and negative constraint verbatim retention. |
 | Benchmarking | [Benchmark findings: effort tuning](benchmark-findings-effort-tuning.md) | Measured profile/tool-use behaviour and open questions around open-ended repo exploration. |
 | Config and error handling | [Edge case and config contract plan](edge-case-config-contract-plan.md) | Audit/refactor plan for edge cases, compact errors, profile safety, config layering, script sprawl, and the profile-bundle design (qz.profiles.v1, profiles/*.json, memory_domain plumbing). |
@@ -389,6 +391,7 @@ docs/compaction-audit-and-strategy.md
 docs/compaction-anchored-schema-v0.md
 docs/compaction-codex-setup.md
 docs/compaction-corpus-dogfood.md
+docs/compaction-stage67-audit.md
 docs/compaction-live-dogfood.md
 docs/master-stabilisation-plan.md
 docs/observability-streaming-bugfix-agenda.md
