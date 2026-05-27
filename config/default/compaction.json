@@ -14,8 +14,7 @@
     "coding-llm": {
       "mode": "llm",
       "survival_profile": "coding",
-      "prompt_file": "config/default/prompts/compact-v0.md",
-      "llm_base_url": "http://127.0.0.1:8080"
+      "prompt_file": "config/default/prompts/compact-v0.md"
     }
   }
 }

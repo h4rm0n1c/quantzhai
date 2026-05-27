@@ -688,19 +688,43 @@ Do not paste full capture bodies into issue comments.
 Stage 6.10.1 activates the `POST /v1/responses/compact` remote compaction path:
 
 1. `CODEX_PROVIDER_NAME = "OpenAI"` in `proxy/qz_codex_client_config.py` (masquerade).
-2. Codex config.toml receives `name = "OpenAI"` in the `[model_providers.quantzhai]` block.
+2. The client-local CODEX_HOME config receives `name = "OpenAI"` in the `[model_providers.quantzhai]` block.
+   **Active config path**: `$HOME/.qz-codex/codex-home/config.toml` (set by `scripts/qz-codex-common`).
+   This is NOT `~/.codex/config.toml` (that is the Codex system default, not used by qz-codex).
 3. Codex's `supports_remote_compaction()` returns true → routes auto-compact to `/v1/responses/compact`.
 4. `_handle_responses_compact()` passes `selected_context_tokens` to the budget resolver.
 
-### Smoke Test (after qz-down / qz-up)
+**Stage 6.10.2 additions:**
+- Zenkai v3 LLM backend defaults to `http://$QZ_SERVER_HOST:$QZ_SERVER_PORT` (active llama-server).
+  No manual `QZ_LLM_COMPACT_BASE_URL` or `llm_base_url` config needed for normal operation.
+- Recursion guard now catches proxy ports 18180 and 18183 even without env vars set.
+- Stale `llm_base_url: "http://127.0.0.1:8080"` removed from `coding-llm` compaction profile.
+- `qz-up` / `qz-codex` responsibilities clarified: `qz-up` handles server lifecycle; `qz-codex`
+  writes the client-local CODEX_HOME config and catalog.
 
-Before running the corpus dogfood, validate the remote compaction endpoint manually:
+### Smoke Test Sequence (Stage 6.10.2)
 
 ```bash
-# 1. Verify proxy is up and catalog is ready
-curl -s http://127.0.0.1:18180/qz/status | jq '.backend.selected_context_length, .catalog.model_count'
+# Step 1: stop everything
+./scripts/qz-down
 
-# 2. Post a minimal CompactionInput to /v1/responses/compact
+# Step 2: start proxy and backend
+./scripts/qz-up
+
+# Step 3: launch qz-codex to write CODEX_HOME config and catalog
+# (run in a disposable test repo, Ctrl-C after it starts)
+./scripts/qz-codex
+
+# Step 4: verify active client config has name = "OpenAI"
+grep -A5 '\[model_providers.quantzhai\]' "$HOME/.qz-codex/codex-home/config.toml"
+# Expected: name = "OpenAI"
+
+# Step 5: verify model_auto_compact_token_limit in client-local catalog
+jq '.models[].model_auto_compact_token_limit // empty' \
+  "$HOME/.qz-codex/codex-home/model-catalogs/qwenzhai-models.json" | head -3
+# Expected: 218891 (for 256k context)
+
+# Step 6: direct endpoint smoke
 curl -s -X POST http://127.0.0.1:18180/v1/responses/compact \
   -H 'Content-Type: application/json' \
   -d '{
@@ -732,7 +756,7 @@ curl -s -X POST http://127.0.0.1:18180/v1/responses/compact \
 }
 ```
 
-(v2 if LLM backend not configured for compaction, v3 if `QZ_LLM_COMPACT_BASE_URL` is set)
+v3 fires when the llama-server (port 18084) is reachable. v2 is the fallback when it's not.
 
 ### Acceptance Criteria
 
@@ -740,7 +764,6 @@ curl -s -X POST http://127.0.0.1:18180/v1/responses/compact \
 - Response body has `"output"` key with a list.
 - `output[0].type == "compaction"`.
 - `output[0].encrypted_content` starts with `"localcmp:"`.
-- `_decode_local_compaction_blob(output[0].encrypted_content)` produces a valid payload with `summary_text`.
 - `var/captures/latest-compact-request.json` written.
 - `var/captures/latest-compact-summary.txt` written.
 
@@ -753,10 +776,12 @@ After confirming the endpoint works, start a Codex session and build context to 
 3. `var/captures/latest-compact-summary.txt` updates.
 4. Codex continues the session using the compacted history.
 
-If Codex still fires inline compaction (visible as the old checkpoint prompt in session), the masquerade may not have taken effect. Check:
+If Codex still fires inline compaction (visible as the old checkpoint prompt in session), the masquerade may not have taken effect. Check the **active client config** (NOT `~/.codex/config.toml`):
 
 ```bash
-grep "name" ~/.qz-codex/codex-home/config.toml | grep quantzhai -A3
+grep -A5 '\[model_providers.quantzhai\]' "$HOME/.qz-codex/codex-home/config.toml"
 ```
 
-The `name` field in `[model_providers.quantzhai]` must be `"OpenAI"`. If it's `"QuantZhai"`, run `./scripts/qz-codex` once to regenerate the config.
+The `name` field in `[model_providers.quantzhai]` must be `"OpenAI"`. If it's `"QuantZhai"`,
+run `./scripts/qz-codex` once to regenerate the client config (or check for a `.pre-qz-remote.bak`
+backup that may have overridden it).

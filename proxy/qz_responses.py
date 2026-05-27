@@ -833,8 +833,40 @@ def _canonical_url_identity(raw_url: str):
     return (scheme, hostname, port, _strip_openai_v1_path(parsed.path))
 
 
+def _active_backend_base_url(env=None) -> str:
+    """Return the active llama-server backend URL derived from the same env vars as the proxy.
+
+    Uses QZ_SERVER_HOST (default: 127.0.0.1) and QZ_SERVER_PORT (default: 18084),
+    matching the --upstream argument constructed by scripts/qz-proxy.
+
+    This is the default LLM backend for Zenkai v3 compaction when QZ_LLM_COMPACT_BASE_URL
+    is not explicitly set. It avoids requiring manual configuration in compaction.json
+    for normal operation.
+
+    Returns empty string if the env vars indicate an unusable target (e.g. blank host/port).
+    """
+    env = os.environ if env is None else env
+    host = env.get("QZ_SERVER_HOST", "127.0.0.1").strip()
+    port = env.get("QZ_SERVER_PORT", "18084").strip()
+    if not host or not port:
+        return ""
+    try:
+        int(port)
+    except (ValueError, TypeError):
+        return ""
+    return f"http://{host}:{port}"
+
+
+_QZ_PROXY_DEFAULT_PORTS = ("18180", "18183")
+
+
 def _is_probably_quantzhai_proxy_url(base_url: str, env=None) -> bool:
-    """Conservatively reject known QuantZhai proxy URLs to avoid recursion."""
+    """Conservatively reject known QuantZhai proxy URLs to avoid recursion.
+
+    Checks env-configured proxy URLs, the hardcoded default proxy ports (18180, 18183),
+    and CODEX_OSS_BASE_URL. This ensures the compactor never calls the QuantZhai proxy
+    itself even when QZ_PROXY_HOST/QZ_PROXY_PORT env vars are not explicitly set.
+    """
     env = os.environ if env is None else env
     base_identity = _canonical_url_identity(base_url)
     if not base_identity:
@@ -844,8 +876,14 @@ def _is_probably_quantzhai_proxy_url(base_url: str, env=None) -> bool:
         env.get("CODEX_OSS_BASE_URL", ""),
         env.get("QZ_PROXY_BASE_URL", ""),
     ]
-    proxy_host = env.get("QZ_PROXY_HOST", "")
-    proxy_port = env.get("QZ_PROXY_PORT", "")
+    # Always check known proxy default ports against common loopback addresses,
+    # regardless of whether QZ_PROXY_HOST/QZ_PROXY_PORT env vars are set.
+    for default_port in _QZ_PROXY_DEFAULT_PORTS:
+        for loopback in ("127.0.0.1", "localhost", "::1"):
+            candidate_urls.append(f"http://{loopback}:{default_port}")
+    # Also check the configured proxy host:port from env vars.
+    proxy_host = env.get("QZ_PROXY_HOST", "127.0.0.1")
+    proxy_port = env.get("QZ_PROXY_PORT", "18180")
     if proxy_host and proxy_port:
         candidate_urls.append(f"http://{proxy_host}:{proxy_port}")
 
@@ -933,8 +971,20 @@ def _call_llm_compactor(
 
     When timeout_sec / max_output_tokens are provided (from the budget resolver),
     they override COMPACTION_CONFIG values.  Pass None to fall back to COMPACTION_CONFIG.
+
+    Backend URL resolution (Stage 6.10.2):
+    1. QZ_LLM_COMPACT_BASE_URL env var or compaction.json llm_base_url — explicit override.
+    2. _active_backend_base_url() — derived from QZ_SERVER_HOST:QZ_SERVER_PORT, same as
+       the proxy's --upstream argument. This is the default for normal operation so that
+       Zenkai v3 LLM calls reach the llama-server directly without manual config.
+    3. Recursion guard: rejects any URL matching known QuantZhai proxy ports (18180, 18183)
+       or CODEX_OSS_BASE_URL. The proxy must never be its own compaction backend.
     """
     base_url = str(COMPACTION_CONFIG.get("llm_base_url", "") or "").rstrip("/")
+    if not base_url:
+        # Fall back to the active llama-server backend derived from env vars.
+        # This allows v3 LLM compaction to work without explicit QZ_LLM_COMPACT_BASE_URL.
+        base_url = _active_backend_base_url()
     if not base_url:
         return None
     if _is_probably_quantzhai_proxy_url(base_url):
@@ -984,7 +1034,10 @@ def _build_local_compaction_response_v3(
     """
     if _current_compaction_mode() not in ("llm", "auto"):
         return None
-    if not COMPACTION_CONFIG["llm_base_url"]:
+    # Allow v3 to proceed when no explicit llm_base_url is configured: _call_llm_compactor()
+    # will fall back to _active_backend_base_url() (QZ_SERVER_HOST:QZ_SERVER_PORT).
+    # Only bail out if neither configured nor active backend is reachable (both empty).
+    if not COMPACTION_CONFIG["llm_base_url"] and not _active_backend_base_url():
         return None
 
     tail_start = _tail_start_for_compaction(working_items)
@@ -1164,8 +1217,12 @@ def _build_local_compaction_response(
             if payload:
                 existing_depth = max(existing_depth, int(payload.get("depth", 1)))
 
-    # Stage 4: Opt-in LLM-generated anchored compaction (v3/Zenkai default)
-    if _current_compaction_mode() in ("llm", "auto") and COMPACTION_CONFIG["llm_base_url"]:
+    # Stage 4: Opt-in LLM-generated anchored compaction (v3/Zenkai default).
+    # llm_base_url may be empty if not explicitly configured — _build_local_compaction_response_v3
+    # will fall back to _active_backend_base_url() (QZ_SERVER_HOST:QZ_SERVER_PORT).
+    if _current_compaction_mode() in ("llm", "auto") and (
+        COMPACTION_CONFIG["llm_base_url"] or _active_backend_base_url()
+    ):
         v3_resp = _build_local_compaction_response_v3(
             body, working_items, existing_depth,
             selected_context_tokens=selected_context_tokens,

@@ -43,8 +43,13 @@ echo $QZ_ROOT/config/default/prompts/compact-v0.md
 
 ### Global setting (config.toml)
 
-Add to your Codex `config.toml` (typically `~/.codex/config.toml`),
-substituting your `$QZ_ROOT`:
+**For QuantZhai sessions**, the active Codex config is managed by `qz-codex` and lives at:
+```
+$HOME/.qz-codex/codex-home/config.toml
+```
+This is the `CODEX_HOME` set by `scripts/qz-codex-common`. Do **not** edit `~/.codex/config.toml` for QuantZhai sessions — it is the Codex system default and is not the active config.
+
+For non-QuantZhai / manual Codex use only, add to `~/.codex/config.toml`:
 
 ```toml
 [experimental]
@@ -56,10 +61,12 @@ Field name: `experimental_compact_prompt_file`
 
 ### Per-profile setting (profile TOML)
 
-Codex also supports `experimental_compact_prompt_file` in a named profile TOML:
+Codex also supports `experimental_compact_prompt_file` in a named profile TOML.
+
+For non-QuantZhai / manual Codex use only (`~/.codex/profiles/`):
 
 ```toml
-# ~/.codex/profiles/quantzhai-high.toml  (example)
+# ~/.codex/profiles/quantzhai-high.toml  (example — non-QuantZhai use only)
 experimental_compact_prompt_file = "/your/path/to/quantzhai/config/default/prompts/compact-v0.md"
 ```
 
@@ -177,12 +184,12 @@ not configurable.
   literal text in the prompt. Codex appends the full session context from its
   conversation state.
 
-- **LLM compaction backend URL must be direct.** If using the opt-in
-  QuantZhai `localcmp:v3:` path, `QZ_LLM_COMPACT_BASE_URL` must point at the
-  actual model backend, not the QuantZhai proxy or its `/v1` endpoint. For
-  example, use `QZ_LLM_COMPACT_BASE_URL=http://127.0.0.1:8080` only when that
-  is the direct llama.cpp/OpenAI-compatible backend. Do not set it to
-  `CODEX_OSS_BASE_URL` or `http://127.0.0.1:18180`.
+- **LLM compaction backend URL resolves automatically (Stage 6.10.2).** Zenkai v3 LLM
+  compaction now defaults to `http://$QZ_SERVER_HOST:$QZ_SERVER_PORT` (the active
+  llama-server backend, same URL as the proxy's `--upstream` argument). `QZ_LLM_COMPACT_BASE_URL`
+  is only needed as an explicit debug override. Do NOT set it to the QuantZhai proxy URL
+  (`http://127.0.0.1:18180`) or `CODEX_OSS_BASE_URL` — the recursion guard will reject it.
+  The hardcoded `llm_base_url` has been removed from `config/default/compaction.json`.
 
 - **Stage 6 is dogfood/live tuning.** Do not run a live LLM smoke through the
   QuantZhai proxy URL; use only a clearly identified direct backend.
@@ -199,14 +206,45 @@ not configurable.
 
 ## Suggested Manual Smoke Test
 
-After wiring the config:
+**Stage 6.10.2 smoke sequence (remote compaction path):**
 
-1. Start `qz-up` and launch `qz-codex` in a **disposable test repo**
-   (e.g. `/tmp/linuxstreamtools` — safe smoke target).
-2. Build enough conversation context to fill a few hundred tokens.
-3. Invoke `/compact` from the Codex TUI.
-4. Inspect the resulting compacted summary in the next Codex turn.
-5. Verify the output follows the schema sections and preserves any exact paths
+1. `./scripts/qz-down` — stop proxy and backend.
+2. `./scripts/qz-up` — start proxy and backend.
+3. Launch `./scripts/qz-codex` (interactive) in a **disposable test repo** to regenerate
+   the client-local CODEX_HOME config and catalog.
+   The active config is: `$HOME/.qz-codex/codex-home/config.toml`
+   (not `~/.codex/config.toml`).
+4. Verify the config was written correctly:
+   ```bash
+   grep -A5 '\[model_providers.quantzhai\]' "$HOME/.qz-codex/codex-home/config.toml"
+   # Expected: name = "OpenAI"
+   ```
+5. Verify `model_auto_compact_token_limit` is in the client-local model catalog:
+   ```bash
+   jq '.models[].model_auto_compact_token_limit // empty' \
+     "$HOME/.qz-codex/codex-home/model-catalogs/qwenzhai-models.json" | head -3
+   # Expected: 218891 (for 256k context)
+   ```
+6. Smoke the remote compaction endpoint directly:
+   ```bash
+   curl -s -X POST http://127.0.0.1:18180/v1/responses/compact \
+     -H 'Content-Type: application/json' \
+     -d '{"model":"Qwen3.6Turbo-27B","input":[
+       {"type":"message","role":"user","content":[{"type":"input_text","text":"Describe Paris."}]},
+       {"type":"message","role":"assistant","content":[{"type":"output_text","text":"Paris is the capital of France."}]}
+     ],"instructions":"Summarise.","tools":[],"parallel_tool_calls":false}' \
+     | jq '{type:.output[0].type, blob:.output[0].encrypted_content[:20]}'
+   # Expected: {"type": "compaction", "blob": "localcmp:v2:" or "localcmp:v3:"}
+   ```
+7. Launch a Codex session and build context until auto-compact fires (near 218891 tokens).
+   Verify proxy logs show a POST to `/v1/responses/compact` (not inline compaction).
+
+**Older inline compaction smoke (still valid for /compact TUI):**
+
+1. Build enough conversation context to fill a few hundred tokens.
+2. Invoke `/compact` from the Codex TUI.
+3. Inspect the resulting compacted summary in the next Codex turn.
+4. Verify the output follows the schema sections and preserves any exact paths
    or commands you mentioned during the session.
 
 Live LLM smoke requires a clearly identified direct backend outside the

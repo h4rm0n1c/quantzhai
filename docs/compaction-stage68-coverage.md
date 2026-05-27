@@ -1,7 +1,7 @@
 # Stage 6.8/6.9/6.10 Compaction Corpus Coverage Evidence
 
 Date: 2026-05-28
-Status: **Stage 6.10 complete — v3/Zenkai promoted to default (auto mode), 16.5% autocompact-buffer reserve policy, model_auto_compact_token_limit emitted, 4/4 v3 deep-coverage accepted. See Stage 6.10 section below. Stage 6.9: context-aligned budget resolver. Stage 6.8: runner improved, 13/14 v3 accepted.**
+Status: **Stage 6.10.2 — Codex config path cleanup, compactor backend auto-resolution, recursion guard hardened. Stage 6.10.1: OpenAI masquerade, remote compaction endpoint. Stage 6.10: v3/Zenkai default, 16.5% autocompact-buffer. Stage 6.9: budget resolver. Stage 6.8: runner improved, 13/14 v3 accepted.**
 
 Commit: see `git log --oneline -1`
 Issue: `#8` — RFC: NetTTS-inspired survival-weighted compaction for QuantZhai
@@ -576,3 +576,92 @@ Added tests in:
 - All Stage 6.10 safety notes remain in force.
 - `localcmp:v3` wire format name unchanged. "Zenkai Boost Compactor" is codename only.
 - `QZ_LLM_COMPACT_BASE_URL` must point at direct backend (18084), not proxy.
+
+## Stage 6.10.2: Codex Config Path Cleanup and Compactor Backend Auto-Resolution (2026-05-28)
+
+### Changes
+
+**Active CODEX_HOME clarification:**
+
+- Active Codex client config for qz-codex sessions is `$HOME/.qz-codex/codex-home/config.toml`
+  (set by `scripts/qz-codex-common` via `CODEX_HOME="$HOME/.qz-codex/codex-home"`),
+  **not** `~/.codex/config.toml`.
+- `var/generated/codex/config.toml` is server-generated metadata written by `qz-codex-common`,
+  not the active Codex client config itself.
+- `docs/compaction-codex-setup.md`: Global and per-profile config sections now clearly distinguish
+  between the active qz-codex config path and the `~/.codex/` path (now qualified as
+  "non-QuantZhai / manual Codex use only").
+
+**Smoke runbook corrected:**
+
+- Step-by-step 7-step smoke sequence in `docs/compaction-codex-setup.md` and 6-step sequence
+  in `docs/compaction-live-dogfood.md` now reference the correct CODEX_HOME config path.
+- `qz-down`/`qz-up` (server lifecycle) and `qz-codex` (client config install) are explicitly
+  separate steps with no assumed ordering shortcut.
+
+**Compactor backend auto-resolution:**
+
+- Added `_active_backend_base_url(env=None) -> str` in `proxy/qz_responses.py`.
+  - Derives `http://$QZ_SERVER_HOST:$QZ_SERVER_PORT` (defaults: `127.0.0.1:18084`), the same
+    as the proxy's `--upstream` argument.
+  - Returns empty string if host or port is blank or port is non-integer.
+- `_call_llm_compactor()` now falls back to `_active_backend_base_url()` when
+  `COMPACTION_CONFIG["llm_base_url"]` is empty. This allows v3 LLM compaction to work in
+  normal operation without any explicit `QZ_LLM_COMPACT_BASE_URL` or `llm_base_url` config.
+  `QZ_LLM_COMPACT_BASE_URL` / `llm_base_url` remain as explicit debug overrides that take
+  priority when set.
+- `_build_local_compaction_response_v3()` early-bail guard updated:
+  old: `if not COMPACTION_CONFIG["llm_base_url"]` →
+  new: `if not COMPACTION_CONFIG["llm_base_url"] and not _active_backend_base_url()`
+- `_build_local_compaction_response()` condition updated similarly so that the v3 path is
+  entered whenever either the configured URL or the active backend URL is available.
+
+**Recursion guard hardened:**
+
+- Added `_QZ_PROXY_DEFAULT_PORTS = ("18180", "18183")` constant.
+- `_is_probably_quantzhai_proxy_url()` now always rejects URLs matching ports 18180 and 18183
+  on loopback addresses (`127.0.0.1`, `localhost`, `::1`), even when `QZ_PROXY_HOST` /
+  `QZ_PROXY_PORT` env vars are not set. Previously the guard only checked env-configured proxy
+  URLs, which meant the hardcoded defaults were not caught if env vars were absent.
+
+**Stale `llm_base_url` removed from config:**
+
+- Removed `"llm_base_url": "http://127.0.0.1:8080"` from `config/default/compaction.json`
+  `coding-llm` profile. Port 8080 was an old llama.cpp default; current backend is 18084.
+  The auto-resolution path now provides the correct URL without manual config.
+
+### Test Coverage (Stage 6.10.2)
+
+Added 3 new test classes in `tests/test_qz_llm_compaction.py` (18 tests):
+
+- `TestActiveBackendBaseUrl` (6 tests):
+  - Default with empty env returns `http://127.0.0.1:18084`.
+  - `QZ_SERVER_HOST` and `QZ_SERVER_PORT` override the default.
+  - Blank host or port returns empty string.
+  - Non-integer port returns empty string.
+  - Whitespace is stripped from host and port.
+
+- `TestProxyRecursionGuardDefaultPorts` (8 tests):
+  - Port 18180 and 18183 rejected on `127.0.0.1` and `localhost` without any env vars.
+  - Backend port 18084 is not rejected.
+  - Unrelated port 8080 not rejected.
+  - Env-configured proxy URL still rejected.
+  - Empty URL returns False.
+
+- `TestCallLlmCompactorActiveBackend` (4 tests):
+  - Active backend URL used when `llm_base_url` is empty (via `_active_backend_base_url` patch).
+  - URL from active backend is in the actual `urlopen` call.
+  - Explicit `llm_base_url` wins over active backend (debug override priority).
+  - Active backend rejected if it resolves to a proxy port.
+  - Both empty → returns None, no network call.
+
+### Safety Notes (Stage 6.10.2)
+
+- Auto-resolution reads env vars at call time (`os.environ`), not at module load. The backend
+  URL is re-derived on each LLM compaction call, so changes to `QZ_SERVER_HOST` / `QZ_SERVER_PORT`
+  after process start are picked up.
+- The recursion guard now has hardcoded knowledge of QuantZhai's default proxy ports. This is
+  intentional and documents the known port allocation. If proxy ports are ever changed, update
+  `_QZ_PROXY_DEFAULT_PORTS` and the guard tests.
+- No compaction logic, survival heuristics, or session ledger affected.
+- All Stage 6.10 and 6.10.1 safety notes remain in force.

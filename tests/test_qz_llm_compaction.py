@@ -7,6 +7,7 @@ import tempfile
 import urllib.error
 from unittest.mock import patch, MagicMock
 from proxy.qz_responses import (
+    _active_backend_base_url,
     _build_llm_compactor_payload,
     _DEFAULT_LLM_MAX_INPUT_CHARS,
     _DEFAULT_LLM_MAX_OUTPUT_TOKENS,
@@ -766,6 +767,152 @@ class TestCompactionBudget(unittest.TestCase):
         # No threshold provided → effective = safe budget.
         self.assertEqual(bm["compaction_budget_tokens"], 109446)
         self.assertEqual(bm["effective_compaction_budget_tokens"], 109446)
+
+
+class TestActiveBackendBaseUrl(unittest.TestCase):
+    """Stage 6.10.2 — _active_backend_base_url() resolves from env vars."""
+
+    def test_default_returns_loopback_18084(self):
+        env = {}  # No QZ_SERVER_HOST / QZ_SERVER_PORT set
+        self.assertEqual(_active_backend_base_url(env=env), "http://127.0.0.1:18084")
+
+    def test_uses_qz_server_host_and_port(self):
+        env = {"QZ_SERVER_HOST": "192.168.1.10", "QZ_SERVER_PORT": "11434"}
+        self.assertEqual(_active_backend_base_url(env=env), "http://192.168.1.10:11434")
+
+    def test_blank_host_returns_empty(self):
+        env = {"QZ_SERVER_HOST": "", "QZ_SERVER_PORT": "18084"}
+        self.assertEqual(_active_backend_base_url(env=env), "")
+
+    def test_blank_port_returns_empty(self):
+        env = {"QZ_SERVER_HOST": "127.0.0.1", "QZ_SERVER_PORT": ""}
+        self.assertEqual(_active_backend_base_url(env=env), "")
+
+    def test_non_integer_port_returns_empty(self):
+        env = {"QZ_SERVER_HOST": "127.0.0.1", "QZ_SERVER_PORT": "notaport"}
+        self.assertEqual(_active_backend_base_url(env=env), "")
+
+    def test_whitespace_stripped_from_host_and_port(self):
+        env = {"QZ_SERVER_HOST": "  127.0.0.1  ", "QZ_SERVER_PORT": "  18084  "}
+        self.assertEqual(_active_backend_base_url(env=env), "http://127.0.0.1:18084")
+
+
+class TestProxyRecursionGuardDefaultPorts(unittest.TestCase):
+    """Stage 6.10.2 — recursion guard catches proxy ports 18180/18183 without env vars."""
+
+    def _empty_env(self):
+        # Env with no QZ_PROXY_BASE_URL, CODEX_OSS_BASE_URL, or QZ_PROXY_HOST/PORT set.
+        return {}
+
+    def test_port_18180_loopback_rejected_without_env(self):
+        self.assertTrue(
+            _is_probably_quantzhai_proxy_url("http://127.0.0.1:18180", env=self._empty_env())
+        )
+
+    def test_port_18183_loopback_rejected_without_env(self):
+        self.assertTrue(
+            _is_probably_quantzhai_proxy_url("http://127.0.0.1:18183", env=self._empty_env())
+        )
+
+    def test_port_18180_localhost_rejected_without_env(self):
+        self.assertTrue(
+            _is_probably_quantzhai_proxy_url("http://localhost:18180", env=self._empty_env())
+        )
+
+    def test_port_18183_localhost_rejected_without_env(self):
+        self.assertTrue(
+            _is_probably_quantzhai_proxy_url("http://localhost:18183", env=self._empty_env())
+        )
+
+    def test_backend_port_18084_not_rejected(self):
+        # Port 18084 is the direct llama-server backend — must NOT be flagged as proxy.
+        self.assertFalse(
+            _is_probably_quantzhai_proxy_url("http://127.0.0.1:18084", env=self._empty_env())
+        )
+
+    def test_unrelated_port_not_rejected(self):
+        self.assertFalse(
+            _is_probably_quantzhai_proxy_url("http://127.0.0.1:8080", env=self._empty_env())
+        )
+
+    def test_env_proxy_url_still_rejected(self):
+        env = {"CODEX_OSS_BASE_URL": "http://127.0.0.1:18180/v1"}
+        self.assertTrue(
+            _is_probably_quantzhai_proxy_url("http://127.0.0.1:18180", env=env)
+        )
+
+    def test_empty_url_returns_false(self):
+        self.assertFalse(
+            _is_probably_quantzhai_proxy_url("", env=self._empty_env())
+        )
+
+
+class TestCallLlmCompactorActiveBackend(unittest.TestCase):
+    """Stage 6.10.2 — _call_llm_compactor() uses active backend when llm_base_url is empty."""
+
+    def setUp(self):
+        self.original_config = COMPACTION_CONFIG.copy()
+        COMPACTION_CONFIG["llm_model"] = "test-model"
+        COMPACTION_CONFIG["llm_disable_reasoning"] = True
+
+    def tearDown(self):
+        for k, v in self.original_config.items():
+            COMPACTION_CONFIG[k] = v
+
+    def _mock_backend_response(self, mock_urlopen, payload):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(payload).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+        mock_urlopen.return_value = mock_resp
+
+    @patch("urllib.request.urlopen")
+    @patch("proxy.qz_responses._active_backend_base_url", return_value="http://127.0.0.1:19999")
+    def test_uses_active_backend_url_when_config_empty(self, _mock_active, mock_urlopen):
+        """When llm_base_url is empty, the URL from _active_backend_base_url() is used."""
+        COMPACTION_CONFIG["llm_base_url"] = ""
+        self._mock_backend_response(
+            mock_urlopen,
+            {"choices": [{"message": {"content": "summary"}}]},
+        )
+        result = _call_llm_compactor("prompt")
+        self.assertEqual(result, "summary")
+        mock_urlopen.assert_called_once()
+        called_url = mock_urlopen.call_args.args[0].full_url
+        self.assertIn(":19999", called_url)
+
+    @patch("urllib.request.urlopen")
+    @patch("proxy.qz_responses._active_backend_base_url", return_value="http://127.0.0.1:19999")
+    def test_explicit_llm_base_url_wins_over_active_backend(self, _mock_active, mock_urlopen):
+        """Explicit llm_base_url (the QZ_LLM_COMPACT_BASE_URL override) takes precedence."""
+        COMPACTION_CONFIG["llm_base_url"] = "http://explicit-backend:8888"
+        self._mock_backend_response(
+            mock_urlopen,
+            {"choices": [{"message": {"content": "summary"}}]},
+        )
+        result = _call_llm_compactor("prompt")
+        self.assertEqual(result, "summary")
+        mock_urlopen.assert_called_once()
+        called_url = mock_urlopen.call_args.args[0].full_url
+        self.assertIn("explicit-backend:8888", called_url)
+        self.assertNotIn(":19999", called_url)
+
+    @patch("urllib.request.urlopen")
+    @patch("proxy.qz_responses._active_backend_base_url", return_value="http://127.0.0.1:18180")
+    def test_active_backend_rejected_when_resolves_to_proxy_port(self, _mock_active, mock_urlopen):
+        """If active backend URL resolves to a proxy port, it must be rejected."""
+        COMPACTION_CONFIG["llm_base_url"] = ""
+        result = _call_llm_compactor("prompt")
+        self.assertIsNone(result)
+        mock_urlopen.assert_not_called()
+
+    @patch("urllib.request.urlopen")
+    @patch("proxy.qz_responses._active_backend_base_url", return_value="")
+    def test_empty_active_backend_returns_none(self, _mock_active, mock_urlopen):
+        """If both llm_base_url and _active_backend_base_url() are empty, return None."""
+        COMPACTION_CONFIG["llm_base_url"] = ""
+        result = _call_llm_compactor("prompt")
+        self.assertIsNone(result)
+        mock_urlopen.assert_not_called()
 
 
 if __name__ == "__main__":
