@@ -1,7 +1,7 @@
 # Compaction Audit and Strategy
 
 Date: 2026-05-27
-Status: **Stage 5** — profile-level compaction config added.
+Status: **Stage 6** — initial live dogfood completed; v3 remains opt-in and fell back safely.
 
 ---
 
@@ -881,6 +881,32 @@ hardcoded safe defaults
 **Goal**: Run live qz-codex sessions with LLM compaction enabled, capture
 telemetry, and tune thresholds.
 
+**Status**: Initial dogfood pass completed on 2026-05-27. See
+`docs/compaction-live-dogfood.md` for the runbook and capture pointers.
+
+**Observed in the initial pass**:
+- Direct backend identified: `http://127.0.0.1:18084`, a llama.cpp server
+  exposed by Docker on host port 18084.
+- QuantZhai proxy URL was not used as `QZ_LLM_COMPACT_BASE_URL`; the normal
+  proxy was on `127.0.0.1:18180` and the temporary smoke proxy on
+  `127.0.0.1:18183`.
+- Disposable smoke repo: `/tmp/linuxstreamtools`.
+- Default qz-codex smoke succeeded without enabling v3.
+- Heuristic live compaction smoke returned valid `localcmp:v2:` and passed
+  `10/10` checks.
+- Opt-in LLM compaction called the direct backend but did not produce an
+  accepted `localcmp:v3:` summary in this run. The path fell back to
+  `localcmp:v2:` as designed.
+- Backend diagnostics showed reasoning-only chat-completion responses at small
+  output budgets, and partial anchored summaries at larger budgets that still
+  failed the required-heading validator.
+- Prompt wording was tightened to require every schema heading through
+  `## Next Actions`, with `- none observed` allowed when evidence is absent.
+
+**Next tuning target**: Stage 6.1 should investigate the narrowest safe way to
+make the direct backend produce complete final `message.content` for compaction
+requests. Keep v3 opt-in and keep v2 fallback mandatory.
+
 **Files**:
 ```text
 var/captures/requests/<request_id>/compact-summary.txt
@@ -1124,7 +1150,7 @@ Stage 3.1             — complete       — hardened metrics scoreboard
 Stage 4               — complete       — LLM-generated v3 blobs
 Stage 4.1             — complete       — harden v3 fallback/config/safety path
 Stage 5               — complete       — compaction.json profile config
-Stage 6               — next available — dogfood/live tuning
+Stage 6               — initial run    — direct-backend dogfood; v2 fallback observed
 ```
 
 Priority note: Stages 0–3 are pure docs/tests. No proxy changes.

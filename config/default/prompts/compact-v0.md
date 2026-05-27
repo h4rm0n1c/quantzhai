@@ -12,6 +12,11 @@ Do not include markdown fences, explanatory prose, or section commentary.
 ## Rules
 
 - Preserve the exact section structure (names, order, sub-sections).
+- Emit every schema heading exactly once, in the order shown below.
+- Do not stop early. The output is invalid unless it includes every required
+  top-level heading through `## Next Actions`.
+- If a required section has no supporting evidence, include a single bullet:
+  `- none observed`.
 - Integrate new facts into the relevant sections.
 - Correct stale facts when new evidence contradicts them; delete superseded entries.
 - Copy exact atoms verbatim — never paraphrase:

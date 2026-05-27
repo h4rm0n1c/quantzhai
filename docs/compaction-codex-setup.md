@@ -1,7 +1,7 @@
 # Compaction Codex Setup
 
 Date: 2026-05-27
-Status: **Stage 5** — prompt file plus profile-level QuantZhai compaction config.
+Status: **Stage 6** — prompt file, profile config, and direct-backend dogfood runbook.
 Codex audit SHA: `46f30d02828bd4c52827e5f0482a6f2a982cce5b`
 
 ---
@@ -165,9 +165,13 @@ not configurable.
   is the direct llama.cpp/OpenAI-compatible backend. Do not set it to
   `CODEX_OSS_BASE_URL` or `http://127.0.0.1:18180`.
 
-- **Stage 6 is dogfood/live tuning.** Stage 5 is config plumbing. Do not run a
-  live LLM smoke through the QuantZhai proxy URL; use only a clearly identified
-  direct backend.
+- **Stage 6 is dogfood/live tuning.** Do not run a live LLM smoke through the
+  QuantZhai proxy URL; use only a clearly identified direct backend.
+
+- **Stage 6 found a thinking-mode blocker.** The direct llama.cpp backend can
+  return reasoning-only chat-completion output or partial anchored content. The
+  v3 path correctly falls back to `localcmp:v2:` when no valid anchored summary
+  is present. See `docs/compaction-live-dogfood.md`.
 
 ---
 
@@ -183,9 +187,9 @@ After wiring the config:
 5. Verify the output follows the schema sections and preserves any exact paths
    or commands you mentioned during the session.
 
-No live runtime smoke is required for Stage 5 unless a clearly identified
-direct backend is available outside the QuantZhai proxy. Stage 6 is the
-dogfood/live tuning pass.
+Live LLM smoke requires a clearly identified direct backend outside the
+QuantZhai proxy. The Stage 6 runbook and first results live in
+`docs/compaction-live-dogfood.md`.
 
 ---
 
@@ -195,6 +199,8 @@ dogfood/live tuning pass.
   field rules.
 - `docs/compaction-audit-and-strategy.md` — Stage 0 audit; Codex source
   evidence for compaction config fields; staged plan Stages 0–6.
+- `docs/compaction-live-dogfood.md` — Stage 6 direct-backend runbook, smoke
+  evidence, fallback observation, and tuning notes.
 - `docs/fixtures/compaction/` — example input/output pairs for schema
   compliance testing.
 - `docs/compaction-bridge-plan.md` — localcmp:v2: blob format and heuristic

@@ -64,10 +64,11 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 15. [Edge case and config contract plan](edge-case-config-contract-plan.md) — audit/refactor plan for config layout, compact errors, profile safety, and script sprawl.
 16. [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) — focused TODO/review plan for `/status`, `qz-top`, `qz-thoughts`, profiles, and streaming.
 17. [Runtime observability notes](runtime-observability-notes.md) — how to inspect live proxy/model behaviour.
-18. [Compaction audit and strategy](compaction-audit-and-strategy.md) — source-grounded audit of Codex and QuantZhai compaction, issue #8 promoted ideas, anchored summary schema v0, recommended prompt v0, and staged implementation roadmap. Stage 4.
+18. [Compaction audit and strategy](compaction-audit-and-strategy.md) — source-grounded audit of Codex and QuantZhai compaction, issue #8 promoted ideas, anchored summary schema v0, recommended prompt v0, and staged implementation roadmap. Stage 6.
 19. [Anchored compaction schema v0](compaction-anchored-schema-v0.md) — canonical schema spec: field rules, exact-atom preservation, evidence-to-decision retention, stale fact correction, uncertainty marking, non-goals, and versioning notes. Stage 4.
-20. [Compaction Codex setup](compaction-codex-setup.md) — how to wire `experimental_compact_prompt_file` to `config/default/prompts/compact-v0.md`; per-profile option; dual-path warnings; manual smoke guidance. Stage 4.
-21. [Compaction fixtures](fixtures/compaction/) — Stage 1 example input/output pairs: fixture-01 (basic coding session), fixture-02 (tool-heavy session), fixture-03 (rejected approaches and negative constraints). Stage 4 compatible.
+20. [Compaction Codex setup](compaction-codex-setup.md) — how to wire `experimental_compact_prompt_file`, use `compaction.json`, keep env overrides explicit, and run manual smoke checks. Stage 6.
+21. [Compaction live dogfood](compaction-live-dogfood.md) — Stage 6 direct-backend smoke runbook, live evidence, observed v2 fallback, and v3 tuning blocker.
+22. [Compaction fixtures](fixtures/compaction/) — Stage 1 example input/output pairs: fixture-01 (basic coding session), fixture-02 (tool-heavy session), fixture-03 (rejected approaches and negative constraints). Stage 4 compatible.
 
 ## Documentation by area
 
@@ -97,7 +98,8 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 | LLM signal system | [LLM signal system](llm-signal-system.md) | Hop budget, context pressure, compaction, and signal design notes. |
 | Compaction strategy | [Compaction audit and strategy](compaction-audit-and-strategy.md) | Codex audit (SHA 46f30d0), QuantZhai current behaviour, #8 promoted ideas, anchored schema v0, prompt v0, staged plan Stages 0–6. |
 | Compaction schema | [Anchored compaction schema v0](compaction-anchored-schema-v0.md) | Schema spec: 14 fixed sections, exact-atom rules, evidence-to-decision retention, stale fact correction, uncertainty marking, Codex prompt-file relationship. Stage 1. |
-| Compaction setup | [Compaction Codex setup](compaction-codex-setup.md) | Wire `experimental_compact_prompt_file` to compact-v0.md; per-profile option; dual-path warnings; manual /compact smoke guidance. Stage 1. |
+| Compaction setup | [Compaction Codex setup](compaction-codex-setup.md) | Wire `experimental_compact_prompt_file`, use `compaction.json`, preserve safe defaults, and run manual /compact smoke checks. Stage 6. |
+| Compaction dogfood | [Compaction live dogfood](compaction-live-dogfood.md) | Stage 6 live smoke evidence, direct backend runbook, observed v2 fallback, and v3 tuning blocker. |
 | Compaction fixtures | [fixtures/compaction/](fixtures/compaction/) | Stage 1 example input/output pairs testing exact atom retention, tool signal retention, rejected-approach preservation, and negative constraint verbatim retention. |
 | Benchmarking | [Benchmark findings: effort tuning](benchmark-findings-effort-tuning.md) | Measured profile/tool-use behaviour and open questions around open-ended repo exploration. |
 | Config and error handling | [Edge case and config contract plan](edge-case-config-contract-plan.md) | Audit/refactor plan for edge cases, compact errors, profile safety, config layering, script sprawl, and the profile-bundle design (qz.profiles.v1, profiles/*.json, memory_domain plumbing). |
@@ -382,6 +384,10 @@ docs/conversation-history-audit-plan.md
 docs/deep-research-report.md
 docs/edge-case-config-contract-plan.md
 docs/llm-signal-system.md
+docs/compaction-audit-and-strategy.md
+docs/compaction-anchored-schema-v0.md
+docs/compaction-codex-setup.md
+docs/compaction-live-dogfood.md
 docs/master-stabilisation-plan.md
 docs/observability-streaming-bugfix-agenda.md
 docs/patch-tool-roadmap.md
