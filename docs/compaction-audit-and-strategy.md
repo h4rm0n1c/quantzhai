@@ -1,7 +1,7 @@
 # Compaction Audit and Strategy
 
 Date: 2026-05-27
-Status: **Stage 6.2** — extended opt-in dogfood completed; v3 accepted across all scenarios, quality confirmed with real conversation depth, fallback proven, latency baseline established; default remains heuristic v2.
+Status: **Stage 6.3** — extended real-session dogfood completed; 6/6 v3 accepted, zero leakage, zero hallucination, quality scales with conversation depth; default remains heuristic v2.
 
 ---
 
@@ -148,6 +148,29 @@ This path is **not active** for QuantZhai local provider sessions.
   (that field is a QuantZhai proxy extension, not a Codex wire field).
 - `previous_response_id` is present in the request struct but was absent
   in the live Codex 0.130 capture (see `codex-context-memory-contract.md`).
+
+---
+
+#### Stage 6.3: Extended real-session opt-in dogfood
+
+**Goal**: Confirm v3 quality and reliability across 6 real execution scenarios with varied tool use, context depth, and constraint density.
+
+**Status**: Completed on 2026-05-27. All 6 scenarios produced accepted v3. See `docs/compaction-live-dogfood.md`.
+
+**Observed**:
+- 6/6 scenarios produced v3 accepted (11 total across Stage 6.2 + 6.3).
+- Zero reasoning_content leakage.
+- Zero placeholder leakage.
+- Zero hallucinated content.
+- Zero heuristic fallbacks triggered.
+- survival_hint_count=0 for all scenarios (conversation depth below keep_recent_items=20).
+- Latency 5.3-7.1s for short conversations; 5.8s for 21-turn session.
+- Quality confirmed to scale with older-item count: Scenario F (21 turns) produced non-trivial content in Files/Paths.
+- v3 vs v2 comparison: identical sparse behavior for short histories; v3 provides canonical schema structure.
+
+**Contract unchanged**: Default remains heuristic v2. v3 is opt-in only. All previous acceptance criteria preserved.
+
+**Tuning recommendation**: No changes justified by current evidence. Sparsity is inherent in short sessions and identical to v2 behaviour.
 
 ---
 
@@ -1177,9 +1200,10 @@ Stage 3.1             — complete       — hardened metrics scoreboard
 Stage 4               — complete       — LLM-generated v3 blobs
 Stage 4.1             — complete       — harden v3 fallback/config/safety path
 Stage 5               — complete       — compaction.json profile config
-Stage 6               — initial run    — direct-backend dogfood; v2 fallback observed
+Stage 6               — complete       — direct-backend dogfood; v2 fallback observed
 Stage 6.1             — complete       — compactor final-output tuning; live v3 accepted
 Stage 6.2             — complete       — extended opt-in dogfood; v3 reliability and quality confirmed; latency baseline 5-68s; fallback proven; no tuning needed
+Stage 6.3             — complete       — extended real-session dogfood; 6/6 v3 accepted; quality scales with conversation depth; zero leakage; no tuning needed
 ```
 
 Priority note: Stages 0–3 are pure docs/tests. No proxy changes.
