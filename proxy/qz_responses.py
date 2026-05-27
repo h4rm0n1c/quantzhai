@@ -60,6 +60,11 @@ _VALID_COMPACTION_MODES = frozenset({"heuristic", "llm", "auto"})
 _DEFAULT_LLM_TIMEOUT_SEC = 30
 _DEFAULT_LLM_MAX_INPUT_CHARS = 100000
 _DEFAULT_LLM_MAX_OUTPUT_TOKENS = 1536
+_DEFAULT_SURVIVAL_PROFILE = "coding"
+_VALID_SURVIVAL_PROFILES = frozenset({_DEFAULT_SURVIVAL_PROFILE})
+_COMPACTION_CONFIG_ENV = "QZ_COMPACTION_CONFIG"
+_COMPACTION_PROFILE_ENV = "QZ_COMPACTION_PROFILE"
+_COMPACTION_SURVIVAL_PROFILE_ENV = "QZ_COMPACTION_SURVIVAL_PROFILE"
 _REQUIRED_ANCHORED_HEADINGS = (
     "## Goal",
     "## Active Constraints & Guardrails",
@@ -81,14 +86,18 @@ def _coerce_positive_int(value, default: int) -> int:
     return parsed
 
 
-def _get_env_int(key: str, default: int) -> int:
+def _get_env_int_from_mapping(env, key: str, default: int) -> int:
     try:
-        val = os.environ.get(key)
+        val = env.get(key)
         if val is None:
             return default
         return _coerce_positive_int(val, default)
     except (ValueError, TypeError):
         return default
+
+
+def _get_env_int(key: str, default: int) -> int:
+    return _get_env_int_from_mapping(os.environ, key, default)
 
 
 def _normalize_compaction_mode(mode) -> str:
@@ -98,12 +107,176 @@ def _normalize_compaction_mode(mode) -> str:
     return normalized if normalized in _VALID_COMPACTION_MODES else "heuristic"
 
 
+def _normalize_survival_profile(value) -> str:
+    if not isinstance(value, str):
+        return _DEFAULT_SURVIVAL_PROFILE
+    normalized = value.strip().lower()
+    return normalized if normalized in _VALID_SURVIVAL_PROFILES else _DEFAULT_SURVIVAL_PROFILE
+
+
 def _current_compaction_mode() -> str:
     return _normalize_compaction_mode(COMPACTION_CONFIG.get("mode"))
 
 
 def _positive_config_int(key: str, default: int) -> int:
     return _coerce_positive_int(COMPACTION_CONFIG.get(key), default)
+
+
+def _current_survival_profile() -> str:
+    return _normalize_survival_profile(COMPACTION_CONFIG.get("survival_profile"))
+
+
+def _score_survival_text(text: str):
+    # Stage 5 reserves survival_profile as a selector; only coding is implemented.
+    _current_survival_profile()
+    return score_text(text)
+
+
+def _qz_root(env=None):
+    env = os.environ if env is None else env
+    raw = env.get("QZ_ROOT")
+    if isinstance(raw, str) and raw.strip():
+        return os.path.abspath(os.path.expanduser(raw.strip()))
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+
+
+def _default_prompt_file(env=None) -> str:
+    env = os.environ if env is None else env
+    return os.path.join(env.get("QZ_ROOT", ""), "config/default/prompts/compact-v0.md")
+
+
+def _default_compaction_json_path(env=None, root=None) -> str:
+    root_path = root or _qz_root(env)
+    return os.path.join(str(root_path), "config/default/compaction.json")
+
+
+def _default_compaction_config(env=None) -> dict:
+    env = os.environ if env is None else env
+    return {
+        "keep_recent_items": _get_env_int_from_mapping(env, "QZ_COMPACT_KEEP_RECENT", 20),
+        "min_preserve_items": _get_env_int_from_mapping(env, "QZ_COMPACT_MIN_PRESERVE", 6),
+        "max_summary_chars": _get_env_int_from_mapping(env, "QZ_COMPACT_MAX_SUMMARY_CHARS", 48000),
+        "max_tool_output_chars": _get_env_int_from_mapping(env, "QZ_COMPACT_MAX_TOOL_OUTPUT_CHARS", 3200),
+        "max_item_summary_chars": _get_env_int_from_mapping(env, "QZ_COMPACT_MAX_ITEM_CHARS", 2000),
+        "max_compaction_depth": _get_env_int_from_mapping(env, "QZ_COMPACT_MAX_DEPTH", 8),
+        "target_output_tokens": _get_env_int_from_mapping(env, "QZ_COMPACT_TARGET_TOKENS", 56000),
+        "mode": "heuristic",
+        "survival_profile": _DEFAULT_SURVIVAL_PROFILE,
+        "llm_base_url": "",
+        "llm_model": "",
+        "llm_timeout_sec": _DEFAULT_LLM_TIMEOUT_SEC,
+        "llm_max_input_chars": _DEFAULT_LLM_MAX_INPUT_CHARS,
+        "llm_max_output_tokens": _DEFAULT_LLM_MAX_OUTPUT_TOKENS,
+        "prompt_file": _default_prompt_file(env),
+    }
+
+
+def _load_compaction_json(path) -> dict:
+    if not isinstance(path, str) or not path.strip():
+        return {}
+    try:
+        with open(os.path.expanduser(path.strip()), "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _select_compaction_profile(config: dict, profile_name: str) -> dict:
+    if not isinstance(config, dict):
+        return {}
+    profiles = config.get("profiles")
+    if not isinstance(profiles, dict):
+        return {}
+
+    requested = profile_name if isinstance(profile_name, str) and profile_name.strip() else "default"
+    for name in (requested.strip(), "default"):
+        profile = profiles.get(name)
+        if isinstance(profile, dict):
+            return dict(profile)
+    return {}
+
+
+def _apply_profile_compaction_values(merged: dict, profile: dict) -> dict:
+    if not isinstance(profile, dict):
+        return merged
+
+    if "mode" in profile:
+        merged["mode"] = _normalize_compaction_mode(profile.get("mode"))
+    if "survival_profile" in profile:
+        merged["survival_profile"] = _normalize_survival_profile(profile.get("survival_profile"))
+
+    for key in ("prompt_file", "llm_base_url", "llm_model"):
+        if key not in profile:
+            continue
+        value = profile.get(key)
+        if isinstance(value, str):
+            merged[key] = value.strip().rstrip("/") if key == "llm_base_url" else value.strip()
+
+    int_defaults = {
+        "llm_timeout_sec": _DEFAULT_LLM_TIMEOUT_SEC,
+        "llm_max_input_chars": _DEFAULT_LLM_MAX_INPUT_CHARS,
+        "llm_max_output_tokens": _DEFAULT_LLM_MAX_OUTPUT_TOKENS,
+    }
+    for key, default in int_defaults.items():
+        if key in profile:
+            merged[key] = _coerce_positive_int(profile.get(key), default)
+    return merged
+
+
+def _apply_env_compaction_overrides(merged: dict, env) -> dict:
+    env = os.environ if env is None else env
+    if "QZCOMPACT" in env:
+        merged["mode"] = _normalize_compaction_mode(env.get("QZCOMPACT"))
+    if _COMPACTION_SURVIVAL_PROFILE_ENV in env:
+        merged["survival_profile"] = _normalize_survival_profile(env.get(_COMPACTION_SURVIVAL_PROFILE_ENV))
+
+    string_env_map = {
+        "QZ_LLM_COMPACT_BASE_URL": "llm_base_url",
+        "QZ_LLM_COMPACT_MODEL": "llm_model",
+        "QZ_LLM_COMPACT_PROMPT_FILE": "prompt_file",
+    }
+    for env_key, cfg_key in string_env_map.items():
+        if env_key not in env:
+            continue
+        value = env.get(env_key)
+        if isinstance(value, str):
+            merged[cfg_key] = value.strip().rstrip("/") if cfg_key == "llm_base_url" else value.strip()
+
+    int_env_map = {
+        "QZ_LLM_COMPACT_TIMEOUT_SEC": ("llm_timeout_sec", _DEFAULT_LLM_TIMEOUT_SEC),
+        "QZ_LLM_COMPACT_MAX_INPUT_CHARS": ("llm_max_input_chars", _DEFAULT_LLM_MAX_INPUT_CHARS),
+        "QZ_LLM_COMPACT_MAX_OUTPUT_TOKENS": ("llm_max_output_tokens", _DEFAULT_LLM_MAX_OUTPUT_TOKENS),
+    }
+    for env_key, (cfg_key, default) in int_env_map.items():
+        if env_key in env:
+            merged[cfg_key] = _get_env_int_from_mapping(env, env_key, default)
+    return merged
+
+
+def _merge_compaction_config(defaults: dict, profile: dict, env=None) -> dict:
+    merged = dict(defaults or _default_compaction_config(env))
+    merged = _apply_profile_compaction_values(merged, profile)
+    merged = _apply_env_compaction_overrides(merged, os.environ if env is None else env)
+    merged["mode"] = _normalize_compaction_mode(merged.get("mode"))
+    merged["survival_profile"] = _normalize_survival_profile(merged.get("survival_profile"))
+    return merged
+
+
+def _get_effective_compaction_config(env=None, root=None, config_path=None, profile_name=None) -> dict:
+    env = os.environ if env is None else env
+    defaults = _default_compaction_config(env)
+    selected_config_path = (
+        config_path
+        or (env.get(_COMPACTION_CONFIG_ENV) if isinstance(env.get(_COMPACTION_CONFIG_ENV), str) and env.get(_COMPACTION_CONFIG_ENV).strip() else None)
+        or _default_compaction_json_path(env, root)
+    )
+    data = _load_compaction_json(selected_config_path)
+    selected_profile = profile_name
+    if selected_profile is None:
+        selected_profile = env.get(_COMPACTION_PROFILE_ENV, "default")
+    profile = _select_compaction_profile(data, selected_profile)
+    return _merge_compaction_config(defaults, profile, env)
 
 # Item types that are proxy-generated and should be excluded from old-history
 # compaction summaries and microcompaction replays. Proxy-local tool types are
@@ -119,24 +292,7 @@ _UPSTREAM_TRANSIENT_ITEM_TYPES: frozenset[str] = frozenset({"reasoning"})
 _COMPACTION_DROP_TYPES: frozenset[str] = _PROXY_LOCAL_ITEM_TYPES | _UPSTREAM_TRANSIENT_ITEM_TYPES
 
 LOCAL_COMPACTION_PREFIX = "localcmp:v2:"
-COMPACTION_CONFIG = {
-    "keep_recent_items": _get_env_int("QZ_COMPACT_KEEP_RECENT", 20),
-    "min_preserve_items": _get_env_int("QZ_COMPACT_MIN_PRESERVE", 6),
-    "max_summary_chars": _get_env_int("QZ_COMPACT_MAX_SUMMARY_CHARS", 48000),
-    "max_tool_output_chars": _get_env_int("QZ_COMPACT_MAX_TOOL_OUTPUT_CHARS", 3200),
-    "max_item_summary_chars": _get_env_int("QZ_COMPACT_MAX_ITEM_CHARS", 2000),
-    "max_compaction_depth": _get_env_int("QZ_COMPACT_MAX_DEPTH", 8),
-    "target_output_tokens": _get_env_int("QZ_COMPACT_TARGET_TOKENS", 56000),
-    
-    # Stage 4 LLM Compaction (opt-in)
-    "mode": _normalize_compaction_mode(os.environ.get("QZCOMPACT", "heuristic")), # heuristic | llm | auto
-    "llm_base_url": os.environ.get("QZ_LLM_COMPACT_BASE_URL", "").rstrip("/"),
-    "llm_model": os.environ.get("QZ_LLM_COMPACT_MODEL", ""),
-    "llm_timeout_sec": _get_env_int("QZ_LLM_COMPACT_TIMEOUT_SEC", _DEFAULT_LLM_TIMEOUT_SEC),
-    "llm_max_input_chars": _get_env_int("QZ_LLM_COMPACT_MAX_INPUT_CHARS", _DEFAULT_LLM_MAX_INPUT_CHARS),
-    "llm_max_output_tokens": _get_env_int("QZ_LLM_COMPACT_MAX_OUTPUT_TOKENS", _DEFAULT_LLM_MAX_OUTPUT_TOKENS),
-    "prompt_file": os.environ.get("QZ_LLM_COMPACT_PROMPT_FILE") or os.path.join(os.environ.get("QZ_ROOT", ""), "config/default/prompts/compact-v0.md"),
-}
+COMPACTION_CONFIG = _get_effective_compaction_config()
 
 FUNCTION_CALL_TYPES = {"function_call", "computer_call", "code_interpreter_call", "custom_tool_call"}
 FUNCTION_OUTPUT_TYPES = {
@@ -420,7 +576,7 @@ def _build_survival_weighted_compaction_prompt(previous_summary: str, new_items:
     
     # Generate hints from the full normalized body, then cap the raw body while
     # keeping those exact-atom hints at the end of the prompt.
-    spans = score_text(raw_convo_body)
+    spans = _score_survival_text(raw_convo_body)
     hints = format_survival_hints(spans, max_spans=40)
     max_input_chars = _positive_config_int("llm_max_input_chars", _DEFAULT_LLM_MAX_INPUT_CHARS)
     if hints:
@@ -607,7 +763,7 @@ def _build_local_compaction_response_v3(body: dict, working_items: list, existin
     
     # Calculate survival hint count for metadata
     combined_older_text = "\n".join(_item_text(it) for it in older)
-    spans = score_text(combined_older_text)
+    spans = _score_survival_text(combined_older_text)
     
     payload = {
         "version": 3,

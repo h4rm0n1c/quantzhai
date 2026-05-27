@@ -7,6 +7,8 @@ import tempfile
 import urllib.error
 from unittest.mock import patch, MagicMock
 from proxy.qz_responses import (
+    _DEFAULT_LLM_MAX_OUTPUT_TOKENS,
+    _DEFAULT_LLM_TIMEOUT_SEC,
     _build_local_compaction_response,
     _build_survival_weighted_compaction_prompt,
     _call_llm_compactor,
@@ -243,8 +245,8 @@ class TestLLMCompaction(unittest.TestCase):
         self.assertEqual(result, VALID_SUMMARY.strip())
         request = mock_urlopen.call_args.args[0]
         payload = json.loads(request.data.decode("utf-8"))
-        self.assertEqual(payload["max_tokens"], 1536)
-        self.assertEqual(mock_urlopen.call_args.kwargs["timeout"], 30)
+        self.assertEqual(payload["max_tokens"], _DEFAULT_LLM_MAX_OUTPUT_TOKENS)
+        self.assertEqual(mock_urlopen.call_args.kwargs["timeout"], _DEFAULT_LLM_TIMEOUT_SEC)
 
     @patch("urllib.request.urlopen")
     def test_recursive_proxy_url_is_rejected_without_network_call(self, mock_urlopen):

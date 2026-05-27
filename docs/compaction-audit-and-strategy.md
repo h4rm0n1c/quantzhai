@@ -1,7 +1,7 @@
 # Compaction Audit and Strategy
 
 Date: 2026-05-27
-Status: **Stage 4.1** — LLM anchored compaction fallback path hardened.
+Status: **Stage 5** — profile-level compaction config added.
 
 ---
 
@@ -732,7 +732,7 @@ Heuristic fallback if LLM call fails.
 
 ---
 
-#### Stage 5: Hybrid proxy integration with localcmp:v3
+#### Stage 4: Hybrid proxy integration with localcmp:v3
 
 **Goal**: Wire v3 compaction into the proxy routing path. Add `localcmp:v3:`
 decode support to `_expand_local_compaction_items`.
@@ -813,6 +813,66 @@ contract.
 - Unit tests use mocked network calls only.
 - Live smoke is optional and was skipped for this hardening slice unless a
   clearly safe direct backend is configured outside the QuantZhai proxy.
+
+---
+
+#### Stage 5: Profile-level compaction config
+
+**Goal**: Add a profile-level compaction configuration surface without changing
+the compaction engine defaults.
+
+**Status**: Complete as of 2026-05-27.
+
+**Config path**:
+```text
+config/default/compaction.json
+QZ_COMPACTION_CONFIG=/path/to/compaction.json
+QZ_COMPACTION_PROFILE=coding-llm
+```
+
+`compaction.json` uses a small JSON shape:
+```json
+{
+  "version": 1,
+  "profiles": {
+    "default": {
+      "mode": "heuristic",
+      "survival_profile": "coding",
+      "prompt_file": "config/default/prompts/compact-v0.md"
+    }
+  }
+}
+```
+
+**Precedence**:
+```text
+hardcoded safe defaults
+  < selected compaction.json profile
+  < QZCOMPACT / QZ_LLM_COMPACT_* / QZ_COMPACTION_* env overrides
+```
+
+**Contract preserved**:
+- Default profile remains heuristic `localcmp:v2:`.
+- `localcmp:v3:` remains opt-in through `mode=llm` or `mode=auto` plus a direct
+  backend URL.
+- Env vars override `compaction.json`.
+- Invalid modes and invalid integer values fall back to safe defaults.
+- Recursive QuantZhai proxy URLs remain rejected before any backend call.
+- Native tool routing, request permission handling, lifecycle event shapes, and
+  BrainCaseDB/memory behavior are unchanged.
+
+**Survival profile selector**:
+- Stage 5 supports only `survival_profile: "coding"`.
+- Unknown selector values fall back to `coding`.
+- Scorer internals remain hardcoded in Python. Config does not expose weights,
+  thresholds, regexes, import paths, plugins, or arbitrary execution.
+- Future profiles such as research, legal/admin evidence work, creative/project
+  writing, and HSM/personal memory can be added later behind this selector.
+
+**Validation**:
+- Unit tests use mocked network calls only.
+- Live LLM smoke is skipped for Stage 5 unless a clearly identified direct
+  backend is configured outside the QuantZhai proxy.
 
 ---
 
@@ -1063,8 +1123,8 @@ Stage 3               — complete       — offline fixture/eval harness
 Stage 3.1             — complete       — hardened metrics scoreboard
 Stage 4               — complete       — LLM-generated v3 blobs
 Stage 4.1             — complete       — harden v3 fallback/config/safety path
-Stage 5               — next available  — profile-level compaction config
-Stage 6               — after Stage 5   — dogfood/live tuning
+Stage 5               — complete       — compaction.json profile config
+Stage 6               — next available — dogfood/live tuning
 ```
 
 Priority note: Stages 0–3 are pure docs/tests. No proxy changes.
