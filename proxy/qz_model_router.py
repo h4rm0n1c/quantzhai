@@ -304,6 +304,16 @@ class ModelRouter:
             last_load_error=existing.last_load_error,
             last_load_error_type=existing.last_load_error_type,
             last_loaded_model=existing.last_loaded_model,
+            # Preserve recovery memory — ordinary writes must not erase these.
+            last_good_key=existing.last_good_key,
+            last_good_backend_id=existing.last_good_backend_id,
+            last_good_label=existing.last_good_label,
+            last_good_source=existing.last_good_source,
+            last_good_loaded_at=existing.last_good_loaded_at,
+            failed_candidate_key=existing.failed_candidate_key,
+            failed_candidate_backend_id=existing.failed_candidate_backend_id,
+            failed_candidate_label=existing.failed_candidate_label,
+            failed_candidate_at=existing.failed_candidate_at,
         )
 
         try:

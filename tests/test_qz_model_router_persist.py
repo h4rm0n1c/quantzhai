@@ -303,5 +303,103 @@ class ReconcileStatusStateLastGoodTests(unittest.TestCase):
                          "last_good_backend_id must remain empty when backend is not loaded")
 
 
+class PersistModelStateRecoveryMemoryTests(unittest.TestCase):
+    """_persist_model_state must carry last_good_* and failed_candidate_* through ordinary writes."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._state_path = str(Path(self._tmp.name) / "model-state.json")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _write_state(self, **kwargs):
+        write_model_state(ModelState(**kwargs), Path(self._state_path))
+
+    def _read_state(self) -> ModelState:
+        return load_model_state(Path(self._state_path)).state
+
+    def test_last_good_fields_preserved_across_normal_write(self):
+        """An ordinary _persist_model_state call must not erase last_good_* fields."""
+        self._write_state(
+            selected_key="Qwen3.6.gguf",
+            selected_backend_id="Qwen3.6",
+            selected_source="operator",
+            last_good_key="Qwen3.6.gguf",
+            last_good_backend_id="Qwen3.6",
+            last_good_label="Qwen3.6 27B",
+            last_good_source="operator",
+            last_good_loaded_at="2026-05-28T00:00:00Z",
+        )
+        router = _make_router(self._state_path)
+        # Ordinary write — same model, new reason
+        router._persist_model_state(
+            {"key": "Qwen3.6.gguf", "backend_id": "Qwen3.6", "label": "Qwen3.6 27B"},
+            reason="reloaded",
+            source="operator",
+        )
+        state = self._read_state()
+        self.assertEqual(state.last_good_backend_id, "Qwen3.6",
+                         "last_good_backend_id must survive ordinary write")
+        self.assertEqual(state.last_good_key, "Qwen3.6.gguf",
+                         "last_good_key must survive ordinary write")
+        self.assertEqual(state.last_good_label, "Qwen3.6 27B",
+                         "last_good_label must survive ordinary write")
+        self.assertEqual(state.last_good_source, "operator",
+                         "last_good_source must survive ordinary write")
+        self.assertEqual(state.last_good_loaded_at, "2026-05-28T00:00:00Z",
+                         "last_good_loaded_at must survive ordinary write")
+
+    def test_failed_candidate_fields_preserved_across_normal_write(self):
+        """An ordinary _persist_model_state call must not erase failed_candidate_* fields."""
+        self._write_state(
+            selected_key="Qwen3.6.gguf",
+            selected_backend_id="Qwen3.6",
+            selected_source="fallback",
+            last_good_backend_id="Qwen3.6",
+            failed_candidate_key="BigModel.gguf",
+            failed_candidate_backend_id="BigModel",
+            failed_candidate_label="Big Model",
+            failed_candidate_at="2026-05-28T00:01:00Z",
+        )
+        router = _make_router(self._state_path)
+        router._persist_model_state(
+            {"key": "Qwen3.6.gguf", "backend_id": "Qwen3.6"},
+            reason="status reconciliation",
+            source="status_snapshot",
+        )
+        state = self._read_state()
+        self.assertEqual(state.failed_candidate_backend_id, "BigModel",
+                         "failed_candidate_backend_id must survive status_snapshot write")
+        self.assertEqual(state.failed_candidate_key, "BigModel.gguf",
+                         "failed_candidate_key must survive status_snapshot write")
+        self.assertEqual(state.failed_candidate_label, "Big Model",
+                         "failed_candidate_label must survive ordinary write")
+        self.assertEqual(state.failed_candidate_at, "2026-05-28T00:01:00Z",
+                         "failed_candidate_at must survive ordinary write")
+
+    def test_status_snapshot_after_recovery_does_not_erase_last_good(self):
+        """A status_snapshot write after self-heal recovery must not erase last_good_backend_id."""
+        # Simulate state after self-heal: canonical source, last_good populated
+        self._write_state(
+            selected_key="Qwen3.6.gguf",
+            selected_backend_id="Qwen3.6",
+            selected_source="fallback",
+            selected_reason="startup self-heal: last_loaded_model salvage",
+            last_good_backend_id="Qwen3.6",
+            last_good_key="Qwen3.6.gguf",
+        )
+        router = _make_router(self._state_path)
+        # A status probe arrives and calls _persist_model_state with status_snapshot
+        router._persist_model_state(
+            {"key": "Qwen3.6.gguf", "backend_id": "Qwen3.6"},
+            reason="status reconciliation",
+            source="status_snapshot",
+        )
+        state = self._read_state()
+        self.assertEqual(state.last_good_backend_id, "Qwen3.6",
+                         "last_good_backend_id must not be erased by a post-recovery status_snapshot write")
+
+
 if __name__ == "__main__":
     unittest.main()

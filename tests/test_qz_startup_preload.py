@@ -107,10 +107,20 @@ def _run_resolve(state: ModelState, catalog: _StubCatalog, state_path: Path):
                 write_model_state(_healed, state_path)
                 return _entry
 
-        # Priority 2: last_loaded_model salvage
+        # Priority 2: last_loaded_model salvage — unique exact match only
         salvage_model = ms.last_loaded_model
         if salvage_model:
-            _entry, _ = catalog.resolve(query=salvage_model)
+            _q = salvage_model.strip()
+            _identity_fields = ("backend_id", "key", "slug", "filename")
+            _exact_matches = [
+                e for e in (catalog.entries or [])
+                if isinstance(e, dict)
+                and any(
+                    isinstance(e.get(f), str) and e.get(f, "").strip() == _q
+                    for f in _identity_fields
+                )
+            ]
+            _entry = _exact_matches[0] if len(_exact_matches) == 1 else None
             if _entry is not None:
                 _backend_id = _entry.get("backend_id") or salvage_model
                 _healed = _dc_replace(
@@ -364,6 +374,93 @@ class CanonicalStateTests(unittest.TestCase):
         result = _run_resolve(state, catalog, self._state_path)
         self.assertIsNotNone(result)
         self.assertEqual(result.get("backend_id"), "default")
+
+
+class ExactMatchSalvageTests(unittest.TestCase):
+    """last_loaded_model salvage requires a unique exact match on catalog identity fields."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._state_path = Path(self._tmp.name) / "model-state.json"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _poisoned(self, last_loaded_model: str) -> ModelState:
+        from dataclasses import replace
+        state = _make_poisoned_state()
+        return replace(state, last_loaded_model=last_loaded_model, last_good_backend_id="")
+
+    def test_exact_backend_id_match_salvages(self):
+        """last_loaded_model that exactly matches one entry's backend_id is salvaged."""
+        state = self._poisoned(REAL_MODEL_ID)
+        real_entry = _make_entry(REAL_MODEL_KEY, backend_id=REAL_MODEL_ID)
+        catalog = _StubCatalog(
+            entries=[_make_entry("default.gguf", backend_id="default"), real_entry],
+        )
+        result = _run_resolve(state, catalog, self._state_path)
+        self.assertIsNotNone(result, "unique exact match must salvage")
+        self.assertEqual(result.get("backend_id"), REAL_MODEL_ID)
+
+    def test_exact_key_match_salvages(self):
+        """last_loaded_model matching a catalog entry's key field is salvaged."""
+        state = self._poisoned(REAL_MODEL_KEY)  # e.g. "Qwen3.6-27B-...-IQ4_XS.gguf"
+        real_entry = _make_entry(REAL_MODEL_KEY, backend_id=REAL_MODEL_ID)
+        catalog = _StubCatalog(
+            entries=[_make_entry("default.gguf", backend_id="default"), real_entry],
+        )
+        result = _run_resolve(state, catalog, self._state_path)
+        self.assertIsNotNone(result, "exact key match must salvage")
+        self.assertEqual(result.get("backend_id"), REAL_MODEL_ID)
+
+    def test_ambiguous_match_does_not_salvage(self):
+        """last_loaded_model matching more than one catalog entry is rejected."""
+        # Two entries share the same backend_id fragment — ambiguous
+        entry_a = _make_entry("ModelA.gguf", backend_id="shared-id")
+        entry_b = _make_entry("ModelB.gguf", backend_id="shared-id")
+        state = self._poisoned("shared-id")
+        catalog = _StubCatalog(entries=[entry_a, entry_b])
+        result = _run_resolve(state, catalog, self._state_path)
+        # Both entries match "shared-id" → ambiguous → returns None
+        self.assertIsNone(result,
+                          "ambiguous last_loaded_model must not salvage")
+
+    def test_no_match_does_not_salvage(self):
+        """last_loaded_model with no catalog match is skipped safely."""
+        state = self._poisoned("ghost-model-not-in-catalog")
+        catalog = _StubCatalog(
+            entries=[_make_entry("default.gguf", backend_id="default")],
+        )
+        result = _run_resolve(state, catalog, self._state_path)
+        self.assertIsNone(result,
+                          "unresolvable last_loaded_model must not salvage")
+
+    def test_partial_substring_does_not_salvage(self):
+        """last_loaded_model that is only a substring of a catalog entry is rejected."""
+        # REAL_MODEL_ID is a substring of REAL_MODEL_KEY (gguf suffix differs)
+        # — but if last_loaded_model is a partial string it must not match
+        state = self._poisoned("Qwen3.6")  # prefix only — not an exact match
+        real_entry = _make_entry(REAL_MODEL_KEY, backend_id=REAL_MODEL_ID)
+        catalog = _StubCatalog(entries=[real_entry])
+        result = _run_resolve(state, catalog, self._state_path)
+        self.assertIsNone(result,
+                          "partial/substring last_loaded_model must not salvage")
+
+    def test_salvage_does_not_happen_when_last_good_is_set(self):
+        """last_good_backend_id takes priority; last_loaded_model path is never reached."""
+        from dataclasses import replace
+        state = _make_poisoned_state()
+        state = replace(state,
+                        last_good_backend_id=REAL_MODEL_ID,
+                        last_loaded_model="some-other-model")
+        real_entry = _make_entry(REAL_MODEL_KEY, backend_id=REAL_MODEL_ID)
+        catalog = _StubCatalog(
+            entries=[real_entry, _make_entry("some-other-model.gguf", backend_id="some-other-model")],
+        )
+        result = _run_resolve(state, catalog, self._state_path)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.get("backend_id"), REAL_MODEL_ID,
+                         "last_good_backend_id must take priority over last_loaded_model")
 
 
 if __name__ == "__main__":

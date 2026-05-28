@@ -798,15 +798,29 @@ def main():
                         print(f"QuantZhai: self-heal state rewrite failed: {_exc}", flush=True)
                     return _entry
 
-            # Recovery priority 2: last_loaded_model (one-time salvage)
+            # Recovery priority 2: last_loaded_model (one-time salvage).
+            # Allowed only when last_loaded_model is a unique exact match against
+            # catalog/backend identity fields.  Fuzzy or ambiguous resolution is
+            # rejected — it is safer to fall through to the catalog default than
+            # to silently load the wrong model.
             salvage_model = state.last_loaded_model
             if salvage_model:
-                _entry, _ = catalog.resolve(query=salvage_model)
+                _q = salvage_model.strip()
+                _identity_fields = ("backend_id", "key", "slug", "filename")
+                _exact_matches = [
+                    e for e in (catalog.entries or [])
+                    if isinstance(e, dict)
+                    and any(
+                        isinstance(e.get(f), str) and e.get(f, "").strip() == _q
+                        for f in _identity_fields
+                    )
+                ]
+                _entry = _exact_matches[0] if len(_exact_matches) == 1 else None
                 if _entry is not None:
                     _backend_id = _entry.get("backend_id") or salvage_model
                     print(
-                        f"QuantZhai: self-heal recovered via last_loaded_model: "
-                        f"{salvage_model!r} → backend_id={_backend_id!r}",
+                        f"QuantZhai: self-heal recovered via last_loaded_model "
+                        f"(unique exact match): {salvage_model!r} → backend_id={_backend_id!r}",
                         flush=True,
                     )
                     try:
@@ -822,6 +836,12 @@ def main():
                     except Exception as _exc:
                         print(f"QuantZhai: self-heal state rewrite failed: {_exc}", flush=True)
                     return _entry
+                else:
+                    print(
+                        f"QuantZhai: self-heal skipping last_loaded_model {salvage_model!r} "
+                        f"— {'ambiguous' if len(_exact_matches) > 1 else 'no'} exact catalog match.",
+                        flush=True,
+                    )
 
             print(
                 "QuantZhai: self-heal found no usable recovery anchor "
