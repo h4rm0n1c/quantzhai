@@ -440,6 +440,11 @@ class RequestRouter:
             model_status = build_model_status(self.handler)
 
     @staticmethod
+    def _hold_open_loading_enabled() -> bool:
+        value = str(os.environ.get("QZ_HOLDOPEN_LOADING") or "").strip().lower()
+        return value in {"1", "true", "yes", "on"}
+
+    @staticmethod
     def _proxy_initialization_ready(initialization: dict) -> bool:
         return bool(initialization.get("ready"))
 
@@ -654,9 +659,21 @@ class RequestRouter:
             if mgr is None:
                 return False
             self._set_manager_launch_model(requested, mgr)
-            result = mgr.restart()
-            if not result.get("ok"):
-                return False
+
+            if mgr.phase in ("disabled", "idle", "stopped", "failed"):
+                result = mgr.start()
+                if not result.get("ok"):
+                    return False
+            else:
+                import threading
+                filename = (mgr.snapshot().get("launch_model_path_basename") or "").strip()
+                if filename and callable(getattr(mgr, "load_model_http", None)):
+                    threading.Thread(
+                        target=mgr.load_model_http,
+                        args=(filename,),
+                        daemon=True
+                    ).start()
+
             self._do_select_model(requested)
             return True
         except Exception:
@@ -2435,7 +2452,7 @@ class RequestRouter:
         return False, None, None, False
 
     def _invoke_selected_model_reload(self, requested: str):
-        """Restart the backend with ``-m /models/<basename>`` for requested."""
+        """Ensure the backend has loaded the requested model."""
         mgr = getattr(self.handler, "backend_manager", None)
         if mgr is None:
             raise RuntimeError("backend_manager not initialised")
@@ -2463,12 +2480,19 @@ class RequestRouter:
         return entry, "direct backend launch model set"
 
     def _direct_mode_reload(self, requested: str, mgr) -> tuple[dict, str]:
-        """Restart the BackendManager container with the selected model."""
+        """Start the backend if needed, then load the selected model."""
         entry, _ = self._set_manager_launch_model(requested, mgr)
         with self._request_gate("/qz/model/reload", requested, False):
-            result = mgr.restart()
-        if not result.get("ok"):
-            raise RuntimeError(result.get("error") or "backend restart rejected")
+            if mgr.phase in ("disabled", "idle", "stopped", "failed"):
+                result = mgr.start()
+                if not result.get("ok"):
+                    raise RuntimeError(result.get("error") or "backend start rejected")
+            else:
+                filename = (mgr.snapshot().get("launch_model_path_basename") or "").strip()
+                if filename and callable(getattr(mgr, "load_model_http", None)):
+                    load_res = mgr.load_model_http(filename)
+                    if not load_res.get("ok"):
+                        raise RuntimeError(load_res.get("error") or "HTTP model load failed")
 
         # Wait for the backend to settle: healthy = success, failed = error.
         deadline = time.time() + float(getattr(self.handler.__class__, "model_load_timeout", 600.0))
@@ -2478,15 +2502,31 @@ class RequestRouter:
             phase = snap.get("phase") or ""
             last_phase = phase
             if phase == "healthy":
-                return entry, "direct backend restart"
+                # Check router status as well
+                is_loaded = False
+                if callable(getattr(mgr, "get_models_status", None)):
+                    status_data = mgr.get_models_status()
+                    if status_data and isinstance(status_data, dict):
+                        filename = (snap.get("launch_model_path_basename") or "").strip()
+                        try:
+                            from .qz_model_status import _inventory_reports_loaded, _model_inventory_target_ids
+                        except ImportError:
+                            from qz_model_status import _inventory_reports_loaded, _model_inventory_target_ids
+                        is_loaded = _inventory_reports_loaded(
+                            status_data,
+                            _model_inventory_target_ids(filename),
+                        )
+
+                if is_loaded:
+                    return entry, "direct backend load"
             if phase == "failed":
                 err = snap.get("last_error") or snap.get("launch_model_error") or "backend failed to launch"
                 raise RuntimeError(str(err))
             if phase in ("disabled", "stopped"):
-                raise RuntimeError(f"backend phase={phase!r} after restart")
+                raise RuntimeError(f"backend phase={phase!r} after start")
             time.sleep(0.5)
         raise RuntimeError(
-            f"backend did not become healthy within model_load_timeout (last phase={last_phase!r})"
+            f"backend did not become healthy and load model within model_load_timeout (last phase={last_phase!r})"
         )
 
     def _web_runtime(self, selected_model=None):
@@ -3178,15 +3218,17 @@ class RequestRouter:
         initialization = self._latest_proxy_initialization()
         # One aggregate hold-open deadline shared across all layered wait phases
         # for this request. Prevents each phase from claiming a fresh full budget.
+        hold_open_loading = self._hold_open_loading_enabled()
         _holdopen_deadline: float | None = (
             time.monotonic() + HOLDOPEN_LOADING_MAX_SECONDS
-            if upstream_path == "/v1/responses"
+            if upstream_path == "/v1/responses" and hold_open_loading
             else None
         )
         if not self._proxy_initialization_ready(initialization):
             if (
                 upstream_path == "/v1/responses"
                 and client_wants_stream
+                and hold_open_loading
             ):
                 self._open_responses_sse()
                 sse_response_started = True
@@ -3214,7 +3256,7 @@ class RequestRouter:
                     )
                     self.handler.close_connection = True
                     return
-            elif upstream_path == "/v1/responses":
+            elif upstream_path == "/v1/responses" and hold_open_loading:
                 startup_ready, initialization = (
                     self._wait_responses_proxy_startup_before_forward(
                         initial_initialization=initialization,
@@ -3369,9 +3411,12 @@ class RequestRouter:
                                     selected_model, model_status, identity_matches_loaded,
                                 )
                             )
-                    transitional_wait = self._is_transitional_responses_wait(
-                        model_status,
-                        request_matches_active,
+                    transitional_wait = (
+                        hold_open_loading
+                        and self._is_transitional_responses_wait(
+                            model_status,
+                            request_matches_active,
+                        )
                     )
                     if (
                         client_wants_stream

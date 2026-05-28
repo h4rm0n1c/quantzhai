@@ -203,7 +203,7 @@ class BackendManager:
         autostart: bool = True,
         require_gpu: bool = True,
         gpu_log_tail: int = 1000,
-        gpu_check_retry_count: int = 5,
+        gpu_check_retry_count: int = 60,
         gpu_check_retry_delay: float = 2.0,
         launch_model_key: str = "",
         launch_model_backend_id: str = "",
@@ -302,10 +302,7 @@ class BackendManager:
         backend_id: str,
         path_basename: str,
     ) -> None:
-        """Set the model the next backend launch will be parameterised with.
-
-        The next ``docker run`` will pass ``-m /models/<basename>``.
-        """
+        """Set the model the next backend launch or HTTP load will target."""
         with self._lock:
             self._launch_model_key = _safe_str(key)
             self._launch_model_backend_id = _safe_str(backend_id)
@@ -355,16 +352,6 @@ class BackendManager:
             if phase in _RUNNING_PHASES or self._busy:
                 return {"ok": False, "action": "start",
                         "error": f"backend is already {phase}",
-                        "backend_manager": self._state.as_dict()}
-
-            if not self._launch_model_path_basename:
-                err = ("direct backend launch requires a launch model; "
-                       "POST /qz/model/select-and-restart with a valid model")
-                self._state.phase = PHASE_FAILED
-                self._state.launch_model_error = err
-                self._state.last_error = err
-                return {"ok": False, "action": "start",
-                        "error": err,
                         "backend_manager": self._state.as_dict()}
 
             self._busy = True
@@ -451,15 +438,10 @@ class BackendManager:
     # ------------------------------------------------------------------
 
     def build_backend_args(self) -> list[str]:
-        """Build the llama.cpp backend argument list.
-
-        The args always include ``-m /models/<basename>`` and the llama.cpp
-        server binds to the single specified model.
-        """
-        if not self._launch_model_path_basename:
-            raise ValueError("direct backend launch requires launch_model_path_basename")
-        args: list[str] = ["-m", f"/models/{self._launch_model_path_basename}"]
-        args += [
+        """Build the llama.cpp backend argument list."""
+        args: list[str] = [
+            "--models-autoload",
+            "--numa", "distribute",
             "--host", "0.0.0.0",
             "--port", "8080",
             "-ngl", "999",
@@ -562,6 +544,38 @@ class BackendManager:
         return combined if combined.strip() else None
 
     # ------------------------------------------------------------------
+    # HTTP Model Management
+    # ------------------------------------------------------------------
+
+    def load_model_http(self, model_basename: str, timeout: float = 120.0) -> dict:
+        """Issue POST /models/load to the running container."""
+        import json
+        import urllib.request
+        url = f"http://{self._server_host}:{self._server_port}/models/load"
+        data = json.dumps({"model": f"/models/{model_basename}"}).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                if 200 <= int(resp.status) < 300:
+                    return {"ok": True}
+                return {"ok": False, "error": f"HTTP {resp.status}"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def get_models_status(self, timeout: float = 3.0) -> dict | None:
+        """Fetch GET /v1/models from the running container."""
+        import json
+        import urllib.request
+        url = f"http://{self._server_host}:{self._server_port}/v1/models"
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                if resp.status == 200:
+                    return json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            pass
+        return None
+
+    # ------------------------------------------------------------------
     # GPU offload verification
     # ------------------------------------------------------------------
 
@@ -651,18 +665,6 @@ class BackendManager:
     def _do_start(self) -> None:
         """Background: rm -f, docker run, then health-check loop."""
         try:
-            if not self._launch_model_path_basename:
-                err = (
-                    "direct backend launch requires a launch model; "
-                    "POST /qz/model/select-and-restart with a valid model"
-                )
-                with self._lock:
-                    self._state.phase = PHASE_FAILED
-                    self._state.launch_model_error = err
-                    self._state.last_error = err
-                self._emit("backend_failed", {"error": err})
-                return
-
             # Remove any existing container first (match qz-up semantics)
             self._runner(self.build_docker_rm_args(force=True), timeout=30.0)
 
@@ -699,6 +701,16 @@ class BackendManager:
                 if rc_ps != 0 or self._container_name not in out_ps:
                     raise RuntimeError("container exited before becoming healthy")
                 if self._health_checker(health_url, timeout=3.0):
+                    # Trigger eager load of the selected model if any
+                    if getattr(self, "_launch_model_path_basename", None):
+                        # Run in background to not block the health check loop immediately,
+                        # though the GPU check below will wait.
+                        import threading
+                        threading.Thread(
+                            target=self.load_model_http,
+                            args=(self._launch_model_path_basename,),
+                            daemon=True
+                        ).start()
                     # GPU offload grace window.
                     # /health passing does not guarantee model-load log lines are
                     # written yet.  Treat any non-GPU provisional state (unknown,

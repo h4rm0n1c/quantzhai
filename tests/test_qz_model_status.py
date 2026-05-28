@@ -13,6 +13,8 @@ from proxy.qz_model_state import (
 )
 from proxy.qz_model_status import (
     QZ_MODEL_STATUS_SCHEMA,
+    _inventory_reports_loaded,
+    _model_inventory_target_ids,
     build_model_status,
     identity_matches_loaded,
     model_selection_hints,
@@ -70,6 +72,12 @@ class _FakeBackendManager:
     def snapshot(self):
         return self._snap
 
+    def get_models_status(self):
+        basename = self._snap["launch_model_path_basename"]
+        if basename:
+            return {"data": [{"id": f"/models/{basename}", "status": {"value": "loaded"}}]}
+        return {"data": []}
+
 
 class _FakeHandler:
     def __init__(
@@ -102,6 +110,27 @@ def _entry(key: str, backend_id: str = "", label: str = "", profile_valid: bool 
         "label": label or key,
         "profile_valid": profile_valid,
     }
+
+
+class ModelInventoryLoadStateTests(unittest.TestCase):
+
+    def test_loaded_status_value_shape(self):
+        self.assertTrue(_inventory_reports_loaded(
+            {"data": [{"id": "/models/kuato.gguf", "status": {"value": "loaded"}}]},
+            _model_inventory_target_ids("kuato.gguf"),
+        ))
+
+    def test_null_status_is_not_loaded(self):
+        self.assertFalse(_inventory_reports_loaded(
+            {"data": [{"id": "/models/kuato.gguf", "status": None}]},
+            _model_inventory_target_ids("kuato.gguf"),
+        ))
+
+    def test_missing_status_on_matching_entry_defaults_loaded(self):
+        self.assertTrue(_inventory_reports_loaded(
+            {"data": [{"id": "kuato.gguf"}]},
+            _model_inventory_target_ids("kuato.gguf"),
+        ))
 
 
 # ---------------------------------------------------------------------------

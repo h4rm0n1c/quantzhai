@@ -87,6 +87,14 @@ def _make_handler(
         "launch_model_path_basename": launch_key,
         "launch_model_error": None,
     }
+    bm.get_models_status.return_value = {
+        "data": [
+            {
+                "id": f"/models/{launch_key}",
+                "status": {"value": "loaded"},
+            }
+        ]
+    } if launch_key else {"data": []}
     handler.backend_manager = bm
 
     return handler
@@ -585,6 +593,9 @@ class ModelSelectionFieldsTests(unittest.TestCase):
                 "launch_model_backend_id": "kuato",
                 "launch_model_path_basename": "kuato.gguf",
             }
+            bm.get_models_status.return_value = {
+                "data": [{"id": "/models/kuato.gguf", "status": {"value": "loaded"}}]
+            }
             h.backend_manager = bm
             p = build_control_plane_status(h)
         m = p["models"]
@@ -629,6 +640,14 @@ class DirectModeControlPlaneTests(unittest.TestCase):
             "launch_model_error": None,
             "container_running": True,
         }
+        bm.get_models_status.return_value = {
+            "data": [
+                {
+                    "id": f"/models/{launch_key}",
+                    "status": {"value": "loaded"},
+                }
+            ]
+        } if launch_key else {"data": []}
         h.backend_manager = bm
         return h
 

@@ -1,5 +1,6 @@
 """Tests for proxy/qz_backend_manager.py — B1: skeleton + B2: lifecycle."""
 
+import json
 import threading
 import time
 import unittest
@@ -228,10 +229,10 @@ class BuildBackendArgsTests(unittest.TestCase):
             **params,
         )
 
-    def test_direct_model_path(self):
+    def test_models_autoload_present(self):
         args = self._mgr().build_backend_args()
-        self.assertIn("-m", args)
-        self.assertEqual(args[args.index("-m") + 1], "/models/kuato.gguf")
+        self.assertIn("--models-autoload", args)
+        self.assertNotIn("-m", args)
 
     def test_no_models_dir(self):
         args = self._mgr().build_backend_args()
@@ -339,6 +340,63 @@ class BuildBackendArgsTests(unittest.TestCase):
             self.assertNotIn(flag, args)
 
 
+class BackendHttpModelManagementTests(unittest.TestCase):
+    class _Resp:
+        def __init__(self, status=200, body=b""):
+            self.status = status
+            self._body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _tb):
+            return False
+
+        def read(self):
+            return self._body
+
+    def _mgr(self):
+        return BackendManager(
+            docker_cmd="docker",
+            image="img",
+            container_name="ctr",
+            server_host="127.0.0.1",
+            server_port=8080,
+            autostart=False,
+        )
+
+    def test_load_model_http_posts_models_path_and_accepts_2xx(self):
+        from unittest.mock import patch
+
+        calls = []
+
+        def fake_urlopen(req, timeout):
+            calls.append((req, timeout))
+            return self._Resp(status=204)
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            result = self._mgr().load_model_http("kuato.gguf", timeout=7.0)
+
+        self.assertEqual(result, {"ok": True})
+        req, timeout = calls[0]
+        self.assertEqual(req.full_url, "http://127.0.0.1:8080/models/load")
+        self.assertEqual(timeout, 7.0)
+        self.assertEqual(req.get_method(), "POST")
+        self.assertEqual(
+            json.loads(req.data.decode("utf-8")),
+            {"model": "/models/kuato.gguf"},
+        )
+
+    def test_get_models_status_returns_inventory_json(self):
+        from unittest.mock import patch
+
+        body = json.dumps({"data": [{"id": "/models/kuato.gguf"}]}).encode("utf-8")
+        with patch("urllib.request.urlopen", return_value=self._Resp(status=200, body=body)):
+            result = self._mgr().get_models_status(timeout=4.0)
+
+        self.assertEqual(result, {"data": [{"id": "/models/kuato.gguf"}]})
+
+
 # ---------------------------------------------------------------------------
 # build_docker_run_args — full invocation
 # ---------------------------------------------------------------------------
@@ -416,8 +474,8 @@ class BuildDockerRunArgsTests(unittest.TestCase):
     def test_no_models_dir_flag(self):
         args = self._mgr().build_docker_run_args()
         self.assertNotIn("--models-dir", args)
-        self.assertIn("-m", args)
-        self.assertEqual(args[args.index("-m") + 1], "/models/kuato.gguf")
+        self.assertIn("--models-autoload", args)
+        self.assertNotIn("-m", args)
 
     def test_backend_args_appended(self):
         """build_docker_run_args must end with build_backend_args."""
@@ -1296,20 +1354,19 @@ class BuildDockerRunArgsDirectModeTests(unittest.TestCase):
         defaults.update(kwargs)
         return BackendManager(**defaults)
 
-    def test_direct_mode_passes_minus_m_with_models_path(self):
+    def test_direct_mode_uses_models_autoload(self):
         args = self._mgr().build_docker_run_args()
-        self.assertIn("-m", args)
-        idx = args.index("-m")
-        self.assertEqual(args[idx + 1], "/models/kuato.gguf")
+        self.assertIn("--models-autoload", args)
+        self.assertNotIn("-m", args)
 
     def test_direct_mode_omits_models_dir(self):
         args = self._mgr().build_docker_run_args()
         self.assertNotIn("--models-dir", args)
 
-    def test_missing_launch_model_raises_for_command_build(self):
+    def test_missing_launch_model_allows_command_build(self):
         mgr = self._mgr(launch_model_path_basename="")
-        with self.assertRaisesRegex(ValueError, "direct backend launch requires"):
-            mgr.build_docker_run_args()
+        args = mgr.build_docker_run_args()
+        self.assertIn("--models-autoload", args)
 
     def test_default_mode_is_direct(self):
         # No backend_model_mode passed → default direct.
@@ -1331,7 +1388,7 @@ class BuildDockerRunArgsDirectModeTests(unittest.TestCase):
         )
         self.assertEqual(mgr.backend_model_mode, "direct")
         args = mgr.build_docker_run_args()
-        self.assertIn("-m", args)
+        self.assertIn("--models-autoload", args)
         self.assertNotIn("--models-dir", args)
 
     def test_set_launch_model_updates_snapshot(self):
@@ -1346,34 +1403,44 @@ class BuildDockerRunArgsDirectModeTests(unittest.TestCase):
         self.assertEqual(snap["launch_model_backend_id"], "kuato")
         self.assertEqual(snap["launch_model_path_basename"], "kuato.gguf")
         args = mgr.build_docker_run_args()
-        self.assertIn("/models/kuato.gguf", args)
+        self.assertIn("--models-autoload", args)
 
     def test_direct_mode_without_launch_model_fails_start(self):
-        """Direct mode + empty launch_model → _do_start fails with a clear error."""
+        """Direct mode + empty launch_model doesn't fail start because we can load model later."""
         runner_calls = []
         def runner(args, timeout=None):
             runner_calls.append(args)
+            # docker ps must return the container name so the health loop
+            # doesn't think the container exited prematurely
+            if "ps" in args:
+                return 0, "test-ctr", ""
             return 0, "", ""
         health_checker = lambda url, timeout=3.0: True
         mgr = _make_mgr(
             runner=runner,
             health_checker=health_checker,
             launch_model_path_basename="",  # no model
+            require_gpu=False,
         )
         mgr.start()
-        # Wait briefly for the lifecycle thread to land in PHASE_FAILED
+        # Wait briefly for the lifecycle thread to land in PHASE_HEALTHY
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline:
-            if mgr.phase == PHASE_FAILED:
+            if mgr.phase == PHASE_HEALTHY:
                 break
             time.sleep(0.02)
-        self.assertEqual(mgr.phase, PHASE_FAILED)
+        self.assertEqual(mgr.phase, PHASE_HEALTHY)
         snap = mgr.snapshot()
-        self.assertIn("direct backend launch requires a launch model", snap["last_error"])
-        self.assertIsNotNone(snap["launch_model_error"])
-        # No docker run should have been attempted
-        self.assertFalse(any("run" in a for a in runner_calls if isinstance(a, list)),
-                         f"docker run should not run when launch model missing: {runner_calls}")
+        self.assertIsNone(snap.get("launch_model_error"))
+        # Container should have been started — docker run is expected
+        run_args = next((a for a in runner_calls if isinstance(a, list) and "run" in a), None)
+        self.assertIsNotNone(run_args, "docker run should have been called to start the container")
+        # No -m flag because no model was pre-selected
+        self.assertNotIn("-m", run_args,
+                         f"docker run must not pass -m when no launch model is set: {run_args}")
+        # --models-autoload should be present (router mode)
+        self.assertIn("--models-autoload", run_args,
+                      f"docker run should pass --models-autoload in router mode: {run_args}")
 
     def test_snapshot_exposes_backend_model_mode(self):
         mgr = self._mgr()
@@ -1529,10 +1596,10 @@ class DockerRunArgsGPUContractTests(unittest.TestCase):
         self.assertIn("--reasoning-format", args)
         self.assertEqual(args[args.index("--reasoning-format") + 1], "deepseek")
 
-    def test_direct_m_flag_uses_models_prefix(self):
+    def test_direct_mode_uses_models_autoload(self):
         args = self._args(launch_model_path_basename="kuato.gguf")
-        self.assertIn("-m", args)
-        self.assertEqual(args[args.index("-m") + 1], "/models/kuato.gguf")
+        self.assertIn("--models-autoload", args)
+        self.assertNotIn("-m", args)
 
     def test_no_models_dir_flag(self):
         args = self._args()

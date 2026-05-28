@@ -351,7 +351,8 @@ Constructed from env vars exactly as in qz-up:
 
 ```python
 backend_args = [
-    "-m", f"/models/{launch_model_path_basename}",
+    "--models-autoload",
+    "--numa", "distribute",
     "--host", "0.0.0.0",
     "--port", "8080",
     "-ngl", "999",
@@ -738,15 +739,15 @@ See `.env.example` for the supported patterns.
 
 `BackendManager` supports one production model-binding mode:
 
-- **direct** — the container launches with `-m /models/<selected>.gguf`. llama-server binds to that single model. Model switching = `docker rm -f` + new `docker run` with a different `-m`.
+- **direct** — the container launches once with `--models-autoload`. The selected model is then loaded through TurboQuant's HTTP model-management API (`POST /models/load` with `/models/<selected>.gguf`). Model switching reuses the running container when possible and waits for `/v1/models` to report the selected model as loaded.
 
-Direct-mode safety gate: `_do_start()` refuses to launch when no `launch_model_path_basename` is set. The `_preload_last_model` flow resolves the persisted selection from `qz.model_state.v1` (or `QZ_MODEL_KEY` seed / catalog default) and calls `BackendManager.set_launch_model(...)` before `begin_autostart()`.
+Direct-mode startup no longer requires a launch model before `docker run`. If `_preload_last_model` resolves a persisted selection from `qz.model_state.v1` (or `QZ_MODEL_KEY` seed / catalog default), it calls `BackendManager.set_launch_model(...)` before `begin_autostart()`, and `BackendManager` eagerly posts `/models/load` after backend `/health` passes.
 
 Direct-mode switch flow on `POST /qz/model/select-and-restart`:
 1. Validate model in catalog + write `qz.model_state.v1` selection.
 2. `mgr.set_launch_model(key, backend_id, path_basename)`
-3. `mgr.restart()` → graceful stop, force-remove, new `docker run -m /models/<basename>`.
-4. Poll `mgr.snapshot().phase` until `healthy` or `failed` (bounded by `QZ_MODEL_LOAD_TIMEOUT`).
+3. If the backend is not running, `mgr.start()` launches the container with `--models-autoload`; otherwise the proxy calls `mgr.load_model_http(...)`.
+4. Poll `mgr.snapshot().phase` and `GET /v1/models` until the target inventory item reports `loaded`, or fail on `phase=failed` / timeout (bounded by `QZ_MODEL_LOAD_TIMEOUT`).
 5. Run `_record_load_observation` (log classifier + state update).
 6. On classified failure: HTTP 409 + rollback to `last_good_*` per the post-Slice F recovery rules.
 
@@ -759,7 +760,7 @@ Legacy `/qz/models/select` and `/qz/models/load` are removed as runtime model-lo
 `/qz/model/status` and `/qz/control-plane` `models` block now expose:
 
 - `backend_model_mode` — compatibility field, always `direct`
-- `launch_model_key`, `launch_model_backend_id`, `launch_model_path_basename` — what the next/last docker run was parameterised with
+- `launch_model_key`, `launch_model_backend_id`, `launch_model_path_basename` — what the next/last HTTP model load targets
 - `model_switch_state` — `idle | selecting | restarting | loading | loaded | failed | rolled_back`
 - `active_load_operation` — `none | backend_restart | rollback_restart`
 - `last_good_key`, `last_good_backend_id`, `failed_candidate_key`, `failed_candidate_backend_id`

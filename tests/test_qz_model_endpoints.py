@@ -374,7 +374,8 @@ class ReloadEndpointTests(unittest.TestCase):
             handler.backend_manager = _FakeBackendManager("update_slots: all slots are idle")
             RequestRouter(handler)._handle_model_reload_endpoint()
         self.assertEqual(called, [])
-        self.assertEqual(handler.backend_manager.restart_calls, 1)
+        self.assertEqual(handler.backend_manager.restart_calls, 0)
+        self.assertEqual(handler.backend_manager.load_model_http_calls, ["kuato.gguf"])
         self.assertEqual(handler.backend_manager.set_launch_model_calls[0]["path_basename"], "kuato.gguf")
         status, body = handler.sent[0]
         self.assertEqual(status, 200)
@@ -407,7 +408,8 @@ class SelectAndRestartEndpointTests(unittest.TestCase):
             handler.backend_manager = _FakeBackendManager("update_slots: all slots are idle")
             RequestRouter(handler)._handle_model_select_endpoint(restart=True)
             self.assertEqual(called, [])
-            self.assertEqual(handler.backend_manager.restart_calls, 1)
+            self.assertEqual(handler.backend_manager.restart_calls, 0)
+            self.assertEqual(handler.backend_manager.load_model_http_calls, ["kuato.gguf"])
             self.assertEqual(handler.backend_manager.set_launch_model_calls[0]["backend_id"], "kuato")
             payload = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["selected_key"], "kuato.gguf")
@@ -471,6 +473,8 @@ class _FakeBackendManager:
         self._post_error = post_restart_error
         self.set_launch_model_calls: list[dict] = []
         self.restart_calls: int = 0
+        self.start_calls: int = 0
+        self.load_model_http_calls: list[str] = []
         self._snapshot: dict = {
             "phase": "healthy",
             "backend_health_ok": True,
@@ -482,6 +486,10 @@ class _FakeBackendManager:
             "gpu_offload_state": "gpu",
             "last_error": None,
         }
+
+    @property
+    def phase(self):
+        return self._snapshot.get("phase")
 
     def fetch_recent_logs(self, tail=None):
         return self._logs
@@ -496,6 +504,14 @@ class _FakeBackendManager:
         self._snapshot["launch_model_backend_id"] = backend_id
         self._snapshot["launch_model_path_basename"] = path_basename
 
+    def start(self):
+        self.start_calls += 1
+        self._snapshot["phase"] = self._post_phase
+        self._snapshot["backend_health_ok"] = self._post_phase == "healthy"
+        if self._post_error:
+            self._snapshot["last_error"] = self._post_error
+        return self._restart_result
+
     def restart(self):
         self.restart_calls += 1
         # Simulate the lifecycle landing on the post-restart phase
@@ -504,6 +520,20 @@ class _FakeBackendManager:
         if self._post_error:
             self._snapshot["last_error"] = self._post_error
         return self._restart_result
+
+    def load_model_http(self, model_basename):
+        self.load_model_http_calls.append(model_basename)
+        self._snapshot["phase"] = self._post_phase
+        self._snapshot["backend_health_ok"] = self._post_phase == "healthy"
+        if self._post_error:
+            self._snapshot["last_error"] = self._post_error
+        return self._restart_result
+
+    def get_models_status(self):
+        basename = (self._snapshot.get("launch_model_path_basename") or "").strip()
+        if self._snapshot.get("phase") != "healthy" or not basename:
+            return {"data": []}
+        return {"data": [{"id": f"/models/{basename}", "status": {"value": "loaded"}}]}
 
     def snapshot(self):
         return dict(self._snapshot)
@@ -783,11 +813,10 @@ class LoadFailureClassificationTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class DirectModeEndpointTests(unittest.TestCase):
-    """In direct mode, /qz/model/{reload,select-and-restart} restart the
-    BackendManager container with -m /models/<basename> instead of going
-    through the legacy resolve+load path."""
+    """In direct mode, /qz/model/{reload,select-and-restart} load through
+    BackendManager HTTP model management instead of the legacy resolve path."""
 
-    def test_select_and_restart_in_direct_mode_calls_set_launch_model_and_restart(self):
+    def test_select_and_restart_in_direct_mode_calls_set_launch_model_and_load(self):
         with _tmp_state_dir() as tmp:
             state_path = tmp / "model-state.json"
             handler = _FakeHandler(
@@ -807,8 +836,8 @@ class DirectModeEndpointTests(unittest.TestCase):
             self.assertEqual(len(calls), 1)
             self.assertEqual(calls[0]["path_basename"], "kuato.gguf")
             self.assertEqual(calls[0]["backend_id"], "kuato")
-            # BackendManager.restart() was invoked exactly once
-            self.assertEqual(handler.backend_manager.restart_calls, 1)
+            self.assertEqual(handler.backend_manager.restart_calls, 0)
+            self.assertEqual(handler.backend_manager.load_model_http_calls, ["kuato.gguf"])
             # 200 OK with status payload
             status, body = handler.sent[0]
             self.assertEqual(status, 200)

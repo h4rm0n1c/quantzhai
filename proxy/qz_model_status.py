@@ -94,15 +94,84 @@ def _resolve_catalog_entry(handler: Any, identity: str) -> dict | None:
 
 
 def _backend_loaded_model(handler: Any) -> str:
-    """Return the direct-launched model id when BackendManager is healthy."""
+    """Return the direct-launched model id when BackendManager is healthy and model is loaded."""
     snap = _backend_manager_snapshot(handler)
     if snap.get("phase") != "healthy" or snap.get("backend_health_ok") is not True:
         return ""
+
+    mgr = getattr(handler, "backend_manager", None)
+    is_loaded = False
+    launch_basename = (snap.get("launch_model_path_basename") or "").strip()
+    target_id = f"/models/{launch_basename}" if launch_basename else ""
+    target_ids = _model_inventory_target_ids(launch_basename)
+
+    if mgr and callable(getattr(mgr, "get_models_status", None)) and target_id:
+        try:
+            status_data = mgr.get_models_status()
+            is_loaded = _inventory_reports_loaded(status_data, target_ids)
+        except Exception:
+            pass
+
+    if not is_loaded:
+        return ""
+
     for key in ("launch_model_backend_id", "launch_model_key", "launch_model_path_basename"):
         value = snap.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def _model_inventory_target_ids(model_basename: str) -> set[str]:
+    """Return plausible llama.cpp/TurboQuant ids for a model basename."""
+    basename = (model_basename or "").strip()
+    if not basename:
+        return set()
+    target_ids = {basename, f"/models/{basename}"}
+    if basename.endswith(".gguf"):
+        target_ids.add(basename[:-5])
+    return target_ids
+
+
+def _model_inventory_load_state(item: Any) -> str:
+    """Normalize a /v1/models item load state.
+
+    TurboQuant has used both ``{"status": {"value": "loaded"}}`` and
+    simpler string/state fields.  Missing state on a matched entry is treated
+    as loaded because some llama.cpp-compatible inventories only list active
+    models; explicit null remains unknown.
+    """
+    if not isinstance(item, dict):
+        return "unknown"
+    status = item.get("status")
+    if isinstance(status, dict):
+        value = status.get("value") or status.get("state")
+        return str(value or "unknown")
+    if isinstance(status, str) and status:
+        return status
+    state = item.get("state")
+    if isinstance(state, str) and state:
+        return state
+    if "status" not in item and "state" not in item:
+        return "loaded"
+    return "unknown"
+
+
+def _inventory_reports_loaded(status_data: Any, target_ids: set[str]) -> bool:
+    """True when a /v1/models payload reports any target id as loaded."""
+    if not target_ids or not isinstance(status_data, dict):
+        return False
+    for item in status_data.get("data", []):
+        if not isinstance(item, dict):
+            continue
+        ids = {
+            str(value).strip()
+            for value in (item.get("id"), item.get("name"), item.get("model"))
+            if isinstance(value, str) and value.strip()
+        }
+        if ids & target_ids and _model_inventory_load_state(item) == "loaded":
+            return True
+    return False
 
 
 def _backend_manager_snapshot(handler: Any) -> dict:
@@ -130,6 +199,7 @@ def _derive_model_switch_state(
     backend_phase: str,
     state,
     selected_loaded_mismatch: bool,
+    router_status: str = "unloaded",
 ) -> tuple[str, str]:
     """Derive (model_switch_state, active_load_operation).
 
@@ -149,11 +219,11 @@ def _derive_model_switch_state(
         return "failed", "none"
     if backend_phase in ("start_requested", "starting"):
         return "restarting", "backend_restart"
-    if backend_phase == "running":
+    if backend_phase == "running" or (backend_phase == "healthy" and router_status == "loading"):
         # Backend container is up but llama-server hasn't reported healthy
-        # yet — counts as "loading".
+        # yet, or router is actively loading the model — counts as "loading".
         return "loading", "backend_restart"
-    if state.last_load_result == "loaded" and backend_phase == "healthy":
+    if state.last_load_result == "loaded" and backend_phase == "healthy" and router_status == "loaded":
         return "loaded", "none"
     return "idle", "none"
 
@@ -335,16 +405,34 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         launch_model_backend_id=launch_model_backend_id,
         launch_model_path_basename=launch_model_path_basename,
     )
+    # Fetch router status directly
+    router_status = "unloaded"
+    if backend_phase == "healthy" and launch_model_path_basename:
+        mgr = getattr(handler, "backend_manager", None)
+        if mgr and callable(getattr(mgr, "get_models_status", None)):
+            try:
+                status_data = mgr.get_models_status()
+                if status_data and isinstance(status_data, dict):
+                    target_ids = _model_inventory_target_ids(launch_model_path_basename)
+                    for m in status_data.get("data", []):
+                        ids = {
+                            str(value).strip()
+                            for value in (m.get("id"), m.get("name"), m.get("model"))
+                            if isinstance(value, str) and value.strip()
+                        } if isinstance(m, dict) else set()
+                        if ids & target_ids:
+                            router_status = _model_inventory_load_state(m)
+                            break
+            except Exception:
+                pass
+
     # GPU gate: if require_gpu=True and GPU is not confirmed, model is not ready.
     # Blocking GPU states: cpu_fallback, failed, unknown_after_retries.
     # "unknown" (before retry completes) is non-blocking — admitted tentatively.
     _gpu_blocking = gpu_required and gpu_offload_state in (
         "cpu_fallback", "failed", "unknown_after_retries"
     )
-    # In direct-m mode the BackendManager health check IS the load confirmation.
-    # last_load_result is router-era history and must not block a healthy direct
-    # backend; if the backend is healthy and launch matches selected, the model
-    # is loaded regardless of prior failure records.
+
     selected_model_ready = bool(
         backend_phase == "healthy"
         and backend_health_ok is True
@@ -352,12 +440,14 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         and launch_matches_selected
         and not launch_model_error
         and not _gpu_blocking
+        and router_status == "loaded"
     )
 
     model_switch_state, active_load_operation = _derive_model_switch_state(
         backend_phase=backend_phase,
         state=state,
         selected_loaded_mismatch=selected_loaded_mismatch,
+        router_status=router_status,
     )
     # Override: when the direct backend is confirmed healthy and launch matches
     # selected, the switch state IS "loaded" — no longer "idle" due to stale
