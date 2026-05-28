@@ -1,6 +1,6 @@
 # Client-Facing Availability and 503 Minimisation Audit
 
-Status: **Active** — initial audit, 2026-05-28
+Status: **Active** — initial audit 2026-05-28; grounding tightened and terminal-failure guidance clarified 2026-05-28
 
 ---
 
@@ -223,9 +223,20 @@ thing. An HTTPS client that talks directly to `/v1/responses` gets no such prote
 
 ### Recovery trigger paths
 
-The recovery-related endpoints (`/qz/recovery/status`, `/qz/recovery/plan`,
-`/qz/recovery/trigger`) all return 200 always (errors are caught and returned as
-structured payloads). These are correctly designed and do not contribute 503s.
+**Read-only status endpoints** (`GET /qz/recovery/status`, `GET /qz/recovery`):
+Always return 200. Errors are caught and embedded as structured payloads in the
+response body. Correct design.
+
+**Action endpoints** (`POST /qz/recovery/plan`, `POST /qz/recovery/trigger`,
+`GET /qz/recovery/jobs/<id>`): Return a range of 4xx and 5xx for validation failures,
+authority checks, feasibility blocks, backoff states, and execution errors.
+`/qz/recovery/trigger` uses 400, 403, 409, 423, 429, 500, and 200/202.
+`/qz/recovery/plan` returns 400 on body validation failures.
+`/qz/recovery/jobs/<id>` returns 400 (missing ID) or 404 (job not found).
+
+**Assessment**: No recovery endpoint returns 503 for transitional or loading states.
+The 4xx/5xx on action endpoints reflect genuine errors or infeasibility, not service
+unavailability. These endpoints are correctly designed and do not contribute pointless 503s.
 
 ---
 
@@ -319,12 +330,25 @@ or future Codex versions but should not be relied upon for current behavior.
 
 **Direct source evidence** (`codex-rs/codex-client/src/sse.rs`):
 - Stream closed before `[DONE]` → `StreamError::Stream("stream closed before completion")`
-- Idle for `idle_timeout` (default 300s) without a new event → `StreamError::Timeout`
+- Idle for `idle_timeout` (default 300s) without a new SSE event → `StreamError::Timeout`
 - These map to `CodexErr::Stream(msg, None)` which IS retryable
+- The idle timer wraps each `stream.next()` call; it resets after each yielded data event
 
-**Implication**: QuantZhai could hold a streaming connection open with keepalive SSE
-comments (`: keepalive`) for up to the 300s idle timeout without Codex dropping the
-connection. This is the mechanism for a "hold open while loading" approach.
+**Implication (strong inference — requires live test to confirm)**:
+The `eventsource_stream` crate used by Codex follows the SSE spec: comment lines
+(`: keepalive`) are consumed by the parser but are NOT dispatched as events. This means
+SSE comments do NOT yield values from `stream.next()` and do NOT reset the Codex
+idle timer. The 300s countdown continues regardless of comment traffic.
+
+SSE comments DO maintain the underlying TCP/HTTP connection at the network layer,
+preventing OS or intermediate proxy timeouts on an otherwise-idle socket. This is
+necessary for a hold-open design but is distinct from resetting the application-level
+idle timer.
+
+**Practical implication for a hold-open design**: works when (a) keepalive comments
+prevent TCP-level connection drops during the hold period, AND (b) the first real SSE
+data event reaches Codex within 300s of the connection being established. Holding for a
+maximum of 270s leaves a 30s margin before the Codex idle timer fires.
 
 ### Responses-API-proxy (the Codex-side proxy)
 
@@ -424,11 +448,20 @@ gets no such protection.
    once `phase == "healthy"`. The SSE idle timeout is 300s, which matches the existing
    wrapper wait budget.
    
-   Compatibility: **Direct source evidence** — the SSE idle timeout in Codex is 300s
-   (`DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000`). Keepalive comments (`: keepalive`)
-   are valid SSE and will prevent the timeout from firing. Once the backend is ready,
-   the proxy starts the real request and forwards events. The client sees a single
-   seamless stream.
+   **Codex source** (direct evidence): SSE idle timeout = 300s
+   (`DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000`). Stream errors are retryable.
+
+   **SSE comment behavior** (strong inference, not directly tested): SSE comment
+   lines do not yield events in `eventsource_stream` and do not reset the 300s Codex
+   idle timer. They maintain the TCP/network connection during the hold period.
+   The 270s hold-open limit leaves a 30s margin before the idle timer fires.
+
+   **QuantZhai design** (plausible, built on top of source evidence — not
+   directly source-proven end-to-end): hold open up to 270s with keepalive comments;
+   once the backend is healthy, forward the real request and start emitting SSE events.
+   Codex sees one uninterrupted stream. "Seamless delayed forwarding" is a
+   QuantZhai-side design choice — Codex source proves the 300s window exists and that
+   stream errors are retried, not that the full hold-open design works end-to-end.
 
 2. **Structured retryable payload with short Retry-After** *(low complexity)*:
    Return 503 but add `Retry-After: 5` and a body with `retry_suggested: true`.
@@ -462,24 +495,37 @@ Same as class A — short startup window. The current behavior is tolerable. Add
 
 **Better options**:
 
-1. **Return a different HTTP status that Codex treats as non-retryable**:
-   `CodexErr::InvalidRequest` (from HTTP 400) is NOT retried. This is semantically
-   imperfect but would stop wasted retries.
-   
-   Better: define a structured error body convention for terminal failures:
-   ```json
-   {"error": "backend_failed", "terminal": true, "reason": "GPU unavailable"}
-   ```
-   and emit HTTP 503 with this body. This preserves the 503 for monitoring while
-   giving clients a `terminal: true` field to act on. Codex will still retry it
-   (it's still `UnexpectedStatus`), but this opens the door for future smarter behavior.
-   
-   Confidence: inference — Codex does not currently parse QuantZhai-specific fields;
-   this is about future compatibility and operator clarity.
+There is no HTTP status combination that is both semantically correct AND stops Codex
+retries for a terminal server-side failure. The two honest options:
 
-2. **Make terminal state explicit in `request_admission_state`**: Already done.
-   The field `"request_admission_state": "failed"` or `"failed_gpu_not_available"` is
-   present in the payload. The gap is that Codex cannot currently act on this field.
+**Option A: HTTP 503 with structured terminal body** *(monitoring/semantics purity)*
+```json
+{"error": "backend_failed", "terminal": true, "reason": "GPU unavailable",
+ "request_admission_state": "failed"}
+```
+- HTTP 503 is semantically correct: this is a server-side failure, not a client error.
+- `terminal: true` is a future-friendly payload hint for smarter clients and monitoring.
+- **Codex behavior** (direct source evidence): `api_bridge.rs` does not inspect
+  QuantZhai-specific JSON fields. A 503 with this body still maps to
+  `CodexErr::UnexpectedStatus` which IS retried. All 5 retry attempts are burned.
+  Codex cannot distinguish a terminal failure 503 from a loading-state 503.
+- Tradeoff: correct semantics and monitoring value, at the cost of wasted retry budget.
+
+**Option B: HTTP 400** *(stop wasted retries immediately)*
+- `CodexErr::InvalidRequest` is NOT retried (direct source evidence).
+- Semantically wrong for hardware or configuration failures (those are not client errors).
+- Will confuse operators expecting 5xx for server-side failures.
+- Tradeoff: saves retry budget; loses semantic correctness.
+
+**No clean resolution with current Codex**: Option A is preferred for semantics and
+future compatibility. Accept that Codex wastes retries on terminal failures until Codex
+gains the ability to read structured failure hints. Document the known behavior so
+operators understand why retries fire for a terminal state.
+
+**Note**: `request_admission_state: "failed"` / `"failed_gpu_not_available"` is already
+present in QuantZhai's 503 payload. The gap is not in the payload — it is that Codex
+does not currently read QuantZhai-specific fields, so this information does not change
+Codex retry behavior.
 
 ### Class G: Invalid request / bad model
 
@@ -510,7 +556,7 @@ For every client-facing request to `/v1/responses`, QuantZhai should classify th
 | **accepted and working** | 200 (streaming) | Hold open with SSE keepalives, forward once backend ready |
 | **accepted and switching/loading** | 200 (streaming) | Same as above; emit progress events if possible |
 | **retryable temporary unavailability** | 503 + `Retry-After` | Backend unreachable, expected to recover; include `retry_after_seconds` |
-| **terminal failure** | 503 with `"terminal": true` | Hard failure; include `request_admission_state` and operator hint |
+| **terminal failure** | 503 + `"terminal": true` | Hard failure; include `request_admission_state` and operator hint. **Note**: Codex still retries this (maps to `UnexpectedStatus`). `terminal: true` is monitoring/future value only — it does not stop current Codex retry waste. |
 | **invalid request** | 400 | Unknown model, malformed body; Codex will NOT retry |
 
 QuantZhai should reach state 5 (503 terminal) only after confirming the failure is
@@ -571,8 +617,14 @@ Codex SSE idle timeout of 300s) and return 503 only then.
 **Why**: This eliminates the most common loading-state 503. Model loads typically take
 30–120s. The Codex SSE idle timeout is 300s. The window exists; use it.
 
-**Codex compatibility**: Direct source evidence. SSE idle timeout = 300s. Keepalive
-comments are valid SSE. Codex will wait.
+**Codex source** (direct evidence): SSE idle timeout = 300s
+(`DEFAULT_STREAM_IDLE_TIMEOUT_MS`). Stream errors are retryable. The idle timer resets
+on each yielded data event.
+
+**SSE comment behavior** (strong inference, not directly tested): SSE comments do not
+yield events in `eventsource_stream` and do not reset the Codex idle timer. They maintain
+the TCP/network connection during the hold period. The 270s limit leaves a 30s margin
+before the idle timer fires for the first real backend event.
 
 **Risk**: Medium. Requires careful connection management. The hold-open path needs proper
 cleanup on client disconnect and error handling if the backend fails during the wait.
