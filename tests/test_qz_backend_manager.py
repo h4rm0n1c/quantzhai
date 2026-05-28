@@ -1035,6 +1035,194 @@ class GPUOffloadLogCheckTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# GPU offload grace window — provisional non-GPU states become healthy later
+# ---------------------------------------------------------------------------
+
+class GPUOffloadGraceWindowTests(unittest.TestCase):
+    """Tests for the bounded grace window that lets gpu_state evolve after /health.
+
+    Health passing does not guarantee all model-load log lines are written yet.
+    The grace window retries for any non-GPU state (unknown, failed, cpu_fallback),
+    not just unknown.  The backend must stay in PHASE_RUNNING during the window
+    so request_admission_state returns "loading", not "failed".
+    """
+
+    def _wait_phase(self, mgr, *phases, timeout=3.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if mgr.phase in phases:
+                return True
+            time.sleep(0.02)
+        return False
+
+    def _make_grace_mgr(self, runner, retry_count=3, retry_delay=0.01):
+        return _make_mgr(
+            runner=runner,
+            health_checker=lambda url, timeout=3.0: True,
+            require_gpu=True,
+            gpu_check_retry_count=retry_count,
+            gpu_check_retry_delay=retry_delay,
+        )
+
+    # --- test case 1: failed -> gpu ---
+
+    def test_failed_then_gpu_reaches_healthy(self):
+        """First log scan says 'failed'; later scan says 'gpu' → healthy, not failed."""
+        log_calls = [0]
+        def runner(args, timeout=None):
+            if "ps" in args:
+                return 0, "test-ctr", ""
+            if "logs" in args:
+                log_calls[0] += 1
+                if log_calls[0] == 1:
+                    return 0, _GPU_LOG_CUDA_INIT_FAIL, ""
+                return 0, _GPU_LOG_OFFLOADED, ""
+            return 0, "", ""
+        mgr = self._make_grace_mgr(runner)
+        mgr.start()
+        reached = self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
+        self.assertTrue(reached, f"timed out in phase {mgr.phase}")
+        self.assertEqual(mgr.phase, PHASE_HEALTHY)
+        snap = mgr.snapshot()
+        self.assertEqual(snap["gpu_offload_state"], "gpu")
+        self.assertIsNone(snap["gpu_error"])
+
+    # --- test case 2: cpu_fallback -> gpu ---
+
+    def test_cpu_fallback_then_gpu_reaches_healthy(self):
+        """First log scan says 'cpu_fallback'; later scan says 'gpu' → healthy."""
+        log_calls = [0]
+        def runner(args, timeout=None):
+            if "ps" in args:
+                return 0, "test-ctr", ""
+            if "logs" in args:
+                log_calls[0] += 1
+                if log_calls[0] == 1:
+                    return 0, _GPU_LOG_CPU_MAPPED, ""
+                return 0, _GPU_LOG_OFFLOADED, ""
+            return 0, "", ""
+        mgr = self._make_grace_mgr(runner)
+        mgr.start()
+        reached = self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
+        self.assertTrue(reached, f"timed out in phase {mgr.phase}")
+        self.assertEqual(mgr.phase, PHASE_HEALTHY)
+        snap = mgr.snapshot()
+        self.assertEqual(snap["gpu_offload_state"], "gpu")
+
+    # --- test case 3: repeated unknown until deadline ---
+
+    def test_repeated_unknown_until_deadline_fails(self):
+        """Repeated 'unknown' throughout the grace window → FAILED after window."""
+        def runner(args, timeout=None):
+            if "ps" in args:
+                return 0, "test-ctr", ""
+            if "logs" in args:
+                return 0, "", ""  # always empty → unknown
+            return 0, "", ""
+        mgr = self._make_grace_mgr(runner, retry_count=2)
+        mgr.start()
+        reached = self._wait_phase(mgr, PHASE_FAILED, PHASE_HEALTHY)
+        self.assertTrue(reached, f"timed out in phase {mgr.phase}")
+        self.assertEqual(mgr.phase, PHASE_FAILED)
+        snap = mgr.snapshot()
+        self.assertEqual(snap["gpu_offload_state"], "unknown_after_retries")
+
+    # --- test case 4: repeated failed until deadline ---
+
+    def test_repeated_failed_until_deadline_fails(self):
+        """Repeated 'failed' throughout the grace window → FAILED after window."""
+        def runner(args, timeout=None):
+            if "ps" in args:
+                return 0, "test-ctr", ""
+            if "logs" in args:
+                return 0, _GPU_LOG_CUDA_INIT_FAIL, ""
+            return 0, "", ""
+        mgr = self._make_grace_mgr(runner, retry_count=2)
+        mgr.start()
+        reached = self._wait_phase(mgr, PHASE_FAILED, PHASE_HEALTHY)
+        self.assertTrue(reached, f"timed out in phase {mgr.phase}")
+        self.assertEqual(mgr.phase, PHASE_FAILED)
+        snap = mgr.snapshot()
+        self.assertEqual(snap["gpu_offload_state"], "failed")
+
+    # --- test case 5: repeated cpu_fallback until deadline ---
+
+    def test_repeated_cpu_fallback_until_deadline_fails(self):
+        """Repeated 'cpu_fallback' throughout the grace window → FAILED after window."""
+        def runner(args, timeout=None):
+            if "ps" in args:
+                return 0, "test-ctr", ""
+            if "logs" in args:
+                return 0, _GPU_LOG_CPU_MAPPED, ""
+            return 0, "", ""
+        mgr = self._make_grace_mgr(runner, retry_count=2)
+        mgr.start()
+        reached = self._wait_phase(mgr, PHASE_FAILED, PHASE_HEALTHY)
+        self.assertTrue(reached, f"timed out in phase {mgr.phase}")
+        self.assertEqual(mgr.phase, PHASE_FAILED)
+        snap = mgr.snapshot()
+        self.assertEqual(snap["gpu_offload_state"], "cpu_fallback")
+
+    # --- test case 6: container exits during grace window ---
+
+    def test_container_exits_during_grace_window_fails_immediately(self):
+        """Container exit during grace window must fail without waiting for deadline."""
+        ps_calls = [0]
+        def runner(args, timeout=None):
+            if "ps" in args:
+                ps_calls[0] += 1
+                # First ps (outer health loop) sees container; all later ones don't.
+                return (0, "test-ctr", "") if ps_calls[0] == 1 else (0, "", "")
+            if "logs" in args:
+                return 0, "", ""  # unknown → enter retry loop
+            return 0, "", ""
+        mgr = self._make_grace_mgr(runner, retry_count=3)
+        mgr.start()
+        reached = self._wait_phase(mgr, PHASE_FAILED, PHASE_HEALTHY)
+        self.assertTrue(reached, f"timed out in phase {mgr.phase}")
+        self.assertEqual(mgr.phase, PHASE_FAILED)
+        snap = mgr.snapshot()
+        self.assertEqual(snap["gpu_offload_state"], "failed")
+        self.assertIn("exited", snap.get("gpu_error", ""))
+
+    # --- test case 7: phase stays RUNNING during grace window ---
+
+    def test_grace_window_phase_stays_running_not_failed(self):
+        """Phase must remain RUNNING during the grace window — not FAILED prematurely.
+
+        This directly verifies the bug fix: request_admission_state must return
+        'loading' (not 'failed') while GPU verification retries are in flight.
+        """
+        phases_during_window = []
+        log_calls = [0]
+
+        def runner(args, timeout=None):
+            if "ps" in args:
+                return 0, "test-ctr", ""
+            if "logs" in args:
+                log_calls[0] += 1
+                phases_during_window.append(mgr.phase)
+                if log_calls[0] <= 2:
+                    return 0, _GPU_LOG_CUDA_INIT_FAIL, ""  # fail first two checks
+                return 0, _GPU_LOG_OFFLOADED, ""            # gpu on third
+            return 0, "", ""
+
+        mgr = self._make_grace_mgr(runner, retry_count=5, retry_delay=0.01)
+        mgr.start()
+        reached = self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
+        self.assertTrue(reached, f"timed out in phase {mgr.phase}")
+        self.assertEqual(mgr.phase, PHASE_HEALTHY)
+        # Every log call during the grace window must have seen PHASE_RUNNING,
+        # not PHASE_FAILED — the whole point of the grace window.
+        self.assertTrue(phases_during_window, "runner was never called for logs")
+        for phase in phases_during_window:
+            self.assertEqual(
+                phase, PHASE_RUNNING,
+                f"Phase must be RUNNING during grace window; got {phase!r}",
+            )
+
+
+# ---------------------------------------------------------------------------
 # BackendState GPU fields in snapshot
 # ---------------------------------------------------------------------------
 

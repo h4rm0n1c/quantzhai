@@ -699,14 +699,29 @@ class BackendManager:
                 if rc_ps != 0 or self._container_name not in out_ps:
                     raise RuntimeError("container exited before becoming healthy")
                 if self._health_checker(health_url, timeout=3.0):
-                    # GPU offload check with retry to handle the race where health
-                    # passes before llama.cpp finishes logging model-load lines.
+                    # GPU offload grace window.
+                    # /health passing does not guarantee model-load log lines are
+                    # written yet.  Treat any non-GPU provisional state (unknown,
+                    # failed, cpu_fallback) as provisional within the bounded retry
+                    # window — only GPU success or window expiry is terminal.
+                    # The backend stays in PHASE_RUNNING throughout so
+                    # request_admission_state remains "loading", not "failed".
                     gpu_state, gpu_err = self._check_gpu_offload_from_logs()
-                    retries_left = self._gpu_check_retry_count if self._require_gpu else 0
-                    while gpu_state == "unknown" and retries_left > 0:
-                        time.sleep(self._gpu_check_retry_delay)
-                        gpu_state, gpu_err = self._check_gpu_offload_from_logs()
-                        retries_left -= 1
+                    if self._require_gpu and gpu_state != "gpu":
+                        retries_left = self._gpu_check_retry_count
+                        while retries_left > 0 and gpu_state != "gpu":
+                            # Container-exit check: if it died during the window,
+                            # fail immediately rather than spinning until deadline.
+                            rc_ps2, out_ps2, _ = self._runner(
+                                self.build_docker_ps_args(), timeout=5.0
+                            )
+                            if rc_ps2 != 0 or self._container_name not in out_ps2:
+                                gpu_state = "failed"
+                                gpu_err = "container exited during GPU offload verification"
+                                break
+                            time.sleep(self._gpu_check_retry_delay)
+                            gpu_state, gpu_err = self._check_gpu_offload_from_logs()
+                            retries_left -= 1
                     if gpu_state == "unknown" and self._require_gpu:
                         gpu_state = "unknown_after_retries"
                         gpu_err = (
