@@ -693,12 +693,13 @@ the existing 503 paths. Timeout/failure after SSE headers are sent is represente
 
 **Where**: `qz_request_router.py`, the `not active_ready or not request_matches_active` block.
 
-**Change**: When `request_admission_state` is `"starting"` or `"loading"`, instead of
-returning 503 immediately, hold the connection open with a streaming response. Emit SSE
-keepalive comments every 15s. Poll the model-status readiness truth internally. When the
-requested model becomes ready and active, forward the original request on the same stream.
-Timeout after 270s (just under the Codex SSE idle timeout of 300s) and emit a stream
-failure event plus `[DONE]`.
+**Change**: When `request_admission_state` is `"starting"`/`"loading"` or model-switch
+state shows an in-flight selected-vs-active gap, hold the connection open with a
+streaming response instead of returning 503 immediately. Emit SSE keepalive comments every
+15s. Poll the model-status readiness truth internally. When the requested model becomes
+ready and active, forward the original request on the same stream. Timeout after 270s
+(just under the Codex SSE idle timeout of 300s) and emit a stream failure event plus
+`[DONE]`.
 
 For non-stream requests under the same flag, wait before sending any response; if the
 requested model becomes ready in time, continue into the normal JSON response path,

@@ -3248,8 +3248,8 @@ class RequestRouter:
                         except Exception:
                             pass
                         if (
-                            str(model_status.get("request_admission_state") or "")
-                            in TRANSITIONAL_REQUEST_ADMISSION_STATES
+                            self._is_transitional_responses_wait(model_status, request_matches_active)
+                            and not self._is_terminal_responses_wait(model_status)
                         ):
                             self._send_transitional_503(payload)
                         else:

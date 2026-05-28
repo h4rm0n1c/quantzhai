@@ -286,6 +286,38 @@ class ResponsesAdmissionTests(unittest.TestCase):
         self.assertIsNone(handler.response_status)
         run_local.assert_not_called()
 
+    def test_responses_stream_flag_off_switching_mismatch_returns_retryable_503(self):
+        entry = self._entry("known-model")
+        catalog = self._Catalog([entry], selected=entry)
+        model_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "old-model",
+            "request_admission_state": "idle",
+            "model_switch_state": "loading",
+        }
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "0"}, clear=False),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status", return_value=model_status),
+            patch("proxy.qz_model_status.identity_matches_loaded", return_value=False),
+            patch("proxy.qz_request_router.build_control_plane_status", return_value={"service_status": {}}),
+            patch.object(RequestRouter, "_run_responses_streaming_locally") as run_stream,
+        ):
+            handler = self._Handler({"model": "known-model", "input": "hi", "stream": True}, catalog)
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        self.assertEqual(len(handler.sent), 1)
+        status, payload = handler.sent[0]
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["readiness"]["request_admission_state"], "idle")
+        self.assertEqual(handler.response_headers.get("Retry-After"), "5")
+        self.assertIs(payload["retry_suggested"], True)
+        self.assertIsNone(handler.response_status)
+        run_stream.assert_not_called()
+
     def test_responses_stream_flag_on_loading_holds_open_then_streams_once(self):
         entry = self._entry("known-model")
         catalog = self._Catalog([entry], selected=entry)
@@ -395,6 +427,40 @@ class ResponsesAdmissionTests(unittest.TestCase):
         status, payload = handler.sent[0]
         self.assertEqual(status, 503)
         self.assertEqual(payload["readiness"]["request_admission_state"], "loading")
+        self.assertEqual(handler.response_headers.get("Retry-After"), "5")
+        self.assertIs(payload["retry_suggested"], True)
+        self.assertIsNone(handler.response_status)
+        self.assertEqual(handler.wfile.getvalue(), b"")
+        run_local.assert_not_called()
+
+    def test_responses_non_stream_flag_on_switching_timeout_returns_retryable_503(self):
+        entry = self._entry("known-model")
+        catalog = self._Catalog([entry], selected=entry)
+        model_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "old-model",
+            "request_admission_state": "idle",
+            "model_switch_state": "loading",
+        }
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_MAX_SECONDS", 0.0),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status", return_value=model_status),
+            patch("proxy.qz_model_status.identity_matches_loaded", return_value=False),
+            patch("proxy.qz_request_router.build_control_plane_status", return_value={"service_status": {}}),
+            patch.object(RequestRouter, "_run_responses_locally") as run_local,
+        ):
+            handler = self._Handler({"model": "known-model", "input": "hi"}, catalog)
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        self.assertEqual(len(handler.sent), 1)
+        status, payload = handler.sent[0]
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["readiness"]["request_admission_state"], "idle")
         self.assertEqual(handler.response_headers.get("Retry-After"), "5")
         self.assertIs(payload["retry_suggested"], True)
         self.assertIsNone(handler.response_status)
