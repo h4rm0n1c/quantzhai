@@ -2547,6 +2547,386 @@ class HoldOpenDeadlineSharingTests(unittest.TestCase):
         self.assertIn(b": qz hold-open waiting for model readiness\n\n", stream_bytes)
         run_stream.assert_called_once()
 
+    # ------------------------------------------------------------------
+    # 12. STREAM: explicit deadline identity proof via method wrapping.
+    #     Captures the deadline kwarg in both wait helpers and proves
+    #     the identical float is used — not recomputed by phase 2.
+    # ------------------------------------------------------------------
+
+    def test_stream_stacked_explicit_deadline_identity_proof(self):
+        """
+        Wrap both stream hold-open helpers to RECORD the deadline kwarg
+        they receive.  Prove:
+
+        a) Both helpers receive the SAME deadline float.
+        b) The deadline matches the entry-time computation (370.0).
+        c) A FRESH computation at phase 2 entry would give a DIFFERENT
+           (larger) value (650.0) that would NOT cause an immediate
+           timeout at the observed clock value.
+        d) Standard SSE failure pattern confirms the shared deadline
+           expired before phase 2 could begin polling.
+
+        Clock trace (monotonic):
+          T=100: entry deadline = 100 + 270 = 370
+          T=100: phase 1 startup — init ready → return True
+          T=380: phase 2 model — 380 >= 370 → immediate timeout
+
+        Fresh deadline if recomputed at phase 2 entry:
+          380 + 270 = 650  → 380 >= 650 is False → would NOT time out
+        """
+        entry = self._make_catalog_entry()
+        catalog = ResponsesAdmissionTests._Catalog([entry], selected=entry)
+        initializing = {"state": "initializing", "ready": False, "catalog_ready": False}
+        ready_init = {"state": "ready", "ready": True, "catalog_ready": True}
+        loading_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "loading",
+        }
+
+        recorded = []
+
+        orig_su = RequestRouter._hold_open_responses_stream_until_proxy_startup_ready
+        orig_mw = RequestRouter._hold_open_responses_stream_until_ready
+
+        def _wrapped_su(self, **kw):
+            recorded.append(('startup', kw.get('deadline')))
+            return orig_su(self, **kw)
+
+        def _wrapped_mw(self, **kw):
+            recorded.append(('model', kw.get('deadline')))
+            return orig_mw(self, **kw)
+
+        # Entry: 100.0 → deadline = 100 + 270 = 370
+        # Phase 1 iter 1: now=100, init not ready → sleep, get ready_init
+        # Phase 1 iter 2: now=200, init ready → return True
+        # Phase 2 iter 1: now=380, 380>=370 → immediate timeout
+        mono_values = [100.0, 100.0, 200.0, 380.0, 380.0, 380.0]
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_MAX_SECONDS", 270.0),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_POLL_SECONDS", 0.001),
+            patch("proxy.qz_request_router.time.monotonic", side_effect=mono_values),
+            patch("proxy.qz_request_router.time.sleep"),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.write_request_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status", return_value=loading_status),
+            patch("proxy.qz_model_status.identity_matches_loaded", return_value=False),
+            patch.object(
+                RequestRouter,
+                "_hold_open_responses_stream_until_proxy_startup_ready",
+                _wrapped_su,
+            ),
+            patch.object(
+                RequestRouter,
+                "_hold_open_responses_stream_until_ready",
+                _wrapped_mw,
+            ),
+            patch.object(RequestRouter, "_run_responses_streaming_locally") as run_stream,
+        ):
+            handler = self._make_handler_for_integration(
+                {"model": "known-model", "input": "hi", "stream": True},
+                catalog,
+                initializations=[initializing, ready_init],
+            )
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        # --- Explicit deadline value proof ---
+        self.assertEqual(len(recorded), 2)
+        startup_dl = recorded[0][1]
+        model_dl = recorded[1][1]
+        self.assertIsNotNone(startup_dl)
+        self.assertIsNotNone(model_dl)
+        # (a) Both phases receive the identical deadline float
+        self.assertEqual(startup_dl, model_dl)
+        # (b) Deadline matches entry-time computation: 100.0 + 270.0 = 370.0
+        self.assertEqual(startup_dl, 370.0)
+        # (c) Fresh deadline at phase 2 entry would be: 380.0 + 270.0 = 650.0
+        #     The shared deadline is SMALLER — it was NOT recomputed
+        fresh_deadline_if_recomputed = 380.0 + 270.0
+        self.assertNotEqual(startup_dl, fresh_deadline_if_recomputed)
+        self.assertLess(startup_dl, fresh_deadline_if_recomputed)
+        # Shared deadline is LESS than phase 2 clock value: expired at entry
+        self.assertLess(startup_dl, 380.0)
+        # Fresh deadline is MORE than phase 2 clock value: NOT expired
+        self.assertGreater(fresh_deadline_if_recomputed, 380.0)
+
+        # (d) Both phases ran — both keepalive types must appear
+        stream_bytes = handler.wfile.getvalue()
+        self.assertEqual(handler.response_status, 200)
+        self.assertEqual(handler.send_response_calls, [200])
+        self.assertEqual(handler.end_headers_calls, 1)
+        self.assertEqual(handler.sent, [])
+        self.assertIn(b": qz hold-open waiting for proxy startup\n\n", stream_bytes)
+        self.assertIn(b": qz hold-open waiting for model readiness\n\n", stream_bytes)
+        self.assertIn(b"event: response.failed", stream_bytes)
+        self.assertIn(b"timed out", stream_bytes)
+        self.assertIn(b"data: [DONE]\n\n", stream_bytes)
+        run_stream.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # 13. NON-STREAM: explicit deadline identity proof via method
+    #     wrapping.  Same structure as test 12.
+    # ------------------------------------------------------------------
+
+    def test_non_stream_stacked_explicit_deadline_identity_proof(self):
+        """
+        Wrap both non-stream wait helpers to record the deadline kwarg.
+        Prove deadline identity across phases for the non-stream path.
+
+        Clock trace (monotonic):
+          T=100: entry deadline = 100 + 270 = 370
+          T=100: phase 1 startup — init ready → return True
+          T=380: phase 2 model — 380 >= 370 → False → 503 fallback
+
+        Fresh deadline if recomputed at phase 2 entry:
+          380 + 270 = 650  → 380 >= 650 is False → would enter loop
+        """
+        entry = self._make_catalog_entry()
+        catalog = ResponsesAdmissionTests._Catalog([entry], selected=entry)
+        initializing = {"state": "initializing", "ready": False, "catalog_ready": False}
+        ready_init = {"state": "ready", "ready": True, "catalog_ready": True}
+        loading_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "loading",
+        }
+
+        recorded = []
+
+        orig_sw = RequestRouter._wait_responses_proxy_startup_before_forward
+        orig_mw = RequestRouter._wait_responses_until_ready_before_forward
+
+        def _wrapped_sw(self, **kw):
+            recorded.append(('startup', kw.get('deadline')))
+            return orig_sw(self, **kw)
+
+        def _wrapped_mw(self, **kw):
+            recorded.append(('model', kw.get('deadline')))
+            return orig_mw(self, **kw)
+
+        # Entry: 100.0 → deadline = 100 + 270 = 370
+        # Phase 1 iter 1: now=100, init not ready → sleep, get ready_init
+        # Phase 1 iter 2: init ready → return True (no monotonic, check before call)
+        # Phase 2 iter 1: now=380, 380>=370 → return False → 503 fallback
+        mono_values = [100.0, 100.0, 380.0, 380.0, 380.0]
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_MAX_SECONDS", 270.0),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_POLL_SECONDS", 0.001),
+            patch("proxy.qz_request_router.time.monotonic", side_effect=mono_values),
+            patch("proxy.qz_request_router.time.sleep"),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status", return_value=loading_status),
+            patch("proxy.qz_model_status.identity_matches_loaded", return_value=False),
+            patch("proxy.qz_request_router.build_control_plane_status",
+                  return_value={"service_status": {}}),
+            patch.object(
+                RequestRouter,
+                "_wait_responses_proxy_startup_before_forward",
+                _wrapped_sw,
+            ),
+            patch.object(
+                RequestRouter,
+                "_wait_responses_until_ready_before_forward",
+                _wrapped_mw,
+            ),
+            patch.object(RequestRouter, "_run_responses_locally") as run_local,
+        ):
+            handler = self._make_handler_for_integration(
+                {"model": "known-model", "input": "hi"},
+                catalog,
+                initializations=[initializing, ready_init],
+            )
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        # --- Explicit deadline value proof ---
+        self.assertEqual(len(recorded), 2)
+        startup_dl = recorded[0][1]
+        model_dl = recorded[1][1]
+        self.assertIsNotNone(startup_dl)
+        self.assertIsNotNone(model_dl)
+        # (a) Both phases receive the identical deadline float
+        self.assertEqual(startup_dl, model_dl)
+        # (b) Deadline matches entry-time computation
+        self.assertEqual(startup_dl, 370.0)
+        # (c) Fresh deadline is 650.0 — shared deadline is DIFFERENT
+        fresh_deadline_if_recomputed = 380.0 + 270.0
+        self.assertNotEqual(startup_dl, fresh_deadline_if_recomputed)
+        self.assertLess(startup_dl, fresh_deadline_if_recomputed)
+        self.assertLess(startup_dl, 380.0)
+        self.assertGreater(fresh_deadline_if_recomputed, 380.0)
+
+        # Non-stream fallback assertions
+        self.assertEqual(len(handler.sent), 1)
+        status, payload = handler.sent[0]
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["readiness"]["request_admission_state"], "loading")
+        self.assertEqual(handler.response_headers.get("Retry-After"), "5")
+        self.assertIs(payload["retry_suggested"], True)
+        self.assertEqual(handler.wfile.getvalue(), b"")
+        run_local.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # 14. NON-STREAM positive composition: startup consumes part of
+    #     shared budget; enough remains for model to become ready.
+    # ------------------------------------------------------------------
+
+    def test_stacked_waits_positive_non_stream_succeeds_after_shared_budget(self):
+        """
+        Non-stream analogue of test 11.
+
+        Startup consumes ~50s of the 270s shared budget.  Model wait
+        inherits ~220s and the model becomes ready within that remaining
+        window.  Request proceeds to the normal local response path.
+
+        Proves shared deadline does not break the non-stream success
+        path when adequate budget remains for both phases.
+        """
+        entry = self._make_catalog_entry()
+        catalog = ResponsesAdmissionTests._Catalog([entry], selected=entry)
+        initializing = {"state": "initializing", "ready": False, "catalog_ready": False}
+        loading_again = {"state": "initializing", "ready": False, "catalog_ready": False}
+        ready_init = {"state": "ready", "ready": True, "catalog_ready": True}
+        loading_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "loading",
+        }
+        ready_status = {
+            "selected_model_ready": True,
+            "backend_loaded_model": "known-model",
+            "request_admission_state": "ready",
+        }
+        local_response = {
+            "id": "resp_ready",
+            "object": "response",
+            "output": [],
+            "usage": {},
+        }
+
+        # T=0:   entry deadline = 0 + 270 = 270
+        # T=0:   phase 1 iter 1 — not ready, not failed, now(0) < 270 → sleep
+        # T=50:  phase 1 iter 2 — not ready, not failed, now(50) < 270 → sleep
+        # T=50:  phase 1 iter 3 — init ready, return True (no monotonic)
+        # T=50:  phase 2 iter 1 — not ready, not terminal, now(50) < 270 → sleep, get ready_status
+        # T=100: phase 2 iter 2 — ready → return True
+        mono_values = [0.0, 0.0, 50.0, 50.0, 100.0, 100.0]
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_POLL_SECONDS", 0.001),
+            patch("proxy.qz_request_router.time.monotonic", side_effect=mono_values),
+            patch("proxy.qz_request_router.time.sleep"),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch(
+                "proxy.qz_model_status.build_model_status",
+                side_effect=[loading_status, ready_status],
+            ),
+            patch.object(
+                RequestRouter,
+                "_run_responses_locally",
+                return_value=(200, "application/json", local_response),
+            ) as run_local,
+        ):
+            handler = self._make_handler_for_integration(
+                {"model": "known-model", "input": "hi"},
+                catalog,
+                initializations=[initializing, loading_again, ready_init],
+            )
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        self.assertEqual(handler.sent, [(200, local_response)])
+        self.assertEqual(handler.response_headers, {})
+        self.assertIsNone(handler.response_status)
+        self.assertEqual(handler.wfile.getvalue(), b"")
+        run_local.assert_called_once()
+
+    # ------------------------------------------------------------------
+    # 15. REGRESSION guard: counting clock proves exact monotonic call
+    #     count matches shared-deadline behavior.  Under a hypothetical
+    #     fresh-full-window model, the count would be strictly larger.
+    # ------------------------------------------------------------------
+
+    def test_stream_stacked_regression_guard_clock_call_count(self):
+        """
+        Count every time.monotonic() call via a counter function and
+        assert the exact total for the stacked wait path.
+
+        With shared deadline and these clock values:
+          entry:    1 call  (100.0 → deadline=370)
+          phase 1:  1 call  (100.0 → init ready, return True)
+          phase 2:  1 call  (380.0 → 380>=370 → timeout)
+          total:    3 calls
+
+        Under a fresh-full-window model phase 2 would need:
+          1 call for deadline computation  (380.0)
+          1 call for now check             (380.0)
+          ... then loop entry would need another call → 4th call
+
+        Total under fresh window model: 4+ calls → StopIteration or
+        a different count with extended clock values.
+        """
+        entry = self._make_catalog_entry()
+        catalog = ResponsesAdmissionTests._Catalog([entry], selected=entry)
+        ready_init = {"state": "ready", "ready": True, "catalog_ready": True}
+        loading_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "loading",
+        }
+
+        clock_values = [100.0, 100.0, 380.0, 380.0, 380.0]
+        clock_pool = list(clock_values)
+        call_count = [0]
+
+        def _counting_mono():
+            call_count[0] += 1
+            if clock_pool:
+                return clock_pool.pop(0)
+            return 0.0
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_MAX_SECONDS", 270.0),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_POLL_SECONDS", 0.001),
+            patch("proxy.qz_request_router.time.monotonic", side_effect=_counting_mono),
+            patch("proxy.qz_request_router.time.sleep"),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.write_request_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status", return_value=loading_status),
+            patch("proxy.qz_model_status.identity_matches_loaded", return_value=False),
+            patch.object(RequestRouter, "_run_responses_streaming_locally") as run_stream,
+        ):
+            handler = self._make_handler_for_integration(
+                {"model": "known-model", "input": "hi", "stream": True},
+                catalog,
+                initializations=[ready_init],
+            )
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        # Shared deadline path makes exactly 3 monotonic calls.
+        # Any other count means the deadline flow has changed.
+        self.assertEqual(call_count[0], 3)
+
+        stream_bytes = handler.wfile.getvalue()
+        self.assertEqual(handler.response_status, 200)
+        self.assertEqual(handler.sent, [])
+        self.assertIn(b"event: response.failed", stream_bytes)
+        self.assertIn(b"timed out", stream_bytes)
+        self.assertIn(b"data: [DONE]\n\n", stream_bytes)
+        run_stream.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
