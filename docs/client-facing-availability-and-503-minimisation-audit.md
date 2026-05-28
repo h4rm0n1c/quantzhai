@@ -20,43 +20,91 @@ Minimising client-facing 503s is an explicit reliability goal, not a cosmetic on
 
 ---
 
-## 2. Truth sources consulted
+## 2. Source access / confidence
+
+This pass uses only directly readable QuantZhai files, directly readable Codex source,
+and official OpenAI pages reached from `https://developers.openai.com/api/reference/overview`.
+Compatibility claims are only as strong as that evidence. Proposed hold-open or streaming
+designs are QuantZhai design recommendations, not proven end-to-end Codex guarantees
+unless a live Codex/QuantZhai test proves them.
 
 ### QuantZhai sources (working tree, 2026-05-28)
 
 | File | What was read |
 |---|---|
-| `proxy/quantzhai_proxy.py` | Startup, initialization flow, `_handle_responses_compact`, `_send_json` |
+| `docs/client-facing-availability-and-503-minimisation-audit.md` | Current audit text |
+| `docs/qz-codex-wrapper-contract.md` | Wrapper pre-flight contract, loading wait/poll |
+| `docs/model-selection-and-compaction-correction-plan.md` | Model state authority, recovery rules |
 | `proxy/qz_request_router.py` | All GET/POST route handlers, 503 gates, `/v1/responses` model-readiness check |
 | `proxy/qz_model_status.py` | `_request_admission_state()`, `_recommended_action()` |
 | `proxy/qz_backend_manager.py` | Full phase lifecycle (`PHASE_*` constants), `_do_start()`, GPU offload verification |
-| `proxy/qz_service_status.py` | `_model_state()`, `_request_admission()` enums |
-| `proxy/qz_model_router.py` | `status_snapshot()`, BackendManager fallback, `handle_ready_get()` |
 | `scripts/qz-codex-common` | `qz_codex_exec_preflight()`, `poll_until_ready()`, `active_match()` |
-| `docs/qz-codex-wrapper-contract.md` | Wrapper pre-flight contract, loading wait/poll |
-| `docs/model-selection-and-compaction-correction-plan.md` | Model state authority, recovery rules |
 
-### Codex sources (openai/codex, fetched via GitHub API, 2026-05-28)
+### Codex sources (openai/codex local audit checkout, 2026-05-28)
 
 | File | What was read |
 |---|---|
-| `codex-rs/responses-api-proxy/src/lib.rs` | Full proxy request forwarding — verbatim status pass-through |
-| `codex-rs/codex-client/src/request.rs` | Request/Response types |
 | `codex-rs/codex-client/src/transport.rs` | `execute()` and `stream()` — non-2xx handling |
-| `codex-rs/codex-client/src/error.rs` | `TransportError`, `StreamError` |
-| `codex-rs/codex-client/src/retry.rs` | `RetryPolicy`, `RetryOn`, `run_with_retry`, `backoff()` |
-| `codex-rs/codex-client/src/sse.rs` | SSE stream parser, idle timeout, stream-close error |
-| `codex-rs/codex-api/src/error.rs` | `ApiError` variants including `ServerOverloaded`, `Retryable` |
-| `codex-rs/codex-api/src/api_bridge.rs` | `map_api_error()` — full HTTP-status-to-CodexErr mapping |
 | `codex-rs/protocol/src/error.rs` | `CodexErr::is_retryable()` — authoritative retry decision |
-| `codex-rs/model-provider-info/src/lib.rs` | `DEFAULT_STREAM_MAX_RETRIES=5`, `DEFAULT_REQUEST_MAX_RETRIES=4`, `retry_5xx=true` |
-| `codex-rs/core/src/session/turn.rs` | Retry loop structure, `max_retries` origin |
-| `codex-rs/core/src/responses_retry.rs` | `handle_retryable_response_stream_error()` |
-| `codex-rs/core/tests/common/streaming_sse.rs` | Test SSE server — confirms POST `/v1/responses` as the only expected path |
+| `codex-rs/model-provider-info/src/lib.rs` | `DEFAULT_STREAM_MAX_RETRIES=5`, `DEFAULT_REQUEST_MAX_RETRIES=4`, `DEFAULT_STREAM_IDLE_TIMEOUT_MS=300_000`, `retry_5xx=true` |
+| `codex-rs/codex-client/src/sse.rs` | SSE parser wrapper and idle-timeout behavior |
+| `codex-rs/codex-api/src/error.rs` | `ApiError` variants including `ServerOverloaded`, `InvalidRequest`, `Retryable` |
+| `codex-rs/codex-api/src/api_bridge.rs` | `map_api_error()` — HTTP-status-to-`CodexErr` mapping |
+| `codex-rs/codex-client/src/retry.rs` | `RetryPolicy`, `RetryOn`, `run_with_retry`, `backoff()` |
+| `codex-rs/responses-api-proxy/src/lib.rs` | Proxy request forwarding — status pass-through |
+| `codex-rs/core/tests/common/streaming_sse.rs` | Test SSE server — directly evidences POST `/v1/responses` in that fixture |
+
+### Official OpenAI docs access (developers.openai.com only)
+
+Attempted from the required root page and real navigation only:
+
+| URL | Result | Evidence used |
+|---|---|---|
+| `https://developers.openai.com/api/reference/overview` | verified | Root API reference, authentication, debugging headers, navigation |
+| `https://developers.openai.com/api/reference/responses/overview` | verified | Responses API reference navigation |
+| `https://developers.openai.com/api/reference/resources/responses/methods/create` | verified | `POST /v1/responses`, `stream: true`, SSE example, context-window 400 behavior |
+| `https://developers.openai.com/api/reference/resources/responses/methods/compact` | verified | `POST /v1/responses/compact` |
+| `https://developers.openai.com/docs/guides/error-codes` -> `https://developers.openai.com/api/docs/guides/error-codes` | verified after redirect | 500/503/429 guidance, Python library error-class descriptions |
+| `https://developers.openai.com/docs/api-reference/responses-streaming` | inaccessible from current tool | Real linked Streaming section fetch failed with `Failed to fetch ... (400) OK` |
+
+No `platform.openai.com/docs/...` pages were used. Links inside official pages that point
+to `platform.openai.com` were not followed.
+
+### Confidence labels used below
+
+| Label | Meaning in this audit |
+|---|---|
+| Direct source evidence | Directly read QuantZhai code/docs, Codex source, or verified developers.openai.com content |
+| Strong inference | A narrow conclusion from direct source evidence, but not proven by a live end-to-end test |
+| Unknown / not claimed | Not directly verified; the audit must not rely on it |
+
+Current unknowns: current OpenAI server behavior for QuantZhai-specific transitional
+states, whether Codex honors `Retry-After` for these paths, whether SSE comments reset
+Codex's application-level idle timer, and whether any external backend implements an
+OpenAI-compatible Responses API closely enough to use as a comparator here.
 
 ---
 
-## 3. North-star rule
+## 3. Compact comparative reference
+
+| Surface | QuantZhai current behavior | Codex client behavior | Official OpenAI Responses behavior directly sourced | External backend comparator |
+|---|---|---|---|---|
+| Main Responses path | `/v1/responses` forwards only when selected backend is ready; startup/loading/switching can return 503 | Codex source and tests use `POST /v1/responses`; non-2xx becomes transport error before SSE parsing | Create-response reference documents `POST /v1/responses` | None used; no directly proven relevant comparator in this pass |
+| Streaming | Loading states return 503 before a stream exists | `stream()` rejects non-2xx; SSE parser waits for yielded events and times out after configured idle timeout, default 300s | `stream: true` streams model response data using server-sent events; example shows Responses SSE events | None used |
+| Plain 503 | Used for proxy initializing, model not found, loading, failed, and broken profile cases | Plain 503 maps to `UnexpectedStatus`, which is retryable | Error docs describe 503 as overloaded/high traffic or slow-down and advise retry after a brief wait | None used |
+| 503 with overloaded code | QuantZhai must not use this for loading/switching | `error.code = "server_is_overloaded"` or `"slow_down"` maps to `ServerOverloaded`, which is not retryable | Error docs include overloaded and slow-down 503 classes | None used |
+| Bad request / invalid input | Unknown model on `/v1/responses` currently returns 503 | HTTP 400 maps to `InvalidRequest`, which is not retryable | Error docs describe bad requests as malformed or missing parameters; create-response docs say context-window overflow with truncation disabled fails with 400 | None used |
+| Compaction | `/v1/responses/compact` returns 200 with LLM or heuristic fallback | Codex compatibility is inferred from the QuantZhai contract and handler; this pass did not re-prove Codex client call sites beyond Responses path tests | Compact-response reference documents `POST /v1/responses/compact` | None used |
+| Status/polling | `/qz/model/status` currently returns 503 during proxy startup | Wrapper swallows failures and continues polling, but direct Codex `/v1/responses` does not use this endpoint | No official OpenAI comparator; this is QuantZhai-specific | None used |
+
+Comparator evidence is deliberately limited. Official OpenAI docs prove the public
+Responses endpoints, streaming mode, and documented 500/503/400-style error meanings;
+they do not prove QuantZhai transitional-state behavior. No other backend is included
+because this pass did not directly prove a relevant `/v1/responses` implementation.
+
+---
+
+## 4. North-star rule
 
 Before returning a client-facing 503, QuantZhai should ask:
 
@@ -66,11 +114,12 @@ Before returning a client-facing 503, QuantZhai should ask:
 4. Can the request degrade gracefully to a truthful fallback?
 5. Only if none of the above apply: is 503 actually warranted?
 
-A 503 that burns a Codex retry is a 503 that could have been something better.
+A 503 that burns a Codex retry spends user experience budget. Loading, starting, and
+switching should feel like accepted work in progress, not like the service is broken.
 
 ---
 
-## 4. Inventory of current client-facing availability surfaces
+## 5. Inventory of current client-facing availability surfaces
 
 ### `/v1/responses`
 
@@ -240,21 +289,21 @@ unavailability. These endpoints are correctly designed and do not contribute poi
 
 ---
 
-## 5. Failure classes
+## 6. Failure classes
 
 | Class | Description | Is 503 correct? |
 |---|---|---|
 | A | Proxy still starting — catalog and policy loading in background | Sometimes acceptable: `/v1/responses` should use retryable semantics; `/qz/model/status` should use 200+not-ready |
-| B | Backend loading — container starting or model loading into VRAM | Usually wrong: transitional, not a failure; request should be held open or expressed as retryable |
-| C | Accepted model/backend switch in progress | Usually wrong: same as B; this is an accepted transition, not a failure |
-| D | Backend temporarily unreachable or unhealthy but likely recoverable | Sometimes acceptable: if truly transient, retryable 503 with short Retry-After; if persistent, 503 is warranted |
+| B | Backend loading — container starting or model loading into VRAM | Usually wrong: transitional work, not service failure; request should be held open or expressed as retryable |
+| C | Accepted model/backend switch in progress | Usually wrong: same as B; the service accepted a transition and should not look broken while doing it |
+| D | Backend temporarily unreachable or unhealthy but likely recoverable | Sometimes acceptable: if truly transient, retryable 503 with short `Retry-After`; if persistent, 503 is warranted |
 | E | Catalog/config not yet loaded | Sometimes acceptable for management endpoints; 200+not-ready for polling endpoints |
-| F | Hard terminal failure — backend crashed, GPU unavailable, VRAM exceeded | Currently 503 (same surface as classes B/C). **Wrong**: terminal failures should use a different mechanism so Codex does not waste retry budget |
+| F | Hard terminal failure — backend crashed, GPU unavailable, VRAM exceeded | Currently 503 (same surface as classes B/C). **Imperfect**: current Codex has no perfect status for "server-side terminal and non-retryable" |
 | G | Invalid request — model not in catalog, bad model ID, bad parameters | Currently 503. **Wrong**: should be 4xx so clients know this is a client error, not a server error |
 
 ---
 
-## 6. Codex compatibility audit
+## 7. Codex compatibility audit
 
 This section is grounded in Codex source. Claims are labelled by evidence confidence.
 
@@ -306,8 +355,10 @@ No special handling. The raw status code and body are preserved.
 
 **Implication**: QuantZhai's current plain-503 responses are treated as `UnexpectedStatus`
 which IS retried, up to 5 times with exponential backoff. This provides some resilience.
-However, the retry budget is not infinite. A model load that takes 60–120 seconds will
-exhaust the default retry budget. Once exhausted, the user sees a hard failure.
+However, request and stream retry budgets are distinct and finite. The reviewed source
+does not show Codex honoring `Retry-After` for these paths. A model load that takes
+60-120 seconds can exhaust the effective user-experience budget, after which the user
+sees a hard failure for work that may still be progressing normally.
 
 ### The `server_is_overloaded` trap
 
@@ -356,16 +407,21 @@ maximum of 270s leaves a 30s margin before the Codex idle timer fires.
 The proxy does simple verbatim forwarding. It does not filter or translate HTTP statuses.
 Whatever QuantZhai returns, Codex's core client receives it as-is.
 
-### What Codex sends as its only POST path
+### What Codex sends as its directly evidenced POST path
 
 **Direct source evidence** (`codex-rs/core/tests/common/streaming_sse.rs`):
 The test SSE server only handles `POST /v1/responses`. There is no evidence that Codex
-sends requests to any other path. `/v1/responses/compact` is called by Codex for remote
-compaction (confirmed by QuantZhai's existing handler and behavior).
+sends requests to any other path in that test fixture.
+
+**Direct source evidence** (official OpenAI docs): `POST /v1/responses/compact` is a
+documented Responses endpoint. QuantZhai implements a compatible handler. This pass did
+not directly re-prove the Codex client call site for `/v1/responses/compact`, so Codex
+compact-path compatibility remains a strong inference from the surrounding QuantZhai
+contract and existing handler, not a direct Codex-source claim here.
 
 ---
 
-## 7. Current obvious UX offenders
+## 8. Current obvious UX offenders
 
 ### Offender 1: Backend loading → hard 503, full stop
 
@@ -375,8 +431,8 @@ client hits `/v1/responses` during a backend restart, they get:
 {"error": "model not ready", "reason": "selected model is not ready for direct backend launch"}
 ```
 with HTTP 503. Codex will retry this up to 5 times. If the load takes longer than the
-retry budget, the user sees a failure. The backend was never actually broken — it was
-working on it. This is the worst offender.
+retry budget, the user sees a failure. The backend was never actually broken; it was
+still doing accepted startup work. This is the worst offender.
 
 ### Offender 2: "Model not found" returns 503
 
@@ -408,8 +464,8 @@ is a category error.
 `select-and-restart` is a compound action: it writes model state, then triggers a backend
 restart, then the backend goes through `start_requested → starting → running → healthy`.
 During this transition, `/v1/responses` returns 503 immediately for any arriving request.
-There is no "switching, please hold" state exposed to the client. The transition is
-invisible except as a string of 503s.
+There is no "switching, please hold" state exposed to the client. The transition should
+feel like accepted work in progress, but today it is visible only as a string of 503s.
 
 ### Offender 6: Wrapper-side waiting is the primary mitigation
 
@@ -421,7 +477,7 @@ gets no such protection.
 
 ---
 
-## 8. Better-than-503 options
+## 9. Better-than-503 options
 
 ### Class A/E: Proxy still starting
 
@@ -438,6 +494,8 @@ gets no such protection.
 ### Class B/C: Backend loading or switching
 
 **Current**: 503 → Codex retries ≤5 times → user fails if load exceeds retry budget.
+That retry budget is user experience budget. Spending it on accepted loading/switching
+work makes a normal transition feel like service failure.
 
 **Better options** (ranked by impact):
 
@@ -495,8 +553,10 @@ Same as class A — short startup window. The current behavior is tolerable. Add
 
 **Better options**:
 
-There is no HTTP status combination that is both semantically correct AND stops Codex
-retries for a terminal server-side failure. The two honest options:
+Current Codex behavior gives QuantZhai no perfect server-side status for "semantically
+correct and non-retryable terminal server failure". There is no HTTP status combination
+reviewed here that is both semantically correct for a server-side failure AND stops
+current Codex retries. The two honest options:
 
 **Option A: HTTP 503 with structured terminal body** *(monitoring/semantics purity)*
 ```json
@@ -504,12 +564,14 @@ retries for a terminal server-side failure. The two honest options:
  "request_admission_state": "failed"}
 ```
 - HTTP 503 is semantically correct: this is a server-side failure, not a client error.
-- `terminal: true` is a future-friendly payload hint for smarter clients and monitoring.
+- `terminal: true` is only a QuantZhai-side hint for operators, monitoring, and future
+  clients. It is not a Codex protocol feature.
 - **Codex behavior** (direct source evidence): `api_bridge.rs` does not inspect
   QuantZhai-specific JSON fields. A 503 with this body still maps to
   `CodexErr::UnexpectedStatus` which IS retried. All 5 retry attempts are burned.
   Codex cannot distinguish a terminal failure 503 from a loading-state 503.
-- Tradeoff: correct semantics and monitoring value, at the cost of wasted retry budget.
+- Tradeoff: correct semantics and monitoring value, at the cost of wasted retry budget
+  for current Codex.
 
 **Option B: HTTP 400** *(stop wasted retries immediately)*
 - `CodexErr::InvalidRequest` is NOT retried (direct source evidence).
@@ -517,10 +579,12 @@ retries for a terminal server-side failure. The two honest options:
 - Will confuse operators expecting 5xx for server-side failures.
 - Tradeoff: saves retry budget; loses semantic correctness.
 
-**No clean resolution with current Codex**: Option A is preferred for semantics and
-future compatibility. Accept that Codex wastes retries on terminal failures until Codex
-gains the ability to read structured failure hints. Document the known behavior so
-operators understand why retries fire for a terminal state.
+**No clean resolution with current Codex**: Option A is preferred for semantics,
+operator clarity, and future compatibility. This is a deliberate tradeoff, not a solved
+protocol. Accept that current Codex wastes retries on terminal failures until Codex gains
+the ability to read structured failure hints or exposes a suitable non-retryable
+server-side failure class. Document the known behavior so operators understand why
+retries fire for a terminal state.
 
 **Note**: `request_admission_state: "failed"` / `"failed_gpu_not_available"` is already
 present in QuantZhai's 503 payload. The gap is not in the payload — it is that Codex
@@ -546,7 +610,7 @@ Codex retry behavior.
 
 ---
 
-## 9. Recommended client-facing availability contract
+## 10. Recommended client-facing availability contract
 
 For every client-facing request to `/v1/responses`, QuantZhai should classify the situation as one of these states, in preference order:
 
@@ -556,7 +620,7 @@ For every client-facing request to `/v1/responses`, QuantZhai should classify th
 | **accepted and working** | 200 (streaming) | Hold open with SSE keepalives, forward once backend ready |
 | **accepted and switching/loading** | 200 (streaming) | Same as above; emit progress events if possible |
 | **retryable temporary unavailability** | 503 + `Retry-After` | Backend unreachable, expected to recover; include `retry_after_seconds` |
-| **terminal failure** | 503 + `"terminal": true` | Hard failure; include `request_admission_state` and operator hint. **Note**: Codex still retries this (maps to `UnexpectedStatus`). `terminal: true` is monitoring/future value only — it does not stop current Codex retry waste. |
+| **terminal failure** | 503 + `"terminal": true` | Hard failure; include `request_admission_state` and operator hint. **Note**: Codex still retries this (maps to `UnexpectedStatus`). `terminal: true` is QuantZhai operator/future-client value only — it does not stop current Codex retry behavior. |
 | **invalid request** | 400 | Unknown model, malformed body; Codex will NOT retry |
 
 QuantZhai should reach state 5 (503 terminal) only after confirming the failure is
@@ -569,7 +633,7 @@ For all other endpoints (`/qz/model/status`, `/health`, control-plane):
 
 ---
 
-## 10. Immediate implementation priorities
+## 11. Immediate implementation priorities
 
 Ordered by user-facing impact and implementation confidence.
 
