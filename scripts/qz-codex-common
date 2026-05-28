@@ -334,7 +334,9 @@ qz_resolve_codex_profile() {
 
 qz_exec_model_from_args() {
   # Extract the model value from exec subcommand arguments.
-  # Handles: -m MODEL, --model MODEL, --model=MODEL, -p PROFILE, --profile=PROFILE
+  # Handles ONLY model flags: -m MODEL, --model MODEL, --model=MODEL
+  # Profile flags (-p, --profile, --profile=...) are NOT model args and
+  # must not be returned here — they set reasoning effort, not the model.
   local pending=0
   for arg in "$@"; do
     if [[ "$pending" -eq 1 ]]; then
@@ -342,10 +344,9 @@ qz_exec_model_from_args() {
       return 0
     fi
     case "$arg" in
-      -m|--model|-p|--profile) pending=1 ;;
-      --model=*)               printf '%s' "${arg#--model=}"; return 0 ;;
-      --profile=*)             printf '%s' "${arg#--profile=}"; return 0 ;;
-      --)                      return 0 ;;
+      -m|--model) pending=1 ;;
+      --model=*)  printf '%s' "${arg#--model=}"; return 0 ;;
+      --)         return 0 ;;
     esac
   done
   return 0
@@ -510,6 +511,46 @@ def post_select_and_restart(req):
         return None, None, str(exc)
 
 
+def poll_until_ready(initial_admission, req):
+    """Poll /qz/model/status until active_match is true or a terminal state.
+
+    Called when selected_identity_match is already confirmed and admission is
+    "starting" or "loading".  sys.exit()s on failure; returns normally on
+    success (caller must sys.exit(0) afterwards).
+    """
+    admission = initial_admission
+    print(
+        "qz-codex: [{}] is {} — waiting up to {:g}s for backend to be ready...".format(
+            req, admission, timeout
+        ),
+        file=sys.stderr,
+    )
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(3)
+        poll_data = fetch_status()
+        if poll_data is None:
+            continue
+        admission = (poll_data.get("request_admission_state") or "").strip()
+        if admission in ("failed", "failed_gpu_not_available"):
+            print_failure_detail(poll_data, req)
+            print(
+                "qz-codex: [{}] failed during load; aborting.".format(req),
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if active_match(poll_data, req):
+            return
+    print(
+        "qz-codex: timed out after {:g}s waiting for [{}] to become ready.".format(
+            timeout, req
+        ),
+        file=sys.stderr,
+    )
+    print("  Last admission state: {}".format(admission), file=sys.stderr)
+    sys.exit(1)
+
+
 data = fetch_status()
 if data is None:
     sys.exit(3)
@@ -531,36 +572,8 @@ if active_match(data, requested):
 # Selected model matches requested but is still loading — wait/poll.
 # This is not a mismatch; QZ_CODEX_AUTO_SELECT_MODEL is not required.
 if selected_identity_match(data, requested) and admission in ("starting", "loading"):
-    print(
-        "qz-codex: [{}] is {} — waiting up to {:g}s for backend to be ready...".format(
-            requested, admission, timeout
-        ),
-        file=sys.stderr,
-    )
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        time.sleep(3)
-        data = fetch_status()
-        if data is None:
-            continue
-        admission = (data.get("request_admission_state") or "").strip()
-        if admission in ("failed", "failed_gpu_not_available"):
-            print_failure_detail(data, requested)
-            print(
-                "qz-codex: [{}] failed during load; aborting.".format(requested),
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        if active_match(data, requested):
-            sys.exit(0)
-    print(
-        "qz-codex: timed out after {:g}s waiting for [{}] to become ready.".format(
-            timeout, requested
-        ),
-        file=sys.stderr,
-    )
-    print("  Last admission state: {}".format(admission), file=sys.stderr)
-    sys.exit(1)
+    poll_until_ready(admission, requested)
+    sys.exit(0)
 
 if not autoselect:
     print_mismatch(data, requested)
@@ -579,7 +592,23 @@ if not isinstance(new_data, dict):
     print("qz-codex: /qz/model/select-and-restart returned unexpected response (HTTP {})".format(status), file=sys.stderr)
     sys.exit(2)
 
+# Fast path: already active after the POST.
 if active_match(new_data, requested):
+    sys.exit(0)
+
+# POST succeeded and the backend is now loading the requested model — wait/poll.
+# This is normal: select-and-restart kicks off a load that takes time to complete.
+new_admission = (new_data.get("request_admission_state") or "").strip()
+if new_admission in ("failed", "failed_gpu_not_available"):
+    print_failure_detail(new_data, requested)
+    print(
+        "qz-codex: [{}] is in a failed state after select-and-restart.".format(requested),
+        file=sys.stderr,
+    )
+    sys.exit(2)
+
+if selected_identity_match(new_data, requested) and new_admission in ("starting", "loading"):
+    poll_until_ready(new_admission, requested)
     sys.exit(0)
 
 print("qz-codex: /qz/model/select-and-restart returned but {} is still not the active model.".format(requested), file=sys.stderr)

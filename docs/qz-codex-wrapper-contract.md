@@ -40,6 +40,11 @@ For `exec` mode without an explicit `-m`, the resolved model is injected as
 
 ## 2. Loading wait/poll
 
+Profile flags (`-p`/`--profile`/`--profile=...`) are **not** model arguments.
+They set Codex reasoning effort.  `qz_exec_model_from_args` extracts only
+`-m`/`--model`/`--model=...`.  A bare `exec -p high` produces no explicit
+model and falls through to the B/C resolution.
+
 When the effective model is already selected by QuantZhai but the backend is
 still loading, `qz-codex` waits:
 
@@ -56,6 +61,11 @@ This path does **not** require `QZ_CODEX_AUTO_SELECT_MODEL=1` — it is not a
 mismatch; it is a normal load-in-progress.
 
 **Timeout** is controlled by `QZ_CODEX_READY_TIMEOUT` (default 300 s).
+
+The same wait/poll path is also used after `POST /qz/model/select-and-restart`
+in the auto-select flow (§5).  If the POST succeeds and the response shows the
+requested model is now selected but still loading, `qz-codex` polls rather than
+failing immediately.
 
 ---
 

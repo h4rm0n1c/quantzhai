@@ -23,6 +23,7 @@ Eight behavioral requirements from the qz-codex wrapper contract:
 import http.server
 import json
 import os
+import shlex
 import subprocess
 import threading
 import unittest
@@ -184,6 +185,24 @@ def _run_resolve(port: int) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=15,
+    )
+
+
+def _run_model_from_args(*args: str) -> subprocess.CompletedProcess:
+    """Call qz_exec_model_from_args directly from bash and capture stdout."""
+    args_str = " ".join(shlex.quote(a) for a in args)
+    env = {
+        "HOME": str(Path.home()),
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin"),
+        "QZ_ROOT": str(REPO_ROOT),
+    }
+    script = f"source '{QZ_CODEX_COMMON}' && qz_exec_model_from_args {args_str}"
+    return subprocess.run(
+        ["bash", "-c", script],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=5,
     )
 
 
@@ -508,6 +527,170 @@ class TimeoutTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Bug 1: profile args must not be parsed as model args
+# ---------------------------------------------------------------------------
+
+class ModelFromArgsParsingTests(unittest.TestCase):
+    """qz_exec_model_from_args must only extract -m/--model values.
+    Profile flags (-p / --profile / --profile=...) must produce empty output."""
+
+    def test_explicit_dash_m_returns_model(self):
+        r = _run_model_from_args("exec", "-m", "kuato.gguf")
+        self.assertEqual(r.stdout.strip(), "kuato.gguf")
+
+    def test_explicit_dash_dash_model_returns_model(self):
+        r = _run_model_from_args("exec", "--model", "kuato.gguf")
+        self.assertEqual(r.stdout.strip(), "kuato.gguf")
+
+    def test_explicit_model_equals_form(self):
+        r = _run_model_from_args("exec", "--model=kuato.gguf")
+        self.assertEqual(r.stdout.strip(), "kuato.gguf")
+
+    def test_dash_p_profile_does_not_produce_model(self):
+        """exec -p high must NOT be treated as an explicit model 'high'."""
+        r = _run_model_from_args("exec", "-p", "high")
+        self.assertEqual(r.stdout.strip(), "")
+
+    def test_dash_dash_profile_does_not_produce_model(self):
+        """exec --profile high must NOT be treated as an explicit model 'high'."""
+        r = _run_model_from_args("exec", "--profile", "high")
+        self.assertEqual(r.stdout.strip(), "")
+
+    def test_dash_dash_profile_equals_does_not_produce_model(self):
+        """exec --profile=high must NOT be treated as an explicit model 'high'."""
+        r = _run_model_from_args("exec", "--profile=high")
+        self.assertEqual(r.stdout.strip(), "")
+
+    def test_model_plus_profile_returns_model_only(self):
+        """exec -m kuato.gguf -p high — model is extracted; profile is ignored."""
+        r = _run_model_from_args("exec", "-m", "kuato.gguf", "-p", "high")
+        self.assertEqual(r.stdout.strip(), "kuato.gguf")
+
+    def test_profile_then_model_returns_model(self):
+        """exec -p high -m kuato.gguf — profile precedes model; model still extracted."""
+        # -p is skipped (not model), -m kuato.gguf is extracted
+        r = _run_model_from_args("exec", "-p", "high", "-m", "kuato.gguf")
+        self.assertEqual(r.stdout.strip(), "kuato.gguf")
+
+    def test_no_args_returns_empty(self):
+        r = _run_model_from_args("exec")
+        self.assertEqual(r.stdout.strip(), "")
+
+    def test_double_dash_stops_parsing(self):
+        """-- terminates arg scanning; model after -- is not extracted."""
+        r = _run_model_from_args("exec", "--", "-m", "kuato.gguf")
+        self.assertEqual(r.stdout.strip(), "")
+
+
+# ---------------------------------------------------------------------------
+# Bug 2: auto-select path waits after POST instead of failing immediately
+# ---------------------------------------------------------------------------
+
+class AutoSelectPostWaitTests(unittest.TestCase):
+    """After POST /qz/model/select-and-restart, if the backend is loading,
+    qz_codex_exec_preflight must wait/poll rather than fail immediately."""
+
+    def _other_model_status(self) -> dict:
+        """A status showing a different model loaded (produces mismatch for kuato)."""
+        return _status(
+            selected_key="other.gguf", selected_backend_id="other",
+            backend_loaded_model="other",
+        )
+
+    def _post_response(self, admission_state: str) -> dict:
+        """What select-and-restart returns when kuato is selected but loading."""
+        return _status(
+            selected_key="kuato.gguf", selected_backend_id="kuato",
+            backend_loaded_model="",
+            admission_state=admission_state,
+        )
+
+    def _ready_status(self) -> dict:
+        return _status(
+            selected_key="kuato.gguf", selected_backend_id="kuato",
+            backend_loaded_model="kuato",
+        )
+
+    def test_starting_after_autoselect_waits_and_succeeds(self):
+        """POST returns 'starting' → preflight waits and succeeds on next poll."""
+        initial = self._other_model_status()
+        post_resp = self._post_response("starting")
+        ready = self._ready_status()
+        # GET seq: [initial, ready] (second GET in the poll loop)
+        with _MockProxy(
+            status_sequence=[initial, ready],
+            select_response=post_resp,
+        ) as proxy:
+            result = _run_preflight(proxy.port, "kuato.gguf", autoselect=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("waiting", result.stderr)
+        # POST was made
+        self.assertEqual(len(proxy.posts), 1)
+
+    def test_loading_after_autoselect_waits_and_succeeds(self):
+        """POST returns 'loading' → preflight waits and succeeds on next poll."""
+        initial = self._other_model_status()
+        post_resp = self._post_response("loading")
+        ready = self._ready_status()
+        with _MockProxy(
+            status_sequence=[initial, ready],
+            select_response=post_resp,
+        ) as proxy:
+            result = _run_preflight(proxy.port, "kuato.gguf", autoselect=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("waiting", result.stderr)
+
+    def test_failed_after_autoselect_fails_immediately(self):
+        """POST returns 'failed' → preflight fails immediately (no wait)."""
+        initial = self._other_model_status()
+        post_resp = self._post_response("failed")
+        post_resp["last_load_result"] = "failed"
+        with _MockProxy(status_response=initial, select_response=post_resp) as proxy:
+            result = _run_preflight(proxy.port, "kuato.gguf", autoselect=True)
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("waiting up to", result.stderr)
+        self.assertIn("failed", result.stderr)
+
+    def test_loading_timeout_after_autoselect_gives_clear_message(self):
+        """POST returns 'loading'; backend never becomes ready → timeout message."""
+        initial = self._other_model_status()
+        post_resp = self._post_response("loading")
+        forever_loading = self._post_response("loading")  # GET poll always returns loading
+        # Sequence: [initial, forever_loading, forever_loading, ...]
+        with _MockProxy(
+            status_sequence=[initial, forever_loading],
+            select_response=post_resp,
+        ) as proxy:
+            result = _run_preflight(proxy.port, "kuato.gguf", autoselect=True)
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("timed out", result.stderr)
+        self.assertIn("kuato.gguf", result.stderr)
+
+    def test_still_mismatched_after_autoselect_exits_2(self):
+        """POST returns a status where kuato is NOT selected → still-not-active error."""
+        initial = self._other_model_status()
+        still_other = self._other_model_status()  # POST didn't change anything
+        with _MockProxy(status_response=initial, select_response=still_other) as proxy:
+            result = _run_preflight(proxy.port, "kuato.gguf", autoselect=True)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("still not the active model", result.stderr)
+
+    def test_autoselect_wait_posts_select_and_restart_once(self):
+        """Even if the wait loop runs multiple polls, only one POST is made."""
+        initial = self._other_model_status()
+        post_resp = self._post_response("loading")
+        ready = self._ready_status()
+        with _MockProxy(
+            status_sequence=[initial, post_resp, ready],  # two poll rounds
+            select_response=post_resp,
+        ) as proxy:
+            result = _run_preflight(proxy.port, "kuato.gguf", autoselect=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # Exactly one POST
+        self.assertEqual(len([p for p in proxy.posts if p[0] == "/qz/model/select-and-restart"]), 1)
+
+
+# ---------------------------------------------------------------------------
 # Structural invariants
 # ---------------------------------------------------------------------------
 
@@ -524,6 +707,9 @@ class StructuralInvariantTests(unittest.TestCase):
     def test_selected_identity_match_defined(self):
         self.assertIn("selected_identity_match", self.common)
 
+    def test_poll_until_ready_helper_defined(self):
+        self.assertIn("poll_until_ready", self.common)
+
     def test_loading_wait_references_starting_and_loading(self):
         # The wait branch must check both "starting" and "loading" admission states.
         self.assertIn('"starting"', self.common)
@@ -538,6 +724,25 @@ class StructuralInvariantTests(unittest.TestCase):
 
     def test_timed_out_message_present(self):
         self.assertIn("timed out", self.common)
+
+    def test_profile_flags_not_in_model_from_args(self):
+        """qz_exec_model_from_args must not parse -p/--profile as model flags."""
+        # Find the function body and verify -p is absent from the model extraction logic.
+        # The fix removes -p, --profile, --profile=* from the case statement.
+        import re
+        fn_match = re.search(
+            r'qz_exec_model_from_args\(\).*?^}',
+            self.common,
+            re.DOTALL | re.MULTILINE,
+        )
+        self.assertIsNotNone(fn_match, "qz_exec_model_from_args not found")
+        fn_body = fn_match.group(0)
+        # Profile flags must not appear as model-extracting patterns
+        self.assertNotIn("--profile=*)", fn_body)
+        self.assertNotIn("-p|--profile)", fn_body)
+        # Model flags must still be present
+        self.assertIn("-m|--model)", fn_body)
+        self.assertIn("--model=*)", fn_body)
 
 
 if __name__ == "__main__":
