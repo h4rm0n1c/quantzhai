@@ -3180,13 +3180,12 @@ class RequestRouter:
         # for this request. Prevents each phase from claiming a fresh full budget.
         _holdopen_deadline: float | None = (
             time.monotonic() + HOLDOPEN_LOADING_MAX_SECONDS
-            if upstream_path == "/v1/responses" and _env_bool("QZ_HOLDOPEN_LOADING", False)
+            if upstream_path == "/v1/responses"
             else None
         )
         if not self._proxy_initialization_ready(initialization):
             if (
                 upstream_path == "/v1/responses"
-                and _env_bool("QZ_HOLDOPEN_LOADING", False)
                 and client_wants_stream
             ):
                 self._open_responses_sse()
@@ -3215,10 +3214,7 @@ class RequestRouter:
                     )
                     self.handler.close_connection = True
                     return
-            elif (
-                upstream_path == "/v1/responses"
-                and _env_bool("QZ_HOLDOPEN_LOADING", False)
-            ):
+            elif upstream_path == "/v1/responses":
                 startup_ready, initialization = (
                     self._wait_responses_proxy_startup_before_forward(
                         initial_initialization=initialization,
@@ -3379,7 +3375,6 @@ class RequestRouter:
                     )
                     if (
                         client_wants_stream
-                        and _env_bool("QZ_HOLDOPEN_LOADING", False)
                         and transitional_wait
                     ):
                         reset_stream_capture = not sse_response_started
@@ -3413,7 +3408,6 @@ class RequestRouter:
                             return
                     elif (
                         not client_wants_stream
-                        and _env_bool("QZ_HOLDOPEN_LOADING", False)
                         and transitional_wait
                     ):
                         ready_after_wait, model_status = (
