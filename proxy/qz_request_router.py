@@ -14,6 +14,9 @@ CAPTURE_CONTRACT_SCHEMA = "qz.capture.contract.v1"
 REASONING_STREAM_FORMATS = {"raw", "summary", "hidden"}
 TRANSITIONAL_503_RETRY_AFTER_SECONDS = 5
 TRANSITIONAL_REQUEST_ADMISSION_STATES = {"starting", "loading"}
+HOLDOPEN_LOADING_MAX_SECONDS = 270.0
+HOLDOPEN_LOADING_KEEPALIVE_SECONDS = 15.0
+HOLDOPEN_LOADING_POLL_SECONDS = 1.0
 
 try:
     from .qz_codex_client_config import codex_client_config_payload, codex_model_catalog_content
@@ -300,6 +303,135 @@ class RequestRouter:
             payload,
             headers={"Retry-After": str(TRANSITIONAL_503_RETRY_AFTER_SECONDS)},
         )
+
+    def _open_responses_sse(self) -> None:
+        self.handler.send_response(200)
+        self.handler.send_header("Content-Type", "text/event-stream")
+        self.handler.send_header("Cache-Control", "no-cache")
+        self.handler.send_header("Connection", "close")
+        self.handler._send_codex_rate_limit_headers()
+        self.handler.end_headers()
+        self.handler._write_codex_rate_limits_event()
+
+    @staticmethod
+    def _responses_model_readiness(selected_model, model_status, identity_matches_loaded):
+        active_ready = bool(model_status.get("selected_model_ready"))
+        active_loaded = str(model_status.get("backend_loaded_model") or "")
+        requested_key = str(selected_model.get("key") or selected_model.get("slug") or "")
+        requested_backend = str(selected_model.get("backend_id") or requested_key)
+        request_matches_active = identity_matches_loaded(
+            requested_key,
+            requested_backend,
+            active_loaded,
+        )
+        return active_ready, requested_key, requested_backend, request_matches_active
+
+    @staticmethod
+    def _is_transitional_responses_wait(model_status, request_matches_active: bool) -> bool:
+        admission_state = str(model_status.get("request_admission_state") or "")
+        if admission_state in TRANSITIONAL_REQUEST_ADMISSION_STATES:
+            return True
+        if request_matches_active:
+            return False
+        return str(model_status.get("model_switch_state") or "") in {
+            "selecting",
+            "restarting",
+            "loading",
+        }
+
+    @staticmethod
+    def _is_terminal_responses_wait(model_status) -> bool:
+        return str(model_status.get("request_admission_state") or "") in {
+            "failed",
+            "failed_gpu_not_available",
+            "unavailable",
+        }
+
+    def _write_responses_stream_failure(
+        self,
+        *,
+        request_id: str,
+        requested_model: str,
+        message: str,
+        reason: str,
+    ) -> None:
+        payload = {
+            "type": "response.failed",
+            "response": {
+                "id": f"resp_failed_{request_id[:8]}_{_now_ts()}",
+                "object": "response",
+                "created_at": _now_ts(),
+                "status": "failed",
+                "model": requested_model,
+                "error": {
+                    "message": message,
+                    "reason": reason,
+                },
+                "output": [],
+                "usage": _normalize_response_usage({}),
+            },
+        }
+        self._write_sse_chunk(make_sse_block("response.failed", payload), request_id=request_id)
+        self._write_sse_chunk(b"data: [DONE]\n\n", request_id=request_id)
+
+    def _hold_open_responses_stream_until_ready(
+        self,
+        *,
+        selected_model,
+        requested_model: str,
+        request_id: str,
+        build_model_status,
+        identity_matches_loaded,
+    ) -> bool:
+        deadline = time.monotonic() + HOLDOPEN_LOADING_MAX_SECONDS
+        next_keepalive = 0.0
+        write_request_capture(request_id, "forwarded-sse.raw", b"", mode="bytes")
+
+        while True:
+            now = time.monotonic()
+            if now >= next_keepalive:
+                self._write_sse_chunk(
+                    b": qz hold-open waiting for model readiness\n\n",
+                    request_id=request_id,
+                )
+                next_keepalive = now + HOLDOPEN_LOADING_KEEPALIVE_SECONDS
+
+            model_status = build_model_status(self.handler)
+            active_ready, _requested_key, _requested_backend, request_matches_active = (
+                self._responses_model_readiness(
+                    selected_model,
+                    model_status,
+                    identity_matches_loaded,
+                )
+            )
+            if active_ready and request_matches_active:
+                return True
+
+            if self._is_terminal_responses_wait(model_status):
+                self._write_responses_stream_failure(
+                    request_id=request_id,
+                    requested_model=requested_model,
+                    message="model did not become ready during stream hold-open",
+                    reason=str(model_status.get("request_admission_state") or "failed"),
+                )
+                return False
+
+            if now >= deadline:
+                self._write_responses_stream_failure(
+                    request_id=request_id,
+                    requested_model=requested_model,
+                    message="model readiness hold-open timed out",
+                    reason="timeout",
+                )
+                return False
+
+            sleep_for = min(
+                HOLDOPEN_LOADING_POLL_SECONDS,
+                max(0.0, next_keepalive - now),
+                max(0.0, deadline - now),
+            )
+            if sleep_for > 0:
+                time.sleep(sleep_for)
 
     def _emit_schema_normalization_telemetry(self, report, request_id: str = "") -> None:
         """Emit tool_schema_replaced telemetry when normalization changes the tool list.
@@ -2870,6 +3002,7 @@ class RequestRouter:
         )
 
         client_model = body.get("model") or ""
+        sse_response_started = False
         with self._request_gate(upstream_path, client_model, client_wants_stream):
             catalog = self.handler._model_catalog()
             if client_model:
@@ -2960,73 +3093,104 @@ class RequestRouter:
                 except ImportError:
                     from qz_model_status import build_model_status, identity_matches_loaded
                 model_status = build_model_status(self.handler)
-                active_ready = bool(model_status.get("selected_model_ready"))
-                active_loaded = str(model_status.get("backend_loaded_model") or "")
-                requested_key = str(selected_model.get("key") or selected_model.get("slug") or "")
-                requested_backend = str(selected_model.get("backend_id") or requested_key)
-                request_matches_active = identity_matches_loaded(
-                    requested_key,
-                    requested_backend,
-                    active_loaded,
+                active_ready, requested_key, requested_backend, request_matches_active = (
+                    self._responses_model_readiness(
+                        selected_model,
+                        model_status,
+                        identity_matches_loaded,
+                    )
                 )
                 if not active_ready or not request_matches_active:
-                    initialization = self.handler._initialization_payload()
-                    cp = build_control_plane_status(self.handler)
-                    ss = cp.get("service_status") or build_service_status(cp)
-                    reason = (
-                        "selected model is not ready for direct backend launch"
-                        if not active_ready
-                        else "requested model is not the active direct-launched model"
+                    transitional_wait = self._is_transitional_responses_wait(
+                        model_status,
+                        request_matches_active,
                     )
-                    payload = build_responses_error_payload(
-                        error="model not ready",
-                        reason=reason,
-                        requested_model=client_model or requested_backend,
-                        proxy_initialization=initialization,
-                        readiness={
-                            "proxy_ready": bool(initialization.get("ready")),
-                            "catalog_ready": bool(initialization.get("catalog_ready")),
-                            "model_visible": True,
-                            "backend_ready": active_ready,
-                            "selected_model_ready": active_ready,
-                            "request_admission_state": model_status.get("request_admission_state"),
-                        },
-                        operator_hint=(
-                            "Use POST /qz/model/select-and-restart to select and "
-                            "restart the backend with the requested model."
-                        ),
-                        status_code=503,
-                        service_status=ss,
-                    )
-                    payload["model_status"] = model_status
-                    self._emit_request_telemetry(
-                        "request_failed",
-                        started_at,
-                        upstream_path,
-                        client_model,
-                        error=reason,
-                        phase="model_readiness",
-                        request_id=request_id,
-                    )
-                    try:
-                        self.handler.telemetry.emit("responses_rejected_model_not_ready", {
-                            "request_id": request_id,
-                            "model": client_model,
-                            "path": upstream_path,
-                            "stream": bool(client_wants_stream),
-                            "selected_model_ready": active_ready,
-                            "request_admission_state": model_status.get("request_admission_state"),
-                        })
-                    except Exception:
-                        pass
                     if (
-                        str(model_status.get("request_admission_state") or "")
-                        in TRANSITIONAL_REQUEST_ADMISSION_STATES
+                        client_wants_stream
+                        and _env_bool("QZ_HOLDOPEN_LOADING", False)
+                        and transitional_wait
                     ):
-                        self._send_transitional_503(payload)
+                        self._open_responses_sse()
+                        sse_response_started = True
+                        if self._hold_open_responses_stream_until_ready(
+                            selected_model=selected_model,
+                            requested_model=client_model or requested_backend,
+                            request_id=request_id,
+                            build_model_status=build_model_status,
+                            identity_matches_loaded=identity_matches_loaded,
+                        ):
+                            pass
+                        else:
+                            self._emit_request_telemetry(
+                                "request_failed",
+                                started_at,
+                                upstream_path,
+                                client_model,
+                                stream=True,
+                                error="model readiness hold-open failed",
+                                phase="model_readiness_holdopen",
+                                request_id=request_id,
+                            )
+                            self.handler.close_connection = True
+                            return
                     else:
-                        self.handler._send_json(503, payload)
-                    return
+                        initialization = self.handler._initialization_payload()
+                        cp = build_control_plane_status(self.handler)
+                        ss = cp.get("service_status") or build_service_status(cp)
+                        reason = (
+                            "selected model is not ready for direct backend launch"
+                            if not active_ready
+                            else "requested model is not the active direct-launched model"
+                        )
+                        payload = build_responses_error_payload(
+                            error="model not ready",
+                            reason=reason,
+                            requested_model=client_model or requested_backend,
+                            proxy_initialization=initialization,
+                            readiness={
+                                "proxy_ready": bool(initialization.get("ready")),
+                                "catalog_ready": bool(initialization.get("catalog_ready")),
+                                "model_visible": True,
+                                "backend_ready": active_ready,
+                                "selected_model_ready": active_ready,
+                                "request_admission_state": model_status.get("request_admission_state"),
+                            },
+                            operator_hint=(
+                                "Use POST /qz/model/select-and-restart to select and "
+                                "restart the backend with the requested model."
+                            ),
+                            status_code=503,
+                            service_status=ss,
+                        )
+                        payload["model_status"] = model_status
+                        self._emit_request_telemetry(
+                            "request_failed",
+                            started_at,
+                            upstream_path,
+                            client_model,
+                            error=reason,
+                            phase="model_readiness",
+                            request_id=request_id,
+                        )
+                        try:
+                            self.handler.telemetry.emit("responses_rejected_model_not_ready", {
+                                "request_id": request_id,
+                                "model": client_model,
+                                "path": upstream_path,
+                                "stream": bool(client_wants_stream),
+                                "selected_model_ready": active_ready,
+                                "request_admission_state": model_status.get("request_admission_state"),
+                            })
+                        except Exception:
+                            pass
+                        if (
+                            str(model_status.get("request_admission_state") or "")
+                            in TRANSITIONAL_REQUEST_ADMISSION_STATES
+                        ):
+                            self._send_transitional_503(payload)
+                        else:
+                            self.handler._send_json(503, payload)
+                        return
 
             selected_identity = (
                 selected_model.get("slug")
@@ -3182,16 +3346,12 @@ class RequestRouter:
                 _ar = getattr(self.handler, "active_requests", ACTIVE_REQUESTS)
                 _ar.begin(request_id, route=upstream_path, model=client_model)
                 if client_wants_stream:
-                    self.handler.send_response(200)
-                    self.handler.send_header("Content-Type", "text/event-stream")
-                    self.handler.send_header("Cache-Control", "no-cache")
-                    self.handler.send_header("Connection", "close")
-                    self.handler._send_codex_rate_limit_headers()
-                    self.handler.end_headers()
-                    self.handler._write_codex_rate_limits_event()
+                    if not sse_response_started:
+                        self._open_responses_sse()
                     stream_result = None
                     try:
-                        write_request_capture(request_id, "forwarded-sse.raw", b"", mode="bytes")
+                        if not sse_response_started:
+                            write_request_capture(request_id, "forwarded-sse.raw", b"", mode="bytes")
                         stream_result = self._run_responses_streaming_locally(
                             body,
                             client_model,

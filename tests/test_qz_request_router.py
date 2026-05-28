@@ -1,5 +1,6 @@
 import json
 import io
+import os
 import unittest
 from unittest.mock import patch
 
@@ -102,6 +103,12 @@ class ResponsesAdmissionTests(unittest.TestCase):
         def status_summary(self, _path):
             return {}
 
+        def apply_reasoning_policy(self, body, _selected_model):
+            return body
+
+        def inject_runtime_state(self, body, _client_model):
+            return body
+
     class _Catalog:
         def __init__(self, entries, selected=None, resolve_result=None):
             self.entries = list(entries)
@@ -124,10 +131,14 @@ class ResponsesAdmissionTests(unittest.TestCase):
         def __init__(self, body, catalog):
             self.headers = ResponsesAdmissionTests._Headers(body)
             self.rfile = io.BytesIO(json.dumps(body).encode("utf-8"))
+            self.wfile = io.BytesIO()
             self.telemetry = ResponsesAdmissionTests._Telemetry()
             self._catalog = catalog
             self.sent = []
             self.response_headers = {}
+            self.response_status = None
+            self.sse_headers = []
+            self.close_connection = False
 
         def _model_catalog(self):
             return self._catalog
@@ -141,6 +152,24 @@ class ResponsesAdmissionTests(unittest.TestCase):
         def _send_json(self, status, payload, headers=None):
             self.response_headers = dict(headers or {})
             self.sent.append((status, payload))
+
+        def send_response(self, status):
+            self.response_status = status
+
+        def send_header(self, key, value):
+            self.sse_headers.append((key, value))
+
+        def end_headers(self):
+            pass
+
+        def _send_codex_rate_limit_headers(self):
+            self.send_header("x-ratelimit-limit-requests", "999999")
+
+        def _write_codex_rate_limits_event(self):
+            self.wfile.write(b"event: codex.rate_limits\ndata: {\"type\":\"codex.rate_limits\"}\n\n")
+
+        def _emit_sse_telemetry(self, _chunk, request_id=""):
+            pass
 
     @staticmethod
     def _entry(key, *, backend_id=None, profile_valid=True, profile_error=""):
@@ -190,7 +219,7 @@ class ResponsesAdmissionTests(unittest.TestCase):
             [event_type for event_type, _payload in handler.telemetry.events],
         )
 
-    def test_responses_not_ready_model_still_returns_503(self):
+    def test_responses_stream_flag_off_loading_still_returns_503(self):
         entry = self._entry("known-model")
         catalog = self._Catalog([entry], selected=entry)
         model_status = {
@@ -200,6 +229,71 @@ class ResponsesAdmissionTests(unittest.TestCase):
         }
 
         with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "0"}, clear=False),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status", return_value=model_status),
+            patch("proxy.qz_model_status.identity_matches_loaded", return_value=False),
+            patch("proxy.qz_request_router.build_control_plane_status", return_value={"service_status": {}}),
+        ):
+            handler = self._Handler({"model": "known-model", "input": "hi", "stream": True}, catalog)
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        self.assertEqual(len(handler.sent), 1)
+        status, payload = handler.sent[0]
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["status_code"], 503)
+        self.assertEqual(payload["error"], "model not ready")
+        self.assertEqual(payload["readiness"]["request_admission_state"], "loading")
+        self.assertEqual(handler.response_headers.get("Retry-After"), "5")
+        self.assertIs(payload["retry_suggested"], True)
+        self.assertIsNone(handler.response_status)
+
+    def test_responses_stream_flag_on_loading_holds_open_then_streams_once(self):
+        entry = self._entry("known-model")
+        catalog = self._Catalog([entry], selected=entry)
+        loading_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "loading",
+        }
+        ready_status = {
+            "selected_model_ready": True,
+            "backend_loaded_model": "known-model",
+            "request_admission_state": "ready",
+        }
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_POLL_SECONDS", 0.001),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.write_request_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status", side_effect=[loading_status, ready_status]),
+            patch.object(RequestRouter, "_run_responses_streaming_locally", return_value={"usage": {}}) as run_stream,
+        ):
+            handler = self._Handler({"model": "known-model", "input": "hi", "stream": True}, catalog)
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        self.assertEqual(handler.response_status, 200)
+        self.assertIn(("Content-Type", "text/event-stream"), handler.sse_headers)
+        self.assertEqual(handler.sent, [])
+        self.assertIn(b": qz hold-open waiting for model readiness\n\n", handler.wfile.getvalue())
+        run_stream.assert_called_once()
+
+    def test_responses_non_stream_flag_on_loading_still_returns_503(self):
+        entry = self._entry("known-model")
+        catalog = self._Catalog([entry], selected=entry)
+        model_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "loading",
+        }
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
             patch("proxy.qz_request_router.write_dual_capture"),
             patch("proxy.qz_request_router.write_capture"),
             patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
@@ -213,11 +307,53 @@ class ResponsesAdmissionTests(unittest.TestCase):
         self.assertEqual(len(handler.sent), 1)
         status, payload = handler.sent[0]
         self.assertEqual(status, 503)
-        self.assertEqual(payload["status_code"], 503)
-        self.assertEqual(payload["error"], "model not ready")
-        self.assertEqual(payload["readiness"]["request_admission_state"], "loading")
         self.assertEqual(handler.response_headers.get("Retry-After"), "5")
         self.assertIs(payload["retry_suggested"], True)
+        self.assertIsNone(handler.response_status)
+
+    def test_responses_stream_holdopen_timeout_emits_sse_failure_not_late_503(self):
+        entry = self._entry("known-model")
+        catalog = self._Catalog([entry], selected=entry)
+        loading_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "loading",
+        }
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_MAX_SECONDS", 0.0),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.write_request_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status", side_effect=[loading_status, loading_status]),
+            patch.object(RequestRouter, "_run_responses_streaming_locally") as run_stream,
+        ):
+            handler = self._Handler({"model": "known-model", "input": "hi", "stream": True}, catalog)
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        stream_bytes = handler.wfile.getvalue()
+        self.assertEqual(handler.response_status, 200)
+        self.assertEqual(handler.sent, [])
+        self.assertIn(b"event: response.failed", stream_bytes)
+        self.assertIn(b"model readiness hold-open timed out", stream_bytes)
+        self.assertIn(b"data: [DONE]\n\n", stream_bytes)
+        run_stream.assert_not_called()
+
+    def test_responses_unknown_model_stream_flag_on_returns_400_no_sse(self):
+        catalog = self._Catalog([self._entry("known-model")])
+
+        with patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False):
+            (status, payload), handler = self._run_responses_request(
+                {"model": "missing-model", "input": "hi", "stream": True},
+                catalog,
+            )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "model not found")
+        self.assertIsNone(handler.response_status)
+        self.assertEqual(handler.wfile.getvalue(), b"")
 
     def test_responses_failed_model_503_does_not_retry_suggest(self):
         entry = self._entry("known-model")

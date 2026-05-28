@@ -686,6 +686,10 @@ is a category error. The wrapper's polling loop silently handles it, but this is
 
 ### Priority 3: Define one graceful hold-open path for `/v1/responses` during backend loading
 
+**Status:** Slice 4a delivered stream-only behind `QZ_HOLDOPEN_LOADING=1`. Non-stream
+requests still use the Slice 3 transitional 503 stop-gap. Timeout/failure after SSE
+headers are sent is represented as `response.failed` plus `[DONE]`, not a late HTTP 503.
+
 **Where**: `qz_request_router.py`, the `not active_ready or not request_matches_active` block.
 
 **Change**: When `request_admission_state` is `"starting"` or `"loading"`, instead of
