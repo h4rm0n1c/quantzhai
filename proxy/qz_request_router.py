@@ -3361,7 +3361,6 @@ class RequestRouter:
                     # the requested model so the hold-open loop can wait for it.
                     if (
                         not request_matches_active
-                        and _env_bool("QZ_HOLDOPEN_LOADING", False)
                         and (requested_key or requested_backend)
                     ):
                         _auto_switched = self._auto_trigger_model_switch_nonblocking(
