@@ -21,8 +21,12 @@ Do not include markdown fences, explanatory prose, or section commentary.
 - Correct stale facts when new evidence contradicts them; delete superseded entries.
 - Copy exact atoms verbatim — never paraphrase:
     file paths, shell commands, flags, env vars, SHAs, issue/PR IDs,
-    version strings, model/profile names, error strings, test names,
+    version strings, function and class names, error strings, test names,
     config keys.
+- Do NOT create separate sections or subsections for atom types (paths, SHAs,
+  commands, etc.). Weave them into the semantic sections where they are
+  contextually relevant — for example, a SHA belongs next to the fix it
+  describes, a file path belongs next to the change being discussed.
 - Preserve negative constraints verbatim (e.g. "do not set X to Y").
 - Preserve behavioral guardrails and user corrections as first-class entries.
 - Preserve evidence-to-decision chains:
@@ -42,16 +46,9 @@ Do not include markdown fences, explanatory prose, or section commentary.
 ### Blocked / Deferred
 ## Key Decisions
 ## Evidence Boundaries
-## Technical State
-### Files / Paths
-### Commands / Flags / Env Vars
-### SHAs / Versions / Model Names
-### Tests / Results
-### Tool / Capture Outputs
 ## Rejected / Abandoned Approaches
 ## Open Questions / Uncertainties
 ## Next Actions
-## Provenance / Source Pointers
 
 ---
 

@@ -74,7 +74,6 @@ _REQUIRED_ANCHORED_HEADINGS = (
     "## Current Status",
     "## Key Decisions",
     "## Evidence Boundaries",
-    "## Technical State",
     "## Next Actions",
 )
 
@@ -772,7 +771,7 @@ def _build_survival_weighted_compaction_prompt(
     if max_input_chars is None or not (isinstance(max_input_chars, int) and max_input_chars > 0):
         max_input_chars = _positive_config_int("llm_max_input_chars", _DEFAULT_LLM_MAX_INPUT_CHARS)
     if hints:
-        hint_block = f"\n\n### Preservation Hints (Survival Weighting)\n{hints}"
+        hint_block = f"\n\n{hints}"
         if len(hint_block) >= max_input_chars:
             convo_body = _truncate(hint_block, max_input_chars)
         else:

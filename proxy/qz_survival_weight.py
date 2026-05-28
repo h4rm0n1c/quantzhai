@@ -233,15 +233,19 @@ def score_items(items: list[dict]) -> list[SurvivalSpan]:
     return all_spans
 
 def format_survival_hints(spans: list[SurvivalSpan], *, max_spans: int = 80) -> str:
-    """Format spans into a compact hint string for the compaction prompt."""
+    """Format spans as contextual guidance for the compaction prompt.
+
+    Produces two inline lines — one for exact-match atoms (heavy weight) and
+    one for context-relevant atoms (medium weight). The framing instructs the
+    LLM to integrate atoms into the semantic sections rather than sort them
+    into type buckets.
+    """
     if not spans:
         return ""
 
-    # Weights for stable sorting
     weight_map = {"heavy": 0, "medium": 1, "light": 2}
     risk_map = {"high": 0, "medium": 1, "low": 2}
 
-    # Deduplicate by text while preserving first occurrence order for priority
     unique_spans = []
     seen_text = set()
     for s in spans:
@@ -249,14 +253,6 @@ def format_survival_hints(spans: list[SurvivalSpan], *, max_spans: int = 80) -> 
             unique_spans.append(s)
             seen_text.add(s.text)
 
-    # Priority sort: 
-    # 1. heavy/high 
-    # 2. heavy/medium
-    # 3. medium/high
-    # 4. medium/medium
-    # 5. light
-    # 6. text length (longer first)
-    # 7. alphabetical (deterministic tie-break)
     sorted_spans = sorted(unique_spans, key=lambda s: (
         weight_map.get(s.weight, 99),
         risk_map.get(s.exactness_risk, 99),
@@ -264,14 +260,23 @@ def format_survival_hints(spans: list[SurvivalSpan], *, max_spans: int = 80) -> 
         s.text
     ))
 
-    lines = ["Survival hints:"]
-    for span in sorted_spans[:max_spans]:
-        # Truncate very long spans safely (preserving start/end context)
-        display_text = span.text
-        if len(display_text) > 120:
-            display_text = display_text[:58] + "..." + display_text[-59:]
-        
-        feature = span.features[0] if span.features else "unknown"
-        lines.append(f"- {span.weight}/{span.exactness_risk} {feature}: {display_text}")
+    selected = sorted_spans[:max_spans]
+
+    heavy = []
+    medium = []
+    for s in selected:
+        display = s.text if len(s.text) <= 80 else s.text[:38] + "…" + s.text[-39:]
+        if s.weight == "heavy":
+            heavy.append(display)
+        else:
+            medium.append(display)
+
+    lines = [
+        "Atoms to preserve verbatim — integrate in context, do not create atom-type sections:",
+    ]
+    if heavy:
+        lines.append("  exact: " + " • ".join(heavy))
+    if medium:
+        lines.append("  context: " + " • ".join(medium))
 
     return "\n".join(lines)

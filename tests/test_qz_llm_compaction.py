@@ -362,7 +362,7 @@ class TestLLMCompaction(unittest.TestCase):
 
         self.assertIn(previous, prompt)
         self.assertIn("Run bash -n scripts/qz-up", prompt)
-        self.assertIn("### Preservation Hints", prompt)
+        self.assertIn("Atoms to preserve verbatim", prompt)
         self.assertIn("DOCKER_BUILDKIT=1", prompt)
 
     def test_prompt_caps_raw_conversation_but_keeps_hints(self):
@@ -375,7 +375,7 @@ class TestLLMCompaction(unittest.TestCase):
 
         self.assertLess(len(prompt), 900)
         self.assertLess(prompt.count("RAW_TOOL_OUTPUT"), 40)
-        self.assertIn("### Preservation Hints", prompt)
+        self.assertIn("Atoms to preserve verbatim", prompt)
         self.assertIn("DOCKER_BUILDKIT=1", prompt)
 
     def test_missing_prompt_file_uses_safe_fallback_template(self):
