@@ -640,6 +640,28 @@ class RequestRouter:
                 time.sleep(sleep_for)
             model_status = build_model_status(self.handler)
 
+    def _auto_trigger_model_switch_nonblocking(self, requested: str) -> bool:
+        """Trigger a non-blocking backend restart for an in-session model switch.
+
+        Called from inside the request gate; must NOT re-acquire the gate.
+        Persists the new selection so build_model_status() sees the updated
+        selected_key when computing selected_model_ready in the hold-open loop.
+        Returns True when the restart was accepted. Returns False if the backend
+        is disabled, a conflicting restart is running, or the model is unknown.
+        """
+        try:
+            mgr = getattr(self.handler, "backend_manager", None)
+            if mgr is None:
+                return False
+            self._set_manager_launch_model(requested, mgr)
+            result = mgr.restart()
+            if not result.get("ok"):
+                return False
+            self._do_select_model(requested)
+            return True
+        except Exception:
+            return False
+
     def _emit_schema_normalization_telemetry(self, report, request_id: str = "") -> None:
         """Emit tool_schema_replaced telemetry when normalization changes the tool list.
 
@@ -3331,6 +3353,27 @@ class RequestRouter:
                     )
                 )
                 if not active_ready or not request_matches_active:
+                    # Auto-trigger: in-session Codex /model switch (issue #77).
+                    # Backend is healthy with model A but client now requests model
+                    # B — no switch is in progress yet so model_switch_state="idle"
+                    # and _is_transitional_responses_wait would return False,
+                    # causing a spurious 503.  Kick off a non-blocking restart for
+                    # the requested model so the hold-open loop can wait for it.
+                    if (
+                        not request_matches_active
+                        and _env_bool("QZ_HOLDOPEN_LOADING", False)
+                        and (requested_key or requested_backend)
+                    ):
+                        _auto_switched = self._auto_trigger_model_switch_nonblocking(
+                            requested_key or requested_backend
+                        )
+                        if _auto_switched:
+                            model_status = build_model_status(self.handler)
+                            active_ready, requested_key, requested_backend, request_matches_active = (
+                                self._responses_model_readiness(
+                                    selected_model, model_status, identity_matches_loaded,
+                                )
+                            )
                     transitional_wait = self._is_transitional_responses_wait(
                         model_status,
                         request_matches_active,
