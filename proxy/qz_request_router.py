@@ -383,11 +383,13 @@ class RequestRouter:
         initial_model_status,
         build_model_status,
         identity_matches_loaded,
+        reset_capture: bool = True,
     ) -> bool:
         deadline = time.monotonic() + HOLDOPEN_LOADING_MAX_SECONDS
         next_keepalive = 0.0
         model_status = initial_model_status
-        write_request_capture(request_id, "forwarded-sse.raw", b"", mode="bytes")
+        if reset_capture:
+            write_request_capture(request_id, "forwarded-sse.raw", b"", mode="bytes")
 
         while True:
             now = time.monotonic()
@@ -434,6 +436,165 @@ class RequestRouter:
             if sleep_for > 0:
                 time.sleep(sleep_for)
             model_status = build_model_status(self.handler)
+
+    @staticmethod
+    def _proxy_initialization_ready(initialization: dict) -> bool:
+        return bool(initialization.get("ready"))
+
+    @staticmethod
+    def _proxy_initialization_failed(initialization: dict) -> bool:
+        return str(initialization.get("state") or "") == "failed"
+
+    def _latest_proxy_initialization(self) -> dict:
+        payload_fn = getattr(self.handler, "_initialization_payload", None)
+        if not callable(payload_fn):
+            return {}
+        try:
+            payload = payload_fn()
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _hold_open_responses_stream_until_proxy_startup_ready(
+        self,
+        *,
+        request_id: str,
+        requested_model: str,
+        initial_initialization: dict,
+    ) -> tuple[bool, dict]:
+        deadline = time.monotonic() + HOLDOPEN_LOADING_MAX_SECONDS
+        next_keepalive = 0.0
+        initialization = initial_initialization if isinstance(initial_initialization, dict) else {}
+        write_request_capture(request_id, "forwarded-sse.raw", b"", mode="bytes")
+
+        while True:
+            now = time.monotonic()
+            if now >= next_keepalive:
+                self._write_sse_chunk(
+                    b": qz hold-open waiting for proxy startup\n\n",
+                    request_id=request_id,
+                )
+                next_keepalive = now + HOLDOPEN_LOADING_KEEPALIVE_SECONDS
+
+            if self._proxy_initialization_ready(initialization):
+                return True, initialization
+
+            if self._proxy_initialization_failed(initialization):
+                self._write_responses_stream_failure(
+                    request_id=request_id,
+                    requested_model=requested_model,
+                    message="proxy initialization failed during stream hold-open",
+                    reason=str(initialization.get("error") or "startup initialization failed"),
+                )
+                return False, initialization
+
+            if now >= deadline:
+                self._write_responses_stream_failure(
+                    request_id=request_id,
+                    requested_model=requested_model,
+                    message="proxy startup hold-open timed out",
+                    reason="timeout",
+                )
+                return False, initialization
+
+            sleep_for = min(
+                HOLDOPEN_LOADING_POLL_SECONDS,
+                max(0.0, next_keepalive - now),
+                max(0.0, deadline - now),
+            )
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            initialization = self._latest_proxy_initialization()
+
+    def _wait_responses_proxy_startup_before_forward(
+        self,
+        *,
+        initial_initialization: dict,
+    ) -> tuple[bool, dict]:
+        deadline = time.monotonic() + HOLDOPEN_LOADING_MAX_SECONDS
+        initialization = initial_initialization if isinstance(initial_initialization, dict) else {}
+
+        while True:
+            if self._proxy_initialization_ready(initialization):
+                return True, initialization
+            if self._proxy_initialization_failed(initialization):
+                return False, initialization
+
+            now = time.monotonic()
+            if now >= deadline:
+                return False, initialization
+
+            sleep_for = min(
+                HOLDOPEN_LOADING_POLL_SECONDS,
+                max(0.0, deadline - now),
+            )
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            initialization = self._latest_proxy_initialization()
+
+    def _send_responses_proxy_startup_503(
+        self,
+        *,
+        initialization: dict,
+        body: dict,
+        upstream_path: str,
+        started_at: float,
+        request_id: str,
+    ) -> None:
+        initialization = initialization if isinstance(initialization, dict) else {}
+        failed = self._proxy_initialization_failed(initialization)
+        _cp_a = self._minimal_cp_for_service_status(initialization)
+        _ss_a = build_service_status(_cp_a)
+        payload = build_responses_error_payload(
+            error="proxy initialization failed" if failed else "proxy not ready",
+            reason=(
+                initialization.get("error")
+                or (
+                    "startup initialization failed"
+                    if failed
+                    else "model catalog and startup policy are still loading"
+                )
+            ),
+            requested_model=body.get("model") or "",
+            proxy_initialization=initialization,
+            readiness={
+                "proxy_ready": bool(initialization.get("ready")),
+                "catalog_ready": bool(initialization.get("catalog_ready")),
+                "model_visible": False,
+                "backend_ready": False,
+            },
+            operator_hint=(
+                "The QuantZhai proxy is initializing. "
+                "Check /qz/status or /health for readiness details. "
+                "qz-codex does not require local Docker or llama.cpp access."
+            ),
+            status_code=503,
+            service_status=_ss_a,
+        )
+        self._emit_request_telemetry(
+            "request_failed",
+            started_at,
+            upstream_path,
+            body.get("model") or "",
+            error=payload.get("reason"),
+            phase="proxy_initialization",
+            request_id=request_id,
+        )
+        try:
+            self.handler.telemetry.emit("responses_rejected_proxy_not_ready", {
+                "request_id": request_id,
+                "model": body.get("model") or "",
+                "path": upstream_path,
+                "stream": body.get("stream", False),
+                "proxy_ready": bool(initialization.get("ready")),
+                "catalog_ready": bool(initialization.get("catalog_ready")),
+            })
+        except Exception:
+            pass
+        if failed:
+            self.handler._send_json(503, payload)
+        else:
+            self._send_transitional_503(payload)
 
     def _wait_responses_until_ready_before_forward(
         self,
@@ -2977,51 +3138,72 @@ class RequestRouter:
         except Exception:
             headers_raw = {}
 
-        if not self._proxy_startup_ready():
-            initialization = self.handler._initialization_payload()
-            _cp_a = self._minimal_cp_for_service_status(initialization)
-            _ss_a = build_service_status(_cp_a)
-            payload = build_responses_error_payload(
-                error="proxy not ready",
-                reason=initialization.get("error") or "model catalog and startup policy are still loading",
-                requested_model=body.get("model") or "",
-                proxy_initialization=initialization,
-                readiness={
-                    "proxy_ready": bool(initialization.get("ready")),
-                    "catalog_ready": bool(initialization.get("catalog_ready")),
-                    "model_visible": False,
-                    "backend_ready": False,
-                },
-                operator_hint=(
-                    "The QuantZhai proxy is initializing. "
-                    "Check /qz/status or /health for readiness details. "
-                    "qz-codex does not require local Docker or llama.cpp access."
-                ),
-                status_code=503,
-                service_status=_ss_a,
-            )
-            self._emit_request_telemetry(
-                "request_failed",
-                started_at,
-                upstream_path,
-                body.get("model") or "",
-                error=payload.get("reason"),
-                phase="proxy_initialization",
-                request_id=request_id,
-            )
-            try:
-                self.handler.telemetry.emit("responses_rejected_proxy_not_ready", {
-                    "request_id": request_id,
-                    "model": body.get("model") or "",
-                    "path": upstream_path,
-                    "stream": body.get("stream", False),
-                    "proxy_ready": bool(initialization.get("ready")),
-                    "catalog_ready": bool(initialization.get("catalog_ready")),
-                })
-            except Exception:
-                pass
-            self._send_transitional_503(payload)
-            return
+        client_wants_stream = (
+            body.get("stream") is True
+            or "text/event-stream" in self.handler.headers.get("Accept", "")
+        )
+
+        client_model = body.get("model") or ""
+        sse_response_started = False
+        initialization = self._latest_proxy_initialization()
+        if not self._proxy_initialization_ready(initialization):
+            if (
+                upstream_path == "/v1/responses"
+                and _env_bool("QZ_HOLDOPEN_LOADING", False)
+                and client_wants_stream
+            ):
+                self._open_responses_sse()
+                sse_response_started = True
+                startup_ready, initialization = (
+                    self._hold_open_responses_stream_until_proxy_startup_ready(
+                        request_id=request_id,
+                        requested_model=client_model,
+                        initial_initialization=initialization,
+                    )
+                )
+                if not startup_ready:
+                    self._emit_request_telemetry(
+                        "request_failed",
+                        started_at,
+                        upstream_path,
+                        client_model,
+                        stream=True,
+                        error=(
+                            initialization.get("error")
+                            or "proxy startup hold-open failed"
+                        ),
+                        phase="proxy_initialization_holdopen",
+                        request_id=request_id,
+                    )
+                    self.handler.close_connection = True
+                    return
+            elif (
+                upstream_path == "/v1/responses"
+                and _env_bool("QZ_HOLDOPEN_LOADING", False)
+            ):
+                startup_ready, initialization = (
+                    self._wait_responses_proxy_startup_before_forward(
+                        initial_initialization=initialization,
+                    )
+                )
+                if not startup_ready:
+                    self._send_responses_proxy_startup_503(
+                        initialization=initialization,
+                        body=body,
+                        upstream_path=upstream_path,
+                        started_at=started_at,
+                        request_id=request_id,
+                    )
+                    return
+            else:
+                self._send_responses_proxy_startup_503(
+                    initialization=initialization,
+                    body=body,
+                    upstream_path=upstream_path,
+                    started_at=started_at,
+                    request_id=request_id,
+                )
+                return
 
         try:
             status_summary = self.handler._model_router().status_summary(self.handler.path)
@@ -3034,13 +3216,6 @@ class RequestRouter:
         except Exception:
             pass
 
-        client_wants_stream = (
-            body.get("stream") is True
-            or "text/event-stream" in self.handler.headers.get("Accept", "")
-        )
-
-        client_model = body.get("model") or ""
-        sse_response_started = False
         with self._request_gate(upstream_path, client_model, client_wants_stream):
             catalog = self.handler._model_catalog()
             if client_model:
@@ -3148,8 +3323,10 @@ class RequestRouter:
                         and _env_bool("QZ_HOLDOPEN_LOADING", False)
                         and transitional_wait
                     ):
-                        self._open_responses_sse()
-                        sse_response_started = True
+                        reset_stream_capture = not sse_response_started
+                        if reset_stream_capture:
+                            self._open_responses_sse()
+                            sse_response_started = True
                         if self._hold_open_responses_stream_until_ready(
                             selected_model=selected_model,
                             requested_model=client_model or requested_backend,
@@ -3157,6 +3334,7 @@ class RequestRouter:
                             initial_model_status=model_status,
                             build_model_status=build_model_status,
                             identity_matches_loaded=identity_matches_loaded,
+                            reset_capture=reset_stream_capture,
                         ):
                             active_ready = True
                             request_matches_active = True

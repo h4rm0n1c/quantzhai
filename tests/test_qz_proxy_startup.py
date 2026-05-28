@@ -73,7 +73,11 @@ def _request_json(url, payload=None):
 
 class ProxyStartupTest(unittest.TestCase):
     def test_control_plane_routes_answer_while_proxy_initializes(self):
-        with tempfile.TemporaryDirectory() as tmpdir, patch.dict(os.environ, {"QZ_VAR_DIR": tmpdir}, clear=False):
+        with tempfile.TemporaryDirectory() as tmpdir, patch.dict(
+            os.environ,
+            {"QZ_VAR_DIR": tmpdir, "QZ_HOLDOPEN_LOADING": "0"},
+            clear=False,
+        ):
             InitializingProxyHandler.root = str(Path(tmpdir))
             InitializingProxyHandler.model_state_path = str(Path(tmpdir) / "model-state.json")
             InitializingProxyHandler.backend_state_path = str(Path(tmpdir) / "backend-state.json")

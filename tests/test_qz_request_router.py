@@ -128,12 +128,23 @@ class ResponsesAdmissionTests(unittest.TestCase):
         upstream = "http://127.0.0.1:1"
         reasoning_stream_format = "raw"
 
-        def __init__(self, body, catalog):
+        def __init__(self, body, catalog, initializations=None, guard_startup_boundary=False):
             self.headers = ResponsesAdmissionTests._Headers(body)
             self.rfile = io.BytesIO(json.dumps(body).encode("utf-8"))
             self.wfile = io.BytesIO()
             self.telemetry = ResponsesAdmissionTests._Telemetry()
             self._catalog = catalog
+            self._initializations = list(initializations or [])
+            self._last_initialization = (
+                dict(self._initializations[0])
+                if self._initializations
+                else {"state": "ready", "ready": True, "catalog_ready": True}
+            )
+            self.startup_ready_seen = bool(self._last_initialization.get("ready"))
+            self.guard_startup_boundary = guard_startup_boundary
+            self.model_catalog_calls = 0
+            self.model_router_calls = 0
+            self.backend_calls = 0
             self.sent = []
             self.response_headers = {}
             self.response_status = None
@@ -144,13 +155,29 @@ class ResponsesAdmissionTests(unittest.TestCase):
             self.close_connection = False
 
         def _model_catalog(self):
+            self.model_catalog_calls += 1
+            if self.guard_startup_boundary and not self.startup_ready_seen:
+                raise AssertionError("model catalog touched before proxy startup readiness")
             return self._catalog
 
         def _model_router(self):
+            self.model_router_calls += 1
+            if self.guard_startup_boundary and not self.startup_ready_seen:
+                raise AssertionError("model router touched before proxy startup readiness")
             return ResponsesAdmissionTests._ModelRouter()
 
+        def _backend(self, authorization=None):
+            self.backend_calls += 1
+            if self.guard_startup_boundary and not self.startup_ready_seen:
+                raise AssertionError("backend touched before proxy startup readiness")
+            raise AssertionError("backend should not be touched by these focused tests")
+
         def _initialization_payload(self):
-            return {"state": "ready", "ready": True, "catalog_ready": True}
+            if self._initializations:
+                self._last_initialization = self._initializations.pop(0)
+            if self._last_initialization.get("ready"):
+                self.startup_ready_seen = True
+            return dict(self._last_initialization)
 
         def _send_json(self, status, payload, headers=None):
             self.response_headers = dict(headers or {})
@@ -200,6 +227,309 @@ class ResponsesAdmissionTests(unittest.TestCase):
             RequestRouter(handler).proxy_json_api("/v1/responses")
         self.assertEqual(len(handler.sent), 1)
         return handler.sent[0], handler
+
+    def test_responses_stream_flag_off_proxy_initializing_still_returns_503(self):
+        entry = self._entry("known-model")
+        catalog = self._Catalog([entry], selected=entry)
+        initialization = {"state": "initializing", "ready": False, "catalog_ready": False}
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "0"}, clear=False),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status") as build_status,
+            patch.object(RequestRouter, "_run_responses_streaming_locally") as run_stream,
+        ):
+            handler = self._Handler(
+                {"model": "known-model", "input": "hi", "stream": True},
+                catalog,
+                initializations=[initialization],
+                guard_startup_boundary=True,
+            )
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        self.assertEqual(len(handler.sent), 1)
+        status, payload = handler.sent[0]
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["error"], "proxy not ready")
+        self.assertEqual(handler.response_headers.get("Retry-After"), "5")
+        self.assertIs(payload["retry_suggested"], True)
+        self.assertIsNone(handler.response_status)
+        self.assertEqual(handler.model_catalog_calls, 0)
+        self.assertEqual(handler.model_router_calls, 0)
+        build_status.assert_not_called()
+        run_stream.assert_not_called()
+
+    def test_responses_non_stream_flag_off_proxy_initializing_still_returns_503(self):
+        entry = self._entry("known-model")
+        catalog = self._Catalog([entry], selected=entry)
+        initialization = {"state": "initializing", "ready": False, "catalog_ready": False}
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "0"}, clear=False),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status") as build_status,
+            patch.object(RequestRouter, "_run_responses_locally") as run_local,
+        ):
+            handler = self._Handler(
+                {"model": "known-model", "input": "hi"},
+                catalog,
+                initializations=[initialization],
+                guard_startup_boundary=True,
+            )
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        self.assertEqual(len(handler.sent), 1)
+        status, payload = handler.sent[0]
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["error"], "proxy not ready")
+        self.assertEqual(handler.response_headers.get("Retry-After"), "5")
+        self.assertIs(payload["retry_suggested"], True)
+        self.assertIsNone(handler.response_status)
+        self.assertEqual(handler.model_catalog_calls, 0)
+        self.assertEqual(handler.model_router_calls, 0)
+        build_status.assert_not_called()
+        run_local.assert_not_called()
+
+    def test_responses_stream_flag_on_proxy_startup_waits_then_streams_once(self):
+        entry = self._entry("known-model")
+        catalog = self._Catalog([entry], selected=entry)
+        initializing = {"state": "initializing", "ready": False, "catalog_ready": False}
+        ready_init = {"state": "ready", "ready": True, "catalog_ready": True}
+        ready_status = {
+            "selected_model_ready": True,
+            "backend_loaded_model": "known-model",
+            "request_admission_state": "ready",
+        }
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_POLL_SECONDS", 0.001),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.write_request_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status", return_value=ready_status),
+            patch.object(RequestRouter, "_run_responses_streaming_locally", return_value={"usage": {}}) as run_stream,
+        ):
+            handler = self._Handler(
+                {"model": "known-model", "input": "hi", "stream": True},
+                catalog,
+                initializations=[initializing, ready_init],
+                guard_startup_boundary=True,
+            )
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        stream_bytes = handler.wfile.getvalue()
+        self.assertEqual(handler.response_status, 200)
+        self.assertEqual(handler.send_response_calls, [200])
+        self.assertEqual(
+            [header for header in handler.sse_headers if header[0] == "Content-Type"],
+            [("Content-Type", "text/event-stream")],
+        )
+        self.assertEqual(handler.end_headers_calls, 1)
+        self.assertEqual(handler.rate_limit_event_calls, 1)
+        self.assertEqual(handler.sent, [])
+        self.assertIn(b": qz hold-open waiting for proxy startup\n\n", stream_bytes)
+        self.assertGreater(handler.model_catalog_calls, 0)
+        self.assertGreater(handler.model_router_calls, 0)
+        self.assertEqual(handler.backend_calls, 0)
+        run_stream.assert_called_once()
+
+    def test_responses_non_stream_startup_wait_does_not_touch_model_paths_before_ready_then_runs_local_once(self):
+        entry = self._entry("known-model")
+        catalog = self._Catalog([entry], selected=entry)
+        initializing = {"state": "initializing", "ready": False, "catalog_ready": False}
+        ready_init = {"state": "ready", "ready": True, "catalog_ready": True}
+        ready_status = {
+            "selected_model_ready": True,
+            "backend_loaded_model": "known-model",
+            "request_admission_state": "ready",
+        }
+        local_response = {
+            "id": "resp_ready",
+            "object": "response",
+            "output": [],
+            "usage": {},
+        }
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_POLL_SECONDS", 0.001),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status", return_value=ready_status),
+            patch.object(
+                RequestRouter,
+                "_run_responses_locally",
+                return_value=(200, "application/json", local_response),
+            ) as run_local,
+        ):
+            handler = self._Handler(
+                {"model": "known-model", "input": "hi"},
+                catalog,
+                initializations=[initializing, ready_init],
+                guard_startup_boundary=True,
+            )
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        self.assertEqual(handler.sent, [(200, local_response)])
+        self.assertEqual(handler.response_headers, {})
+        self.assertIsNone(handler.response_status)
+        self.assertEqual(handler.wfile.getvalue(), b"")
+        self.assertGreater(handler.model_catalog_calls, 0)
+        self.assertGreater(handler.model_router_calls, 0)
+        self.assertEqual(handler.backend_calls, 0)
+        run_local.assert_called_once()
+
+    def test_responses_stream_startup_holdopen_timeout_emits_sse_failure(self):
+        entry = self._entry("known-model")
+        catalog = self._Catalog([entry], selected=entry)
+        initializing = {"state": "initializing", "ready": False, "catalog_ready": False}
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_MAX_SECONDS", 0.0),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.write_request_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status") as build_status,
+            patch.object(RequestRouter, "_run_responses_streaming_locally") as run_stream,
+        ):
+            handler = self._Handler(
+                {"model": "known-model", "input": "hi", "stream": True},
+                catalog,
+                initializations=[initializing],
+                guard_startup_boundary=True,
+            )
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        stream_bytes = handler.wfile.getvalue()
+        self.assertEqual(handler.response_status, 200)
+        self.assertEqual(handler.sent, [])
+        self.assertIn(b"event: response.failed", stream_bytes)
+        self.assertIn(b"proxy startup hold-open timed out", stream_bytes)
+        self.assertIn(b"data: [DONE]\n\n", stream_bytes)
+        self.assertEqual(handler.model_catalog_calls, 0)
+        self.assertEqual(handler.model_router_calls, 0)
+        build_status.assert_not_called()
+        run_stream.assert_not_called()
+
+    def test_responses_non_stream_startup_wait_timeout_returns_existing_503(self):
+        entry = self._entry("known-model")
+        catalog = self._Catalog([entry], selected=entry)
+        initializing = {"state": "initializing", "ready": False, "catalog_ready": False}
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_MAX_SECONDS", 0.0),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status") as build_status,
+            patch.object(RequestRouter, "_run_responses_locally") as run_local,
+        ):
+            handler = self._Handler(
+                {"model": "known-model", "input": "hi"},
+                catalog,
+                initializations=[initializing],
+                guard_startup_boundary=True,
+            )
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        self.assertEqual(len(handler.sent), 1)
+        status, payload = handler.sent[0]
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["error"], "proxy not ready")
+        self.assertEqual(handler.response_headers.get("Retry-After"), "5")
+        self.assertIs(payload["retry_suggested"], True)
+        self.assertIsNone(handler.response_status)
+        self.assertEqual(handler.model_catalog_calls, 0)
+        self.assertEqual(handler.model_router_calls, 0)
+        build_status.assert_not_called()
+        run_local.assert_not_called()
+
+    def test_responses_stream_startup_failed_emits_sse_failure(self):
+        entry = self._entry("known-model")
+        catalog = self._Catalog([entry], selected=entry)
+        failed = {
+            "state": "failed",
+            "ready": False,
+            "catalog_ready": False,
+            "error": "catalog load failed",
+        }
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.write_request_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status") as build_status,
+            patch.object(RequestRouter, "_run_responses_streaming_locally") as run_stream,
+        ):
+            handler = self._Handler(
+                {"model": "known-model", "input": "hi", "stream": True},
+                catalog,
+                initializations=[failed],
+                guard_startup_boundary=True,
+            )
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        stream_bytes = handler.wfile.getvalue()
+        self.assertEqual(handler.response_status, 200)
+        self.assertEqual(handler.sent, [])
+        self.assertIn(b"event: response.failed", stream_bytes)
+        self.assertIn(b"catalog load failed", stream_bytes)
+        self.assertIn(b"data: [DONE]\n\n", stream_bytes)
+        self.assertEqual(handler.model_catalog_calls, 0)
+        self.assertEqual(handler.model_router_calls, 0)
+        build_status.assert_not_called()
+        run_stream.assert_not_called()
+
+    def test_responses_non_stream_startup_failed_returns_initialization_failed_503(self):
+        entry = self._entry("known-model")
+        catalog = self._Catalog([entry], selected=entry)
+        failed = {
+            "state": "failed",
+            "ready": False,
+            "catalog_ready": False,
+            "error": "catalog load failed",
+        }
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status") as build_status,
+            patch.object(RequestRouter, "_run_responses_locally") as run_local,
+        ):
+            handler = self._Handler(
+                {"model": "known-model", "input": "hi"},
+                catalog,
+                initializations=[failed],
+                guard_startup_boundary=True,
+            )
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        self.assertEqual(len(handler.sent), 1)
+        status, payload = handler.sent[0]
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["error"], "proxy initialization failed")
+        self.assertEqual(payload["reason"], "catalog load failed")
+        self.assertNotIn("Retry-After", handler.response_headers)
+        self.assertNotIn("retry_suggested", payload)
+        self.assertIsNone(handler.response_status)
+        self.assertEqual(handler.model_catalog_calls, 0)
+        self.assertEqual(handler.model_router_calls, 0)
+        build_status.assert_not_called()
+        run_local.assert_not_called()
 
     def test_responses_unknown_model_returns_400_not_503(self):
         catalog = self._Catalog([self._entry("known-model")])

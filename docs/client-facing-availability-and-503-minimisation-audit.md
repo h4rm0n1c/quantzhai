@@ -688,8 +688,9 @@ is a category error. The wrapper's polling loop silently handles it, but this is
 
 **Status:** Slice 4a delivered stream-only behind `QZ_HOLDOPEN_LOADING=1`. Slice 4b
 adds a bounded non-stream pre-forward wait under the same flag before falling back to
-the existing 503 paths. Timeout/failure after SSE headers are sent is represented as
-`response.failed` plus `[DONE]`, not a late HTTP 503.
+the existing 503 paths. Slice 5 extends the same flag to bounded `/v1/responses`
+startup waits before model/catalog readiness is consulted. Timeout/failure after SSE
+headers are sent is represented as `response.failed` plus `[DONE]`, not a late HTTP 503.
 
 **Where**: `qz_request_router.py`, the `not active_ready or not request_matches_active` block.
 
