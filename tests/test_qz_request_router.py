@@ -1,5 +1,7 @@
 import json
+import io
 import unittest
+from unittest.mock import patch
 
 from proxy.qz_proxy_tools import ProxyLocalToolExecutor, ProxyLocalToolRegistry
 from proxy.qz_request_normalization import NOT_PLANNING_MODE_HINT
@@ -74,6 +76,161 @@ class FakeRouter(RequestRouter):
         self.request_bodies.append(json.loads(json.dumps(body)))
         payload = self.responses.pop(0)
         return 200, "application/json", json.dumps(payload).encode("utf-8")
+
+
+class ResponsesAdmissionTests(unittest.TestCase):
+    class _Telemetry:
+        def __init__(self):
+            self.events = []
+
+        def emit(self, event_type, payload):
+            self.events.append((event_type, payload))
+
+    class _Headers:
+        def __init__(self, body, accept="application/json"):
+            self._raw = json.dumps(body).encode("utf-8")
+            self._accept = accept
+
+        def get(self, key, default=None):
+            if key == "Content-Length":
+                return str(len(self._raw))
+            if key == "Accept":
+                return self._accept
+            return default
+
+    class _ModelRouter:
+        def status_summary(self, _path):
+            return {}
+
+    class _Catalog:
+        def __init__(self, entries, selected=None, resolve_result=None):
+            self.entries = list(entries)
+            self.selected = selected
+            self._resolve_result = resolve_result
+
+        def resolve(self, query=None):
+            if self._resolve_result is not None:
+                return self._resolve_result
+            for entry in self.entries:
+                if query in {entry.get("key"), entry.get("slug"), entry.get("backend_id")}:
+                    return entry, "match"
+            return None, f"no match for {query}"
+
+    class _Handler:
+        path = "/v1/responses"
+        upstream = "http://127.0.0.1:1"
+        reasoning_stream_format = "raw"
+
+        def __init__(self, body, catalog):
+            self.headers = ResponsesAdmissionTests._Headers(body)
+            self.rfile = io.BytesIO(json.dumps(body).encode("utf-8"))
+            self.telemetry = ResponsesAdmissionTests._Telemetry()
+            self._catalog = catalog
+            self.sent = []
+
+        def _model_catalog(self):
+            return self._catalog
+
+        def _model_router(self):
+            return ResponsesAdmissionTests._ModelRouter()
+
+        def _initialization_payload(self):
+            return {"state": "ready", "ready": True, "catalog_ready": True}
+
+        def _send_json(self, status, payload):
+            self.sent.append((status, payload))
+
+    @staticmethod
+    def _entry(key, *, backend_id=None, profile_valid=True, profile_error=""):
+        entry = {
+            "key": key,
+            "slug": key,
+            "stem": key,
+            "backend_id": backend_id or key,
+            "label": key,
+            "profile_valid": profile_valid,
+        }
+        if profile_error:
+            entry["profile_error"] = profile_error
+        return entry
+
+    def _run_responses_request(self, body, catalog):
+        handler = self._Handler(body, catalog)
+        with (
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+        ):
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+        self.assertEqual(len(handler.sent), 1)
+        return handler.sent[0], handler
+
+    def test_responses_unknown_model_returns_400_not_503(self):
+        catalog = self._Catalog([self._entry("known-model")])
+
+        (status, payload), handler = self._run_responses_request(
+            {"model": "missing-model", "input": "hi"},
+            catalog,
+        )
+
+        self.assertEqual(status, 400)
+        self.assertNotEqual(status, 503)
+        self.assertEqual(payload["status_code"], 400)
+        self.assertEqual(payload["error"], "model not found")
+        self.assertEqual(payload["error_code"], "model_not_found")
+        self.assertEqual(payload["requested_model"], "missing-model")
+        self.assertIn("no match", payload["reason"])
+        self.assertIn("known-model", payload["available_models"])
+        self.assertIn(
+            "responses_rejected_model_missing",
+            [event_type for event_type, _payload in handler.telemetry.events],
+        )
+
+    def test_responses_not_ready_model_still_returns_503(self):
+        entry = self._entry("known-model")
+        catalog = self._Catalog([entry], selected=entry)
+        model_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "loading",
+        }
+
+        with (
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status", return_value=model_status),
+            patch("proxy.qz_model_status.identity_matches_loaded", return_value=False),
+            patch("proxy.qz_request_router.build_control_plane_status", return_value={"service_status": {}}),
+        ):
+            handler = self._Handler({"model": "known-model", "input": "hi"}, catalog)
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        self.assertEqual(len(handler.sent), 1)
+        status, payload = handler.sent[0]
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["status_code"], 503)
+        self.assertEqual(payload["error"], "model not ready")
+        self.assertEqual(payload["readiness"]["request_admission_state"], "loading")
+
+    def test_responses_profile_backend_missing_stays_503(self):
+        bad_profile = self._entry(
+            "profile-model",
+            profile_valid=False,
+            profile_error="symlink target not found in scanned GGUF models: target.gguf",
+        )
+        catalog = self._Catalog([bad_profile], resolve_result=(bad_profile, "match"))
+
+        (status, payload), _handler = self._run_responses_request(
+            {"model": "profile-model", "input": "hi"},
+            catalog,
+        )
+
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["status_code"], 503)
+        self.assertEqual(payload["error"], "profile backend missing")
+        self.assertEqual(payload["error_code"], "profile_backend_missing")
+        self.assertIn("fix", payload)
 
 
 class RequestRouterProxyLocalToolTests(unittest.TestCase):

@@ -2876,6 +2876,11 @@ class RequestRouter:
                 )
                 _error_label = "profile backend missing" if _is_profile_missing else "model not found"
                 _op_action_b = "inspect_logs" if _is_profile_missing else "select_model"
+                _status_code_b = (
+                    400
+                    if upstream_path == "/v1/responses" and client_model and not _is_profile_missing
+                    else 503
+                )
                 _cp_b = self._minimal_cp_for_service_status(initialization)
                 _ss_b = build_service_status(_cp_b)
                 payload = build_responses_error_payload(
@@ -2894,7 +2899,7 @@ class RequestRouter:
                         "Use a real model ID from /v1/models or POST /qz/models/refresh. "
                         "Old aliases (low/medium/high/max/caveman) are deprecated."
                     ),
-                    status_code=503,
+                    status_code=_status_code_b,
                     service_status=_ss_b,
                     operator_action=_op_action_b,
                 )
@@ -2912,7 +2917,7 @@ class RequestRouter:
                     })
                 except Exception:
                     pass
-                self.handler._send_json(503, payload)
+                self.handler._send_json(_status_code_b, payload)
                 return
 
             if upstream_path == "/v1/responses":

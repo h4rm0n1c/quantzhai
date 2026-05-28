@@ -649,6 +649,8 @@ Ordered by user-facing impact and implementation confidence.
 
 ### Priority 1: Fix "model not found" from 503 to 400
 
+**Status:** Delivered in Slice 1 — `/v1/responses` explicit catalog misses now return 400.
+
 **Where**: `qz_request_router.py`, the `selected_model is None` branch in `proxy_json_api()`.
 
 **Change**: Return 400 (not 503) for unknown model names.
