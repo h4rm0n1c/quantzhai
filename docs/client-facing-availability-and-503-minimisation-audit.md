@@ -686,9 +686,10 @@ is a category error. The wrapper's polling loop silently handles it, but this is
 
 ### Priority 3: Define one graceful hold-open path for `/v1/responses` during backend loading
 
-**Status:** Slice 4a delivered stream-only behind `QZ_HOLDOPEN_LOADING=1`. Non-stream
-requests still use the Slice 3 transitional 503 stop-gap. Timeout/failure after SSE
-headers are sent is represented as `response.failed` plus `[DONE]`, not a late HTTP 503.
+**Status:** Slice 4a delivered stream-only behind `QZ_HOLDOPEN_LOADING=1`. Slice 4b
+adds a bounded non-stream pre-forward wait under the same flag before falling back to
+the existing 503 paths. Timeout/failure after SSE headers are sent is represented as
+`response.failed` plus `[DONE]`, not a late HTTP 503.
 
 **Where**: `qz_request_router.py`, the `not active_ready or not request_matches_active` block.
 
@@ -698,6 +699,10 @@ keepalive comments every 15s. Poll the model-status readiness truth internally. 
 requested model becomes ready and active, forward the original request on the same stream.
 Timeout after 270s (just under the Codex SSE idle timeout of 300s) and emit a stream
 failure event plus `[DONE]`.
+
+For non-stream requests under the same flag, wait before sending any response; if the
+requested model becomes ready in time, continue into the normal JSON response path,
+otherwise return the existing transitional or terminal 503 payload.
 
 **Why**: This eliminates the most common loading-state 503. Model loads typically take
 30–120s. The Codex SSE idle timeout is 300s. The window exists; use it.

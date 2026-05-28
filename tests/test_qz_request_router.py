@@ -255,6 +255,37 @@ class ResponsesAdmissionTests(unittest.TestCase):
         self.assertIs(payload["retry_suggested"], True)
         self.assertIsNone(handler.response_status)
 
+    def test_responses_non_stream_flag_off_loading_still_returns_503(self):
+        entry = self._entry("known-model")
+        catalog = self._Catalog([entry], selected=entry)
+        model_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "loading",
+        }
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "0"}, clear=False),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status", return_value=model_status),
+            patch("proxy.qz_model_status.identity_matches_loaded", return_value=False),
+            patch("proxy.qz_request_router.build_control_plane_status", return_value={"service_status": {}}),
+            patch.object(RequestRouter, "_run_responses_locally") as run_local,
+        ):
+            handler = self._Handler({"model": "known-model", "input": "hi"}, catalog)
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        self.assertEqual(len(handler.sent), 1)
+        status, payload = handler.sent[0]
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["readiness"]["request_admission_state"], "loading")
+        self.assertEqual(handler.response_headers.get("Retry-After"), "5")
+        self.assertIs(payload["retry_suggested"], True)
+        self.assertIsNone(handler.response_status)
+        run_local.assert_not_called()
+
     def test_responses_stream_flag_on_loading_holds_open_then_streams_once(self):
         entry = self._entry("known-model")
         catalog = self._Catalog([entry], selected=entry)
@@ -295,7 +326,49 @@ class ResponsesAdmissionTests(unittest.TestCase):
         self.assertIn(b": qz hold-open waiting for model readiness\n\n", handler.wfile.getvalue())
         run_stream.assert_called_once()
 
-    def test_responses_non_stream_flag_on_loading_still_returns_503(self):
+    def test_responses_non_stream_flag_on_loading_waits_then_runs_local_once(self):
+        entry = self._entry("known-model")
+        catalog = self._Catalog([entry], selected=entry)
+        loading_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "loading",
+        }
+        ready_status = {
+            "selected_model_ready": True,
+            "backend_loaded_model": "known-model",
+            "request_admission_state": "ready",
+        }
+        local_response = {
+            "id": "resp_ready",
+            "object": "response",
+            "output": [],
+            "usage": {},
+        }
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_POLL_SECONDS", 0.001),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status", side_effect=[loading_status, ready_status]),
+            patch.object(
+                RequestRouter,
+                "_run_responses_locally",
+                return_value=(200, "application/json", local_response),
+            ) as run_local,
+        ):
+            handler = self._Handler({"model": "known-model", "input": "hi"}, catalog)
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        self.assertEqual(handler.sent, [(200, local_response)])
+        self.assertEqual(handler.response_headers, {})
+        self.assertIsNone(handler.response_status)
+        self.assertEqual(handler.wfile.getvalue(), b"")
+        run_local.assert_called_once()
+
+    def test_responses_non_stream_flag_on_loading_timeout_returns_existing_503(self):
         entry = self._entry("known-model")
         catalog = self._Catalog([entry], selected=entry)
         model_status = {
@@ -306,12 +379,14 @@ class ResponsesAdmissionTests(unittest.TestCase):
 
         with (
             patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_MAX_SECONDS", 0.0),
             patch("proxy.qz_request_router.write_dual_capture"),
             patch("proxy.qz_request_router.write_capture"),
             patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
             patch("proxy.qz_model_status.build_model_status", return_value=model_status),
             patch("proxy.qz_model_status.identity_matches_loaded", return_value=False),
             patch("proxy.qz_request_router.build_control_plane_status", return_value={"service_status": {}}),
+            patch.object(RequestRouter, "_run_responses_locally") as run_local,
         ):
             handler = self._Handler({"model": "known-model", "input": "hi"}, catalog)
             RequestRouter(handler).proxy_json_api("/v1/responses")
@@ -319,9 +394,50 @@ class ResponsesAdmissionTests(unittest.TestCase):
         self.assertEqual(len(handler.sent), 1)
         status, payload = handler.sent[0]
         self.assertEqual(status, 503)
+        self.assertEqual(payload["readiness"]["request_admission_state"], "loading")
         self.assertEqual(handler.response_headers.get("Retry-After"), "5")
         self.assertIs(payload["retry_suggested"], True)
         self.assertIsNone(handler.response_status)
+        self.assertEqual(handler.wfile.getvalue(), b"")
+        run_local.assert_not_called()
+
+    def test_responses_non_stream_flag_on_terminal_after_wait_returns_existing_503(self):
+        entry = self._entry("known-model")
+        catalog = self._Catalog([entry], selected=entry)
+        loading_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "loading",
+        }
+        failed_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "failed",
+        }
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_POLL_SECONDS", 0.001),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status", side_effect=[loading_status, failed_status]),
+            patch("proxy.qz_model_status.identity_matches_loaded", return_value=False),
+            patch("proxy.qz_request_router.build_control_plane_status", return_value={"service_status": {}}),
+            patch.object(RequestRouter, "_run_responses_locally") as run_local,
+        ):
+            handler = self._Handler({"model": "known-model", "input": "hi"}, catalog)
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        self.assertEqual(len(handler.sent), 1)
+        status, payload = handler.sent[0]
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["readiness"]["request_admission_state"], "failed")
+        self.assertNotIn("Retry-After", handler.response_headers)
+        self.assertNotIn("retry_suggested", payload)
+        self.assertIsNone(handler.response_status)
+        self.assertEqual(handler.wfile.getvalue(), b"")
+        run_local.assert_not_called()
 
     def test_responses_stream_holdopen_timeout_emits_sse_failure_not_late_503(self):
         entry = self._entry("known-model")
@@ -402,6 +518,24 @@ class ResponsesAdmissionTests(unittest.TestCase):
         self.assertEqual(payload["error"], "model not found")
         self.assertIsNone(handler.response_status)
         self.assertEqual(handler.wfile.getvalue(), b"")
+
+    def test_responses_unknown_model_non_stream_flag_on_returns_400_no_wait(self):
+        catalog = self._Catalog([self._entry("known-model")])
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_model_status.build_model_status") as build_status,
+        ):
+            (status, payload), handler = self._run_responses_request(
+                {"model": "missing-model", "input": "hi"},
+                catalog,
+            )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "model not found")
+        self.assertIsNone(handler.response_status)
+        self.assertEqual(handler.wfile.getvalue(), b"")
+        build_status.assert_not_called()
 
     def test_responses_failed_model_503_does_not_retry_suggest(self):
         entry = self._entry("known-model")

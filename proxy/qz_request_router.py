@@ -435,6 +435,42 @@ class RequestRouter:
                 time.sleep(sleep_for)
             model_status = build_model_status(self.handler)
 
+    def _wait_responses_until_ready_before_forward(
+        self,
+        *,
+        selected_model,
+        initial_model_status,
+        build_model_status,
+        identity_matches_loaded,
+    ) -> tuple[bool, dict]:
+        deadline = time.monotonic() + HOLDOPEN_LOADING_MAX_SECONDS
+        model_status = initial_model_status
+
+        while True:
+            active_ready, _requested_key, _requested_backend, request_matches_active = (
+                self._responses_model_readiness(
+                    selected_model,
+                    model_status,
+                    identity_matches_loaded,
+                )
+            )
+            if active_ready and request_matches_active:
+                return True, model_status
+            if self._is_terminal_responses_wait(model_status):
+                return False, model_status
+
+            now = time.monotonic()
+            if now >= deadline:
+                return False, model_status
+
+            sleep_for = min(
+                HOLDOPEN_LOADING_POLL_SECONDS,
+                max(0.0, deadline - now),
+            )
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            model_status = build_model_status(self.handler)
+
     def _emit_schema_normalization_telemetry(self, report, request_id: str = "") -> None:
         """Emit tool_schema_replaced telemetry when normalization changes the tool list.
 
@@ -3122,7 +3158,8 @@ class RequestRouter:
                             build_model_status=build_model_status,
                             identity_matches_loaded=identity_matches_loaded,
                         ):
-                            pass
+                            active_ready = True
+                            request_matches_active = True
                         else:
                             self._emit_request_telemetry(
                                 "request_failed",
@@ -3136,7 +3173,31 @@ class RequestRouter:
                             )
                             self.handler.close_connection = True
                             return
-                    else:
+                    elif (
+                        not client_wants_stream
+                        and _env_bool("QZ_HOLDOPEN_LOADING", False)
+                        and transitional_wait
+                    ):
+                        ready_after_wait, model_status = (
+                            self._wait_responses_until_ready_before_forward(
+                                selected_model=selected_model,
+                                initial_model_status=model_status,
+                                build_model_status=build_model_status,
+                                identity_matches_loaded=identity_matches_loaded,
+                            )
+                        )
+                        if ready_after_wait:
+                            active_ready = True
+                            request_matches_active = True
+                        else:
+                            active_ready, requested_key, requested_backend, request_matches_active = (
+                                self._responses_model_readiness(
+                                    selected_model,
+                                    model_status,
+                                    identity_matches_loaded,
+                                )
+                            )
+                    if not active_ready or not request_matches_active:
                         initialization = self.handler._initialization_payload()
                         cp = build_control_plane_status(self.handler)
                         ss = cp.get("service_status") or build_service_status(cp)
