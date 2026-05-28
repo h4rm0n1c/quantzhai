@@ -12,83 +12,50 @@ esac
 
 qz_prepare_codex_home
 
-qz_exec_has_model_selector() {
-  local arg
-  for arg in "${@:2}"; do
-    case "$arg" in
-      -m|--model|-p|--profile|--model=*|--profile=*)
-        return 0
-        ;;
-      --)
-        break
-        ;;
-    esac
-  done
-  return 1
-}
-
 QZ_CODEX_ARGS=("$@")
-if [[ "${1:-}" == "exec" ]]; then
-  case "${2:-}" in
-    resume|review|help|-h|--help)
-      ;;
-    *)
-      if ! qz_exec_has_model_selector "$@"; then
-        if [[ -n "${QZ_CODEX_EXEC_DEFAULT_MODEL:-}" ]]; then
-          QZ_CODEX_ARGS=(exec -m "$QZ_CODEX_EXEC_DEFAULT_MODEL" "${@:2}")
-        else
-          cat >&2 <<'EOF'
-qz-codex: exec requires an explicit -m/--model or -p/--profile.
-
-Reason: Codex persists the last selected model in $CODEX_HOME/config.toml,
-so non-interactive captures can silently run under a roleplay profile instead
-of the intended coding/compiler profile.
-
-Example:
-  ./scripts/qz-codex exec -m prompt-compiler --json --ephemeral 'Say done.'
-
-To set a wrapper default for exec runs:
-  QZ_CODEX_EXEC_DEFAULT_MODEL=prompt-compiler ./scripts/qz-codex exec --json --ephemeral 'Say done.'
-EOF
-          exit 64
-        fi
-      fi
-      ;;
-  esac
-fi
-
 QZ_CODEX_EXTRA_ARGS=()
 if [[ -n "${QZ_CODEX_MODEL_PROVIDER:-}" ]]; then
   QZ_CODEX_EXTRA_ARGS+=(-c "model_provider=\"$QZ_CODEX_MODEL_PROVIDER\"")
 fi
 
-# Model preflight: verify the requested model is the active selected/loaded
-# backend model via GET /qz/model/status.  Visibility in /v1/models is no
-# longer sufficient.
+# --- Effective model resolution: A, B, or C ---
 #
-# When QZ_CODEX_AUTO_SELECT_MODEL=1, a mismatch triggers a POST to
-# /qz/model/select-and-restart (source=qz_codex).  Otherwise mismatch fails
-# with a literal curl command the operator can paste.
+# A. User explicitly passed -m / --model → use that exact model (strict).
+# B. No explicit model + QuantZhai already has a selected model →
+#    use the selected model; no hardcoded fallback, no config.toml guess.
+# C. No explicit model + no selected model (fresh install) →
+#    POST /qz/model/select-and-restart with no "model" field so the proxy
+#    picks its catalog default (source=qz_codex); then wait/poll until ready.
 #
-# See docs/proxy-model-selection-authority.md §8.
+# For exec mode without an explicit -m, the resolved model is injected as -m
+# so Codex does not fall back to a stale config.toml selection.
+#
+# See docs/qz-codex-wrapper-contract.md for the full behavior contract.
 
-_preflight_model="$(qz_exec_model_from_args "${QZ_CODEX_ARGS[@]}")"
-if [[ -z "$_preflight_model" ]]; then
-  if [[ "${QZ_CODEX_ARGS[0]:-}" == "exec" ]]; then
-    _preflight_model="${QZ_CODEX_EXEC_DEFAULT_MODEL:-}"
-  else
-    # In interactive mode, check if we have a persisted selection in config.toml
-    # that Codex will use on startup.
-    _preflight_model=$(grep -E '^\s*model\s*=' "$CODEX_HOME/config.toml" 2>/dev/null | cut -d'"' -f2 || true)
-    if [[ -z "$_preflight_model" ]]; then
-       # Fall back to proxy's currently selected model so we at least verify it is READY.
-       _preflight_model=$(qz_proxy_loaded_model)
-    fi
+_explicit_model_arg="$(qz_exec_model_from_args "${QZ_CODEX_ARGS[@]}")"
+
+if [[ -n "$_explicit_model_arg" ]]; then
+  # A: user explicitly passed -m / --model
+  _preflight_model="$_explicit_model_arg"
+elif [[ "${QZ_CODEX_ARGS[0]:-}" == "exec" && -n "${QZ_CODEX_EXEC_DEFAULT_MODEL:-}" ]]; then
+  # exec + operator-set env-var override (treated as explicit)
+  _preflight_model="$QZ_CODEX_EXEC_DEFAULT_MODEL"
+  QZ_CODEX_ARGS=(exec -m "$QZ_CODEX_EXEC_DEFAULT_MODEL" "${QZ_CODEX_ARGS[@]:1}")
+else
+  # B / C: no explicit model — resolve from QuantZhai's selected model (or
+  # bootstrap the first catalog entry on a fresh install).
+  _preflight_model="$(qz_resolve_effective_model)" || exit $?
+  # For exec mode: inject the resolved model so Codex does not use a stale
+  # config.toml selection from a previous interactive session.
+  if [[ "${QZ_CODEX_ARGS[0]:-}" == "exec" && -n "$_preflight_model" ]]; then
+    QZ_CODEX_ARGS=(exec -m "$_preflight_model" "${QZ_CODEX_ARGS[@]:1}")
   fi
 fi
 
+# Preflight: verify the effective model is active (or wait while it loads).
+# Distinguishes: ready / loading (wait) / failed (abort) / mismatch (error or auto-select).
+# QZ_CODEX_AUTO_SELECT_MODEL=1 enables auto-select for explicit-model mismatches only.
 if [[ -n "$_preflight_model" ]]; then
-  # Preflight distinguishes: visibility vs selection vs readiness.
   qz_codex_exec_preflight "$_preflight_model" || exit $?
 fi
 

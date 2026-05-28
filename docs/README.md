@@ -140,6 +140,7 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 | Tooling roadmap | [Patch tool roadmap](patch-tool-roadmap.md) | Patch/edit tooling plans for safer repo modification. |
 | Backend lifecycle | [Backend lifecycle control plane](backend-lifecycle-control-plane.md) | #65: BackendManager owns Docker lifecycle; qz-up starts proxy only; /qz/backend/* endpoints; operator guide in §15. |
 | Model selection | [Proxy-owned model selection authority](proxy-model-selection-authority.md) | #65 follow-up: audit + final design for proxy-owned model selection; precedence; qz.model_state.v1; new /qz/model/* endpoints; qz-codex auto-select; no-new-scripts invariant. |
+| qz-codex wrapper | [qz-codex wrapper contract](qz-codex-wrapper-contract.md) | Effective-model resolution (A/B/C), loading wait/poll, first-run bootstrap, and strict explicit-model rules. |
 | Reasoning policy | [Qwen reasoning effort policy](qwen-reasoning-effort-policy.md) | Two-axis thinking control: `thinking_mode` × `reasoning_effort`; per-block budgets; profile config; TheTom budget field compat. |
 | Backend compat | [TheTom OAI responses compat](thetom-oai-responses-compat.md) | `/v1/responses` path reads `thinking_budget_tokens`, not `reasoning_budget_tokens`; why both fields must be mirrored; validation evidence. |
 | Proxy roadmap | [Proxy capability roadmap](proxy-capability-roadmap.md) | Proxy feature expansion and compatibility work. |

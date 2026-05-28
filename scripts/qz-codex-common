@@ -219,6 +219,99 @@ qz_prepare_codex_home() {
   return $?
 }
 
+qz_resolve_effective_model() {
+  # Determine the effective model to run Codex with when no explicit -m/--model
+  # arg was given.
+  #
+  # Resolution order:
+  #   B. Use the model already selected by QuantZhai (/qz/model/status).
+  #   C. If no selected model, POST /qz/model/select-and-restart with no
+  #      explicit model so the proxy picks its catalog default; use the
+  #      resulting selection (first-run bootstrap).
+  #
+  # Outputs the effective model name to stdout.
+  # Exit codes: 0 = resolved; 1 = bootstrap failed; 3 = proxy unreachable.
+  python3 - "$QZ_PROXY_HOST" "$QZ_PROXY_PORT" <<'PY'
+import json, sys, urllib.request, urllib.error
+
+host = sys.argv[1]
+port = sys.argv[2]
+
+
+def fetch_status():
+    url = "http://{}:{}/qz/model/status".format(host, port)
+    try:
+        with urllib.request.urlopen(url, timeout=3.0) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception as exc:
+        print("qz-codex: GET /qz/model/status failed: {}".format(exc), file=sys.stderr)
+        return None
+
+
+data = fetch_status()
+if data is None:
+    sys.exit(3)
+
+# B: selected model exists — use it directly
+selected_backend_id = (data.get("selected_backend_id") or "").strip()
+selected_key = (data.get("selected_key") or "").strip()
+effective = selected_backend_id or selected_key
+if effective:
+    print(effective)
+    sys.exit(0)
+
+# C: no selected model — first-run bootstrap via proxy catalog default
+print("qz-codex: no selected model; bootstrapping from proxy catalog default...", file=sys.stderr)
+select_url = "http://{}:{}/qz/model/select-and-restart".format(host, port)
+# No "model" field: proxy picks catalog.selected or catalog.entries[0]
+payload = json.dumps({"source": "qz_codex"}).encode("utf-8")
+req = urllib.request.Request(
+    select_url,
+    data=payload,
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(req, timeout=10.0) as r:
+        result = json.loads(r.read().decode("utf-8"))
+except urllib.error.HTTPError as exc:
+    raw = exc.read().decode("utf-8")
+    print(
+        "qz-codex: bootstrap select-and-restart failed (HTTP {}): {}".format(exc.code, raw[:300]),
+        file=sys.stderr,
+    )
+    sys.exit(1)
+except Exception as exc:
+    print("qz-codex: bootstrap select-and-restart error: {}".format(exc), file=sys.stderr)
+    sys.exit(1)
+
+# Extract the selected model from the select-and-restart response
+effective = ""
+if isinstance(result, dict):
+    effective = (
+        (result.get("selected_backend_id") or "").strip()
+        or (result.get("selected_key") or "").strip()
+    )
+
+if not effective:
+    # Re-fetch status as fallback
+    data2 = fetch_status()
+    if data2:
+        effective = (
+            (data2.get("selected_backend_id") or "").strip()
+            or (data2.get("selected_key") or "").strip()
+        )
+
+if not effective:
+    print("qz-codex: bootstrap: no model selected after select-and-restart", file=sys.stderr)
+    sys.exit(1)
+
+print("qz-codex: bootstrap: selected {}".format(effective), file=sys.stderr)
+print(effective)
+sys.exit(0)
+PY
+}
+
 qz_resolve_codex_profile() {
   local profile="${1:-medium}"
   # Use the model currently loaded in the proxy so the benchmark always
@@ -274,7 +367,7 @@ qz_codex_exec_preflight() {
   local timeout="${QZ_CODEX_READY_TIMEOUT:-300}"
   REQUESTED="$requested" AUTOSELECT="$autoselect" READY_TIMEOUT="$timeout" \
     python3 - "$QZ_PROXY_HOST" "$QZ_PROXY_PORT" <<'PY'
-import json, os, sys, urllib.request, urllib.error
+import json, os, sys, time, urllib.request, urllib.error
 
 host = sys.argv[1]
 port = sys.argv[2]
@@ -314,6 +407,18 @@ def active_match(data, req):
         if sbid:
             candidates.add(sbid.lower())
     return req.lower() in candidates
+
+
+def selected_identity_match(data, req):
+    """True if req matches the selected model identity (key or backend_id),
+    regardless of whether the backend is ready.  Used to detect a genuine
+    load-in-progress vs a full model mismatch."""
+    if not isinstance(data, dict):
+        return False
+    req_l = req.lower()
+    sk = (data.get("selected_key") or "").strip().lower()
+    sbid = (data.get("selected_backend_id") or "").strip().lower()
+    return bool((sk or sbid) and req_l in {sk, sbid})
 
 
 def print_mismatch(data, req):
@@ -409,8 +514,53 @@ data = fetch_status()
 if data is None:
     sys.exit(3)
 
+# Hard failure — the backend is broken; do not spin-wait.
+admission = (data.get("request_admission_state") or "").strip()
+if admission in ("failed", "failed_gpu_not_available"):
+    print_failure_detail(data, requested)
+    print(
+        "qz-codex: backend is in a failed state ({}); not waiting.".format(admission),
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+# Already active and ready — fast path.
 if active_match(data, requested):
     sys.exit(0)
+
+# Selected model matches requested but is still loading — wait/poll.
+# This is not a mismatch; QZ_CODEX_AUTO_SELECT_MODEL is not required.
+if selected_identity_match(data, requested) and admission in ("starting", "loading"):
+    print(
+        "qz-codex: [{}] is {} — waiting up to {:g}s for backend to be ready...".format(
+            requested, admission, timeout
+        ),
+        file=sys.stderr,
+    )
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(3)
+        data = fetch_status()
+        if data is None:
+            continue
+        admission = (data.get("request_admission_state") or "").strip()
+        if admission in ("failed", "failed_gpu_not_available"):
+            print_failure_detail(data, requested)
+            print(
+                "qz-codex: [{}] failed during load; aborting.".format(requested),
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if active_match(data, requested):
+            sys.exit(0)
+    print(
+        "qz-codex: timed out after {:g}s waiting for [{}] to become ready.".format(
+            timeout, requested
+        ),
+        file=sys.stderr,
+    )
+    print("  Last admission state: {}".format(admission), file=sys.stderr)
+    sys.exit(1)
 
 if not autoselect:
     print_mismatch(data, requested)
