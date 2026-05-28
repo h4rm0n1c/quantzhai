@@ -2202,6 +2202,141 @@ class HoldOpenDeadlineSharingTests(unittest.TestCase):
 
         self.assertTrue(result)
 
+    # ------------------------------------------------------------------
+    # 7. Stream: both phases actually run; shared deadline proven by
+    #    both keepalive types appearing and model wait failing on expiry.
+    # ------------------------------------------------------------------
+
+    def test_stream_stacked_startup_phase_runs_then_model_wait_expires_on_shared_deadline(self):
+        """
+        Proxy is NOT immediately ready. Startup wait runs one loop iteration
+        before becoming ready. Model wait then sees the same exhausted deadline
+        and fails immediately, emitting SSE failure.
+
+        Regression guard: if model wait had computed a fresh deadline from the
+        current monotonic time (T=380 → 380+270=650), it would not have timed
+        out at T=380 and would have kept polling, exhausting the mock side-effects
+        and raising StopIteration instead of cleanly emitting response.failed.
+
+        Both keepalive messages in stream_bytes confirm both phases ran.
+        """
+        entry = self._make_catalog_entry()
+        catalog = ResponsesAdmissionTests._Catalog([entry], selected=entry)
+        initializing = {"state": "initializing", "ready": False, "catalog_ready": False}
+        ready_init = {"state": "ready", "ready": True, "catalog_ready": True}
+        loading_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "loading",
+        }
+
+        # T0=100: deadline = 100 + 270 = 370
+        # T1=100: startup-wait iter 1 — not past deadline, sleep, get ready_init
+        # T2=200: startup-wait iter 2 — init ready, return True (no deadline check)
+        # T3=380: model-wait iter 1 — 380 >= 370, SSE failure, return False
+        mono_values = [100.0, 100.0, 200.0, 380.0, 380.0, 380.0]
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_MAX_SECONDS", 270.0),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_POLL_SECONDS", 0.001),
+            patch("proxy.qz_request_router.time.monotonic", side_effect=mono_values),
+            patch("proxy.qz_request_router.time.sleep"),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.write_request_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status", return_value=loading_status),
+            patch("proxy.qz_model_status.identity_matches_loaded", return_value=False),
+            patch.object(RequestRouter, "_run_responses_streaming_locally") as run_stream,
+        ):
+            handler = self._make_handler_for_integration(
+                {"model": "known-model", "input": "hi", "stream": True},
+                catalog,
+                initializations=[initializing, ready_init],
+            )
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        stream_bytes = handler.wfile.getvalue()
+        # Both phases ran — both keepalive message types must appear
+        self.assertIn(b": qz hold-open waiting for proxy startup\n\n", stream_bytes)
+        self.assertIn(b": qz hold-open waiting for model readiness\n\n", stream_bytes)
+        # SSE opened exactly once (during startup wait)
+        self.assertEqual(handler.response_status, 200)
+        self.assertEqual(handler.send_response_calls, [200])
+        self.assertEqual(handler.end_headers_calls, 1)
+        self.assertEqual(handler.sent, [])
+        # Model wait expired on shared deadline → SSE failure, not normal stream
+        self.assertIn(b"event: response.failed", stream_bytes)
+        self.assertIn(b"timed out", stream_bytes)
+        self.assertIn(b"data: [DONE]\n\n", stream_bytes)
+        run_stream.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # 8. Non-stream: both phases actually run; shared deadline proven by
+    #    model wait falling back immediately after startup succeeds.
+    # ------------------------------------------------------------------
+
+    def test_non_stream_stacked_startup_phase_runs_then_model_wait_expires_on_shared_deadline(self):
+        """
+        Non-stream. Proxy NOT immediately ready. Startup wait runs one iteration
+        before succeeding. Model wait receives the same exhausted deadline and
+        returns False immediately, producing the transitional 503 fallback.
+
+        Regression guard: if model wait had a fresh deadline (380+270=650), it
+        would not have exited at T=380 and would have continued polling, exhausting
+        the monotonic side-effect list and raising StopIteration rather than
+        producing a clean 503.
+        """
+        entry = self._make_catalog_entry()
+        catalog = ResponsesAdmissionTests._Catalog([entry], selected=entry)
+        initializing = {"state": "initializing", "ready": False, "catalog_ready": False}
+        ready_init = {"state": "ready", "ready": True, "catalog_ready": True}
+        loading_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "loading",
+        }
+
+        # Non-stream startup wait checks ready/failed before calling monotonic.
+        # T0=100: deadline = 100 + 270 = 370
+        # startup-wait iter 1: not ready, not failed → T1=100, not past, sleep, get ready_init
+        # startup-wait iter 2: ready → return True (no monotonic call)
+        # model-wait iter 1: not ready, not terminal → T2=380, 380 >= 370, return False
+        mono_values = [100.0, 100.0, 380.0, 380.0, 380.0]
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_MAX_SECONDS", 270.0),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_POLL_SECONDS", 0.001),
+            patch("proxy.qz_request_router.time.monotonic", side_effect=mono_values),
+            patch("proxy.qz_request_router.time.sleep"),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status", return_value=loading_status),
+            patch("proxy.qz_model_status.identity_matches_loaded", return_value=False),
+            patch("proxy.qz_request_router.build_control_plane_status", return_value={"service_status": {}}),
+            patch.object(RequestRouter, "_run_responses_locally") as run_local,
+        ):
+            handler = self._make_handler_for_integration(
+                {"model": "known-model", "input": "hi"},
+                catalog,
+                initializations=[initializing, ready_init],
+            )
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        self.assertEqual(len(handler.sent), 1)
+        status, payload = handler.sent[0]
+        self.assertEqual(status, 503)
+        # Transitional loading state → carries Retry-After and retry_suggested
+        self.assertEqual(payload["readiness"]["request_admission_state"], "loading")
+        self.assertEqual(handler.response_headers.get("Retry-After"), "5")
+        self.assertIs(payload["retry_suggested"], True)
+        # No SSE bytes — non-stream path
+        self.assertEqual(handler.wfile.getvalue(), b"")
+        run_local.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
