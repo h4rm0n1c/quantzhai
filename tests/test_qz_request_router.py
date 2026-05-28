@@ -3121,3 +3121,232 @@ class HelperLevelDeadlineConsumptionTests(unittest.TestCase):
             self.assertFalse(ok)
 
 
+class HelperDeadlineConsumptionTests(unittest.TestCase):
+    """Direct helper-level proof that a shared explicit deadline is consumed
+    across two sequential helper calls — phase 2 sees only the remaining
+    budget, not a fresh full window.
+    """
+
+    class _FakeHandler:
+        def __init__(self):
+            self.wfile = io.BytesIO()
+            self.telemetry = MagicMock()
+            self.path = "/v1/responses"
+            self.headers = {}
+            self.upstream = "http://127.0.0.1:1"
+            self.reasoning_stream_format = "raw"
+            self._init_queue = []
+
+        def _initialization_payload(self):
+            if self._init_queue:
+                return self._init_queue.pop(0)
+            return {"state": "ready", "ready": True}
+
+        def _emit_sse_telemetry(self, chunk, request_id=""):
+            pass
+
+    def setUp(self):
+        self.handler = self._FakeHandler()
+        self.router = RequestRouter(self.handler)
+        self.shared_deadline = 1000.0
+
+    def test_stream_helpers_share_explicit_deadline_remaining_time(self):
+        # Phase 1: initial init not ready, then becomes ready after one poll
+        self.handler._init_queue = [{"state": "ready", "ready": True}]
+        # Phase 2: model loading and never becomes ready
+        loading_status = {
+            "selected_model_ready": False,
+            "request_admission_state": "loading",
+            "backend_loaded_model": "",
+        }
+
+        # Phase 1: monotonic at 900 (loop1, not ready -> sleep+fetch),
+        #          then 910 (loop2, now ready -> return True).
+        # Phase 2: monotonic at 1001 (>= shared_deadline 1000 -> timeout).
+        mono = iter([900.0, 910.0, 1001.0])
+
+        with (
+            patch("proxy.qz_request_router.time.monotonic", side_effect=lambda: next(mono)),
+            patch("proxy.qz_request_router.time.sleep"),
+            patch("proxy.qz_request_router.write_request_capture"),
+            patch("proxy.qz_request_router.append_request_capture"),
+            patch("proxy.qz_request_router.capture_enabled", return_value=False),
+            patch("proxy.qz_request_router._now_ts", return_value=123456789),
+        ):
+            ok1, _ = self.router._hold_open_responses_stream_until_proxy_startup_ready(
+                request_id="req-stream",
+                requested_model="m1",
+                initial_initialization={"state": "initializing", "ready": False},
+                deadline=self.shared_deadline,
+            )
+            self.assertTrue(ok1, "phase 1 stream helper should succeed before deadline")
+
+            ok2 = self.router._hold_open_responses_stream_until_ready(
+                selected_model={"key": "m1", "backend_id": "m1"},
+                requested_model="m1",
+                request_id="req-stream",
+                initial_model_status=loading_status,
+                build_model_status=lambda h: loading_status,
+                identity_matches_loaded=lambda k, b, l: False,
+                reset_capture=False,
+                deadline=self.shared_deadline,
+            )
+            self.assertFalse(ok2, "phase 2 stream helper must fail; shared deadline exhausted")
+
+        output = self.handler.wfile.getvalue()
+        self.assertIn(b"response.failed", output)
+        self.assertIn(b"data: [DONE]\n\n", output)
+        self.assertIn(b"model readiness hold-open timed out", output)
+
+    def test_non_stream_helpers_share_explicit_deadline_remaining_time(self):
+        self.handler._init_queue = [{"state": "ready", "ready": True}]
+        loading_status = {
+            "selected_model_ready": False,
+            "request_admission_state": "loading",
+            "backend_loaded_model": "",
+        }
+
+        # Phase 1: monotonic at 900 (not ready -> sleep+fetch); next loop sees
+        # ready before any further monotonic call. Phase 2: monotonic at 1001
+        # (>= shared_deadline 1000 -> immediate False).
+        mono = iter([900.0, 1001.0])
+
+        with (
+            patch("proxy.qz_request_router.time.monotonic", side_effect=lambda: next(mono)),
+            patch("proxy.qz_request_router.time.sleep"),
+        ):
+            ok1, _ = self.router._wait_responses_proxy_startup_before_forward(
+                initial_initialization={"state": "initializing", "ready": False},
+                deadline=self.shared_deadline,
+            )
+            self.assertTrue(ok1, "phase 1 non-stream helper should succeed")
+
+            ok2, returned_status = self.router._wait_responses_until_ready_before_forward(
+                selected_model={"key": "m1", "backend_id": "m1"},
+                initial_model_status=loading_status,
+                build_model_status=lambda h: loading_status,
+                identity_matches_loaded=lambda k, b, l: False,
+                deadline=self.shared_deadline,
+            )
+            self.assertFalse(ok2, "phase 2 non-stream helper must fail; deadline exhausted")
+            self.assertIs(returned_status, loading_status)
+
+    def test_helper_deadline_positive_composition_with_time_remaining(self):
+        # Both helpers succeed: phase 1 consumes some budget; phase 2 still has
+        # remaining time on the same explicit deadline and reaches readiness.
+        self.handler._init_queue = [{"state": "ready", "ready": True}]
+        loading_status = {
+            "selected_model_ready": False,
+            "request_admission_state": "loading",
+            "backend_loaded_model": "",
+        }
+        ready_status = {
+            "selected_model_ready": True,
+            "backend_loaded_model": "m1",
+            "request_admission_state": "ready",
+        }
+        status_seq = iter([ready_status])
+
+        # Phase 1: 500 (not ready -> sleep+fetch ready). Phase 2: 600
+        # (not ready, well under 1000 -> sleep+fetch ready, return True
+        # without another monotonic call).
+        mono = iter([500.0, 600.0])
+
+        with (
+            patch("proxy.qz_request_router.time.monotonic", side_effect=lambda: next(mono)),
+            patch("proxy.qz_request_router.time.sleep"),
+        ):
+            ok1, _ = self.router._wait_responses_proxy_startup_before_forward(
+                initial_initialization={"state": "initializing", "ready": False},
+                deadline=self.shared_deadline,
+            )
+            self.assertTrue(ok1)
+
+            ok2, final_status = self.router._wait_responses_until_ready_before_forward(
+                selected_model={"key": "m1", "backend_id": "m1"},
+                initial_model_status=loading_status,
+                build_model_status=lambda h: next(status_seq),
+                identity_matches_loaded=lambda k, b, l: True,
+                deadline=self.shared_deadline,
+            )
+            self.assertTrue(ok2, "phase 2 should succeed when budget remains on shared deadline")
+            self.assertIs(final_status, ready_status)
+
+    def test_helper_phase_two_would_have_succeeded_with_fresh_window_but_fails_with_shared_deadline(self):
+        # Smoking-gun regression guard. Identical inputs are run through the
+        # phase 2 helper twice: once with the (exhausted) shared deadline, once
+        # with deadline=None so the helper re-arms a fresh HOLDOPEN_LOADING_MAX
+        # window. The shared-deadline call must fail; the fresh-window call must
+        # succeed. If the production code silently re-armed a new window when
+        # phase 2 inherited the shared deadline, the shared-deadline call would
+        # have succeeded too — and this test would fail.
+        loading_status = {
+            "selected_model_ready": False,
+            "request_admission_state": "loading",
+            "backend_loaded_model": "",
+        }
+        ready_status = {
+            "selected_model_ready": True,
+            "backend_loaded_model": "m1",
+            "request_admission_state": "ready",
+        }
+
+        # ---- Shared-deadline path: phase 2 enters at T=1100, deadline=1000
+        # (already exhausted) -> must return False on first loop without ever
+        # polling build_model_status enough to see the ready transition.
+        shared_build_calls = {"n": 0}
+
+        def shared_build(_handler):
+            shared_build_calls["n"] += 1
+            return ready_status  # would yield success if helper kept looping
+
+        with (
+            patch("proxy.qz_request_router.time.monotonic", return_value=1100.0),
+            patch("proxy.qz_request_router.time.sleep"),
+        ):
+            ok_shared, status_shared = self.router._wait_responses_until_ready_before_forward(
+                selected_model={"key": "m1", "backend_id": "m1"},
+                initial_model_status=loading_status,
+                build_model_status=shared_build,
+                identity_matches_loaded=lambda k, b, l: True,
+                deadline=self.shared_deadline,
+            )
+        self.assertFalse(
+            ok_shared,
+            "phase 2 must fail when inheriting an already-exhausted shared deadline",
+        )
+        self.assertIs(status_shared, loading_status)
+        self.assertEqual(
+            shared_build_calls["n"], 0,
+            "phase 2 must not have polled past timeout; remaining budget is zero",
+        )
+
+        # ---- Counterfactual fresh-window path: same inputs, deadline=None.
+        # Helper re-arms with HOLDOPEN_LOADING_MAX_SECONDS at T=1100, loops
+        # once, sees ready on the next build, returns True. This proves the
+        # shared-deadline failure above is BECAUSE of the inherited deadline,
+        # not because the helper is fundamentally broken on these inputs.
+        fresh_build_calls = {"n": 0}
+
+        def fresh_build(_handler):
+            fresh_build_calls["n"] += 1
+            return ready_status
+
+        with (
+            patch("proxy.qz_request_router.time.monotonic", return_value=1100.0),
+            patch("proxy.qz_request_router.time.sleep"),
+        ):
+            ok_fresh, status_fresh = self.router._wait_responses_until_ready_before_forward(
+                selected_model={"key": "m1", "backend_id": "m1"},
+                initial_model_status=loading_status,
+                build_model_status=fresh_build,
+                identity_matches_loaded=lambda k, b, l: True,
+                deadline=None,
+            )
+        self.assertTrue(
+            ok_fresh,
+            "phase 2 with a fresh window would have succeeded on identical inputs",
+        )
+        self.assertIs(status_fresh, ready_status)
+        self.assertGreaterEqual(fresh_build_calls["n"], 1)
+
