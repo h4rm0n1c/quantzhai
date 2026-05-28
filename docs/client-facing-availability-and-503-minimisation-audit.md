@@ -691,6 +691,8 @@ adds a bounded non-stream pre-forward wait under the same flag before falling ba
 the existing 503 paths. Slice 5 extends the same flag to bounded `/v1/responses`
 startup waits before model/catalog readiness is consulted. Timeout/failure after SSE
 headers are sent is represented as `response.failed` plus `[DONE]`, not a late HTTP 503.
+Slice 6 establishes one aggregate hold-open deadline per request in `proxy_json_api`
+and threads it through all layered wait phases; no phase may claim a fresh full budget.
 
 **Where**: `qz_request_router.py`, the `not active_ready or not request_matches_active` block.
 

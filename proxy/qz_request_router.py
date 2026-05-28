@@ -384,8 +384,10 @@ class RequestRouter:
         build_model_status,
         identity_matches_loaded,
         reset_capture: bool = True,
+        deadline: float | None = None,
     ) -> bool:
-        deadline = time.monotonic() + HOLDOPEN_LOADING_MAX_SECONDS
+        if deadline is None:
+            deadline = time.monotonic() + HOLDOPEN_LOADING_MAX_SECONDS
         next_keepalive = 0.0
         model_status = initial_model_status
         if reset_capture:
@@ -461,8 +463,10 @@ class RequestRouter:
         request_id: str,
         requested_model: str,
         initial_initialization: dict,
+        deadline: float | None = None,
     ) -> tuple[bool, dict]:
-        deadline = time.monotonic() + HOLDOPEN_LOADING_MAX_SECONDS
+        if deadline is None:
+            deadline = time.monotonic() + HOLDOPEN_LOADING_MAX_SECONDS
         next_keepalive = 0.0
         initialization = initial_initialization if isinstance(initial_initialization, dict) else {}
         write_request_capture(request_id, "forwarded-sse.raw", b"", mode="bytes")
@@ -510,8 +514,10 @@ class RequestRouter:
         self,
         *,
         initial_initialization: dict,
+        deadline: float | None = None,
     ) -> tuple[bool, dict]:
-        deadline = time.monotonic() + HOLDOPEN_LOADING_MAX_SECONDS
+        if deadline is None:
+            deadline = time.monotonic() + HOLDOPEN_LOADING_MAX_SECONDS
         initialization = initial_initialization if isinstance(initial_initialization, dict) else {}
 
         while True:
@@ -603,8 +609,10 @@ class RequestRouter:
         initial_model_status,
         build_model_status,
         identity_matches_loaded,
+        deadline: float | None = None,
     ) -> tuple[bool, dict]:
-        deadline = time.monotonic() + HOLDOPEN_LOADING_MAX_SECONDS
+        if deadline is None:
+            deadline = time.monotonic() + HOLDOPEN_LOADING_MAX_SECONDS
         model_status = initial_model_status
 
         while True:
@@ -3146,6 +3154,13 @@ class RequestRouter:
         client_model = body.get("model") or ""
         sse_response_started = False
         initialization = self._latest_proxy_initialization()
+        # One aggregate hold-open deadline shared across all layered wait phases
+        # for this request. Prevents each phase from claiming a fresh full budget.
+        _holdopen_deadline: float | None = (
+            time.monotonic() + HOLDOPEN_LOADING_MAX_SECONDS
+            if upstream_path == "/v1/responses" and _env_bool("QZ_HOLDOPEN_LOADING", False)
+            else None
+        )
         if not self._proxy_initialization_ready(initialization):
             if (
                 upstream_path == "/v1/responses"
@@ -3159,6 +3174,7 @@ class RequestRouter:
                         request_id=request_id,
                         requested_model=client_model,
                         initial_initialization=initialization,
+                        deadline=_holdopen_deadline,
                     )
                 )
                 if not startup_ready:
@@ -3184,6 +3200,7 @@ class RequestRouter:
                 startup_ready, initialization = (
                     self._wait_responses_proxy_startup_before_forward(
                         initial_initialization=initialization,
+                        deadline=_holdopen_deadline,
                     )
                 )
                 if not startup_ready:
@@ -3335,6 +3352,7 @@ class RequestRouter:
                             build_model_status=build_model_status,
                             identity_matches_loaded=identity_matches_loaded,
                             reset_capture=reset_stream_capture,
+                            deadline=_holdopen_deadline,
                         ):
                             active_ready = True
                             request_matches_active = True
@@ -3362,6 +3380,7 @@ class RequestRouter:
                                 initial_model_status=model_status,
                                 build_model_status=build_model_status,
                                 identity_matches_loaded=identity_matches_loaded,
+                                deadline=_holdopen_deadline,
                             )
                         )
                         if ready_after_wait:

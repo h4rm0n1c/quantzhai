@@ -1,6 +1,7 @@
 import json
 import io
 import os
+import time
 import unittest
 from unittest.mock import patch
 
@@ -1854,6 +1855,352 @@ class NonStreamingDroppedToolTests(unittest.TestCase):
         error_events = [p for t, p in router.handler.telemetry.emitted if t == "tool_call_error"]
         self.assertTrue(error_events, "unknown tool should emit tool_call_error telemetry")
         self.assertEqual(error_events[0]["source"], "tool_decision")
+
+
+class HoldOpenDeadlineSharingTests(unittest.TestCase):
+    """
+    Slice 6: one aggregate hold-open deadline shared across layered wait phases.
+
+    All four wait helpers now accept an optional `deadline` kwarg.  When called
+    from proxy_json_api the same deadline object is threaded through both the
+    startup-wait phase and the selected-model-wait phase.  These tests verify:
+
+    1. Stream helper respects an externally supplied expired deadline (immediate SSE failure).
+    2. Non-stream helper respects an externally supplied expired deadline (immediate False).
+    3. Integration: startup wait succeeds → model wait sees same exhausted deadline → stream SSE failure.
+    4. Integration: startup wait succeeds → model wait sees same exhausted deadline → non-stream falls back.
+    5. Positive composition: adequate budget across both phases → success.
+    6. Guard: helpers called *without* a passed deadline still work (backward compat).
+    """
+
+    # ------------------------------------------------------------------
+    # Shared helpers
+    # ------------------------------------------------------------------
+
+    class _Wfile:
+        def __init__(self):
+            self.buf = io.BytesIO()
+
+        def write(self, b):
+            self.buf.write(b)
+
+        def flush(self):
+            pass
+
+        def getvalue(self):
+            return self.buf.getvalue()
+
+    def _make_sse_router(self, wfile=None):
+        """Return a minimal RequestRouter wired to write SSE into wfile."""
+        wfile = wfile or self._Wfile()
+
+        class _Handler:
+            def __init__(self_h):
+                self_h.wfile = wfile
+                self_h.close_connection = False
+
+            def _emit_sse_telemetry(self_h, _chunk, request_id=""):
+                pass
+
+        return RequestRouter(_Handler()), wfile
+
+    def _make_catalog_entry(self, key="known-model"):
+        return {
+            "key": key,
+            "slug": key,
+            "backend_id": key,
+            "label": key,
+            "profile_valid": True,
+        }
+
+    def _make_handler_for_integration(self, body, catalog, initializations=None):
+        return ResponsesAdmissionTests._Handler(
+            body,
+            catalog,
+            initializations=initializations,
+        )
+
+    # ------------------------------------------------------------------
+    # 1. Stream helper — expired deadline → immediate SSE failure
+    # ------------------------------------------------------------------
+
+    def test_stream_hold_open_ready_respects_passed_expired_deadline(self):
+        router, wfile = self._make_sse_router()
+        entry = self._make_catalog_entry()
+        loading_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "loading",
+        }
+
+        def _build_status(_h):
+            return loading_status
+
+        def _identity(_key, _backend, _loaded):
+            return False
+
+        with patch("proxy.qz_request_router.write_request_capture"):
+            result = router._hold_open_responses_stream_until_ready(
+                selected_model=entry,
+                requested_model="known-model",
+                request_id="req_test",
+                initial_model_status=loading_status,
+                build_model_status=_build_status,
+                identity_matches_loaded=_identity,
+                reset_capture=True,
+                deadline=time.monotonic() - 10.0,  # already expired
+            )
+
+        self.assertFalse(result)
+        stream_bytes = wfile.getvalue()
+        self.assertIn(b"event: response.failed", stream_bytes)
+        self.assertIn(b"data: [DONE]\n\n", stream_bytes)
+        # Failure must be "timeout", not terminal-failure reason
+        self.assertIn(b"timed out", stream_bytes)
+
+    # ------------------------------------------------------------------
+    # 2. Non-stream helper — expired deadline → immediate False
+    # ------------------------------------------------------------------
+
+    def test_non_stream_wait_respects_passed_expired_deadline(self):
+        router, _ = self._make_sse_router()
+        entry = self._make_catalog_entry()
+        loading_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "loading",
+        }
+        build_calls = []
+
+        def _build_status(_h):
+            build_calls.append(1)
+            return loading_status
+
+        def _identity(_key, _backend, _loaded):
+            return False
+
+        result, returned_status = router._wait_responses_until_ready_before_forward(
+            selected_model=entry,
+            initial_model_status=loading_status,
+            build_model_status=_build_status,
+            identity_matches_loaded=_identity,
+            deadline=time.monotonic() - 10.0,  # already expired
+        )
+
+        self.assertFalse(result)
+        # Should have returned immediately — no extra build_model_status polls beyond initial
+        self.assertEqual(build_calls, [])
+
+    # ------------------------------------------------------------------
+    # 3. Integration stream: startup succeeds, phase 2 sees exhausted budget
+    # ------------------------------------------------------------------
+
+    def test_stream_stacked_waits_share_budget_phase2_sees_no_remaining_time(self):
+        """
+        time.monotonic is mocked so that:
+        - deadline is established at T=100 → deadline = 370.0
+        - phase 1 startup: sees T=100, init is ready → returns immediately
+        - T jumps to 380 (past deadline)
+        - phase 2 model wait: sees T=380 >= 370 → immediate SSE failure
+
+        Under the OLD behavior (fresh deadline per helper), phase 2 would compute
+        deadline = 380 + 270 = 650 and would NOT time out immediately.
+        """
+        entry = self._make_catalog_entry()
+        catalog = ResponsesAdmissionTests._Catalog([entry], selected=entry)
+        ready_init = {"state": "ready", "ready": True, "catalog_ready": True}
+        loading_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "loading",
+        }
+        ready_status = {
+            "selected_model_ready": True,
+            "backend_loaded_model": "known-model",
+            "request_admission_state": "ready",
+        }
+
+        # time.monotonic side effects:
+        # [0] deadline establishment: 100.0
+        # [1] phase 1 startup loop first iteration: 100.0 → keepalive written, init ready → return
+        # [2] phase 2 model loop first iteration: 380.0 → past deadline → timeout
+        # [3+] additional calls if needed
+        mono_values = [100.0, 100.0, 380.0, 380.0, 380.0]
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_MAX_SECONDS", 270.0),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_POLL_SECONDS", 0.001),
+            patch("proxy.qz_request_router.time.monotonic", side_effect=mono_values),
+            patch("proxy.qz_request_router.time.sleep"),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.write_request_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status", return_value=loading_status),
+            patch("proxy.qz_model_status.identity_matches_loaded", return_value=False),
+            patch.object(RequestRouter, "_run_responses_streaming_locally") as run_stream,
+        ):
+            handler = self._make_handler_for_integration(
+                {"model": "known-model", "input": "hi", "stream": True},
+                catalog,
+                initializations=[ready_init],
+            )
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        stream_bytes = handler.wfile.getvalue()
+        self.assertEqual(handler.response_status, 200)
+        self.assertEqual(handler.sent, [])
+        self.assertIn(b"event: response.failed", stream_bytes)
+        self.assertIn(b"timed out", stream_bytes)
+        self.assertIn(b"data: [DONE]\n\n", stream_bytes)
+        # Streaming runtime must NOT have been invoked
+        run_stream.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # 4. Integration non-stream: startup consumes budget, phase 2 falls back
+    # ------------------------------------------------------------------
+
+    def test_non_stream_stacked_waits_share_budget_phase2_falls_back_immediately(self):
+        """
+        Same clock mock strategy as test 3 but for non-stream.
+
+        Phase 1 non-stream startup wait: sees T=100, init ready → returns True.
+        Phase 2 model wait: sees T=380 >= deadline 370 → returns (False, status).
+        Fallback 503 is emitted without a second full wait window.
+        """
+        entry = self._make_catalog_entry()
+        catalog = ResponsesAdmissionTests._Catalog([entry], selected=entry)
+        ready_init = {"state": "ready", "ready": True, "catalog_ready": True}
+        loading_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "loading",
+        }
+
+        mono_values = [100.0, 100.0, 380.0, 380.0, 380.0]
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_MAX_SECONDS", 270.0),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_POLL_SECONDS", 0.001),
+            patch("proxy.qz_request_router.time.monotonic", side_effect=mono_values),
+            patch("proxy.qz_request_router.time.sleep"),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status", return_value=loading_status),
+            patch("proxy.qz_model_status.identity_matches_loaded", return_value=False),
+            patch("proxy.qz_request_router.build_control_plane_status", return_value={"service_status": {}}),
+            patch.object(RequestRouter, "_run_responses_locally") as run_local,
+        ):
+            handler = self._make_handler_for_integration(
+                {"model": "known-model", "input": "hi"},
+                catalog,
+                initializations=[ready_init],
+            )
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        self.assertEqual(len(handler.sent), 1)
+        status, payload = handler.sent[0]
+        self.assertEqual(status, 503)
+        # Transitional loading → has Retry-After
+        self.assertEqual(handler.response_headers.get("Retry-After"), "5")
+        self.assertIs(payload["retry_suggested"], True)
+        self.assertEqual(handler.wfile.getvalue(), b"")
+        run_local.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # 5. Positive composition: adequate budget, startup + model both succeed
+    # ------------------------------------------------------------------
+
+    def test_stacked_waits_positive_composition_stream_both_phases_succeed(self):
+        """Adequate shared budget → startup waits, then model becomes ready, stream runs."""
+        entry = self._make_catalog_entry()
+        catalog = ResponsesAdmissionTests._Catalog([entry], selected=entry)
+        initializing = {"state": "initializing", "ready": False, "catalog_ready": False}
+        ready_init = {"state": "ready", "ready": True, "catalog_ready": True}
+        loading_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "loading",
+        }
+        ready_status = {
+            "selected_model_ready": True,
+            "backend_loaded_model": "known-model",
+            "request_admission_state": "ready",
+        }
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_POLL_SECONDS", 0.001),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.write_request_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch(
+                "proxy.qz_model_status.build_model_status",
+                side_effect=[loading_status, ready_status],
+            ),
+            patch.object(
+                RequestRouter, "_run_responses_streaming_locally", return_value={"usage": {}}
+            ) as run_stream,
+        ):
+            handler = self._make_handler_for_integration(
+                {"model": "known-model", "input": "hi", "stream": True},
+                catalog,
+                initializations=[initializing, ready_init],
+            )
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        self.assertEqual(handler.response_status, 200)
+        self.assertEqual(handler.send_response_calls, [200])
+        self.assertEqual(handler.end_headers_calls, 1)
+        self.assertEqual(handler.sent, [])
+        run_stream.assert_called_once()
+
+    # ------------------------------------------------------------------
+    # 6. Backward compat: helpers without a passed deadline still work
+    # ------------------------------------------------------------------
+
+    def test_stream_hold_open_without_deadline_param_still_works(self):
+        """Calling helper without deadline kwarg computes its own (backward compat)."""
+        router, wfile = self._make_sse_router()
+        entry = self._make_catalog_entry()
+        loading_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "loading",
+        }
+        ready_status = {
+            "selected_model_ready": True,
+            "backend_loaded_model": "known-model",
+            "request_admission_state": "ready",
+        }
+        statuses = iter([loading_status, ready_status])
+
+        def _build_status(_h):
+            return next(statuses)
+
+        def _identity(_key, _backend, _loaded):
+            return _loaded == "known-model"
+
+        with (
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_POLL_SECONDS", 0.001),
+            patch("proxy.qz_request_router.write_request_capture"),
+        ):
+            result = router._hold_open_responses_stream_until_ready(
+                selected_model=entry,
+                requested_model="known-model",
+                request_id="req_compat",
+                initial_model_status=loading_status,
+                build_model_status=_build_status,
+                identity_matches_loaded=_identity,
+                reset_capture=True,
+                # No deadline kwarg — must compute its own
+            )
+
+        self.assertTrue(result)
 
 
 if __name__ == "__main__":
