@@ -3,7 +3,7 @@ import io
 import os
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from proxy.qz_proxy_tools import ProxyLocalToolExecutor, ProxyLocalToolRegistry
 from proxy.qz_request_normalization import NOT_PLANNING_MODE_HINT
@@ -2930,3 +2930,194 @@ class HoldOpenDeadlineSharingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class HelperLevelDeadlineConsumptionTests(unittest.TestCase):
+    """
+    TEST-ONLY SLICE A: Helper-level deadline consumption proof.
+    Verifies that layered wait helpers correctly consume a shared deadline.
+    """
+
+    class FakeHandler:
+        def __init__(self):
+            self.wfile = io.BytesIO()
+            self.initializations = []
+            self.telemetry = MagicMock()
+            self.upstream = "http://127.0.0.1:1"
+            self.reasoning_stream_format = "raw"
+            self.headers = {}
+            self.path = "/v1/responses"
+
+        def _initialization_payload(self):
+            return self.initializations.pop(0) if self.initializations else {}
+
+        def _latest_proxy_initialization(self):
+            return self._initialization_payload()
+
+        def _emit_sse_telemetry(self, chunk, request_id=""):
+            pass
+
+    def setUp(self):
+        self.handler = self.FakeHandler()
+        self.router = RequestRouter(self.handler)
+        self.deadline = 1000.0
+
+    def test_stream_helper_stacked_deadline_proof(self):
+        """
+        Prove that phase 2 stream helper consumes only remaining time from shared deadline.
+        """
+        # Phase 1: Proxy Startup (succeeds)
+        # initial state: not ready
+        # next poll: ready
+        self.handler.initializations = [
+            {"state": "ready", "ready": True}
+        ]
+        
+        # Phase 2: Model Readiness (fails due to exhausted deadline)
+        model_status = {"selected_model_ready": False, "request_admission_state": "loading"}
+        
+        # Mock timeline:
+        # T=900: Phase 1 starts (not ready)
+        # T=910: Phase 1 loop 2 (ready) -> return True
+        # T=1001: Phase 2 starts (past deadline) -> immediate timeout
+        mono_values = [
+            900.0,  # Phase 1 loop 1
+            910.0,  # Phase 1 loop 2
+            1001.0, # Phase 2 loop 1 (past deadline)
+            1001.0, # Phase 2 failure generation
+        ]
+
+        with (
+            patch("proxy.qz_request_router.time.monotonic", side_effect=mono_values),
+            patch("proxy.qz_request_router.time.sleep"),
+            patch("proxy.qz_request_router.write_request_capture"),
+            patch("proxy.qz_request_router._now_ts", return_value=123456789),
+        ):
+            # 1. First helper: startup
+            ok1, _ = self.router._hold_open_responses_stream_until_proxy_startup_ready(
+                request_id="req1",
+                requested_model="m1",
+                initial_initialization={"state": "initializing", "ready": False},
+                deadline=self.deadline
+            )
+            self.assertTrue(ok1, "Phase 1 (startup) should have succeeded")
+
+            # 2. Second helper: model (uses SAME deadline)
+            ok2 = self.router._hold_open_responses_stream_until_ready(
+                selected_model={"key": "m1"},
+                requested_model="m1",
+                request_id="req1",
+                initial_model_status=model_status,
+                build_model_status=lambda h: model_status,
+                identity_matches_loaded=lambda k, b, l: False,
+                reset_capture=False,
+                deadline=self.deadline
+            )
+            self.assertFalse(ok2, "Phase 2 (model) should have timed out")
+
+        # Assertions for stream failure format
+        output = self.handler.wfile.getvalue()
+        self.assertIn(b"event: response.failed", output)
+        self.assertIn(b"model readiness hold-open timed out", output)
+        self.assertIn(b"data: [DONE]\n\n", output)
+
+    def test_non_stream_helper_stacked_deadline_proof(self):
+        """
+        Prove that phase 2 non-stream helper consumes only remaining time from shared deadline.
+        """
+        # Phase 1: Proxy Startup (succeeds)
+        self.handler.initializations = [
+            {"state": "ready", "ready": True}
+        ]
+        
+        # Phase 2: Model Readiness (fails due to exhausted deadline)
+        model_status = {"selected_model_ready": False}
+        
+        # Mock timeline:
+        # T=900: Phase 1 starts (not ready)
+        # T=910: Phase 1 loop 2 (ready)
+        # T=1001: Phase 2 starts -> immediate timeout
+        mono_values = [
+            900.0,  # Phase 1 loop 1
+            1001.0, # Phase 2 loop 1
+        ]
+
+        with (
+            patch("proxy.qz_request_router.time.monotonic", side_effect=mono_values),
+            patch("proxy.qz_request_router.time.sleep"),
+        ):
+            # 1. First helper: startup
+            ok1, _ = self.router._wait_responses_proxy_startup_before_forward(
+                initial_initialization={"state": "initializing", "ready": False},
+                deadline=self.deadline
+            )
+            self.assertTrue(ok1, "Phase 1 (startup) should have succeeded")
+
+            # 2. Second helper: model (uses SAME deadline)
+            ok2, status = self.router._wait_responses_until_ready_before_forward(
+                selected_model={"key": "m1"},
+                initial_model_status=model_status,
+                build_model_status=lambda h: model_status,
+                identity_matches_loaded=lambda k, b, l: False,
+                deadline=self.deadline
+            )
+            self.assertFalse(ok2, "Phase 2 (model) should have timed out")
+            self.assertEqual(status, model_status)
+
+    def test_positive_helper_composition_case(self):
+        """
+        Prove that both helpers succeed when budget remains.
+        """
+        self.handler.initializations = [
+            {"state": "ready", "ready": True}
+        ]
+        model_status_ready = {"selected_model_ready": True, "backend_loaded_model": "m1"}
+        
+        # Adequate budget remains at every step
+        mono_values = [500.0, 600.0, 700.0]
+
+        with (
+            patch("proxy.qz_request_router.time.monotonic", side_effect=mono_values),
+            patch("proxy.qz_request_router.time.sleep"),
+        ):
+            ok1, _ = self.router._wait_responses_proxy_startup_before_forward(
+                initial_initialization={"state": "ready", "ready": True},
+                deadline=self.deadline
+            )
+            self.assertTrue(ok1)
+            
+            ok2, status = self.router._wait_responses_until_ready_before_forward(
+                selected_model={"key": "m1"},
+                initial_model_status={"selected_model_ready": False},
+                build_model_status=lambda h: model_status_ready,
+                identity_matches_loaded=lambda k, b, l: True,
+                deadline=self.deadline
+            )
+            self.assertTrue(ok2)
+            self.assertEqual(status, model_status_ready)
+
+    def test_regression_guard(self):
+        """
+        Prove that phase 2 would FAIL if it re-armed a fresh window (using HOLDOPEN_LOADING_MAX_SECONDS).
+        """
+        model_status = {"selected_model_ready": False}
+        with (
+            patch("proxy.qz_request_router.time.monotonic", return_value=1100.0),
+            patch("proxy.qz_request_router.write_request_capture"),
+            patch("proxy.qz_request_router._now_ts", return_value=123456789),
+        ):
+            # Passed deadline 1000.0, current time 1100.0 -> expired.
+            # If it re-armed, it would use 1100 + 270 = 1370 and pass (eventually, after polling).
+            # But it should return False immediately because 1100 >= 1000.
+            ok = self.router._hold_open_responses_stream_until_ready(
+                selected_model={"key": "m1"},
+                requested_model="m1",
+                request_id="req_reg",
+                initial_model_status=model_status,
+                build_model_status=lambda h: model_status,
+                identity_matches_loaded=lambda k, b, l: False,
+                reset_capture=False,
+                deadline=self.deadline
+            )
+            self.assertFalse(ok)
+
+
