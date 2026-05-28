@@ -12,6 +12,8 @@ RUNTIME_METRICS_SCHEMA = "qz.runtime.metrics.v1"
 PROMPT_CONTRACT_SCHEMA = "qz.prompt.contract.v1"
 CAPTURE_CONTRACT_SCHEMA = "qz.capture.contract.v1"
 REASONING_STREAM_FORMATS = {"raw", "summary", "hidden"}
+TRANSITIONAL_503_RETRY_AFTER_SECONDS = 5
+TRANSITIONAL_REQUEST_ADMISSION_STATES = {"starting", "loading"}
 
 try:
     from .qz_codex_client_config import codex_client_config_payload, codex_model_catalog_content
@@ -290,6 +292,14 @@ class _MultiRawLog:
 class RequestRouter:
     def __init__(self, handler):
         self.handler = handler
+
+    def _send_transitional_503(self, payload: dict) -> None:
+        payload["retry_suggested"] = True
+        self.handler._send_json(
+            503,
+            payload,
+            headers={"Retry-After": str(TRANSITIONAL_503_RETRY_AFTER_SECONDS)},
+        )
 
     def _emit_schema_normalization_telemetry(self, report, request_id: str = "") -> None:
         """Emit tool_schema_replaced telemetry when normalization changes the tool list.
@@ -2840,7 +2850,7 @@ class RequestRouter:
                 })
             except Exception:
                 pass
-            self.handler._send_json(503, payload)
+            self._send_transitional_503(payload)
             return
 
         try:
@@ -3009,7 +3019,13 @@ class RequestRouter:
                         })
                     except Exception:
                         pass
-                    self.handler._send_json(503, payload)
+                    if (
+                        str(model_status.get("request_admission_state") or "")
+                        in TRANSITIONAL_REQUEST_ADMISSION_STATES
+                    ):
+                        self._send_transitional_503(payload)
+                    else:
+                        self.handler._send_json(503, payload)
                     return
 
             selected_identity = (

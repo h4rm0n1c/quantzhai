@@ -48,7 +48,7 @@ def _serve(handler):
     return server
 
 
-def _request_json(url, payload=None):
+def _request_json_with_headers(url, payload=None):
     if payload is None:
         req = urllib.request.Request(url, headers={"Accept": "application/json"})
     else:
@@ -60,10 +60,15 @@ def _request_json(url, payload=None):
         )
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
-            return resp.status, json.loads(resp.read().decode("utf-8"))
+            return resp.status, dict(resp.headers), json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8") if exc.fp else "{}"
-        return exc.code, json.loads(body or "{}")
+        return exc.code, dict(exc.headers), json.loads(body or "{}")
+
+
+def _request_json(url, payload=None):
+    status, _headers, body = _request_json_with_headers(url, payload)
+    return status, body
 
 
 class ProxyStartupTest(unittest.TestCase):
@@ -97,7 +102,7 @@ class ProxyStartupTest(unittest.TestCase):
 
                 InitializingProxyHandler.model_catalog_calls = 0
                 InitializingProxyHandler.backend_calls = 0
-                status, model_status = _request_json(f"{base}/qz/model/status")
+                status, headers, model_status = _request_json_with_headers(f"{base}/qz/model/status")
                 self.assertEqual(status, 200)
                 self.assertEqual(model_status["schema"], "qz.model_status.v1")
                 self.assertFalse(model_status["selected_model_ready"])
@@ -105,18 +110,27 @@ class ProxyStartupTest(unittest.TestCase):
                 self.assertEqual(model_status["request_admission_state"], "starting")
                 self.assertFalse(model_status["proxy_initialization"]["ready"])
                 self.assertEqual(model_status["proxy_initialization"]["state"], "initializing")
+                self.assertNotIn("Retry-After", headers)
+                self.assertNotIn("retry_suggested", model_status)
                 self.assertEqual(InitializingProxyHandler.model_catalog_calls, 0)
                 self.assertEqual(InitializingProxyHandler.backend_calls, 0)
 
-                status, models = _request_json(f"{base}/qz/models")
+                status, headers, models = _request_json_with_headers(f"{base}/qz/models")
                 self.assertEqual(status, 503)
                 self.assertEqual(models["error"], "proxy initializing")
+                self.assertNotIn("Retry-After", headers)
+                self.assertNotIn("retry_suggested", models)
 
-                status, response = _request_json(f"{base}/v1/responses", {"model": "anything", "input": "hi"})
+                status, headers, response = _request_json_with_headers(
+                    f"{base}/v1/responses",
+                    {"model": "anything", "input": "hi"},
+                )
                 self.assertEqual(status, 503)
+                self.assertEqual(headers.get("Retry-After"), "5")
                 # New schema: qz.responses.error.v1
                 self.assertEqual(response.get("schema"), "qz.responses.error.v1")
                 self.assertEqual(response["error"], "proxy not ready")
+                self.assertIs(response["retry_suggested"], True)
                 self.assertFalse(response["readiness"]["proxy_ready"])
                 self.assertIn("proxy_initialization", response)
                 self.assertEqual(response["proxy_initialization"]["state"], "initializing")

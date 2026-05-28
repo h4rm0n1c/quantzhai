@@ -127,6 +127,7 @@ class ResponsesAdmissionTests(unittest.TestCase):
             self.telemetry = ResponsesAdmissionTests._Telemetry()
             self._catalog = catalog
             self.sent = []
+            self.response_headers = {}
 
         def _model_catalog(self):
             return self._catalog
@@ -137,7 +138,8 @@ class ResponsesAdmissionTests(unittest.TestCase):
         def _initialization_payload(self):
             return {"state": "ready", "ready": True, "catalog_ready": True}
 
-        def _send_json(self, status, payload):
+        def _send_json(self, status, payload, headers=None):
+            self.response_headers = dict(headers or {})
             self.sent.append((status, payload))
 
     @staticmethod
@@ -181,6 +183,8 @@ class ResponsesAdmissionTests(unittest.TestCase):
         self.assertEqual(payload["requested_model"], "missing-model")
         self.assertIn("no match", payload["reason"])
         self.assertIn("known-model", payload["available_models"])
+        self.assertNotIn("Retry-After", handler.response_headers)
+        self.assertNotIn("retry_suggested", payload)
         self.assertIn(
             "responses_rejected_model_missing",
             [event_type for event_type, _payload in handler.telemetry.events],
@@ -212,6 +216,36 @@ class ResponsesAdmissionTests(unittest.TestCase):
         self.assertEqual(payload["status_code"], 503)
         self.assertEqual(payload["error"], "model not ready")
         self.assertEqual(payload["readiness"]["request_admission_state"], "loading")
+        self.assertEqual(handler.response_headers.get("Retry-After"), "5")
+        self.assertIs(payload["retry_suggested"], True)
+
+    def test_responses_failed_model_503_does_not_retry_suggest(self):
+        entry = self._entry("known-model")
+        catalog = self._Catalog([entry], selected=entry)
+        model_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "failed",
+        }
+
+        with (
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status", return_value=model_status),
+            patch("proxy.qz_model_status.identity_matches_loaded", return_value=False),
+            patch("proxy.qz_request_router.build_control_plane_status", return_value={"service_status": {}}),
+        ):
+            handler = self._Handler({"model": "known-model", "input": "hi"}, catalog)
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        self.assertEqual(len(handler.sent), 1)
+        status, payload = handler.sent[0]
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["status_code"], 503)
+        self.assertEqual(payload["readiness"]["request_admission_state"], "failed")
+        self.assertNotIn("Retry-After", handler.response_headers)
+        self.assertNotIn("retry_suggested", payload)
 
     def test_responses_profile_backend_missing_stays_503(self):
         bad_profile = self._entry(
@@ -221,7 +255,7 @@ class ResponsesAdmissionTests(unittest.TestCase):
         )
         catalog = self._Catalog([bad_profile], resolve_result=(bad_profile, "match"))
 
-        (status, payload), _handler = self._run_responses_request(
+        (status, payload), handler = self._run_responses_request(
             {"model": "profile-model", "input": "hi"},
             catalog,
         )
@@ -231,6 +265,8 @@ class ResponsesAdmissionTests(unittest.TestCase):
         self.assertEqual(payload["error"], "profile backend missing")
         self.assertEqual(payload["error_code"], "profile_backend_missing")
         self.assertIn("fix", payload)
+        self.assertNotIn("Retry-After", handler.response_headers)
+        self.assertNotIn("retry_suggested", payload)
 
 
 class RequestRouterProxyLocalToolTests(unittest.TestCase):

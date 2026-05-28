@@ -726,6 +726,8 @@ This is automatically resolved by Priority 3. No separate implementation needed.
 
 ### Priority 5: Add `Retry-After` to transitional 503s as stop-gap
 
+**Status**: Delivered in Slice 3 for transitional `/v1/responses` 503 responses.
+
 **Where**: `_send_json` calls that emit 503 for loading/starting states.
 
 **Change**: Add `Retry-After: 5` response header when returning 503 for transitional

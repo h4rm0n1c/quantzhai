@@ -222,12 +222,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
             "initialization": init,
         }
 
-    def _send_json(self, status, obj):
+    def _send_json(self, status, obj, headers=None):
         data = json.dumps(obj).encode("utf-8")
         try:
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self._send_codex_rate_limit_headers()
+            for key, value in (headers or {}).items():
+                self.send_header(str(key), str(value))
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
