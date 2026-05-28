@@ -171,8 +171,10 @@ The v2 fallback is honest and useful. Other endpoints should learn from this pat
 - Profile invalid → 400
 - State persistence failure → 500
 
-**Assessment:** 503 on proxy startup is acceptable here. Operators tolerate startup delays
-for management endpoints.
+**Assessment:** For this operator-facing management endpoint, a startup 503 is currently
+tolerated debt rather than a desirable long-term contract. Operators can survive a short
+startup window here, but the endpoint should not be treated as evidence that 503-heavy
+startup behavior is broadly okay.
 
 ---
 
@@ -188,7 +190,8 @@ for management endpoints.
 - State write failure → 500
 
 **Assessment:** The 409 on load failure is better than a 503. The proxy-not-ready 503 is
-acceptable. This endpoint is operator-initiated.
+currently tolerated debt for an operator-initiated endpoint, not a model for user-facing
+reliability.
 
 ---
 
@@ -204,7 +207,8 @@ acceptable. This endpoint is operator-initiated.
 - Model not in catalog → 404
 - Load failure → 409
 
-**Assessment:** Good error differentiation. The 503 on proxy startup is acceptable.
+**Assessment:** Good error differentiation. The startup 503 is currently tolerated debt for
+an operator-facing endpoint, not a signal that startup 503s are desirable.
 
 ---
 
@@ -248,7 +252,8 @@ discards useful state. More importantly: any future client that is less forgivin
 **Failure behavior:**
 - Proxy not ready → 503
 
-**Assessment:** Acceptable. This is an operator action; startup delays are expected.
+**Assessment:** This is operator-only work. A brief startup 503 is currently tolerated debt,
+not a pattern to copy into client-facing request paths.
 
 ---
 
@@ -293,11 +298,11 @@ unavailability. These endpoints are correctly designed and do not contribute poi
 
 | Class | Description | Is 503 correct? |
 |---|---|---|
-| A | Proxy still starting — catalog and policy loading in background | Sometimes acceptable: `/v1/responses` should use retryable semantics; `/qz/model/status` should use 200+not-ready |
+| A | Proxy still starting — catalog and policy loading in background | Sometimes warranted as temporarily tolerated debt on operator paths; `/v1/responses` should prefer retryable semantics and `/qz/model/status` should use 200+not-ready |
 | B | Backend loading — container starting or model loading into VRAM | Usually wrong: transitional work, not service failure; request should be held open or expressed as retryable |
 | C | Accepted model/backend switch in progress | Usually wrong: same as B; the service accepted a transition and should not look broken while doing it |
-| D | Backend temporarily unreachable or unhealthy but likely recoverable | Sometimes acceptable: if truly transient, retryable 503 with short `Retry-After`; if persistent, 503 is warranted |
-| E | Catalog/config not yet loaded | Sometimes acceptable for management endpoints; 200+not-ready for polling endpoints |
+| D | Backend temporarily unreachable or unhealthy but likely recoverable | Sometimes warranted if truly transient, but still debt if overused; prefer retryable 503 with short `Retry-After` only when hold-open is not viable |
+| E | Catalog/config not yet loaded | Sometimes warranted as temporarily tolerated debt for management endpoints; 200+not-ready for polling endpoints |
 | F | Hard terminal failure — backend crashed, GPU unavailable, VRAM exceeded | Currently 503 (same surface as classes B/C). **Imperfect**: current Codex has no perfect status for "server-side terminal and non-retryable" |
 | G | Invalid request — model not in catalog, bad model ID, bad parameters | Currently 503. **Wrong**: should be 4xx so clients know this is a client error, not a server error |
 
@@ -447,7 +452,7 @@ that cannot succeed regardless. The correct status is 400 or 404.
 
 ### Offender 3: Hard terminal failure shares the same 503 surface as loading
 
-A backend that failed to load (`request_admission_state: "failed"`) returns the same 503
+A backend that failed to load (`request_admission_state`: `"failed"`) returns the same 503
 as a backend that is loading. Codex cannot distinguish them. For a terminal failure, all
 5 retries are wasted. The user sees a failure after ~30 seconds of pointless waiting
 instead of immediately.
@@ -487,7 +492,11 @@ gets no such protection.
 
 1. **For `/qz/model/status`**: Always return 200 with `{"ready": false, "request_admission_state": "starting"}`. Cost: trivial code change. Confidence: high — works correctly with current wrapper polling.
 
-2. **For `/v1/responses`**: The current behavior (503 → retried as `UnexpectedStatus`) is tolerable for brief startup. No immediate change needed, but adding `Retry-After: 5` would be good hygiene. Confidence: only inference that Codex reads this header; worth doing anyway for other clients.
+2. **For `/v1/responses`**: The current behavior (503 → retried as `UnexpectedStatus`) is
+currently tolerated debt for a brief startup window, not a pattern to celebrate. No
+immediate change is required ahead of the higher-value fixes below, but adding
+`Retry-After: 5` would still be good hygiene. Confidence: only inference that Codex reads
+this header; worth doing anyway for other clients.
 
 3. **`/health` pattern**: Already correct. Return 200 with `"status": "initializing"` body. Other endpoints should learn from this.
 
@@ -544,8 +553,9 @@ work makes a normal transition feel like service failure.
 ### Class E: Catalog not ready
 
 **Current**: 503 on most endpoints.
-Same as class A — short startup window. The current behavior is tolerable. Add
-`Retry-After: 5` header for good hygiene.
+Same as class A — short startup window. This is currently tolerated debt for management
+paths, not a reason to normalize startup 503s as good UX. Add `Retry-After: 5` header for
+good hygiene.
 
 ### Class F: Hard terminal failure
 
