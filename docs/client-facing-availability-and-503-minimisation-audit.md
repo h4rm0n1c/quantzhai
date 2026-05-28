@@ -667,11 +667,14 @@ are error responses. The body structure stays the same.
 
 ### Priority 2: Always return 200 from `/qz/model/status`
 
-**Where**: `qz_request_router.py` at the `/qz/model/status` handler, lines 677–690.
+**Status:** Delivered in Slice 2 — `/qz/model/status` now returns 200 during proxy
+startup with a not-ready model-status payload and `request_admission_state: "starting"`.
+
+**Where**: `qz_request_router.py` at the `/qz/model/status` handler.
 
 **Change**: Remove the `_proxy_startup_ready()` guard that returns 503. Instead call
-through to the model router, which already handles the not-ready case via
-`_initializing_status_snapshot()` (returns a valid JSON payload with `ready: false`).
+through to the model-status builder and annotate the startup case with
+`proxy_initialization`, `ready: false`, and `request_admission_state: "starting"`.
 
 **Why**: This endpoint's job is to report state. 503 from a state-reporting endpoint
 is a category error. The wrapper's polling loop silently handles it, but this is fragile.
