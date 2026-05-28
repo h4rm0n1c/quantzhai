@@ -672,9 +672,10 @@ startup with a not-ready model-status payload and `request_admission_state: "sta
 
 **Where**: `qz_request_router.py` at the `/qz/model/status` handler.
 
-**Change**: Remove the `_proxy_startup_ready()` guard that returns 503. Instead call
-through to the model-status builder and annotate the startup case with
-`proxy_initialization`, `ready: false`, and `request_admission_state: "starting"`.
+**Change**: Remove the `_proxy_startup_ready()` guard that returns 503. Startup now
+short-circuits to a model-status not-ready payload with `proxy_initialization`,
+`ready: false`, and `request_admission_state: "starting"` before touching catalog or
+backend state.
 
 **Why**: This endpoint's job is to report state. 503 from a state-reporting endpoint
 is a category error. The wrapper's polling loop silently handles it, but this is fragile.

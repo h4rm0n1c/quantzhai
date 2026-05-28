@@ -676,12 +676,20 @@ class RequestRouter:
 
         if self.handler.path == "/qz/model/status":
             try:
-                from .qz_model_status import QZ_MODEL_STATUS_SCHEMA, build_model_status
+                from .qz_model_status import (
+                    QZ_MODEL_STATUS_SCHEMA,
+                    build_initializing_model_status,
+                    build_model_status,
+                )
             except ImportError:
-                from qz_model_status import QZ_MODEL_STATUS_SCHEMA, build_model_status
+                from qz_model_status import (
+                    QZ_MODEL_STATUS_SCHEMA,
+                    build_initializing_model_status,
+                    build_model_status,
+                )
             startup_ready = self._proxy_startup_ready()
-            initialization = {}
             if not startup_ready:
+                initialization = {}
                 payload_fn = getattr(self.handler, "_initialization_payload", None)
                 if callable(payload_fn):
                     try:
@@ -690,33 +698,19 @@ class RequestRouter:
                             initialization = maybe_payload
                     except Exception:
                         initialization = {}
-            state = initialization.get("state") or "initializing"
+                self.handler._send_json(200, build_initializing_model_status(initialization))
+                return
             try:
                 payload = build_model_status(self.handler)
             except Exception as exc:
-                if state == "failed":
-                    admission_state = "failed"
-                elif not startup_ready:
-                    admission_state = "starting"
-                else:
-                    admission_state = "unavailable"
                 payload = {
                     "ok": False,
                     "schema": QZ_MODEL_STATUS_SCHEMA,
                     "error": str(exc),
                     "ready": False,
                     "selected_model_ready": False,
-                    "request_admission_state": admission_state,
+                    "request_admission_state": "unavailable",
                 }
-            if not startup_ready:
-                payload["ready"] = False
-                payload["proxy_initialization"] = initialization or {
-                    "state": state,
-                    "ready": False,
-                }
-                payload["request_admission_state"] = (
-                    "failed" if state == "failed" else "starting"
-                )
             self.handler._send_json(200, payload)
             return
 

@@ -33,6 +33,23 @@ except ImportError:
 QZ_MODEL_STATUS_SCHEMA = "qz.model_status.v1"
 
 
+def build_initializing_model_status(initialization: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build a qz.model_status.v1 startup payload without touching model/backend state."""
+    init = initialization if isinstance(initialization, dict) else {}
+    state = init.get("state") or "initializing"
+    return {
+        "ok": True,
+        "schema": QZ_MODEL_STATUS_SCHEMA,
+        "ready": False,
+        "selected_model_ready": False,
+        "request_admission_state": "failed" if state == "failed" else "starting",
+        "proxy_initialization": init or {
+            "state": state,
+            "ready": False,
+        },
+    }
+
+
 def _model_state_path(handler: Any) -> Path | None:
     raw = getattr(handler, "model_state_path", None)
     if isinstance(raw, str) and raw.strip():

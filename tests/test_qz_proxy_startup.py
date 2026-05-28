@@ -29,11 +29,15 @@ class InitializingProxyHandler(ProxyHandler):
     root = ""
     model_state_path = ""
     backend_state_path = ""
+    model_catalog_calls = 0
+    backend_calls = 0
 
     def _model_catalog(self):
+        self.__class__.model_catalog_calls += 1
         raise AssertionError("early control-plane routes must not load the model catalog")
 
     def _backend(self, authorization=None):
+        self.__class__.backend_calls += 1
         raise AssertionError("early control-plane routes must not touch the backend")
 
 
@@ -69,6 +73,8 @@ class ProxyStartupTest(unittest.TestCase):
             InitializingProxyHandler.model_state_path = str(Path(tmpdir) / "model-state.json")
             InitializingProxyHandler.backend_state_path = str(Path(tmpdir) / "backend-state.json")
             InitializingProxyHandler.telemetry = TelemetryBus()
+            InitializingProxyHandler.model_catalog_calls = 0
+            InitializingProxyHandler.backend_calls = 0
             InitializingProxyHandler._set_initialization_state("initializing")
             server = _serve(InitializingProxyHandler)
             try:
@@ -89,6 +95,8 @@ class ProxyStartupTest(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertEqual(config["proxy_initialization"]["state"], "initializing")
 
+                InitializingProxyHandler.model_catalog_calls = 0
+                InitializingProxyHandler.backend_calls = 0
                 status, model_status = _request_json(f"{base}/qz/model/status")
                 self.assertEqual(status, 200)
                 self.assertEqual(model_status["schema"], "qz.model_status.v1")
@@ -97,6 +105,8 @@ class ProxyStartupTest(unittest.TestCase):
                 self.assertEqual(model_status["request_admission_state"], "starting")
                 self.assertFalse(model_status["proxy_initialization"]["ready"])
                 self.assertEqual(model_status["proxy_initialization"]["state"], "initializing")
+                self.assertEqual(InitializingProxyHandler.model_catalog_calls, 0)
+                self.assertEqual(InitializingProxyHandler.backend_calls, 0)
 
                 status, models = _request_json(f"{base}/qz/models")
                 self.assertEqual(status, 503)
@@ -114,12 +124,40 @@ class ProxyStartupTest(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
+    def test_model_status_short_circuits_while_proxy_initializes(self):
+        with tempfile.TemporaryDirectory() as tmpdir, patch.dict(os.environ, {"QZ_VAR_DIR": tmpdir}, clear=False):
+            InitializingProxyHandler.root = str(Path(tmpdir))
+            InitializingProxyHandler.model_state_path = str(Path(tmpdir) / "model-state.json")
+            InitializingProxyHandler.backend_state_path = str(Path(tmpdir) / "backend-state.json")
+            InitializingProxyHandler.telemetry = TelemetryBus()
+            InitializingProxyHandler.model_catalog_calls = 0
+            InitializingProxyHandler.backend_calls = 0
+            InitializingProxyHandler._set_initialization_state("initializing")
+            server = _serve(InitializingProxyHandler)
+            try:
+                base = f"http://127.0.0.1:{server.server_port}"
+                with patch("proxy.qz_model_status.build_model_status") as build_status:
+                    status, model_status = _request_json(f"{base}/qz/model/status")
+
+                self.assertEqual(status, 200)
+                build_status.assert_not_called()
+                self.assertEqual(model_status["schema"], "qz.model_status.v1")
+                self.assertFalse(model_status["ready"])
+                self.assertEqual(model_status["request_admission_state"], "starting")
+                self.assertEqual(InitializingProxyHandler.model_catalog_calls, 0)
+                self.assertEqual(InitializingProxyHandler.backend_calls, 0)
+            finally:
+                server.shutdown()
+                server.server_close()
+
     def test_model_status_returns_normal_payload_when_proxy_ready(self):
         with tempfile.TemporaryDirectory() as tmpdir, patch.dict(os.environ, {"QZ_VAR_DIR": tmpdir}, clear=False):
             InitializingProxyHandler.root = str(Path(tmpdir))
             InitializingProxyHandler.model_state_path = str(Path(tmpdir) / "model-state.json")
             InitializingProxyHandler.backend_state_path = str(Path(tmpdir) / "backend-state.json")
             InitializingProxyHandler.telemetry = TelemetryBus()
+            InitializingProxyHandler.model_catalog_calls = 0
+            InitializingProxyHandler.backend_calls = 0
             InitializingProxyHandler._set_initialization_state("ready")
             server = _serve(InitializingProxyHandler)
             try:
@@ -142,6 +180,8 @@ class ProxyStartupTest(unittest.TestCase):
             InitializingProxyHandler.model_state_path = str(Path(tmpdir) / "model-state.json")
             InitializingProxyHandler.backend_state_path = str(Path(tmpdir) / "backend-state.json")
             InitializingProxyHandler.telemetry = TelemetryBus()
+            InitializingProxyHandler.model_catalog_calls = 0
+            InitializingProxyHandler.backend_calls = 0
             InitializingProxyHandler._set_initialization_state("ready")
             server = _serve(InitializingProxyHandler)
             try:
