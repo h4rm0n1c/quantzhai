@@ -722,20 +722,47 @@ class DoRestartBackendTests(unittest.TestCase):
         class _FakeBackendManager:
             def __init__(self, ok):
                 self._ok = ok
-                self.restart_called = 0
+                self.start_called = 0
+                self.load_model_http_called = 0
                 self.launch = None
+                self._last_load_attempted_at = None
+
+            @property
+            def phase(self):
+                return self.snapshot().get("phase")
 
             def set_launch_model(self, **kwargs):
                 self.launch = kwargs
 
-            def restart(self):
-                self.restart_called += 1
+            def start(self):
+                self.start_called += 1
                 if not self._ok:
                     return {"ok": False, "error": "Docker failed"}
                 return {"ok": True}
 
+            def load_model_http(self, model_basename):
+                self.load_model_http_called += 1
+                if not self._ok:
+                    return {"ok": False, "error": "HTTP load failed"}
+                import time
+                self._last_load_attempted_at = time.time()
+                return {"ok": True}
+
+            def is_load_in_flight(self, timeout=120.0):
+                if self._last_load_attempted_at is None:
+                    return False
+                import time
+                return (time.time() - self._last_load_attempted_at) < timeout
+
+            def get_models_status(self):
+                return {"data": []}
+
             def snapshot(self):
-                return {"phase": "healthy" if self._ok else "failed", "last_error": "Docker failed" if not self._ok else ""}
+                return {
+                    "phase": "healthy" if self._ok else "failed",
+                    "last_error": "Docker failed" if not self._ok else "",
+                    "launch_model_path_basename": (self.launch or {}).get("path_basename", ""),
+                }
 
         class _FakeRouter:
             def __init__(self, ctx):
@@ -778,11 +805,17 @@ class DoRestartBackendTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(error, "")
 
-    def test_success_calls_restart_manager(self):
+    def test_success_calls_load_model_http(self):
         router, backend = self._make_router(backend_ok=True, context_length=65536)
         router._do_restart_backend()
-        self.assertEqual(backend.restart_called, 1)
+        self.assertEqual(backend.load_model_http_called, 1)
         self.assertEqual(backend.launch["backend_id"], "qwen3-6b")
+
+    def test_failure_starts_backend(self):
+        router, backend = self._make_router(backend_ok=False)
+        ok, error = router._do_restart_backend()
+        self.assertEqual(backend.start_called, 1)
+        self.assertFalse(ok)
 
     def test_failure_returns_false_with_message(self):
         router, _ = self._make_router(backend_ok=False)
@@ -1013,15 +1046,33 @@ class DoReloadSelectedModelTests(unittest.TestCase):
                 self._bid = bid
                 self._hcls = hcls
                 self._succeeds = succeeds
-                self.restart_called = 0
+                self.start_called = 0
+                self.load_model_http_called = 0
                 self.launch = None
+                self._last_load_attempted_at = None
+
+            @property
+            def phase(self):
+                return self.snapshot().get("phase")
 
             def set_launch_model(self, **kwargs):
                 self.launch = kwargs
 
-            def restart(self):
-                self.restart_called += 1
+            def start(self):
+                self.start_called += 1
                 if self._succeeds:
+                    self._hcls.model_load_state = "ready"
+                    self._hcls.model_load_error = None
+                    return {"ok": True}
+                else:
+                    self._hcls.model_load_state = "start_failed"
+                    return {"ok": False, "error": "start failed"}
+
+            def load_model_http(self, model_basename):
+                self.load_model_http_called += 1
+                if self._succeeds:
+                    import time
+                    self._last_load_attempted_at = time.time()
                     self._hcls.model_load_state = "ready"
                     self._hcls.model_load_error = None
                     return {"ok": True}
@@ -1030,10 +1081,25 @@ class DoReloadSelectedModelTests(unittest.TestCase):
                     self._hcls.model_load_error = "load HTTP 422"
                     return {"ok": False, "error": "load HTTP 422"}
 
+            def is_load_in_flight(self, timeout=120.0):
+                if self._last_load_attempted_at is None:
+                    return False
+                import time
+                return (time.time() - self._last_load_attempted_at) < timeout
+
+            def get_models_status(self):
+                basename = (self.launch or {}).get("path_basename", "")
+                if not basename:
+                    return {"data": []}
+                return {"data": [{"id": f"/models/{basename}", "status": {"value": "loaded" if self._succeeds else "unloaded"}}]}
+
             def snapshot(self):
+                # In router mode the backend container is healthy even when
+                # the HTTP model load fails (container stays up).
                 return {
-                    "phase": "healthy" if self._succeeds else "failed",
+                    "phase": "healthy",
                     "last_error": "" if self._succeeds else "load HTTP 422",
+                    "launch_model_path_basename": (self.launch or {}).get("path_basename", ""),
                 }
 
         router = RequestRouter.__new__(RequestRouter)
@@ -1056,10 +1122,10 @@ class DoReloadSelectedModelTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(error, "")
 
-    def test_sets_launch_model_and_restarts(self):
+    def test_sets_launch_model_and_loads(self):
         router, inner = self._make_router(backend_id="qwen3-6b", load_succeeds=True)
         router._do_reload_selected_model()
-        self.assertEqual(inner.restart_called, 1)
+        self.assertEqual(inner.load_model_http_called, 1)
         self.assertEqual(inner.launch["backend_id"], "qwen3-6b")
 
     def test_failure(self):
@@ -1074,10 +1140,10 @@ class DoReloadSelectedModelTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertGreater(len(error), 0)
 
-    def test_does_not_call_restart(self):
-        router, _ = self._make_router(backend_id="qwen3", load_succeeds=True)
+    def test_does_not_call_start(self):
+        router, inner = self._make_router(backend_id="qwen3", load_succeeds=True)
         router._do_reload_selected_model()
-        self.assertFalse(router.handler.__class__.restart_called)
+        self.assertEqual(inner.start_called, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -1248,6 +1314,7 @@ class DoStartBackendTests(unittest.TestCase):
                 self.start_called = 0
                 self.restart_called = False
                 self.launch = None
+                self._last_load_attempted_at = None
 
             def set_launch_model(self, **kwargs):
                 self.launch = kwargs
@@ -1261,6 +1328,9 @@ class DoStartBackendTests(unittest.TestCase):
             def restart(self):
                 self.restart_called = True
                 return {"ok": True}
+
+            def is_load_in_flight(self, timeout=120.0):
+                return False
 
         class _FakeRouter:
             def __init__(self, ctx):

@@ -200,11 +200,17 @@ def _derive_model_switch_state(
     state,
     selected_loaded_mismatch: bool,
     router_status: str = "unloaded",
+    load_in_flight: bool = False,
 ) -> tuple[str, str]:
     """Derive (model_switch_state, active_load_operation).
 
     model_switch_state ∈ {idle, selecting, restarting, loading, loaded, failed, rolled_back}
     active_load_operation ∈ {none, backend_restart, rollback_restart}
+
+    ``load_in_flight`` indicates that ``load_model_http()`` was called recently
+    (within the model load timeout window).  It is the tiebreaker for the async
+    window between POST /models/load returning 200 (async accept) and the model
+    inventory confirming the new model via GET /v1/models.
     """
     rolled_back = bool(
         state.last_load_result == "failed"
@@ -225,6 +231,10 @@ def _derive_model_switch_state(
         return "loading", "backend_restart"
     if state.last_load_result == "loaded" and backend_phase == "healthy" and router_status == "loaded":
         return "loaded", "none"
+    # When load_model_http() was called recently but /v1/models hasn't
+    # confirmed yet, report "loading" rather than falling through to "idle".
+    if load_in_flight and backend_phase == "healthy":
+        return "loading", "none"
     return "idle", "none"
 
 
@@ -254,6 +264,7 @@ def _request_admission_state(
     selected_model_ready: bool,
     last_load_result: str,
     launch_model_error: Any,
+    launch_matches_selected: bool = False,
     gpu_required: bool = True,
     gpu_offload_state: str = "unknown",
 ) -> str:
@@ -276,6 +287,10 @@ def _request_admission_state(
         return "unavailable"
     if backend_health_ok is False:
         return "failed"
+    if backend_phase == "healthy" and launch_matches_selected:
+        # Healthy backend is configured to load the selected model via HTTP
+        # but the router inventory hasn't confirmed it loaded yet.
+        return "loading"
     return "unavailable"
 
 
@@ -287,6 +302,7 @@ def _recommended_action(
     last_load_error_type: str | None,
     backend_phase: str = "",
     launch_model_key: str = "",
+    model_switch_state: str = "",
 ) -> str | None:
     """Operator-actionable hint, or None when no action is needed."""
     if last_load_error_type == "insufficient_vram":
@@ -297,17 +313,22 @@ def _recommended_action(
     if not selected_identity:
         return "No selected model. POST /qz/model/select with {\"model\":\"<id>\"}."
     if selected_loaded_mismatch:
+        if model_switch_state in ("loading", "restarting"):
+            return (
+                "Model switch is in progress. Wait for completion before "
+                "requesting the new model."
+            )
         return (
             "Selected model differs from loaded backend model. "
             "POST /qz/model/reload or /qz/model/select-and-restart."
         )
     if selected_identity and not backend_loaded_model:
         # Backend is actively loading — don't suggest reload while in flight.
-        if backend_phase in ("start_requested", "starting", "running") and launch_model_key:
+        if backend_phase in ("start_requested", "starting", "running", "healthy") and launch_model_key:
             return (
                 "Backend is loading the selected model. "
                 "Check /qz/backend/status for progress; "
-                "do not POST /qz/model/reload while the backend is starting."
+                "do not POST /qz/model/reload while the backend is loading."
             )
         return (
             "No backend-loaded model yet. POST /qz/model/reload to load the "
@@ -405,10 +426,18 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         launch_model_backend_id=launch_model_backend_id,
         launch_model_path_basename=launch_model_path_basename,
     )
+    # Detect in-flight async load: load_model_http was called recently but
+    # /v1/models may not have confirmed the new model yet.
+    mgr = getattr(handler, "backend_manager", None)
+    load_in_flight = bool(
+        mgr
+        and callable(getattr(mgr, "is_load_in_flight", None))
+        and mgr.is_load_in_flight()
+    )
+
     # Fetch router status directly
     router_status = "unloaded"
     if backend_phase == "healthy" and launch_model_path_basename:
-        mgr = getattr(handler, "backend_manager", None)
         if mgr and callable(getattr(mgr, "get_models_status", None)):
             try:
                 status_data = mgr.get_models_status()
@@ -448,6 +477,7 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         state=state,
         selected_loaded_mismatch=selected_loaded_mismatch,
         router_status=router_status,
+        load_in_flight=load_in_flight,
     )
     # Override: when the direct backend is confirmed healthy and launch matches
     # selected, the switch state IS "loaded" — no longer "idle" due to stale
@@ -462,6 +492,7 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         selected_model_ready=selected_model_ready,
         last_load_result=state.last_load_result,
         launch_model_error=launch_model_error,
+        launch_matches_selected=launch_matches_selected,
         gpu_required=gpu_required,
         gpu_offload_state=gpu_offload_state,
     )
@@ -473,6 +504,7 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         last_load_error_type=state.last_load_error_type,
         backend_phase=backend_phase,
         launch_model_key=launch_model_key,
+        model_switch_state=model_switch_state,
     )
 
     # Recovery surface: last-known-good vs. failed candidate, and a rollback

@@ -255,6 +255,11 @@ class BackendManager:
         self._lock = threading.Lock()
         self._busy = False           # True while a lifecycle operation is running
 
+        # Load tracking — records the last time load_model_http() was called
+        # so callers can detect an in-flight async model load before the
+        # model inventory (/v1/models) confirms the new model.
+        self._last_load_attempted_at: float | None = None
+
         # State
         initial_phase = PHASE_IDLE if autostart else PHASE_DISABLED
         self._state = BackendState(
@@ -440,8 +445,7 @@ class BackendManager:
     def build_backend_args(self) -> list[str]:
         """Build the llama.cpp backend argument list."""
         args: list[str] = [
-            "--models-autoload",
-            "--numa", "distribute",
+            "--models-dir", "/models",
             "--host", "0.0.0.0",
             "--port", "8080",
             "-ngl", "999",
@@ -548,11 +552,41 @@ class BackendManager:
     # ------------------------------------------------------------------
 
     def load_model_http(self, model_basename: str, timeout: float = 120.0) -> dict:
-        """Issue POST /models/load to the running container."""
+        """Issue POST /models/load to the running container.
+
+        The router expects the model *name* (the ``.gguf`` basename without
+        extension), not a filesystem path.  See
+        ``server_models::post_router_models_load`` in server-models.cpp.
+        """
         import json
         import urllib.request
+        model_name = model_basename
+        if model_name.endswith(".gguf"):
+            model_name = model_name[:-5]
         url = f"http://{self._server_host}:{self._server_port}/models/load"
-        data = json.dumps({"model": f"/models/{model_basename}"}).encode("utf-8")
+        data = json.dumps({"model": model_name}).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                if 200 <= int(resp.status) < 300:
+                    with self._lock:
+                        self._last_load_attempted_at = time.time()
+                    return {"ok": True}
+                return {"ok": False, "error": f"HTTP {resp.status}"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def unload_model_http(self, model_id: str, timeout: float = 30.0) -> dict:
+        """Issue POST /models/unload to the running container.
+
+        ``model_id`` is the model's inventory id (as returned by GET /v1/models),
+        which may be the stem name or a full path depending on how the server
+        registered the model.
+        """
+        import json
+        import urllib.request
+        url = f"http://{self._server_host}:{self._server_port}/models/unload"
+        data = json.dumps({"model": model_id}).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -561,6 +595,32 @@ class BackendManager:
                 return {"ok": False, "error": f"HTTP {resp.status}"}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+
+    def get_loaded_model_ids(self) -> list[str]:
+        """Return ids of all currently loaded models from GET /v1/models."""
+        status = self.get_models_status()
+        if not status:
+            return []
+        loaded = []
+        for entry in (status.get("data") or []):
+            if isinstance(entry, dict):
+                s = entry.get("status") or {}
+                if isinstance(s, dict) and s.get("value") == "loaded":
+                    model_id = entry.get("id")
+                    if isinstance(model_id, str) and model_id.strip():
+                        loaded.append(model_id.strip())
+        return loaded
+
+    def is_load_in_flight(self, timeout: float = 120.0) -> bool:
+        """Return True if load_model_http was called within *timeout* seconds.
+
+        This lets callers detect an in-flight async model load before the
+        model inventory endpoint (/v1/models) confirms the new model.
+        """
+        t = self._last_load_attempted_at
+        if t is None:
+            return False
+        return (time.time() - t) < timeout
 
     def get_models_status(self, timeout: float = 3.0) -> dict | None:
         """Fetch GET /v1/models from the running container."""
@@ -578,6 +638,36 @@ class BackendManager:
     # ------------------------------------------------------------------
     # GPU offload verification
     # ------------------------------------------------------------------
+
+    def _check_gpu_offload_from_models_api(self) -> tuple[str, str | None]:
+        """Check GPU offload via the /v1/models inventory.
+
+        In router mode the parent server is a pure message-router and never
+        loads a model itself, so its docker logs contain no GPU offload
+        evidence.  This method checks the model inventory directly: if any
+        loaded model's args include --n-gpu-layers > 0, GPU offload is
+        confirmed.
+
+        Returns:
+          'gpu'     — at least one loaded model has n-gpu-layers > 0
+          'unknown' — no loaded models yet, or inventory unavailable
+        """
+        status = self.get_models_status()
+        if not status:
+            return "unknown", None
+        for entry in (status.get("data") or []):
+            model_status = entry.get("status") or {}
+            if model_status.get("value") != "loaded":
+                continue
+            args = model_status.get("args") or []
+            for i, arg in enumerate(args):
+                if arg in ("--n-gpu-layers", "-ngl") and i + 1 < len(args):
+                    try:
+                        if int(args[i + 1]) > 0:
+                            return "gpu", None
+                    except (ValueError, TypeError):
+                        pass
+        return "unknown", None
 
     def _check_gpu_offload_from_logs(self) -> tuple[str, str | None]:
         """Inspect container logs for GPU offload evidence after health passes.
@@ -719,6 +809,13 @@ class BackendManager:
                     # The backend stays in PHASE_RUNNING throughout so
                     # request_admission_state remains "loading", not "failed".
                     gpu_state, gpu_err = self._check_gpu_offload_from_logs()
+                    # Only supplement with the model inventory check when docker
+                    # logs are ambiguous.  Hard failures (CUDA init error,
+                    # CPU_Mapped) are confirmed negative signals and still block.
+                    if gpu_state == "unknown":
+                        api_state, _ = self._check_gpu_offload_from_models_api()
+                        if api_state == "gpu":
+                            gpu_state, gpu_err = "gpu", None
                     if self._require_gpu and gpu_state != "gpu":
                         retries_left = self._gpu_check_retry_count
                         while retries_left > 0 and gpu_state != "gpu":
@@ -733,6 +830,10 @@ class BackendManager:
                                 break
                             time.sleep(self._gpu_check_retry_delay)
                             gpu_state, gpu_err = self._check_gpu_offload_from_logs()
+                            if gpu_state == "unknown":
+                                api_state, _ = self._check_gpu_offload_from_models_api()
+                                if api_state == "gpu":
+                                    gpu_state, gpu_err = "gpu", None
                             retries_left -= 1
                     if gpu_state == "unknown" and self._require_gpu:
                         gpu_state = "unknown_after_retries"
@@ -749,7 +850,19 @@ class BackendManager:
                     _gpu_blocking = self._require_gpu and gpu_state in (
                         "cpu_fallback", "failed", "unknown_after_retries"
                     )
-                    if _gpu_blocking:
+                    if _gpu_blocking and gpu_state == "unknown_after_retries":
+                        # Router mode: the parent server is a pure message-router
+                        # and never loads a model itself.  Neither docker logs nor
+                        # the model inventory found GPU evidence — the selected
+                        # model is probably still loading asynchronously via HTTP.
+                        # Let the backend proceed to HEALTHY so it can serve
+                        # requests once a model is ready.  Hard failures (CUDA
+                        # init error, CPU_Mapped) still block via the elif below.
+                        gpu_state = "unknown"
+                        gpu_err = None
+                        _gpu_observed = None
+                        _gpu_blocking = False
+                    elif _gpu_blocking:
                         err_str = gpu_err or f"GPU not used (gpu_offload_state={gpu_state})"
                         with self._lock:
                             self._state.phase = PHASE_FAILED

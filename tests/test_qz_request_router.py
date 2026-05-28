@@ -229,38 +229,10 @@ class ResponsesAdmissionTests(unittest.TestCase):
         self.assertEqual(len(handler.sent), 1)
         return handler.sent[0], handler
 
-    def test_responses_stream_flag_off_proxy_initializing_still_returns_503(self):
-        entry = self._entry("known-model")
-        catalog = self._Catalog([entry], selected=entry)
-        initialization = {"state": "initializing", "ready": False, "catalog_ready": False}
-
-        with (
-            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "0"}, clear=False),
-            patch("proxy.qz_request_router.write_dual_capture"),
-            patch("proxy.qz_request_router.write_capture"),
-            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
-            patch("proxy.qz_model_status.build_model_status") as build_status,
-            patch.object(RequestRouter, "_run_responses_streaming_locally") as run_stream,
-        ):
-            handler = self._Handler(
-                {"model": "known-model", "input": "hi", "stream": True},
-                catalog,
-                initializations=[initialization],
-                guard_startup_boundary=True,
-            )
-            RequestRouter(handler).proxy_json_api("/v1/responses")
-
-        self.assertEqual(len(handler.sent), 1)
-        status, payload = handler.sent[0]
-        self.assertEqual(status, 503)
-        self.assertEqual(payload["error"], "proxy not ready")
-        self.assertEqual(handler.response_headers.get("Retry-After"), "5")
-        self.assertIs(payload["retry_suggested"], True)
-        self.assertIsNone(handler.response_status)
-        self.assertEqual(handler.model_catalog_calls, 0)
-        self.assertEqual(handler.model_router_calls, 0)
-        build_status.assert_not_called()
-        run_stream.assert_not_called()
+    # test_responses_stream_flag_off_proxy_initializing_still_returns_503 removed:
+    # QZ_HOLDOPEN_LOADING env var is removed — hold-open for /v1/responses is
+    # unconditional for stream=True requests. The "flag off → 503" path no longer
+    # exists; see commit c372aba and AGENTS.md hold-open doctrine.
 
     def test_responses_non_stream_flag_off_proxy_initializing_still_returns_503(self):
         entry = self._entry("known-model")
@@ -555,36 +527,10 @@ class ResponsesAdmissionTests(unittest.TestCase):
             [event_type for event_type, _payload in handler.telemetry.events],
         )
 
-    def test_responses_stream_flag_off_loading_still_returns_503(self):
-        entry = self._entry("known-model")
-        catalog = self._Catalog([entry], selected=entry)
-        model_status = {
-            "selected_model_ready": False,
-            "backend_loaded_model": "",
-            "request_admission_state": "loading",
-        }
-
-        with (
-            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "0"}, clear=False),
-            patch("proxy.qz_request_router.write_dual_capture"),
-            patch("proxy.qz_request_router.write_capture"),
-            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
-            patch("proxy.qz_model_status.build_model_status", return_value=model_status),
-            patch("proxy.qz_model_status.identity_matches_loaded", return_value=False),
-            patch("proxy.qz_request_router.build_control_plane_status", return_value={"service_status": {}}),
-        ):
-            handler = self._Handler({"model": "known-model", "input": "hi", "stream": True}, catalog)
-            RequestRouter(handler).proxy_json_api("/v1/responses")
-
-        self.assertEqual(len(handler.sent), 1)
-        status, payload = handler.sent[0]
-        self.assertEqual(status, 503)
-        self.assertEqual(payload["status_code"], 503)
-        self.assertEqual(payload["error"], "model not ready")
-        self.assertEqual(payload["readiness"]["request_admission_state"], "loading")
-        self.assertEqual(handler.response_headers.get("Retry-After"), "5")
-        self.assertIs(payload["retry_suggested"], True)
-        self.assertIsNone(handler.response_status)
+    # test_responses_stream_flag_off_loading_still_returns_503 removed:
+    # QZ_HOLDOPEN_LOADING env var is removed — hold-open for /v1/responses is
+    # unconditional for stream=True requests. The "flag off → 503" path no longer
+    # exists; see commit c372aba and AGENTS.md hold-open doctrine.
 
     def test_responses_non_stream_flag_off_loading_still_returns_503(self):
         entry = self._entry("known-model")
@@ -617,37 +563,10 @@ class ResponsesAdmissionTests(unittest.TestCase):
         self.assertIsNone(handler.response_status)
         run_local.assert_not_called()
 
-    def test_responses_stream_flag_off_switching_mismatch_returns_retryable_503(self):
-        entry = self._entry("known-model")
-        catalog = self._Catalog([entry], selected=entry)
-        model_status = {
-            "selected_model_ready": False,
-            "backend_loaded_model": "old-model",
-            "request_admission_state": "idle",
-            "model_switch_state": "loading",
-        }
-
-        with (
-            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "0"}, clear=False),
-            patch("proxy.qz_request_router.write_dual_capture"),
-            patch("proxy.qz_request_router.write_capture"),
-            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
-            patch("proxy.qz_model_status.build_model_status", return_value=model_status),
-            patch("proxy.qz_model_status.identity_matches_loaded", return_value=False),
-            patch("proxy.qz_request_router.build_control_plane_status", return_value={"service_status": {}}),
-            patch.object(RequestRouter, "_run_responses_streaming_locally") as run_stream,
-        ):
-            handler = self._Handler({"model": "known-model", "input": "hi", "stream": True}, catalog)
-            RequestRouter(handler).proxy_json_api("/v1/responses")
-
-        self.assertEqual(len(handler.sent), 1)
-        status, payload = handler.sent[0]
-        self.assertEqual(status, 503)
-        self.assertEqual(payload["readiness"]["request_admission_state"], "idle")
-        self.assertEqual(handler.response_headers.get("Retry-After"), "5")
-        self.assertIs(payload["retry_suggested"], True)
-        self.assertIsNone(handler.response_status)
-        run_stream.assert_not_called()
+    # test_responses_stream_flag_off_switching_mismatch_returns_retryable_503 removed:
+    # QZ_HOLDOPEN_LOADING env var is removed — hold-open for /v1/responses is
+    # unconditional for stream=True requests. The "flag off → 503" path no longer
+    # exists; see commit c372aba and AGENTS.md hold-open doctrine.
 
     def test_responses_stream_flag_on_loading_holds_open_then_streams_once(self):
         entry = self._entry("known-model")

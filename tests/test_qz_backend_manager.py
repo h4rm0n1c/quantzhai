@@ -229,14 +229,13 @@ class BuildBackendArgsTests(unittest.TestCase):
             **params,
         )
 
-    def test_models_autoload_present(self):
+    def test_models_dir_present(self):
         args = self._mgr().build_backend_args()
-        self.assertIn("--models-autoload", args)
+        self.assertIn("--models-dir", args)
+        idx = args.index("--models-dir")
+        self.assertEqual(args[idx + 1], "/models")
         self.assertNotIn("-m", args)
-
-    def test_no_models_dir(self):
-        args = self._mgr().build_backend_args()
-        self.assertNotIn("--models-dir", args)
+        self.assertNotIn("--models-autoload", args)
 
     def test_host_and_port(self):
         args = self._mgr().build_backend_args()
@@ -384,7 +383,7 @@ class BackendHttpModelManagementTests(unittest.TestCase):
         self.assertEqual(req.get_method(), "POST")
         self.assertEqual(
             json.loads(req.data.decode("utf-8")),
-            {"model": "/models/kuato.gguf"},
+            {"model": "kuato"},
         )
 
     def test_get_models_status_returns_inventory_json(self):
@@ -471,10 +470,12 @@ class BuildDockerRunArgsTests(unittest.TestCase):
         args = self._mgr(image="my-image:v1").build_docker_run_args()
         self.assertIn("my-image:v1", args)
 
-    def test_no_models_dir_flag(self):
+    def test_models_dir_in_docker_run(self):
         args = self._mgr().build_docker_run_args()
-        self.assertNotIn("--models-dir", args)
-        self.assertIn("--models-autoload", args)
+        self.assertIn("--models-dir", args)
+        idx = args.index("--models-dir")
+        self.assertEqual(args[idx + 1], "/models")
+        self.assertNotIn("--models-autoload", args)
         self.assertNotIn("-m", args)
 
     def test_backend_args_appended(self):
@@ -880,6 +881,8 @@ class GPUOffloadLogCheckTests(unittest.TestCase):
         """Return a manager whose runner returns gpu_logs for 'logs' commands.
 
         Uses gpu_check_retry_count=0 so GPU tests run without sleep delays.
+        Uses an unbound port (29999) so get_models_status() always returns None
+        in unit tests, keeping GPU-log tests isolated from a live container.
         """
         def runner(args, timeout=None):
             if "ps" in args:
@@ -894,6 +897,7 @@ class GPUOffloadLogCheckTests(unittest.TestCase):
             require_gpu=require_gpu,
             gpu_check_retry_count=0,
             gpu_check_retry_delay=0.0,
+            server_port=29999,
             **kwargs,
         )
 
@@ -1079,17 +1083,41 @@ class GPUOffloadLogCheckTests(unittest.TestCase):
         self.assertTrue(reached, f"timed out in phase {mgr.phase}")
         self.assertEqual(mgr.phase, PHASE_HEALTHY)
 
-    def test_unknown_gpu_state_does_not_fail_when_require_gpu(self):
-        # Empty logs → unknown → after retries (0 here) → unknown_after_retries → FAIL.
-        # This is the new correct behaviour: require_gpu=True cannot admit when GPU
-        # state is indeterminate after the retry window.
+    def test_unknown_gpu_state_goes_healthy_in_router_mode(self):
+        # Empty docker logs (router mode: parent never loads a model) +
+        # /v1/models on port 29999 is unbound → unknown_after_retries is
+        # non-blocking in router mode → HEALTHY with gpu_offload_state "unknown".
         mgr = self._mgr_with_logs("", require_gpu=True)
         mgr.start()
         reached = self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
         self.assertTrue(reached, f"timed out in phase {mgr.phase}")
-        self.assertEqual(mgr.phase, PHASE_FAILED)
+        self.assertEqual(mgr.phase, PHASE_HEALTHY)
         snap = mgr.snapshot()
-        self.assertEqual(snap["gpu_offload_state"], "unknown_after_retries")
+        self.assertEqual(snap["gpu_offload_state"], "unknown")
+
+    def test_router_mode_gpu_confirmed_via_models_api(self):
+        """Empty docker logs + /v1/models shows a loaded model with n-gpu-layers 999 → gpu."""
+        import json
+        from unittest.mock import patch, MagicMock
+
+        inventory = {"data": [{"id": "kuato", "status": {"value": "loaded", "args": [
+            "/app/llama-server", "--n-gpu-layers", "999", "--model", "/models/kuato.gguf",
+        ]}}]}
+        resp = MagicMock()
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = MagicMock(return_value=False)
+        resp.status = 200
+        resp.read.return_value = json.dumps(inventory).encode()
+
+        mgr = self._mgr_with_logs("", require_gpu=True)
+        with patch("urllib.request.urlopen", return_value=resp):
+            mgr.start()
+            reached = self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
+        self.assertTrue(reached, f"timed out in phase {mgr.phase}")
+        self.assertEqual(mgr.phase, PHASE_HEALTHY)
+        snap = mgr.snapshot()
+        self.assertEqual(snap["gpu_offload_state"], "gpu")
+        self.assertTrue(snap["gpu_observed"])
 
 
 # ---------------------------------------------------------------------------
@@ -1120,6 +1148,7 @@ class GPUOffloadGraceWindowTests(unittest.TestCase):
             require_gpu=True,
             gpu_check_retry_count=retry_count,
             gpu_check_retry_delay=retry_delay,
+            server_port=29999,
         )
 
     # --- test case 1: failed -> gpu ---
@@ -1169,8 +1198,13 @@ class GPUOffloadGraceWindowTests(unittest.TestCase):
 
     # --- test case 3: repeated unknown until deadline ---
 
-    def test_repeated_unknown_until_deadline_fails(self):
-        """Repeated 'unknown' throughout the grace window → FAILED after window."""
+    def test_repeated_unknown_until_deadline_healthy_in_router_mode(self):
+        """Repeated 'unknown' throughout the grace window → HEALTHY in router mode.
+
+        Router mode: the parent server is a pure message-router and never loads
+        a model itself.  Empty docker logs are expected — the GPU check should
+        not fail the backend just because the parent process has no GPU output.
+        """
         def runner(args, timeout=None):
             if "ps" in args:
                 return 0, "test-ctr", ""
@@ -1179,11 +1213,11 @@ class GPUOffloadGraceWindowTests(unittest.TestCase):
             return 0, "", ""
         mgr = self._make_grace_mgr(runner, retry_count=2)
         mgr.start()
-        reached = self._wait_phase(mgr, PHASE_FAILED, PHASE_HEALTHY)
+        reached = self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
         self.assertTrue(reached, f"timed out in phase {mgr.phase}")
-        self.assertEqual(mgr.phase, PHASE_FAILED)
+        self.assertEqual(mgr.phase, PHASE_HEALTHY)
         snap = mgr.snapshot()
-        self.assertEqual(snap["gpu_offload_state"], "unknown_after_retries")
+        self.assertEqual(snap["gpu_offload_state"], "unknown")
 
     # --- test case 4: repeated failed until deadline ---
 
@@ -1354,19 +1388,20 @@ class BuildDockerRunArgsDirectModeTests(unittest.TestCase):
         defaults.update(kwargs)
         return BackendManager(**defaults)
 
-    def test_direct_mode_uses_models_autoload(self):
+    def test_direct_mode_uses_models_dir(self):
         args = self._mgr().build_docker_run_args()
-        self.assertIn("--models-autoload", args)
+        self.assertIn("--models-dir", args)
+        self.assertEqual(args[args.index("--models-dir") + 1], "/models")
         self.assertNotIn("-m", args)
 
-    def test_direct_mode_omits_models_dir(self):
+    def test_direct_mode_includes_models_dir(self):
         args = self._mgr().build_docker_run_args()
-        self.assertNotIn("--models-dir", args)
+        self.assertIn("--models-dir", args)
 
     def test_missing_launch_model_allows_command_build(self):
         mgr = self._mgr(launch_model_path_basename="")
         args = mgr.build_docker_run_args()
-        self.assertIn("--models-autoload", args)
+        self.assertIn("--models-dir", args)
 
     def test_default_mode_is_direct(self):
         # No backend_model_mode passed → default direct.
@@ -1388,8 +1423,8 @@ class BuildDockerRunArgsDirectModeTests(unittest.TestCase):
         )
         self.assertEqual(mgr.backend_model_mode, "direct")
         args = mgr.build_docker_run_args()
-        self.assertIn("--models-autoload", args)
-        self.assertNotIn("--models-dir", args)
+        self.assertIn("--models-dir", args)
+        self.assertEqual(args[args.index("--models-dir") + 1], "/models")
 
     def test_set_launch_model_updates_snapshot(self):
         mgr = self._mgr(launch_model_path_basename="", launch_model_key="", launch_model_backend_id="")
@@ -1403,7 +1438,7 @@ class BuildDockerRunArgsDirectModeTests(unittest.TestCase):
         self.assertEqual(snap["launch_model_backend_id"], "kuato")
         self.assertEqual(snap["launch_model_path_basename"], "kuato.gguf")
         args = mgr.build_docker_run_args()
-        self.assertIn("--models-autoload", args)
+        self.assertIn("--models-dir", args)
 
     def test_direct_mode_without_launch_model_fails_start(self):
         """Direct mode + empty launch_model doesn't fail start because we can load model later."""
@@ -1438,9 +1473,9 @@ class BuildDockerRunArgsDirectModeTests(unittest.TestCase):
         # No -m flag because no model was pre-selected
         self.assertNotIn("-m", run_args,
                          f"docker run must not pass -m when no launch model is set: {run_args}")
-        # --models-autoload should be present (router mode)
-        self.assertIn("--models-autoload", run_args,
-                      f"docker run should pass --models-autoload in router mode: {run_args}")
+        # --models-dir should be present (router mode)
+        self.assertIn("--models-dir", run_args,
+                      f"docker run should pass --models-dir in router mode: {run_args}")
 
     def test_snapshot_exposes_backend_model_mode(self):
         mgr = self._mgr()
@@ -1596,14 +1631,16 @@ class DockerRunArgsGPUContractTests(unittest.TestCase):
         self.assertIn("--reasoning-format", args)
         self.assertEqual(args[args.index("--reasoning-format") + 1], "deepseek")
 
-    def test_direct_mode_uses_models_autoload(self):
+    def test_direct_mode_uses_models_dir(self):
         args = self._args(launch_model_path_basename="kuato.gguf")
-        self.assertIn("--models-autoload", args)
+        self.assertIn("--models-dir", args)
+        self.assertEqual(args[args.index("--models-dir") + 1], "/models")
+        self.assertNotIn("--models-autoload", args)
         self.assertNotIn("-m", args)
 
-    def test_no_models_dir_flag(self):
+    def test_models_dir_flag_present(self):
         args = self._args()
-        self.assertNotIn("--models-dir", args)
+        self.assertIn("--models-dir", args)
 
     def test_readonly_models_mount(self):
         args = self._args(model_dir="/my/models")
@@ -1732,6 +1769,7 @@ class GPURetryLogicTests(unittest.TestCase):
             require_gpu=require_gpu,
             gpu_check_retry_count=retry_count,
             gpu_check_retry_delay=retry_delay,
+            server_port=29999,
         ), call_count
 
     def _wait_phase(self, mgr, *phases, timeout=3.0):
@@ -1752,15 +1790,20 @@ class GPURetryLogicTests(unittest.TestCase):
         self.assertEqual(mgr.phase, PHASE_HEALTHY)
         self.assertEqual(mgr.snapshot()["gpu_offload_state"], "gpu")
 
-    def test_retry_exhausted_fails_when_always_unknown(self):
-        """All retries return empty logs → unknown_after_retries → FAIL."""
+    def test_retry_exhausted_healthy_when_always_unknown(self):
+        """All retries return empty logs → unknown_after_retries → HEALTHY in router mode.
+
+        Empty docker logs are normal in router mode (parent never loads a model).
+        The backend must not be failed just because the log-based GPU check found
+        nothing — it proceeds to HEALTHY so HTTP-loaded models can serve requests.
+        """
         logs = ["", "", ""]  # all empty
         mgr, _ = self._mgr_with_retry_logs(logs, retry_count=2)
         mgr.start()
         reached = self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
         self.assertTrue(reached)
-        self.assertEqual(mgr.phase, PHASE_FAILED)
-        self.assertEqual(mgr.snapshot()["gpu_offload_state"], "unknown_after_retries")
+        self.assertEqual(mgr.phase, PHASE_HEALTHY)
+        self.assertEqual(mgr.snapshot()["gpu_offload_state"], "unknown")
 
 
 class BackendManagerConstructorStoreWiringTests(unittest.TestCase):

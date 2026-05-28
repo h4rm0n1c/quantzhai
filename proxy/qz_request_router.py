@@ -157,21 +157,23 @@ _PERMISSION_OUTCOME_ADVISORY_TEXT = (
 )
 
 _TRIGGER_WARNINGS: dict = {
-    "refresh_catalog":      "Refreshing the catalog does not restart the backend.",
-    "clear_failure":        "Clearing failure state does not start or restart the backend.",
+    "refresh_catalog":      "Refreshing the catalog does not affect the backend.",
+    "clear_failure":        "Clearing failure state does not affect the backend.",
     "select_model":         (
         "Selecting a model changes the active selection state only; "
-        "the model is NOT loaded. Call reload_selected_model to restart the backend with it."
+        "the model is NOT loaded. Call reload_selected_model to load it via HTTP."
     ),
     "start_backend":        (
-        "Starting the backend launches llama-server with the selected model."
+        "Starting the backend launches llama-server with --models-dir "
+        "and loads the selected model via HTTP."
     ),
     "restart_backend":      (
-        "Restarting the backend will interrupt active requests and relaunch the selected model."
+        "Restarting the backend will stop the container and start a new one "
+        "with --models-dir. Active requests will be interrupted."
     ),
     "reload_selected_model": (
-        "Reloading the selected model may interrupt active requests. "
-        "The backend process is restarted with -m for the selected model."
+        "Reloading the selected model loads it via the llama.cpp HTTP API. "
+        "The container is not restarted."
     ),
 }
 
@@ -440,11 +442,6 @@ class RequestRouter:
             model_status = build_model_status(self.handler)
 
     @staticmethod
-    def _hold_open_loading_enabled() -> bool:
-        value = str(os.environ.get("QZ_HOLDOPEN_LOADING") or "").strip().lower()
-        return value in {"1", "true", "yes", "on"}
-
-    @staticmethod
     def _proxy_initialization_ready(initialization: dict) -> bool:
         return bool(initialization.get("ready"))
 
@@ -646,36 +643,68 @@ class RequestRouter:
             model_status = build_model_status(self.handler)
 
     def _auto_trigger_model_switch_nonblocking(self, requested: str) -> bool:
-        """Trigger a non-blocking backend restart for an in-session model switch.
+        """Trigger a non-blocking model load for an in-session model switch.
 
         Called from inside the request gate; must NOT re-acquire the gate.
         Persists the new selection so build_model_status() sees the updated
         selected_key when computing selected_model_ready in the hold-open loop.
-        Returns True when the restart was accepted. Returns False if the backend
-        is disabled, a conflicting restart is running, or the model is unknown.
+        Returns True when the load was actually triggered. Returns False if the
+        backend is disabled, the model is unknown, nothing was started, or a
+        switch for this target is already in progress.
         """
         try:
             mgr = getattr(self.handler, "backend_manager", None)
             if mgr is None:
                 return False
+
+            # Dedup: skip if a load for this exact target is already in flight.
+            # Avoids re-triggering a switch that is already in progress.
+            # Uses mgr.snapshot() + is_load_in_flight() — no build_model_status call.
+            if callable(getattr(mgr, "is_load_in_flight", None)) and mgr.is_load_in_flight():
+                snap = mgr.snapshot()
+                current_launch = (snap.get("launch_model_path_basename") or "").strip()
+                current_stem = current_launch[:-5] if current_launch.endswith(".gguf") else current_launch
+                if requested and requested in (current_launch, current_stem):
+                    return False
+
             self._set_manager_launch_model(requested, mgr)
 
+            triggered = False
             if mgr.phase in ("disabled", "idle", "stopped", "failed"):
                 result = mgr.start()
-                if not result.get("ok"):
-                    return False
+                if result.get("ok"):
+                    triggered = True
             else:
                 import threading
                 filename = (mgr.snapshot().get("launch_model_path_basename") or "").strip()
                 if filename and callable(getattr(mgr, "load_model_http", None)):
+                    # Unload all currently loaded models before loading the new
+                    # one — QuantZhai supports one model at a time (VRAM constraint).
+                    # Unload+load runs in a single background thread so the hold-open
+                    # loop sees a clean loading→loaded transition.
+                    can_unload = callable(getattr(mgr, "unload_model_http", None)) and \
+                                 callable(getattr(mgr, "get_loaded_model_ids", None))
+                    if can_unload:
+                        loaded_ids = mgr.get_loaded_model_ids()
+                    else:
+                        loaded_ids = []
+
+                    def _unload_then_load(ids_to_unload, new_filename):
+                        for mid in ids_to_unload:
+                            mgr.unload_model_http(mid)
+                        mgr.load_model_http(new_filename)
+
                     threading.Thread(
-                        target=mgr.load_model_http,
-                        args=(filename,),
+                        target=_unload_then_load,
+                        args=(loaded_ids, filename),
                         daemon=True
                     ).start()
+                    triggered = True
 
-            self._do_select_model(requested)
-            return True
+            if triggered:
+                self._do_select_model(requested, source="qz_codex")
+                return True
+            return False
         except Exception:
             return False
 
@@ -1448,12 +1477,14 @@ class RequestRouter:
         except Exception as exc:
             return False, str(exc)
 
-    def _do_select_model(self, model: str) -> tuple[bool, str]:
+    def _do_select_model(self, model: str, source: str = "operator") -> tuple[bool, str]:
         """Select a model in catalog/router state without loading it.
 
         Uses catalog.resolve() for lookup, then sets catalog.selected and persists
         model state via the model router. Does NOT call backend.load_model(),
         start_container(), or restart_container(). Does NOT load the model.
+        ``source`` must be a value from SELECTED_SOURCES so the selection survives
+        proxy restarts without being treated as observational/poisoned.
         Returns (success, error_message). Never raises.
         """
         try:
@@ -1475,8 +1506,8 @@ class RequestRouter:
             router = self.handler._model_router()
             router._persist_model_state(
                 selected,
-                reason="recovery select_model",
-                source="recovery_select_model",
+                reason="select_model",
+                source=source,
             )
 
             return True, ""
@@ -1510,7 +1541,11 @@ class RequestRouter:
             return False, error
 
     def _do_restart_backend(self) -> tuple[bool, str]:
-        """Restart BackendManager with the selected direct -m launch model.
+        """Ensure the backend is running and the selected model is loaded.
+
+        In router mode this loads the model via HTTP POST /models/load on the
+        running container, or starts the container if it is not yet running.
+        Does NOT kill or recreate the container for model switching.
 
         Returns (success, error_message). Never raises.
         """
@@ -1522,8 +1557,18 @@ class RequestRouter:
             if mgr is None:
                 return False, "backend_manager not initialised"
             self._set_manager_launch_model(model_id, mgr)
-            result = mgr.restart()
-            return bool(result.get("ok")), str(result.get("error") or "")
+
+            if mgr.phase in ("disabled", "idle", "stopped", "failed"):
+                result = mgr.start()
+                if not result.get("ok"):
+                    return False, str(result.get("error") or "backend start rejected")
+            else:
+                filename = (mgr.snapshot().get("launch_model_path_basename") or "").strip()
+                if filename and callable(getattr(mgr, "load_model_http", None)):
+                    load_res = mgr.load_model_http(filename)
+                    if not load_res.get("ok"):
+                        return False, str(load_res.get("error") or "HTTP model load failed")
+            return True, ""
         except Exception as exc:
             error = str(exc)
             try:
@@ -3218,17 +3263,15 @@ class RequestRouter:
         initialization = self._latest_proxy_initialization()
         # One aggregate hold-open deadline shared across all layered wait phases
         # for this request. Prevents each phase from claiming a fresh full budget.
-        hold_open_loading = self._hold_open_loading_enabled()
         _holdopen_deadline: float | None = (
             time.monotonic() + HOLDOPEN_LOADING_MAX_SECONDS
-            if upstream_path == "/v1/responses" and hold_open_loading
+            if upstream_path == "/v1/responses"
             else None
         )
         if not self._proxy_initialization_ready(initialization):
             if (
                 upstream_path == "/v1/responses"
                 and client_wants_stream
-                and hold_open_loading
             ):
                 self._open_responses_sse()
                 sse_response_started = True
@@ -3256,7 +3299,7 @@ class RequestRouter:
                     )
                     self.handler.close_connection = True
                     return
-            elif upstream_path == "/v1/responses" and hold_open_loading:
+            elif upstream_path == "/v1/responses":
                 startup_ready, initialization = (
                     self._wait_responses_proxy_startup_before_forward(
                         initial_initialization=initialization,
@@ -3411,12 +3454,9 @@ class RequestRouter:
                                     selected_model, model_status, identity_matches_loaded,
                                 )
                             )
-                    transitional_wait = (
-                        hold_open_loading
-                        and self._is_transitional_responses_wait(
-                            model_status,
-                            request_matches_active,
-                        )
+                    transitional_wait = self._is_transitional_responses_wait(
+                        model_status,
+                        request_matches_active,
                     )
                     if (
                         client_wants_stream

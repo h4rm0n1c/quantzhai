@@ -6,6 +6,20 @@ QuantZhai is a local Codex stack for running Qwen through a TurboQuant llama.cpp
 
 Keep the repo small and reproducible. Runtime state belongs in `var/`; source, config examples, scripts, and docs belong in git.
 
+## Router Mode
+
+QuantZhai uses llama.cpp router mode. The container stays alive; models are loaded and unloaded via HTTP. See `docs/router-mode-migration-plan.md` for history and remaining P2 cleanup.
+
+Key rules:
+- Model switching must NOT kill or recreate the container. Use `unload_model_http()` then `load_model_http()`.
+- One model loaded at a time — VRAM constraint (26 GB total). Always unload before loading a new model.
+- Hold-open for `/v1/responses` is unconditional for `stream=True` (no env var gate, `QZ_HOLDOPEN_LOADING` is removed).
+- `healthy` backend + `unloaded` router status = `"loading"`, NOT `"unavailable"`.
+- `restart()` is dead code; use `start()` (container start) or `load_model_http()` (model switch).
+- `_auto_trigger_model_switch_nonblocking` must only return `True` when it actually triggered something.
+- `_do_select_model()` must write with a source from `SELECTED_SOURCES` (e.g. `"qz_codex"`) — never `"recovery_select_model"` or `"status_snapshot"` which are treated as observational and discarded on restart.
+- GPU offload is verified via `GET /v1/models` (child process inventory), not docker logs. Docker logs show the parent router only.
+
 ## Do Not Commit
 
 - `.env`

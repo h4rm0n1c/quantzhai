@@ -66,12 +66,14 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 16. [Observability and streaming bugfix agenda](observability-streaming-bugfix-agenda.md) — focused TODO/review plan for `/status`, `qz-top`, `qz-thoughts`, profiles, and streaming.
 17. [Runtime observability notes](runtime-observability-notes.md) — how to inspect live proxy/model behaviour.
 18. [Compaction audit and strategy](compaction-audit-and-strategy.md) — source-grounded audit of Codex and QuantZhai compaction, issue #8 promoted ideas, anchored summary schema v0, recommended prompt v0, and staged implementation roadmap. Stage 6.10.1.
-19. [Anchored compaction schema v0](compaction-anchored-schema-v0.md) — canonical schema spec: field rules, exact-atom preservation, evidence-to-decision retention, stale fact correction, uncertainty marking, non-goals, and versioning notes. Stage 4.
-20. [Compaction Codex setup](compaction-codex-setup.md) — how to wire `experimental_compact_prompt_file`, use `compaction.json`, keep env overrides explicit, and run manual smoke checks. Stage 6.10.2: CODEX_HOME path corrected, compactor backend auto-resolution, 7-step smoke runbook. Stage 6.10.1: OpenAI masquerade active, `/v1/responses/compact` remote compaction endpoint, double-compaction safety notes.
-21. [Compaction live dogfood](compaction-live-dogfood.md) — Stage 6/6.1 direct-backend smoke runbook, live evidence, observed v2 fallback, and accepted opt-in v3 tuning. Stage 6.10.2: smoke runbook and config path corrected. Stage 6.10.1: remote compaction smoke test runbook and Codex session verification.
-22. [Stage 6.7 compaction dogfood audit](compaction-stage67-audit.md) — adversarial audit of Stage 6.7 claims, runner bias, classifier evidence, v3 summary quality, and Stage 6.8 recommendation.
-23. [Stage 6.8/6.9/6.10/6.10.4 compaction corpus coverage and budget alignment](compaction-stage68-coverage.md) — coverage/runner hardening (13/14 v3 accepted, c_macro confirmed), Stage 6.9 context-aligned budget resolver, Stage 6.10 v3 default + autocompact-buffer policy, Stage 6.10.1 OpenAI masquerade + remote compaction endpoint, Stage 6.10.2 config path cleanup + backend auto-resolution, Stage 6.10.3 remote compaction source selection fix + v3 fallback diagnostics, Stage 6.10.4 context resolution fix (runtime_context_length field, no silent except).
-24. [Compaction fixtures](fixtures/compaction/) — Stage 1 example input/output pairs: fixture-01 (basic coding session), fixture-02 (tool-heavy session), fixture-03 (rejected approaches and negative constraints). Stage 4 compatible.
+19. [Router mode migration plan](router-mode-migration-plan.md) — P0/P1 complete: seamless live model switching confirmed 2026-05-29. One model at a time (unload→load), GPU via `/v1/models` inventory, selection survives restarts. Remaining P2: dead code, stale docs.
+20. [Anchored compaction schema v0](compaction-anchored-schema-v0.md) — canonical schema spec: field rules, exact-atom preservation, evidence-to-decision retention, stale fact correction, uncertainty marking, non-goals, and versioning notes. Stage 4.
+21. [Compaction Codex setup](compaction-codex-setup.md) — how to wire `experimental_compact_prompt_file`, use `compaction.json`, keep env overrides explicit, and run manual smoke checks. Stage 6.10.2: CODEX_HOME path corrected, compactor backend auto-resolution, 7-step smoke runbook. Stage 6.10.1: OpenAI masquerade active, `/v1/responses/compact` remote compaction endpoint, double-compaction safety notes.
+22. [Compaction live dogfood](compaction-live-dogfood.md) — Stage 6/6.1 direct-backend smoke runbook, live evidence, observed v2 fallback, and accepted opt-in v3 tuning. Stage 6.10.2: smoke runbook and config path corrected. Stage 6.10.1: remote compaction smoke test runbook and Codex session verification.
+23. [Stage 6.7 compaction dogfood audit](compaction-stage67-audit.md) — adversarial audit of Stage 6.7 claims, runner bias, classifier evidence, v3 summary quality, and Stage 6.8 recommendation.
+24. [Stage 6.8/6.9/6.10/6.10.4 compaction corpus coverage and budget alignment](compaction-stage68-coverage.md) — coverage/runner hardening (13/14 v3 accepted, c_macro confirmed), Stage 6.9 context-aligned budget resolver, Stage 6.10 v3 default + autocompact-buffer policy, Stage 6.10.1 OpenAI masquerade + remote compaction endpoint, Stage 6.10.2 config path cleanup + backend auto-resolution, Stage 6.10.3 remote compaction source selection fix + v3 fallback diagnostics, Stage 6.10.4 context resolution fix (runtime_context_length field, no silent except).
+25. [Compaction fixtures](fixtures/compaction/) — Stage 1 example input/output pairs: fixture-01 (basic coding session), fixture-02 (tool-heavy session), fixture-03 (rejected approaches and negative constraints). Stage 4 compatible.
+
 
 ## Documentation by area
 
@@ -425,6 +427,7 @@ docs/codex-visible-tool-lifecycle-audit.md
 docs/qwen-reasoning-effort-policy.md
 docs/thetom-oai-responses-compat.md
 docs/subsystem-boundaries-and-gravity-wells.md
+docs/router-mode-migration-plan.md
 ```
 
 ## Maintenance rule
