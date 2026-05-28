@@ -927,18 +927,23 @@ def _extract_llm_compactor_content(data) -> Optional[str]:
     return None
 
 
-def _build_llm_compactor_payload(prompt: str, max_output_tokens: Optional[int] = None) -> dict:
+def _build_llm_compactor_payload(prompt: str, max_output_tokens: Optional[int] = None,
+                                  llm_model: str = "") -> dict:
     """Build the chat-completions payload for the LLM compactor.
 
     When max_output_tokens is provided (from the budget resolver), it overrides the
     COMPACTION_CONFIG value.  Pass None to fall back to COMPACTION_CONFIG as before.
+
+    llm_model: if non-empty, overrides COMPACTION_CONFIG["llm_model"]. Should be the
+    actual backend_id of the currently loaded model so the router can route the request.
     """
     if isinstance(max_output_tokens, int) and max_output_tokens > 0:
         tokens = max_output_tokens
     else:
         tokens = _positive_config_int("llm_max_output_tokens", _DEFAULT_LLM_MAX_OUTPUT_TOKENS)
+    effective_model = (llm_model or "").strip() or COMPACTION_CONFIG["llm_model"] or "local-model"
     payload = {
-        "model": COMPACTION_CONFIG["llm_model"] or "local-model",
+        "model": effective_model,
         "messages": [
             {
                 "role": "system",
@@ -968,6 +973,7 @@ def _call_llm_compactor(
     timeout_sec: Optional[int] = None,
     max_output_tokens: Optional[int] = None,
     llm_base_url: str = "",
+    llm_model: str = "",
 ) -> tuple:
     """Execute a direct call to the local LLM backend for compaction.
 
@@ -1001,7 +1007,8 @@ def _call_llm_compactor(
         return None, "proxy_url_rejected"
 
     url = _llm_chat_completions_url(base_url)
-    payload = _build_llm_compactor_payload(prompt, max_output_tokens=max_output_tokens)
+    payload = _build_llm_compactor_payload(prompt, max_output_tokens=max_output_tokens,
+                                           llm_model=llm_model)
 
     if isinstance(timeout_sec, int) and timeout_sec > 0:
         effective_timeout = timeout_sec
@@ -1136,12 +1143,22 @@ def _build_local_compaction_response_v3(
         max_input_chars=budget["effective_max_input_chars"],
     )
 
+    # Resolve the model name: use the actually-loaded backend_id so the router
+    # can route to the correct child process. COMPACTION_CONFIG["llm_model"] is
+    # the operator override; backend_resolution_detail carries the live backend_id.
+    _backend_model_id = ""
+    if isinstance(backend_resolution_detail, dict) and backend_resolution_detail.get("ok"):
+        _backend_model_id = (
+            str(backend_resolution_detail.get("launch_model_backend_id") or "").strip()
+        )
+
     start_ms = int(time.time() * 1000)
     summary_text, llm_call_reason = _call_llm_compactor(
         prompt,
         timeout_sec=budget["effective_timeout_sec"],
         max_output_tokens=budget["effective_max_output_tokens"],
         llm_base_url=effective_llm_base_url,
+        llm_model=_backend_model_id,
     )
     latency_ms = int(time.time() * 1000) - start_ms
 
