@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "description": "Multi-repo corpus for QuantZhai compaction dogfood anti-overfit testing.",
+  "version": 2,
+  "description": "Multi-repo corpus for QuantZhai compaction dogfood anti-overfit testing. Expanded to 10 repos with PHP web apps (qdb, snippetcms) to cover SQL/database and server-side web patterns.",
   "repos": [
     {
       "id": "linuxstreamtools",
@@ -81,6 +81,26 @@
       "language": "c",
       "shape": "single-header-libraries",
       "role": "external"
+    },
+    {
+      "id": "qdb",
+      "url": "https://github.com/h4rm0n1c/qdb.git",
+      "ref": "main",
+      "cache_name": "qdb.git",
+      "scratch_name": "qdb",
+      "language": "php",
+      "shape": "php-webapp-sql-js",
+      "role": "internal-web"
+    },
+    {
+      "id": "snippetcms",
+      "url": "https://github.com/h4rm0n1c/snippetcms.git",
+      "ref": "main",
+      "cache_name": "snippetcms.git",
+      "scratch_name": "snippetcms",
+      "language": "php",
+      "shape": "php-cms-sql-html",
+      "role": "internal-web"
     }
   ]
 }

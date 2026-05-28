@@ -32,28 +32,62 @@ PATTERNS = {
     "build_file": re.compile(r'(^|[\s"\'\(])((?:package\.json|pyproject\.toml|Cargo\.toml|Cargo\.lock|go\.mod|go\.sum|CMakeLists\.txt|Makefile))(?=($|[\s"\'\):,;]))'),
     "repo_dir": re.compile(r'(^|[\s"\'\(])((?:src|tests?|docs?|examples|include|cmake|completions|scripts|config)/)(?=($|[\s"\'\):,;]))'),
     "command": re.compile(r'(^|[\s"\'\(])((?:git|python3?|rg|curl|bash|sudo)\b(?:\s+(?!(?:and|or)\b)[^\s"\'\(\)\)\:,;]+)*)(?=($|[\s"\'\(\)\)\:,;]|(?:\s+and\b|\s+or\b)))'),
-    "language_command": re.compile(r'(^|[\s"\'\(])((?:npm|pnpm|yarn)\s+(?:test|run\s+test)|go\s+test\s+\./\.\.\.|cargo\s+(?:test|build|run)|cmake\s+--build|ctest|pytest)(?=($|[\s"\'\):,;]))'),
+    "language_command": re.compile(r'(^|[\s"\'\(])((?:npm|pnpm|yarn)\s+(?:test|run\s+test)|go\s+test\s+\./\.\.\.|cargo\s+(?:test|build|run)|cmake\s+--build|ctest|pytest|php\s+\S+|composer\s+\S+)(?=($|[\s"\'\):,;]))'),
     "flag": re.compile(r'(^|\s)(--[a-z0-9_-]+|-[a-z0-9])(?=($|[\s:,;]))'),
     "env_var": re.compile(r'(^|\s)([A-Z0-9_]{3,}=[^ \s]+|\$[A-Z0-9_]{3,})(?=($|[\s:,;]))'),
     "sha": re.compile(r'(^|[\s"\'\(])([0-9a-f]{7,64})(?=($|[\s"\'\):,;]))'),
     "issue_ref": re.compile(r'(^|\s)(#\d+|issue\s+#\d+|PR\s+#\d+)(?=($|[\s:,;]))', re.IGNORECASE),
-    "version": re.compile(r'(^|\s)(v\d+\.\d+\.\d+|localcmp:v\d+:?|Codex\s+v?\d+\.\d+(?:\.\d+)?)(?=($|[\s:,;]))', re.IGNORECASE),
-    "error_string": re.compile(r'(^|[\s"\'\(])(error:|failed:|exception:|traceback|permission denied|exit_code=\d+|ImportError|attempted relative import with no known parent package|local streaming runtime error|response\.custom_tool_call_input\.done)(?=($|[\s"\'\):,;]))', re.IGNORECASE),
+    # version: generic semver only — removed QuantZhai-specific localcmp:v and Codex v prefixes
+    "version": re.compile(r'(^|\s)(v\d+\.\d+(?:\.\d+)?(?:[-+][a-z0-9.]+)?)(?=($|[\s:,;]))', re.IGNORECASE),
+    # error_string: generic error signals — removed three LLM/QuantZhai-specific literals
+    # (attempted relative import…, local streaming runtime error, response.custom_tool_call_input.done)
+    "error_string": re.compile(r'(^|[\s"\'\(])(error:|failed:|exception:|traceback|permission denied|exit_code=\d+|ImportError|AttributeError|TypeError|RuntimeError|SyntaxError|KeyError|ValueError|NullPointerException|segfault|SQLSTATE\[\w+\])(?=($|[\s"\'\):,;]))', re.IGNORECASE),
     "negation": re.compile(r'(^|[\s"\'\(])(not|never|no|without|unless|rejected|disallowed|disagree|don\'t|cannot)(?=($|[\s"\'\):,;]))', re.IGNORECASE),
     "user_correction": re.compile(r'(^|[\s"\'\(])(user corrected|user rejected|user explicitly said|do not re-attempt|incorrect|mistake)(?=($|[\s"\'\):,;]))', re.IGNORECASE),
     "decision_boundary": re.compile(r'(^|[\s"\'\(])(therefore|decided|deferred|blocked because|evidence-to-decision|evidence|source-backed|inferred|concluded)(?=($|[\s"\'\):,;]))', re.IGNORECASE),
     "test_name": re.compile(r'(^|[\s"\'\(])(test_[a-z0-9_]+|[A-Z][a-zA-Z0-9]+Tests|[a-z0-9_]+\.py)(?=($|[\s"\'\):,;]))'),
-    "model_name": re.compile(r'(^|[\s"\'\(])(Qwen[a-zA-Z0-9\._\-\[\]]+|gemini-[a-z0-9\.-]+|GPT-[a-z0-9\.-]+)(?=($|[\s"\'\):,;]))', re.IGNORECASE),
+    # model_name removed: was hardcoded to Qwen/gemini-/GPT- — fires only in quantzhai,
+    # zero hits in 8/9 corpus repos. LLM product names are not a general coding atom.
     "c_macro": re.compile(r'(^|[\s"\'\(])(#define|[A-Z][A-Z0-9_]+_IMPLEMENTATION)(?=($|[\s"\'\):,;]))'),
     "qualified_symbol": re.compile(r'(^|[\s"\'\(])([A-Z][a-z0-9]+\(\))(?=($|[\s"\'\):,;]))'),
     "code_symbol": re.compile(r'(^|[\s"\'\(])([a-z_][a-z0-9_]{2,}_[a-z0-9_]+|[a-z_][a-z0-9_]*\(\)|[A-Z][a-z0-9]+[A-Z][a-zA-Z0-9]+|[a-z0-9_]+\.[a-z0-9_]+)(?=($|[\s"\'\):,;]))'),
+    # import_path: module/package import statements across languages — high signal, fired zero
+    # times in current scorer despite being present in every corpus repo.
+    # Covers: Python (from X import Y / import X), JS/TS (import X from 'Y' / require('Y')),
+    # Rust (use X::Y), Go (import "X"), C/C++ (#include <X>/"X"), PHP (require/include 'X').
+    "import_path": re.compile(
+        r'(^|[\s"\'\(])'
+        r'(from\s+[\w.]+\s+import\s+[\w*, ]+|import\s+[\w./"-]+|use\s+[\w:]+;?'
+        r'|require\(["\'][\w./]+["\']\)|include[_once]*\s*["\'][\w./]+["\']'
+        r'|#include\s*[<"][\w./]+[>"])'
+        r'(?=($|[\s"\'\):,;]))',
+        re.MULTILINE
+    ),
+    # sql_keyword: DDL/DML verbs that are schema atoms — zero coverage previously.
+    # Fires on SQL files (CREATE TABLE, ALTER TABLE, PRIMARY KEY, etc.) and inline
+    # query strings in any language. HEAVY because schema structure is high-value context.
+    "sql_keyword": re.compile(
+        r'(^|[\s"\'\(])'
+        r'(CREATE\s+(?:TABLE|DATABASE|INDEX|VIEW|TRIGGER|PROCEDURE|FUNCTION)'
+        r'|ALTER\s+TABLE|DROP\s+(?:TABLE|DATABASE|INDEX)'
+        r'|PRIMARY\s+KEY|FOREIGN\s+KEY|FULLTEXT\s+KEY|UNIQUE\s+KEY'
+        r'|AUTO_INCREMENT|NOT\s+NULL|CHARACTER\s+SET|COLLATE\s+\w+'
+        r'|ENGINE=\w+|INSERT\s+INTO|SELECT\s+(?:\*|\w)|DELETE\s+FROM|UPDATE\s+\w)'
+        r'(?=($|[\s"\'\):,;]))',
+        re.IGNORECASE
+    ),
 }
 
 # Weighting overrides
-HEAVY_FEATURES = {"path", "command", "env_var", "sha", "issue_ref", "version", "error_string", "negation", "user_correction", "build_file", "language_command", "c_macro"}
-MEDIUM_FEATURES = {"flag", "test_name", "code_symbol", "model_name", "decision_boundary", "repo_dir", "qualified_symbol"}
+HEAVY_FEATURES = {"path", "command", "env_var", "sha", "issue_ref", "version", "error_string",
+                  "negation", "user_correction", "build_file", "language_command", "c_macro",
+                  "import_path", "sql_keyword"}
+MEDIUM_FEATURES = {"flag", "test_name", "code_symbol", "decision_boundary", "repo_dir",
+                   "qualified_symbol"}
 
-HIGH_RISK_FEATURES = {"path", "command", "env_var", "sha", "issue_ref", "version", "error_string", "negation", "user_correction", "decision_boundary", "build_file", "language_command", "c_macro"}
+HIGH_RISK_FEATURES = {"path", "command", "env_var", "sha", "issue_ref", "version", "error_string",
+                      "negation", "user_correction", "decision_boundary", "build_file",
+                      "language_command", "c_macro", "import_path", "sql_keyword"}
 
 def score_text(text: str) -> list[SurvivalSpan]:
     if not text or not text.strip():
