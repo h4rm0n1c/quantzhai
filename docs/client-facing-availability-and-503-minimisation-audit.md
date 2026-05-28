@@ -694,9 +694,10 @@ headers are sent is represented as `response.failed` plus `[DONE]`, not a late H
 
 **Change**: When `request_admission_state` is `"starting"` or `"loading"`, instead of
 returning 503 immediately, hold the connection open with a streaming response. Emit SSE
-keepalive comments every 15s. Poll `BackendManager.snapshot()` internally. When phase
-reaches `"healthy"`, forward the original request. Timeout after 270s (just under the
-Codex SSE idle timeout of 300s) and return 503 only then.
+keepalive comments every 15s. Poll the model-status readiness truth internally. When the
+requested model becomes ready and active, forward the original request on the same stream.
+Timeout after 270s (just under the Codex SSE idle timeout of 300s) and emit a stream
+failure event plus `[DONE]`.
 
 **Why**: This eliminates the most common loading-state 503. Model loads typically take
 30–120s. The Codex SSE idle timeout is 300s. The window exists; use it.

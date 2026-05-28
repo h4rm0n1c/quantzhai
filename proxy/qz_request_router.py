@@ -380,11 +380,13 @@ class RequestRouter:
         selected_model,
         requested_model: str,
         request_id: str,
+        initial_model_status,
         build_model_status,
         identity_matches_loaded,
     ) -> bool:
         deadline = time.monotonic() + HOLDOPEN_LOADING_MAX_SECONDS
         next_keepalive = 0.0
+        model_status = initial_model_status
         write_request_capture(request_id, "forwarded-sse.raw", b"", mode="bytes")
 
         while True:
@@ -396,7 +398,6 @@ class RequestRouter:
                 )
                 next_keepalive = now + HOLDOPEN_LOADING_KEEPALIVE_SECONDS
 
-            model_status = build_model_status(self.handler)
             active_ready, _requested_key, _requested_backend, request_matches_active = (
                 self._responses_model_readiness(
                     selected_model,
@@ -432,6 +433,7 @@ class RequestRouter:
             )
             if sleep_for > 0:
                 time.sleep(sleep_for)
+            model_status = build_model_status(self.handler)
 
     def _emit_schema_normalization_telemetry(self, report, request_id: str = "") -> None:
         """Emit tool_schema_replaced telemetry when normalization changes the tool list.
@@ -3116,6 +3118,7 @@ class RequestRouter:
                             selected_model=selected_model,
                             requested_model=client_model or requested_backend,
                             request_id=request_id,
+                            initial_model_status=model_status,
                             build_model_status=build_model_status,
                             identity_matches_loaded=identity_matches_loaded,
                         ):

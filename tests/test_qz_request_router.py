@@ -138,6 +138,9 @@ class ResponsesAdmissionTests(unittest.TestCase):
             self.response_headers = {}
             self.response_status = None
             self.sse_headers = []
+            self.send_response_calls = []
+            self.end_headers_calls = 0
+            self.rate_limit_event_calls = 0
             self.close_connection = False
 
         def _model_catalog(self):
@@ -154,18 +157,20 @@ class ResponsesAdmissionTests(unittest.TestCase):
             self.sent.append((status, payload))
 
         def send_response(self, status):
+            self.send_response_calls.append(status)
             self.response_status = status
 
         def send_header(self, key, value):
             self.sse_headers.append((key, value))
 
         def end_headers(self):
-            pass
+            self.end_headers_calls += 1
 
         def _send_codex_rate_limit_headers(self):
             self.send_header("x-ratelimit-limit-requests", "999999")
 
         def _write_codex_rate_limits_event(self):
+            self.rate_limit_event_calls += 1
             self.wfile.write(b"event: codex.rate_limits\ndata: {\"type\":\"codex.rate_limits\"}\n\n")
 
         def _emit_sse_telemetry(self, _chunk, request_id=""):
@@ -278,7 +283,14 @@ class ResponsesAdmissionTests(unittest.TestCase):
             RequestRouter(handler).proxy_json_api("/v1/responses")
 
         self.assertEqual(handler.response_status, 200)
+        self.assertEqual(handler.send_response_calls, [200])
+        self.assertEqual(handler.end_headers_calls, 1)
+        self.assertEqual(handler.rate_limit_event_calls, 1)
         self.assertIn(("Content-Type", "text/event-stream"), handler.sse_headers)
+        self.assertEqual(
+            [header for header in handler.sse_headers if header[0] == "Content-Type"],
+            [("Content-Type", "text/event-stream")],
+        )
         self.assertEqual(handler.sent, [])
         self.assertIn(b": qz hold-open waiting for model readiness\n\n", handler.wfile.getvalue())
         run_stream.assert_called_once()
@@ -338,6 +350,42 @@ class ResponsesAdmissionTests(unittest.TestCase):
         self.assertEqual(handler.sent, [])
         self.assertIn(b"event: response.failed", stream_bytes)
         self.assertIn(b"model readiness hold-open timed out", stream_bytes)
+        self.assertIn(b"data: [DONE]\n\n", stream_bytes)
+        run_stream.assert_not_called()
+
+    def test_responses_stream_holdopen_terminal_failure_emits_sse_failure(self):
+        entry = self._entry("known-model")
+        catalog = self._Catalog([entry], selected=entry)
+        loading_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "loading",
+        }
+        failed_status = {
+            "selected_model_ready": False,
+            "backend_loaded_model": "",
+            "request_admission_state": "failed_gpu_not_available",
+        }
+
+        with (
+            patch.dict(os.environ, {"QZ_HOLDOPEN_LOADING": "1"}, clear=False),
+            patch("proxy.qz_request_router.HOLDOPEN_LOADING_POLL_SECONDS", 0.001),
+            patch("proxy.qz_request_router.write_dual_capture"),
+            patch("proxy.qz_request_router.write_capture"),
+            patch("proxy.qz_request_router.write_request_capture"),
+            patch("proxy.qz_request_router.incoming_headers_payload", return_value={}),
+            patch("proxy.qz_model_status.build_model_status", side_effect=[loading_status, failed_status]),
+            patch.object(RequestRouter, "_run_responses_streaming_locally") as run_stream,
+        ):
+            handler = self._Handler({"model": "known-model", "input": "hi", "stream": True}, catalog)
+            RequestRouter(handler).proxy_json_api("/v1/responses")
+
+        stream_bytes = handler.wfile.getvalue()
+        self.assertEqual(handler.response_status, 200)
+        self.assertEqual(handler.send_response_calls, [200])
+        self.assertEqual(handler.sent, [])
+        self.assertIn(b"event: response.failed", stream_bytes)
+        self.assertIn(b"failed_gpu_not_available", stream_bytes)
         self.assertIn(b"data: [DONE]\n\n", stream_bytes)
         run_stream.assert_not_called()
 
