@@ -58,9 +58,13 @@ except ImportError:
     from qz_survival_weight import score_text, format_survival_hints
 
 _VALID_COMPACTION_MODES = frozenset({"heuristic", "llm", "auto"})
-_DEFAULT_LLM_TIMEOUT_SEC = 30
+_DEFAULT_LLM_TIMEOUT_SEC = 300         # compaction takes minutes: 100K char input +
+                                       # 8K token output at 60-90 t/s = 90-160s;
+                                       # 300s gives headroom for prompt processing
 _DEFAULT_LLM_MAX_INPUT_CHARS = 100000
-_DEFAULT_LLM_MAX_OUTPUT_TOKENS = 1536
+_DEFAULT_LLM_MAX_OUTPUT_TOKENS = 8192  # corpus data shows real compaction summaries
+                                       # need 6000-8000 tokens for 8 schema sections
+                                       # with actual session detail preserved
 _DEFAULT_LLM_DISABLE_REASONING = True
 _DEFAULT_SURVIVAL_PROFILE = "coding"
 _VALID_SURVIVAL_PROFILES = frozenset({_DEFAULT_SURVIVAL_PROFILE})
