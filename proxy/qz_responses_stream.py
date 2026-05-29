@@ -647,6 +647,11 @@ class ResponsesStreamRuntime:
         self.upstream = upstream.rstrip("/")
         self.authorization = authorization or "Bearer local"
         self.reasoning_stream_format = reasoning_stream_format
+        # Lock serialises concurrent wfile.write() calls: the main stream loop
+        # and the execute() worker thread both call _write_chunk, and wfile is
+        # not thread-safe (write + flush are two separate calls).
+        import threading as _thr
+        self._chunk_lock = _thr.Lock()
         self.chunk_writer = chunk_writer
         self.stream_opener = stream_opener or self._open_upstream_stream
         self.capture_enabled = capture_enabled
@@ -767,10 +772,11 @@ class ResponsesStreamRuntime:
         return resp.readline()
 
     def _write_chunk(self, chunk: bytes):
-        try:
-            self.chunk_writer(chunk)
-        except (BrokenPipeError, ConnectionResetError, OSError) as exc:
-            raise ClientStreamDisconnected(str(exc) or exc.__class__.__name__) from exc
+        with self._chunk_lock:
+            try:
+                self.chunk_writer(chunk)
+            except (BrokenPipeError, ConnectionResetError, OSError) as exc:
+                raise ClientStreamDisconnected(str(exc) or exc.__class__.__name__) from exc
 
     def _inject_working_status(
         self,
@@ -2141,24 +2147,51 @@ class ResponsesStreamRuntime:
                                     "tool_call_started",
                                     self.proxy_tool_registry.telemetry_payload(hs.completed_call),
                                 )
-                                try:
-                                    result = self.proxy_tool_registry.execute(
-                                        hs.completed_call,
-                                        ProxyToolExecutionContext(
-                                            request_id=self.request_id,
-                                            counters=counters,
-                                            seen_signatures=seen_signatures,
-                                        ),
-                                    )
-                                except Exception as exc:
+                                # Run execute() in a worker thread so the main thread
+                                # can send SSE keepalives during blocking I/O (e.g.
+                                # web search HTTP calls).  _chunk_lock serialises
+                                # concurrent wfile writes between the two threads.
+                                import queue as _q
+                                import threading as _thr
+                                _result_q: _q.Queue = _q.Queue()
+                                _exec_call = hs.completed_call
+                                _exec_ctx = ProxyToolExecutionContext(
+                                    request_id=self.request_id,
+                                    counters=counters,
+                                    seen_signatures=seen_signatures,
+                                )
+                                def _execute_worker():
+                                    try:
+                                        _result_q.put(("ok", self.proxy_tool_registry.execute(_exec_call, _exec_ctx)))
+                                    except Exception as _exc:
+                                        _result_q.put(("err", _exc))
+                                _thr.Thread(target=_execute_worker, daemon=True).start()
+
+                                # Poll for result; send keepalives while waiting.
+                                _KEEPALIVE_INTERVAL = 1.5
+                                _exec_result = None
+                                _exec_error = None
+                                while True:
+                                    try:
+                                        _kind, _val = _result_q.get(timeout=_KEEPALIVE_INTERVAL)
+                                        if _kind == "ok":
+                                            _exec_result = _val
+                                        else:
+                                            _exec_error = _val
+                                        break
+                                    except _q.Empty:
+                                        self._write_chunk(b": qz tool executing\n\n")
+
+                                if _exec_error is not None:
                                     self._emit(
                                         "tool_call_failed",
                                         self.proxy_tool_registry.telemetry_payload(
                                             hs.completed_call,
-                                            error=str(exc),
+                                            error=str(_exec_error),
                                         ),
                                     )
-                                    raise
+                                    raise _exec_error
+                                result = _exec_result
                                 self._emit(
                                     "tool_call_completed",
                                     self.proxy_tool_registry.telemetry_payload(
