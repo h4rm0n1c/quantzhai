@@ -39,6 +39,10 @@ Do not include markdown fences, explanatory prose, or section commentary.
       may paraphrase the surface form, but you must not drop the concept,
       invert its polarity, or strip the cause/effect link. A `concepts`
       marker is a pointer to a discovered fact, not a string to copy.
+    - `eliminate:` planning scaffolding markers ("Let me X", "Now I'll Y").
+      Content containing these markers is derivable from its outcomes and
+      contributes nothing to the session delta. Remove it entirely — do not
+      compress it, do not summarise it, do not reference it. Kill it.
 - Preserve negative constraints verbatim (e.g. "do not set X to Y").
 - Preserve behavioral guardrails and user corrections as first-class entries.
 - Preserve evidence-to-decision chains:

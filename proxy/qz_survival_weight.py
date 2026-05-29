@@ -182,6 +182,50 @@ SEMANTIC_PATTERNS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Level 3: Frieza patterns — scaffolding / planning narration
+#
+# These identify content that is DERIVABLE from its outcomes and should be
+# eliminated by the compactor, not summarised.  Planning narration ("Let me
+# read X", "Now I'll Y") fills context budget without contributing to the
+# session delta.  The compactor may remove Frieza items entirely.
+#
+# Design rules:
+#   - Fire only at the start of an action-intent sentence (anchored to
+#     planning verbs, not discovery verbs).
+#   - Must NOT fire when the sentence contains a discovery/conclusion
+#     (L1/L2 patterns already handle that case by suppressing L3).
+#   - Four patterns cover the corpus Frieza population without over-fitting.
+# ---------------------------------------------------------------------------
+FRIEZA_PATTERNS = {
+    # "Let me X" / "Let me also X" / "Let me continue X" — planning opener
+    "planning_let_me": re.compile(
+        r'(?:^|(?<=[.!?\n]))\s*(?:Let me|let me)\s+(?:also\s+|now\s+|continue\s+|'
+        r'start\s+(?:by\s+)?|begin\s+(?:by\s+)?)?(?:read|check|look|examine|inspect|'
+        r'run|verify|update|review|write|add|find|search|list|get|fetch|try|test|'
+        r'see|explore|understand|summarize|outline|create|fix|make|do|use|open|'
+        r'move|go|call|apply|build|set|put|load)\b',
+        re.IGNORECASE | re.MULTILINE),
+    # "Now I'll X" / "Now I need to X" / "Now let me X"
+    "planning_now": re.compile(
+        r'(?:^|(?<=[.!?\n]))\s*Now\s+(?:I\'ll|I will|I need to|let me|I should|'
+        r'I can|I have to|I must|we need to|we should)\s+\w+',
+        re.IGNORECASE | re.MULTILINE),
+    # "I'll start by X" / "I'll begin by X" / "I'm going to X"
+    "planning_intent": re.compile(
+        r'(?:^|(?<=[.!?\n]))\s*I\'(?:ll|m going to|m about to|d like to|ve got to)\s+'
+        r'(?:start\s+(?:by\s+)?|begin\s+(?:by\s+)?|need to\s+)?'
+        r'(?:read|check|look|examine|inspect|run|verify|update|review|write|add|'
+        r'find|search|list|get|fetch|try|test|see|explore|understand|create|fix|'
+        r'make|do|use|open|move|go|call|apply|build|set|put|load)\b',
+        re.IGNORECASE | re.MULTILINE),
+    # "This is a X task" / "This is an X/Y task" — task-framing opener
+    "planning_frame": re.compile(
+        r'(?:^|(?<=[.!?\n]))\s*This is (?:a|an) \w+(?:\s*/\s*\w+)? task\b',
+        re.IGNORECASE | re.MULTILINE),
+}
+
+
 # Weighting overrides
 HEAVY_FEATURES = {"path", "command", "env_var", "sha", "issue_ref", "version", "error_string",
                   "negation", "user_correction", "build_file", "language_command", "c_macro",
@@ -258,10 +302,8 @@ def score_text(text: str) -> list[SurvivalSpan]:
             last_end = m["end"]
             seen_texts.add(m["text"])
 
-    # Level-2: semantic patterns. Fire AT MOST ONCE per category per text
-    # (paraphrasable concepts; we don't need every match). Span text is the
-    # matched lexeme — purely a marker; the concept itself is the surrounding
-    # sentence, which the LLM holds in the raw conversation prefix.
+    # Level-2: semantic patterns — concepts to preserve (paraphrase allowed).
+    has_l2 = False
     for name, pattern in SEMANTIC_PATTERNS.items():
         m = pattern.search(text)
         if not m:
@@ -269,6 +311,7 @@ def score_text(text: str) -> list[SurvivalSpan]:
         marker = m.group(0).strip()
         if not marker or marker in seen_texts:
             continue
+        has_l2 = True
         selected_spans.append(SurvivalSpan(
             text=marker,
             weight="medium",
@@ -279,6 +322,31 @@ def score_text(text: str) -> list[SurvivalSpan]:
             level=2,
         ))
         seen_texts.add(marker)
+
+    # Level-3 (Frieza): scaffolding / planning narration — eliminate signal.
+    # Only fires when the item has NO level-1 or level-2 signals.  Mixed items
+    # (planning opener + substantive discovery) are not Frieza — the L1/L2
+    # signal wins.  A Frieza tag tells the compactor: remove this item entirely
+    # rather than summarising it.
+    if not selected_spans and not has_l2:
+        for name, pattern in FRIEZA_PATTERNS.items():
+            m = pattern.search(text)
+            if not m:
+                continue
+            marker = m.group(0).strip()
+            if not marker or marker in seen_texts:
+                continue
+            selected_spans.append(SurvivalSpan(
+                text=marker,
+                weight="light",
+                exactness_risk="low",
+                features=(name,),
+                start=m.start(),
+                end=m.end(),
+                level=3,
+            ))
+            seen_texts.add(marker)
+            break  # one Frieza tag per item is enough
 
     return selected_spans
 
@@ -362,16 +430,14 @@ def score_items(items: list[dict]) -> list[SurvivalSpan]:
 def format_survival_hints(spans: list[SurvivalSpan], *, max_spans: int = 80) -> str:
     """Format spans as contextual guidance for the compaction prompt.
 
-    Produces up to three inline lines:
-      - ``verbatim``: Level-1 heavy atoms (paths, SHAs, commands, env vars,
-        errors, negations, etc.) — LLM must copy these exactly.
-      - ``context``: Level-1 medium atoms (flags, test names, code symbols,
-        decision-boundary markers) — preserve in context, exactness still
-        matters.
-      - ``concepts``: Level-2 semantic patterns (causal explanations,
-        constraint discoveries, corrections, investigation outcomes, failure
-        records). The LLM must preserve the *meaning* of the sentence
-        containing each marker but may paraphrase the surface form.
+    Produces up to four inline lines:
+      - ``verbatim``: Level-1 heavy atoms — copy exactly, no paraphrase.
+      - ``context``: Level-1 medium atoms — preserve, exactness matters.
+      - ``concepts``: Level-2 semantic markers — preserve the meaning of the
+        containing sentence; surface form may be paraphrased.
+      - ``eliminate``: Level-3 Frieza markers — planning scaffolding that is
+        derivable from its outcomes. Remove these items entirely; do not
+        summarise them.
     """
     if not spans:
         return ""
@@ -397,28 +463,37 @@ def format_survival_hints(spans: list[SurvivalSpan], *, max_spans: int = 80) -> 
     selected = sorted_spans[:max_spans]
 
     verbatim = []
-    context = []
+    context_atoms = []
     concepts = []
+    eliminate = []
     for s in selected:
         display = s.text if len(s.text) <= 80 else s.text[:38] + "…" + s.text[-39:]
-        if getattr(s, "level", 1) == 2:
+        lvl = getattr(s, "level", 1)
+        if lvl == 3:
+            eliminate.append(display)
+        elif lvl == 2:
             concepts.append(display)
         elif s.weight == "heavy":
             verbatim.append(display)
         else:
-            context.append(display)
+            context_atoms.append(display)
 
     lines = [
         "Atoms to preserve verbatim — integrate in context, do not create atom-type sections:",
     ]
     if verbatim:
         lines.append("  verbatim: " + " • ".join(verbatim))
-    if context:
-        lines.append("  context: " + " • ".join(context))
+    if context_atoms:
+        lines.append("  context: " + " • ".join(context_atoms))
     if concepts:
         lines.append(
             "  concepts (preserve meaning, paraphrase allowed): "
             + " • ".join(concepts)
+        )
+    if eliminate:
+        lines.append(
+            "  eliminate (scaffolding — remove entirely, do not summarise): "
+            + " • ".join(eliminate)
         )
 
     return "\n".join(lines)
