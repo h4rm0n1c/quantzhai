@@ -277,7 +277,7 @@ def _request_admission_state(
     # Runtime crash: child was killed by signal (OOM abort, segfault) during
     # serving.  Terminal — the model must be explicitly re-selected to retry.
     if router_status == "crashed":
-        return "failed"
+        return "failed_runtime_crash"
     if not selected_identity:
         return "unavailable"
     if last_load_result == "failed" or launch_model_error:

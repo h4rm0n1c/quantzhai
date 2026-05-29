@@ -346,8 +346,25 @@ class RequestRouter:
         return str(model_status.get("request_admission_state") or "") in {
             "failed",
             "failed_gpu_not_available",
+            "failed_runtime_crash",
             "unavailable",
         }
+
+    @staticmethod
+    def _terminal_failure_message(model_status: dict) -> str:
+        """Return a human-readable failure message for the terminal hold-open state."""
+        admission = str(model_status.get("request_admission_state") or "failed")
+        if admission == "failed_runtime_crash":
+            return (
+                "Model crashed during inference (runtime OOM or abort). "
+                "It will not auto-reload. Use /model to select a different model."
+            )
+        if admission == "failed_gpu_not_available":
+            return (
+                "Model loaded on CPU — GPU offload failed. "
+                "Use /model to select a model that fits in VRAM."
+            )
+        return "model did not become ready during stream hold-open"
 
     def _write_responses_stream_failure(
         self,
@@ -418,7 +435,7 @@ class RequestRouter:
                 self._write_responses_stream_failure(
                     request_id=request_id,
                     requested_model=requested_model,
-                    message="model did not become ready during stream hold-open",
+                    message=self._terminal_failure_message(model_status),
                     reason=str(model_status.get("request_admission_state") or "failed"),
                 )
                 return False
@@ -666,9 +683,10 @@ class RequestRouter:
                     return False
 
             # Dedup 2: skip if this model crashed recently (runtime OOM/abort).
-            # Prevents tight reload→crash→reload loops while keeping the backend
-            # healthy for other models. The operator can override by explicitly
-            # selecting a model via POST /qz/model/select-and-restart.
+            # Prevents tight reload→OOM→crash→reload loops. The operator can
+            # override by explicitly calling POST /qz/model/select-and-restart.
+            # Also dedup if admission is already failed_runtime_crash to avoid
+            # spurious retriggers before crash is fully propagated.
             if callable(getattr(mgr, "is_runtime_crash_recent", None)):
                 if mgr.is_runtime_crash_recent(requested):
                     return False
