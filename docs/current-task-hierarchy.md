@@ -1,7 +1,7 @@
 # QuantZhai Current Task Hierarchy
 
 Date: 2026-05-30
-Status: active control sheet — router mode fully correct; profile alias routing fixed; hold-open 503 eliminated; model switching solid end-to-end.
+Status: active control sheet — router mode correct; VRAM metrics live (#52 closed); SSE visibility shipped; async tool executor done; next: operational store design (#51/#46).
 
 ## 2026-05-30: Profile alias routing, hold-open 503, dual-load prevention
 

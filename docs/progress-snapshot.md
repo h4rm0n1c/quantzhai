@@ -1,6 +1,6 @@
 # QuantZhai Progress Snapshot
 
-Last updated: 2026-05-30 (profile alias routing fixed, hold-open 503 eliminated, model switching solid).
+Last updated: 2026-05-30 (profile alias routing, hold-open 503, VRAM backend metrics, SSE visibility, async tool executor).
 
 See `docs/current-stocktake.md` for the full point-in-time state summary.
 
@@ -11,13 +11,27 @@ we overall?" without rereading every roadmap.
 
 Current estimate: **98% through stabilisation for the local Codex + Qwen goal**.
 
-The 2026-05-30 session closed the remaining router-mode contract violations: profile
-alias routing (qwen-blank.gguf symlinks now load by their real GGUF name so
-load-name and forward-name match), hold-open 503 eliminated (stale failure state no
-longer terminates hold-open during active loads), dual-load prevention complete
-(_direct_mode_reload now unloads before loading, same-GGUF optimisation covers both
-auto-trigger and explicit select-and-restart paths). Same-GGUF profile switches are
-instant (<50ms). All model switching verified live end-to-end.
+The 2026-05-30 session delivered:
+
+Router-mode contract violations all closed: profile alias routing fixed (symlinks
+load by real GGUF so load-name and forward-name match), hold-open 503 eliminated,
+dual-load prevention complete, same-GGUF switches instant (<50ms).
+
+VRAM backend metrics (#52 closed): TurboQuant C++ patch adds per-device
+{model_bytes, kv_bytes, compute_bytes, free_bytes} to /v1/models via
+llama_get_memory_breakdown(). Proxy vram snapshot now uses these as backend-confirmed
+sources instead of nvidia-smi calibration for MODEL_RUNTIME and KV_ALLOC.
+
+SSE visibility: web_search_call output_item.added now includes the action/query field
+so Codex shows "Searching the web: [exact query]" immediately. Working-status
+synthetic reasoning items injected before function_call suppression ("Applying
+changes...", "Running command...", etc.). "Loading [model]..." during hold-open.
+
+Async proxy-local tool executor: execute() runs in a worker thread; main loop sends
+SSE keepalives every 1.5s during blocking I/O. _chunk_lock serialises concurrent
+wfile writes. Python GIL releases during urllib socket I/O — real parallelism.
+
+"User sees a pause, not an error" principle codified in AGENTS.md.
 
 The 2026-05-29 session delivered: router mode fully live (seamless in-session model
 switching confirmed end-to-end), two GPU/crash reliability fixes (issues #79 and #80),
