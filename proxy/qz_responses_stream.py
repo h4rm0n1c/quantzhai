@@ -772,6 +772,73 @@ class ResponsesStreamRuntime:
         except (BrokenPipeError, ConnectionResetError, OSError) as exc:
             raise ClientStreamDisconnected(str(exc) or exc.__class__.__name__) from exc
 
+    def _inject_working_status(
+        self,
+        status_text: str,
+        output_index: int,
+        sequence: int,
+        summary_started: set,
+    ) -> int:
+        """Inject a self-contained synthetic reasoning item with status text.
+
+        Creates a minimal output_item.added → reasoning_summary_part.added →
+        reasoning_summary_text.delta → output_item.done lifecycle so Codex renders
+        the status text in its dimmed thinking section immediately.
+
+        Use this whenever the SSE channel would otherwise be silent while the proxy
+        is working — tool argument assembly, execution gaps, inter-hop waits.
+
+        Returns the updated sequence number.
+        """
+        import uuid as _uuid
+        item_id = f"rs_status_{self.request_id[:8]}_{_uuid.uuid4().hex[:8]}"
+
+        # output_item.added (type=reasoning, empty summary)
+        sequence += 1
+        self._write_chunk(_sse_block_with_sequence("response.output_item.added", {
+            "output_index": output_index,
+            "item": {
+                "id": item_id,
+                "type": "reasoning",
+                "summary": [],
+                "encrypted_content": None,
+                "status": "in_progress",
+            },
+        }, sequence))
+
+        # reasoning_summary_part.added
+        sequence += 1
+        self._write_chunk(_sse_block_with_sequence("response.reasoning_summary_part.added", {
+            "item_id": item_id,
+            "output_index": output_index,
+            "summary_index": 0,
+            "part": {"type": "summary_text", "text": ""},
+        }, sequence))
+        summary_started.add(item_id)
+
+        # reasoning_summary_text.delta — the visible status text
+        sequence += 1
+        self._write_chunk(_sse_block_with_sequence("response.reasoning_summary_text.delta", {
+            "item_id": item_id,
+            "delta": status_text,
+            "summary_index": 0,
+        }, sequence))
+
+        # output_item.done — close the reasoning item cleanly
+        sequence += 1
+        self._write_chunk(_sse_block_with_sequence("response.output_item.done", {
+            "output_index": output_index,
+            "item": {
+                "id": item_id,
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": status_text}],
+                "encrypted_content": None,
+                "status": "completed",
+            },
+        }, sequence))
+
+        return sequence
+
     def _emit(self, event_type: str, payload: dict | None = None):
         self.telemetry_emitter.emit(event_type, payload)
 
@@ -1648,6 +1715,7 @@ class ResponsesStreamRuntime:
                         stream_no_output_timeout_s=self.stream_no_output_timeout_s,
                         stream_terminal_timeout_s=self.stream_terminal_timeout_s,
                     )
+                    _status_injected_for_call = False  # one injection per function_call
 
                     def sync_terminal_read_timeout(now):
                         if hs.watchdog_state.first_terminal_at is not None:
@@ -1844,6 +1912,48 @@ class ResponsesStreamRuntime:
                             # Codex currently treats response.output_item.added for function_call
                             # as runnable even when arguments are still streaming, which can execute
                             # an empty-argument command before response.function_call_arguments.done.
+                            #
+                            # Inject a synthetic reasoning status so the user sees something
+                            # immediately instead of silence while arguments assemble.
+                            if (not _status_injected_for_call
+                                    and event_type == "response.output_item.added"
+                                    and isinstance(payload, dict)
+                                    and isinstance(payload.get("item"), dict)):
+                                _item = payload["item"]
+                                _tool = str(_item.get("name") or "")
+                                # web_search already shows output_item.added with query detail —
+                                # skip injection to avoid redundant "Using web_search..." + "Searching..."
+                                _is_proxy_local = self.proxy_tool_registry.is_proxy_local_name(_tool)
+                                if not _is_proxy_local:
+                                    _STATUS_MAP = {
+                                        "apply_patch":       "Applying changes...",
+                                        "exec_command":      "Running command...",
+                                        "update_plan":       "Updating plan...",
+                                        "request_user_input":"Waiting for input...",
+                                        "view_image":        "Loading image...",
+                                        "spawn_agent":       "Spawning agent...",
+                                        "send_input":        "Sending to agent...",
+                                        "resume_agent":      "Resuming agent...",
+                                        "wait_agent":        "Waiting for agent...",
+                                    }
+                                    if _tool in _STATUS_MAP:
+                                        _status = _STATUS_MAP[_tool]
+                                    elif any(k in _tool for k in ("shell", "bash", "exec", "run", "cmd")):
+                                        _status = "Running command..."
+                                    elif any(k in _tool for k in ("patch", "write", "edit", "file")):
+                                        _status = "Applying changes..."
+                                    elif _tool:
+                                        _status = f"Using {_tool}..."
+                                    else:
+                                        _status = "Working..."
+                                    try:
+                                        _inject_idx = max(0, hs.max_output_index + 1)
+                                        sequence = self._inject_working_status(
+                                            _status, _inject_idx, sequence, summary_started
+                                        )
+                                    except Exception:
+                                        pass
+                                _status_injected_for_call = True
                             abort_reason = hs.tool_call_state.abort_reason(
                                 time.time(),
                                 self.private_function_call_timeout_s,

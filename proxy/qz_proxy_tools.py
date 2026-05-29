@@ -172,6 +172,14 @@ class ProxyLocalToolRegistry:
             and call.get("name") in self._executors
         )
 
+    def is_proxy_local_name(self, name: str) -> bool:
+        """True when the tool name is handled proxy-locally (e.g. web_search).
+
+        Used to skip redundant working-status injection for tools that already
+        emit a visible output_item.added before execution starts.
+        """
+        return isinstance(name, str) and name in self._executors
+
     def completed_call_decision(
         self,
         call: dict,

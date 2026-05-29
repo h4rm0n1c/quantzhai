@@ -412,6 +412,45 @@ class RequestRouter:
         if reset_capture:
             write_request_capture(request_id, "forwarded-sse.raw", b"", mode="bytes")
 
+        # Inject a synthetic reasoning status so users see what's happening
+        # during model switch/load instead of a silent throbber.
+        _hold_status_sent = False
+        _hold_status_sequence = 1
+        _hold_status_item_id = f"rs_hold_{request_id[:8]}"
+        _hold_status_summary_started: set = set()
+
+        def _send_hold_open_status(status_text: str) -> None:
+            nonlocal _hold_status_sent, _hold_status_sequence
+            _iid = f"rs_hold_{request_id[:8]}_{uuid.uuid4().hex[:6]}"
+            def _block(ev, payload):
+                payload = dict(payload)
+                payload["type"] = ev
+                payload["sequence_number"] = _hold_status_sequence
+                return make_sse_block(ev, payload)
+            for _ev, _payload in [
+                ("response.output_item.added", {
+                    "output_index": 0,
+                    "item": {"id": _iid, "type": "reasoning", "summary": [],
+                             "encrypted_content": None, "status": "in_progress"},
+                }),
+                ("response.reasoning_summary_part.added", {
+                    "item_id": _iid, "output_index": 0, "summary_index": 0,
+                    "part": {"type": "summary_text", "text": ""},
+                }),
+                ("response.reasoning_summary_text.delta", {
+                    "item_id": _iid, "delta": status_text, "summary_index": 0,
+                }),
+                ("response.output_item.done", {
+                    "output_index": 0,
+                    "item": {"id": _iid, "type": "reasoning",
+                             "summary": [{"type": "summary_text", "text": status_text}],
+                             "encrypted_content": None, "status": "completed"},
+                }),
+            ]:
+                self._write_sse_chunk(_block(_ev, _payload), request_id=request_id)
+                _hold_status_sequence += 1  # noqa: F821 (nonlocal updated above)
+            _hold_status_sent = True
+
         while True:
             now = time.monotonic()
             if now >= next_keepalive:
@@ -419,6 +458,21 @@ class RequestRouter:
                     b": qz hold-open waiting for model readiness\n\n",
                     request_id=request_id,
                 )
+                if not _hold_status_sent:
+                    # First keepalive: inject informative status so the user sees
+                    # what's happening instead of just a silent connection.
+                    _model_label = str(
+                        (selected_model or {}).get("label")
+                        or (selected_model or {}).get("key")
+                        or requested_model
+                        or "model"
+                    ).removesuffix(".gguf")
+                    _switch_state = str(model_status.get("model_switch_state") or "")
+                    if _switch_state in ("restarting", "loading") or not _hold_status_sent:
+                        try:
+                            _send_hold_open_status(f"Loading {_model_label}...")
+                        except Exception:
+                            pass
                 next_keepalive = now + HOLDOPEN_LOADING_KEEPALIVE_SECONDS
 
             active_ready, _requested_key, _requested_backend, request_matches_active = (
