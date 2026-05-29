@@ -590,20 +590,38 @@ class BackendManagerLifecycleTests(unittest.TestCase):
 
     # --- start() ---
 
-    def test_start_issues_rm_then_run(self):
-        runner, calls = self._ok_runner()
+    def test_start_fresh_issues_rm_then_run(self):
+        """When container is not running, start() must rm -f then docker run."""
+        calls = []
+        def runner(args, timeout=None):
+            calls.append(args)
+            if "ps" in args:
+                return 0, "", ""  # container NOT running → fresh start path
+            return 0, "", ""
         health_checker = lambda url, timeout=3.0: True
         mgr = _make_mgr(runner=runner, health_checker=health_checker)
         result = mgr.start()
         self.assertTrue(result["ok"])
-        # Wait for lifecycle thread to complete
         self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
-        # rm -f must come before run
         rm_idx = next((i for i, a in enumerate(calls) if "rm" in a), None)
         run_idx = next((i for i, a in enumerate(calls) if "run" in a), None)
-        self.assertIsNotNone(rm_idx, "docker rm not called")
-        self.assertIsNotNone(run_idx, "docker run not called")
+        self.assertIsNotNone(rm_idx, "docker rm not called on fresh start")
+        self.assertIsNotNone(run_idx, "docker run not called on fresh start")
         self.assertLess(rm_idx, run_idx, "rm must precede run")
+
+    def test_start_reconnects_if_container_already_healthy(self):
+        """When container is already running and healthy, start() must NOT rm or run."""
+        runner, calls = self._ok_runner()  # ps returns container running
+        health_checker = lambda url, timeout=3.0: True
+        mgr = _make_mgr(runner=runner, health_checker=health_checker)
+        result = mgr.start()
+        self.assertTrue(result["ok"])
+        self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
+        self.assertEqual(mgr.phase, PHASE_HEALTHY)
+        rm_called = any("rm" in a for a in calls)
+        run_called = any("run" in a for a in calls)
+        self.assertFalse(rm_called, "docker rm must NOT be called when container already healthy")
+        self.assertFalse(run_called, "docker run must NOT be called when container already healthy")
 
     def test_start_success_reaches_healthy(self):
         runner, _ = self._ok_runner()
@@ -1661,12 +1679,14 @@ class BuildDockerRunArgsDirectModeTests(unittest.TestCase):
     def test_direct_mode_without_launch_model_fails_start(self):
         """Direct mode + empty launch_model doesn't fail start because we can load model later."""
         runner_calls = []
+        ps_count = [0]
         def runner(args, timeout=None):
             runner_calls.append(args)
-            # docker ps must return the container name so the health loop
-            # doesn't think the container exited prematurely
             if "ps" in args:
-                return 0, "test-ctr", ""
+                ps_count[0] += 1
+                # First ps call is the reconnect check — return empty (not running).
+                # Subsequent ps calls are from the health-check loop — return running.
+                return 0, ("" if ps_count[0] == 1 else "test-ctr"), ""
             return 0, "", ""
         health_checker = lambda url, timeout=3.0: True
         mgr = _make_mgr(

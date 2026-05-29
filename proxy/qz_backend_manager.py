@@ -883,135 +883,177 @@ class BackendManager:
         self._do_start()
 
     def _do_start(self) -> None:
-        """Background: rm -f, docker run, then health-check loop."""
+        """Background: attach to or start the backend container, then GPU-check.
+
+        In router mode the container is a persistent service that must survive
+        proxy restarts.  Killing and restarting a healthy container causes
+        CUDA_ERROR_INITIALIZATION_ERROR because the GPU driver has not finished
+        releasing the previous context before the new container initialises.
+
+        Three cases:
+          1. Container already running and healthy → reconnect, skip rm+run.
+          2. Container running but unhealthy → rm -f then fresh run.
+          3. Container not running → rm -f (clean up stale name) then run.
+        """
         try:
-            # Remove any existing container first (match qz-up semantics)
-            self._runner(self.build_docker_rm_args(force=True), timeout=30.0)
-
-            with self._lock:
-                self._state.phase = PHASE_STARTING
-                # Refresh launch_model_* on the state snapshot so observers
-                # see what we're actually launching with.
-                self._state.backend_model_mode = "direct"
-                self._state.launch_model_key = self._launch_model_key
-                self._state.launch_model_backend_id = self._launch_model_backend_id
-                self._state.launch_model_path_basename = self._launch_model_path_basename
-                self._state.launch_model_error = None
-            self._emit("backend_starting", {
-                "backend_model_mode": "direct",
-                "launch_model_backend_id": self._launch_model_backend_id,
-            })
-
-            rc, _out, err = self._runner(self.build_docker_run_args(), timeout=60.0)
-            if rc != 0:
-                raise RuntimeError(f"docker run failed (rc={rc}): {err.strip()}")
-
-            with self._lock:
-                self._state.phase = PHASE_RUNNING
-                self._state.container_running = True
-                self._state.last_started_at = _iso_now()
-            self._emit("backend_started")
-
-            # Health-check loop
             health_url = f"http://{self._server_host}:{self._server_port}/health"
-            deadline = time.monotonic() + self._health_check_timeout
-            while time.monotonic() < deadline:
-                # Check container still running
+            try:
                 rc_ps, out_ps, _ = self._runner(self.build_docker_ps_args(), timeout=5.0)
-                if rc_ps != 0 or self._container_name not in out_ps:
-                    raise RuntimeError("container exited before becoming healthy")
-                if self._health_checker(health_url, timeout=3.0):
-                    # Trigger eager load of the selected model if any
-                    if getattr(self, "_launch_model_path_basename", None):
-                        # Run in background to not block the health check loop immediately,
-                        # though the GPU check below will wait.
-                        import threading
-                        threading.Thread(
-                            target=self.load_model_http,
-                            args=(self._launch_model_path_basename,),
-                            daemon=True
-                        ).start()
-                    # GPU offload grace window.
-                    # /health passing does not guarantee model-load log lines are
-                    # written yet.  Treat any non-GPU provisional state (unknown,
-                    # failed, cpu_fallback) as provisional within the bounded retry
-                    # window — only GPU success or window expiry is terminal.
-                    # The backend stays in PHASE_RUNNING throughout so
-                    # request_admission_state remains "loading", not "failed".
-                    gpu_state, gpu_err = self._check_gpu_offload_from_logs()
-                    # Only supplement with the model inventory check when docker
-                    # logs are ambiguous.  Hard failures (CUDA init error,
-                    # CPU_Mapped) are confirmed negative signals and still block.
-                    if gpu_state == "unknown":
-                        api_state, _ = self._check_gpu_offload_from_models_api()
-                        if api_state == "gpu":
-                            gpu_state, gpu_err = "gpu", None
-                    if self._require_gpu and gpu_state != "gpu":
-                        retries_left = self._gpu_check_retry_count
-                        while retries_left > 0 and gpu_state != "gpu":
-                            # Container-exit check: if it died during the window,
-                            # fail immediately rather than spinning until deadline.
-                            rc_ps2, out_ps2, _ = self._runner(
-                                self.build_docker_ps_args(), timeout=5.0
-                            )
-                            if rc_ps2 != 0 or self._container_name not in out_ps2:
-                                gpu_state = "failed"
-                                gpu_err = "container exited during GPU offload verification"
-                                break
-                            time.sleep(self._gpu_check_retry_delay)
-                            gpu_state, gpu_err = self._check_gpu_offload_from_logs()
-                            if gpu_state == "unknown":
-                                api_state, _ = self._check_gpu_offload_from_models_api()
-                                if api_state == "gpu":
-                                    gpu_state, gpu_err = "gpu", None
-                            retries_left -= 1
-                    if gpu_state == "unknown" and self._require_gpu:
-                        gpu_state = "unknown_after_retries"
-                        gpu_err = (
-                            f"GPU offload state could not be confirmed after "
-                            f"{self._gpu_check_retry_count} retries. "
-                            "Logs may be unavailable or model load not yet complete."
+                _already_running = rc_ps == 0 and self._container_name in out_ps
+                _already_healthy = _already_running and self._health_checker(health_url, timeout=3.0)
+            except Exception:
+                _already_running = False
+                _already_healthy = False
+
+            if _already_healthy:
+                # Case 1: container is up and the router responds — reconnect.
+                with self._lock:
+                    self._state.phase = PHASE_RUNNING
+                    self._state.backend_model_mode = "direct"
+                    self._state.launch_model_key = self._launch_model_key
+                    self._state.launch_model_backend_id = self._launch_model_backend_id
+                    self._state.launch_model_path_basename = self._launch_model_path_basename
+                    self._state.launch_model_error = None
+                    self._state.container_running = True
+                    self._state.last_started_at = _iso_now()
+                self._emit("backend_started")
+            else:
+                # Cases 2 & 3: rm -f (ignores rc) then fresh docker run.
+                self._runner(self.build_docker_rm_args(force=True), timeout=30.0)
+
+                with self._lock:
+                    self._state.phase = PHASE_STARTING
+                    self._state.backend_model_mode = "direct"
+                    self._state.launch_model_key = self._launch_model_key
+                    self._state.launch_model_backend_id = self._launch_model_backend_id
+                    self._state.launch_model_path_basename = self._launch_model_path_basename
+                    self._state.launch_model_error = None
+                self._emit("backend_starting", {
+                    "backend_model_mode": "direct",
+                    "launch_model_backend_id": self._launch_model_backend_id,
+                })
+
+                rc, _out, err = self._runner(self.build_docker_run_args(), timeout=60.0)
+                if rc != 0:
+                    raise RuntimeError(f"docker run failed (rc={rc}): {err.strip()}")
+
+                with self._lock:
+                    self._state.phase = PHASE_RUNNING
+                    self._state.container_running = True
+                    self._state.last_started_at = _iso_now()
+                self._emit("backend_started")
+
+                # Health-check loop (only for fresh starts)
+                deadline = time.monotonic() + self._health_check_timeout
+                while time.monotonic() < deadline:
+                    rc_ps, out_ps, _ = self._runner(self.build_docker_ps_args(), timeout=5.0)
+                    if rc_ps != 0 or self._container_name not in out_ps:
+                        raise RuntimeError("container exited before becoming healthy")
+                    if not self._health_checker(health_url, timeout=3.0):
+                        time.sleep(self._health_check_interval)
+                        continue
+                    break
+                else:
+                    raise RuntimeError(
+                        f"backend did not become healthy within {self._health_check_timeout:.0f}s"
+                    )
+
+            # Health confirmed (either reconnected or fresh start passed above).
+            # Trigger model load and GPU check — same path for both cases.
+            if True:
+                # Trigger eager load of the selected model if any
+                if getattr(self, "_launch_model_path_basename", None):
+                    import threading
+                    threading.Thread(
+                        target=self.load_model_http,
+                        args=(self._launch_model_path_basename,),
+                        daemon=True
+                    ).start()
+                # GPU offload grace window.
+                # /health passing does not guarantee model-load log lines are
+                # written yet.  Treat any non-GPU provisional state (unknown,
+                # failed, cpu_fallback) as provisional within the bounded retry
+                # window — only GPU success or window expiry is terminal.
+                # The backend stays in PHASE_RUNNING throughout so
+                # request_admission_state remains "loading", not "failed".
+                gpu_state, gpu_err = self._check_gpu_offload_from_logs()
+                # Supplement with the model inventory check when logs are
+                # ambiguous OR when the parent router logged a hard CUDA
+                # failure during its own init (router mode: the parent never
+                # loads models, so its CUDA init failure is benign — children
+                # use separate CUDA contexts).  If the API confirms a loaded
+                # model with n-gpu-layers > 0, override the log-based failure.
+                # CPU_Mapped stays blocking (it's unambiguous about CPU use).
+                if gpu_state in ("unknown", "failed"):
+                    api_state, _ = self._check_gpu_offload_from_models_api()
+                    if api_state == "gpu":
+                        gpu_state, gpu_err = "gpu", None
+                if self._require_gpu and gpu_state != "gpu":
+                    retries_left = self._gpu_check_retry_count
+                    while retries_left > 0 and gpu_state != "gpu":
+                        # Container-exit check: if it died during the window,
+                        # fail immediately rather than spinning until deadline.
+                        rc_ps2, out_ps2, _ = self._runner(
+                            self.build_docker_ps_args(), timeout=5.0
                         )
-                    _gpu_observed: bool | None = (
-                        True if gpu_state == "gpu"
-                        else False if gpu_state in ("cpu_fallback", "failed")
-                        else None
+                        if rc_ps2 != 0 or self._container_name not in out_ps2:
+                            gpu_state = "failed"
+                            gpu_err = "container exited during GPU offload verification"
+                            break
+                        time.sleep(self._gpu_check_retry_delay)
+                        gpu_state, gpu_err = self._check_gpu_offload_from_logs()
+                        if gpu_state in ("unknown", "failed"):
+                            api_state, _ = self._check_gpu_offload_from_models_api()
+                            if api_state == "gpu":
+                                gpu_state, gpu_err = "gpu", None
+                        retries_left -= 1
+                if gpu_state == "unknown" and self._require_gpu:
+                    gpu_state = "unknown_after_retries"
+                    gpu_err = (
+                        f"GPU offload state could not be confirmed after "
+                        f"{self._gpu_check_retry_count} retries. "
+                        "Logs may be unavailable or model load not yet complete."
                     )
-                    _gpu_blocking = self._require_gpu and gpu_state in (
-                        "cpu_fallback", "failed", "unknown_after_retries"
-                    )
-                    if _gpu_blocking and gpu_state == "unknown_after_retries":
-                        # Router mode: the parent server is a pure message-router
-                        # and never loads a model itself.  Neither docker logs nor
-                        # the model inventory found GPU evidence — the selected
-                        # model is probably still loading asynchronously via HTTP.
-                        # Let the backend proceed to HEALTHY so it can serve
-                        # requests once a model is ready.  Hard failures (CUDA
-                        # init error, CPU_Mapped) still block via the elif below.
-                        gpu_state = "unknown"
-                        gpu_err = None
-                        _gpu_observed = None
-                        _gpu_blocking = False
-                    elif _gpu_blocking:
-                        err_str = gpu_err or f"GPU not used (gpu_offload_state={gpu_state})"
-                        with self._lock:
-                            self._state.phase = PHASE_FAILED
-                            self._state.backend_health_ok = False
-                            self._state.gpu_offload_state = gpu_state
-                            self._state.gpu_observed = _gpu_observed
-                            self._state.gpu_error = gpu_err
-                            self._state.last_error = err_str
-                        self._emit("backend_failed", {"error": err_str, "gpu_offload_state": gpu_state})
-                        return
+                _gpu_observed: bool | None = (
+                    True if gpu_state == "gpu"
+                    else False if gpu_state in ("cpu_fallback", "failed")
+                    else None
+                )
+                _gpu_blocking = self._require_gpu and gpu_state in (
+                    "cpu_fallback", "failed", "unknown_after_retries"
+                )
+                if _gpu_blocking and gpu_state == "unknown_after_retries":
+                    # Router mode: the parent server is a pure message-router
+                    # and never loads a model itself.  Neither docker logs nor
+                    # the model inventory found GPU evidence — the selected
+                    # model is probably still loading asynchronously via HTTP.
+                    # Let the backend proceed to HEALTHY so it can serve
+                    # requests once a model is ready.  Hard failures (CUDA
+                    # init error, CPU_Mapped) still block via the elif below.
+                    gpu_state = "unknown"
+                    gpu_err = None
+                    _gpu_observed = None
+                    _gpu_blocking = False
+                elif _gpu_blocking:
+                    err_str = gpu_err or f"GPU not used (gpu_offload_state={gpu_state})"
                     with self._lock:
-                        self._state.phase = PHASE_HEALTHY
-                        self._state.backend_health_ok = True
-                        self._state.last_healthy_at = _iso_now()
+                        self._state.phase = PHASE_FAILED
+                        self._state.backend_health_ok = False
                         self._state.gpu_offload_state = gpu_state
                         self._state.gpu_observed = _gpu_observed
                         self._state.gpu_error = gpu_err
-                    self._emit("backend_healthy")
+                        self._state.last_error = err_str
+                    self._emit("backend_failed", {"error": err_str, "gpu_offload_state": gpu_state})
                     return
+                with self._lock:
+                    self._state.phase = PHASE_HEALTHY
+                    self._state.backend_health_ok = True
+                    self._state.last_healthy_at = _iso_now()
+                    self._state.gpu_offload_state = gpu_state
+                    self._state.gpu_observed = _gpu_observed
+                    self._state.gpu_error = gpu_err
+                self._emit("backend_healthy")
+                return
                 time.sleep(self._health_check_interval)
 
             raise RuntimeError(
