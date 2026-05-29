@@ -1,7 +1,68 @@
 # QuantZhai Current Task Hierarchy
 
-Date: 2026-05-26
-Status: active control sheet — #61 Slice A design complete; Slice B (implementation) is next; #52 is upstream-blocked; #8 is long-term RFC; 3641 tests pass.
+Date: 2026-05-29
+Status: active control sheet — router mode live; #79 and #80 closed; compaction working end-to-end; 4187 tests pass.
+
+## 2026-05-29: Router mode, GPU fixes, compaction, MTP
+
+```text
+COMPLETE — full session delivery:
+
+Router mode live (commit 3d18458):
+  - Seamless in-session model switching confirmed end-to-end
+  - Unload→load HTTP, no container restarts, one model at a time (VRAM constraint)
+  - Model selection persists across proxy restarts (source="qz_codex" in SELECTED_SOURCES)
+  - Dedup guard: is_load_in_flight() + snapshot() (no extra build_model_status call)
+  - Hold-open unconditional for /v1/responses stream=True (QZ_HOLDOPEN_LOADING removed)
+
+GPU detection #79 (commit 0992d89 — CLOSED):
+  - _scan_gpu_log_lines() extracted as shared module-level scanner
+  - _check_gpu_offload_from_logs() filters [PORT] child lines — child CUDA failures
+    no longer kill the parent backend phase (PHASE_FAILED false positive fixed)
+  - _check_gpu_offload_for_loaded_model(model_id) polls /v1/models for child port,
+    scans port-scoped logs post-load for GPU confirmation
+  - _unload_then_load() calls post-load check; unloads on CPU fallback detection
+  - 15 new tests
+
+Runtime crash detection #80 (commits f090f53, b5399d3 — CLOSED):
+  - BackendManager tracks proxy_loaded_models / proxy_unloaded_models
+  - When router shows loaded→unloaded without proxy calling unload: crash detected
+  - router_status="crashed" → admission="failed_runtime_crash" (terminal)
+  - 120s auto-trigger dedup prevents OOM loop
+  - Actionable error message in Codex: "Model crashed during inference... use /model"
+  - 5 new tests
+
+LLM v3 compaction (commit 3e94900):
+  - Fixed: compactor was sending {"model":"local-model"} → router 400 not found
+  - Fixed: pass launch_model_backend_id from backend_resolution_detail to payload
+
+Survival scorer generalised (commit 5005e64):
+  - Removed model_name (Qwen/gemini-/GPT- — AI-specific, zero hits in 8/10 repos)
+  - Cleaned version (removed localcmp:v/Codex-specific prefixes)
+  - Cleaned error_string (removed 3 LLM-specific literals)
+  - Added import_path (Python/JS/Rust/Go/PHP/C imports — fired in every repo)
+  - Added sql_keyword (DDL/DML verbs — zero coverage before)
+  - Corpus expanded to 10 repos: added qdb (PHP webapp) and snippetcms (PHP CMS)
+
+Compaction schema redesigned (commit ca9a346):
+  - Removed ## Technical State and atom-bucket subsections from compact-v0.md
+  - Survival hints now guidance text ("integrate in context") not atom inventory
+  - Atoms appear contextually in semantic sections, not in type buckets
+
+Tensor split corrected (commit c6d737a):
+  - Default was 9,17 (wrong — over-allocates V100)
+  - Fixed to 10,16 matching actual hardware (RTX3080=10GB, V100=16GB)
+  - Running config had 10,15 (stale shell env override) — corrected
+
+MTP draft speculation (commit 62bb002):
+  - models-preset.ini: per-model spec-type=draft-mtp for MTP-Preserved GGUFs
+  - build_backend_args() auto-includes --models-preset when file exists
+  - Confirmed: IQ4_XS loaded with both draft-mtp and ngram-mod active at 10,16 split
+
+qz-build-image fixed (commit 4e1997d):
+  - qz-docker-quantzhai wrapper denied docker build (only allows runtime ops)
+  - Fixed to use raw sudo docker for build step
+```
 
 ## #73 Remove unsupported custom_tool_call_input.done (2026-05-26)
 

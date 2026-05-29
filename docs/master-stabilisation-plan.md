@@ -2,13 +2,18 @@
 
 ## Status
 
+**2026-05-29 update**: Router mode migration complete. GPU reliability fixes (#79
+load-time CPU fallback, #80 runtime crash detection) shipped. LLM v3 compaction
+working end-to-end. Survival scorer generalised to 10-repo corpus. MTP draft
+speculation confirmed on IQ4_XS. See `docs/router-mode-migration-plan.md` for
+the full completion checklist. Active focus: operational-store substrate (#46)
+and docs/contracts audit pass.
+
 Open master plan. Phase 1 breakage fixes, telemetry schema base, monitor
 fallback cleanup, concurrent monitor smoke, stream timing telemetry, qz-top
 host-local VRAM split, request-scoped stream captures, reasoning-effort policy,
 the first config ownership/layering pass, and the evidence-backed Responses
-stream/tool state table are live-smoked or regression-covered. The active
-engineering focus now moves to finishing the generic tool lifecycle boundary
-before broader refactors.
+stream/tool state table are live-smoked or regression-covered.
 
 This is the controlling map for the current QuantZhai stabilisation work. It ties together the known bug notes, observability agenda, and configuration-contract plan.
 

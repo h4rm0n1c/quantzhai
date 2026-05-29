@@ -1,6 +1,6 @@
 # QuantZhai Progress Snapshot
 
-Last updated: 2026-05-20 (post-#37/#56 close-out stocktake).
+Last updated: 2026-05-29 (router mode live, GPU/crash fixes, compaction improvements).
 
 See `docs/current-stocktake.md` for the full point-in-time state summary.
 
@@ -9,14 +9,16 @@ we overall?" without rereading every roadmap.
 
 ## Overall
 
-Current estimate: **95% through stabilisation for the local Codex + Qwen goal**.
+Current estimate: **97% through stabilisation for the local Codex + Qwen goal**.
+
+The 2026-05-29 session delivered: router mode fully live (seamless in-session model
+switching confirmed end-to-end), two GPU/crash reliability fixes (issues #79 and #80),
+LLM v3 compaction fixed, survival scorer generalised across 10-repo corpus, compaction
+schema redesigned for better LLM-guided output, MTP draft speculation working on
+IQ4_XS, and tensor split corrected to 10,16.
 
 The 2026-05-20 run closed: #37 (stream seam extraction, Slices 1–2J), #56 (generated
 artifact migration, A1/A2/A3 under var/generated/). Major structural work is now done.
-
-The 2026-05-19 run closed: #56/#57/#58 (generated artifacts, qz-codex always-HTTP).
-
-The 2026-05-18 run closed: #53/#54 (BrainCase), #3/#4/#43 (repeated-read v1).
 
 The remaining risk is the state substrate: SQLite operational store has not been
 designed or implemented. This is the next architectural decision.
@@ -41,8 +43,10 @@ Recently closed: #5, #37, #53, #54, #56, #57, #58, #3/#4/#43.
 
 ## Area estimates
 
-- **Core usable stack:** 94%
-  Known-good local flow. Suite is green at 2566 tests.
+- **Core usable stack:** 97%
+  Router mode live: in-session model switching (unload→load HTTP, no container
+  restarts) confirmed working. Suite is green at 208+ backend tests; full suite
+  at 4187 pass. GPU detection, runtime crash detection, and compaction all working.
   Live smoke (`scripts/qz-live-smoke`) validates the end-to-end path reliably.
 - **Config/model/profile correctness:** 89%
   qz.profiles.v1 is the active format. memory_domain is wired from profile
@@ -59,10 +63,12 @@ Recently closed: #5, #37, #53, #54, #56, #57, #58, #3/#4/#43.
   calibrated MODEL_RUNTIME, MODEL_FILE provenance, KV_ALLOC from runtime budget.
   Recovery system fully operational. Compaction/stream hang watchdog (#40) and
   backend allocator metrics (#52, upstream-blocked) remain.
-- **LLM signal system:** 72%
-  Reasoning-effort prompts simplified. Hop/context pressure signals, compaction
-  bridge, and profile eval work are delivered. Repeated-read v1 plan is approved;
-  not yet implemented.
+- **LLM signal system:** 78%
+  Reasoning-effort prompts simplified. Compaction bridge delivered and now
+  working end-to-end: LLM v3 (anchored summary, survival-weighted) confirmed
+  live; survival scorer generalised to 10-repo corpus (PHP/SQL/web coverage added);
+  schema redesigned — no atom-bucket sections, hints guide LLM contextually.
+  Repeated-read v1 plan is approved; not yet implemented.
 - **State/memory substrate:** 78%
   BrainCaseDB is the first concrete LimbiCore technology (#53/#54 closed).
   render/recall/write_candidate tools live; operator review and retention CLI live.
@@ -129,7 +135,9 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 
 ## Immediate next priorities
 
-1. **#46 Slice B-impl** — create `qz_operational_store.py` (schema_meta/runtime_events/runtime_facts only). A-design + A.2-correction complete. #51 needs reframing; backoff/cooldown NOT in scope.
+1. **Docs / contracts audit pass** — router mode migration plan, current-task-hierarchy, and master-stabilisation-plan all need update to reflect 2026-05-29 work.
+2. **Issue #80 P2 follow-up** — `_unload_then_load` needs to surface the crash to model state (`last_load_result = failed`) so it persists across proxy restarts; auto-revert to `last_good` on crash is deferred.
+3. **#46 Slice B-impl** — create `qz_operational_store.py` (schema_meta/runtime_events/runtime_facts only). A-design + A.2-correction complete.
 
 ## Remaining big rocks
 
@@ -151,12 +159,17 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 16. ~~Repeated-read v1 advisory signal~~ — done (#3/#4/#43 closed); qz_file_signal.py live.
 17. ~~Stream seam extraction~~ — done (#37 closed, Slices 1–2J); StreamHopState + StreamRunState + 6 pure helpers.
 18. ~~Generated artifact migration~~ — done (#56 closed); A1/A2/A3 under var/generated/.
-19. Streaming reliability — structurally improved; side-effect residual bounded in place by design.
-20. LLM signal system — repeated-read v1 done; repeated-read v2 blocked on SQLite.
-21. Phase 1 SQLite substrate — parked (#2); BrainCaseDB proven but operational store TBD.
-22. qz-write-runtime-state replacement (#46) — OperationalStore Slice B+C (next concrete work).
-23. Recovery/backoff state persistence (#51) — needs reframing; backoff/cooldown persistence NOT wanted.
-22. Split proxy into a conventional Python package — later.
-23. Add backend adapter boundary — later.
-24. Later: MCP/app bridge, search packet mode, redaction, run grouping, rendered
+19. ~~Router mode model switching~~ — done (2026-05-29); unload→load HTTP, one model at a time, selection persists.
+20. ~~GPU detection false positive (#79)~~ — done (2026-05-29); child log filtering, port-scoped post-load check.
+21. ~~Runtime crash detection (#80)~~ — done (2026-05-29); inventory delta tracking, 120s backoff, actionable messages.
+22. ~~LLM v3 compaction~~ — done (2026-05-29); correct model backend_id, survival scorer generalised, schema redesigned.
+23. ~~MTP draft speculation~~ — done (2026-05-29); models-preset.ini, confirmed on IQ4_XS at 10,16 split.
+24. Streaming reliability — structurally improved; side-effect residual bounded in place by design.
+25. LLM signal system — repeated-read v1 done; repeated-read v2 blocked on SQLite.
+26. Phase 1 SQLite substrate — parked (#2); BrainCaseDB proven but operational store TBD.
+27. qz-write-runtime-state replacement (#46) — OperationalStore Slice B+C (next concrete work).
+28. Recovery/backoff state persistence (#51) — needs reframing; backoff/cooldown persistence NOT wanted.
+29. Split proxy into a conventional Python package — later.
+30. Add backend adapter boundary — later.
+31. Later: MCP/app bridge, search packet mode, redaction, run grouping, rendered
     state packets, roleplay/HSM-specific renderers.
