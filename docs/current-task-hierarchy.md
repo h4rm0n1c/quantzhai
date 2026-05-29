@@ -1,7 +1,60 @@
 # QuantZhai Current Task Hierarchy
 
-Date: 2026-05-29
-Status: active control sheet — router mode live; #79 and #80 closed; compaction working end-to-end; 4187 tests pass.
+Date: 2026-05-30
+Status: active control sheet — router mode fully correct; profile alias routing fixed; hold-open 503 eliminated; model switching solid end-to-end.
+
+## 2026-05-30: Profile alias routing, hold-open 503, dual-load prevention
+
+```text
+COMPLETE — all router-mode contract violations closed:
+
+Profile alias routing (commits 37d0120, f3b590e):
+  - Root cause: proxy init and _set_manager_launch_model both used entry.get("filename")
+    (symlink name, e.g. "qwen-blank.gguf") as the load target. Router registered model
+    as "qwen-blank" but requests forwarded as backend_id ("Qwen3.6-35B-A3B-...IQ4_XS").
+    Every request 404'd at the router level.
+  - Fix: both sites now use backend_target first, so load-name and forward-name match.
+  - quantzhai_proxy.py line ~886: backend_target > filename priority.
+  - _set_manager_launch_model: removed is_profile_alias block; always load by backend_target.
+
+Dual-load prevention (commit 37d0120):
+  - _do_start() reconnect path no longer fires eager load_model_http(). On reconnect the
+    container is already serving — auto-trigger handles load on the first request.
+  - get_active_model_ids() added to BackendManager: returns {model_id: state} for both
+    loaded AND loading models. Used by same-GGUF optimisation in auto-trigger.
+  - _direct_mode_reload: now calls get_loaded_model_ids() + unload_model_http() before
+    loading a new model. Prevents dual-loading via the explicit select-and-restart path.
+
+Same-GGUF optimisation (commits 37d0120, f3b590e):
+  - Switching between a profile alias (qwen-blank) and its real model (IQ4_XS), or
+    between two aliases of the same GGUF (kuato/caveman), is now instant (<50ms).
+  - _auto_trigger: checks get_active_model_ids() — if same backend_target already
+    loaded or loading, skips the unload→load cycle and updates selection only.
+  - _direct_mode_reload: checks if filename_stem already loaded → returns immediately.
+
+Hold-open 503 elimination (commit f3b590e):
+  - _request_admission_state: stale last_load_result="failed" no longer terminates
+    hold-open when router_status="loading" (active load in progress).
+  - Auto-trigger clears last_load_result before starting unload→load thread so the
+    brief router_status="unloaded" window between unload and load acceptance also
+    falls through to "loading" (via launch_matches_selected) not "failed".
+  - Log classifier (_record_load_observation) now only runs on the failure branch.
+    Previously ran on success paths too, finding stale VRAM OOM messages from prior
+    loads and triggering false rollbacks on valid same-GGUF shortcuts.
+
+Test suite updated:
+  - test_qz_backend_autostart_invariants: replaced pre-router-mode tests (expecting
+    -m flag, requiring failure when no model set) with correct router-mode tests:
+    reconnect skips docker run; fresh start omits -m; starting without a model is
+    valid. 4187+ tests passing.
+
+Live verified (2026-05-30):
+  - qwen-blank → IQ4_XS (same GGUF): 0.034s
+  - IQ4_XS → qwen-blank (same GGUF): 0.028s
+  - qwen-blank → NEO-CODE (real switch): 26s
+  - NEO-CODE → qwen-blank (real switch): 45s
+  - All ok:true, correct selected_key, correct loaded_model, last_load_result="loaded"
+```
 
 ## 2026-05-29: Router mode, GPU fixes, compaction, MTP
 

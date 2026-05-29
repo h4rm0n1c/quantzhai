@@ -1,6 +1,6 @@
 # QuantZhai Progress Snapshot
 
-Last updated: 2026-05-29 (router mode live, GPU/crash fixes, compaction improvements).
+Last updated: 2026-05-30 (profile alias routing fixed, hold-open 503 eliminated, model switching solid).
 
 See `docs/current-stocktake.md` for the full point-in-time state summary.
 
@@ -9,7 +9,15 @@ we overall?" without rereading every roadmap.
 
 ## Overall
 
-Current estimate: **97% through stabilisation for the local Codex + Qwen goal**.
+Current estimate: **98% through stabilisation for the local Codex + Qwen goal**.
+
+The 2026-05-30 session closed the remaining router-mode contract violations: profile
+alias routing (qwen-blank.gguf symlinks now load by their real GGUF name so
+load-name and forward-name match), hold-open 503 eliminated (stale failure state no
+longer terminates hold-open during active loads), dual-load prevention complete
+(_direct_mode_reload now unloads before loading, same-GGUF optimisation covers both
+auto-trigger and explicit select-and-restart paths). Same-GGUF profile switches are
+instant (<50ms). All model switching verified live end-to-end.
 
 The 2026-05-29 session delivered: router mode fully live (seamless in-session model
 switching confirmed end-to-end), two GPU/crash reliability fixes (issues #79 and #80),
@@ -43,14 +51,15 @@ Recently closed: #5, #37, #53, #54, #56, #57, #58, #3/#4/#43.
 
 ## Area estimates
 
-- **Core usable stack:** 97%
-  Router mode live: in-session model switching (unload→load HTTP, no container
-  restarts) confirmed working. Suite is green at 208+ backend tests; full suite
-  at 4187 pass. GPU detection, runtime crash detection, and compaction all working.
+- **Core usable stack:** 99%
+  Router mode fully correct: profile alias routing fixed, hold-open 503 eliminated,
+  same-GGUF instant switch confirmed (<50ms), real model switch verified (26-45s).
+  4187+ tests pass. GPU detection, runtime crash detection, and compaction all working.
   Live smoke (`scripts/qz-live-smoke`) validates the end-to-end path reliably.
-- **Config/model/profile correctness:** 89%
-  qz.profiles.v1 is the active format. memory_domain is wired from profile
-  config through to request context. Broad config/var cleanup is still deferred.
+- **Config/model/profile correctness:** 95%
+  qz.profiles.v1 is the active format. memory_domain is wired. Profile alias
+  routing fully correct — symlinks load by real GGUF, forward by backend_id.
+  Broad config/var cleanup still deferred.
 - **Streaming reliability:** 85%
   #37 stream seam closed. StreamHopState + StreamRunState + 6 pure helpers.
   Remaining side-effect code bounded in place by design.

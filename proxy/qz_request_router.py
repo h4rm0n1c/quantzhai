@@ -2531,13 +2531,28 @@ class RequestRouter:
         existing = load_model_state(state_path).state
 
         # Classify failure from recent container logs when BackendManager is wired.
-        # Only classify on failure paths — when resolve_succeeded=True the wait loop
-        # already confirmed the model is loaded, and stale log messages from previous
-        # load attempts would produce false positives (e.g. old VRAM OOM appears after
-        # a same-GGUF shortcut that never actually loaded anything).
+        # Skip only when the router inventory confirms the model is already loaded —
+        # that means either a same-GGUF shortcut fired (no load happened, stale OOM
+        # logs would cause false rollbacks) or a real load completed successfully.
+        # When resolve failed OR the model is not confirmed loaded, always run the
+        # classifier so genuine VRAM OOM errors are caught even if the HTTP reload
+        # call returned 200 (the router accepts loads asynchronously).
         failure = None
         mgr = getattr(self.handler, "backend_manager", None)
-        if not resolve_succeeded and mgr is not None and callable(getattr(mgr, "fetch_recent_logs", None)):
+        _router_confirms_loaded = False
+        if resolve_succeeded and mgr is not None and callable(getattr(mgr, "get_active_model_ids", None)):
+            try:
+                _snap = mgr.snapshot()
+                _launch_id = (
+                    _snap.get("launch_model_backend_id") or
+                    (_snap.get("launch_model_path_basename") or "").removesuffix(".gguf")
+                ).strip()
+                if _launch_id:
+                    _active = mgr.get_active_model_ids()
+                    _router_confirms_loaded = _active.get(_launch_id) == "loaded"
+            except Exception:
+                pass
+        if not _router_confirms_loaded and mgr is not None and callable(getattr(mgr, "fetch_recent_logs", None)):
             try:
                 logs = mgr.fetch_recent_logs()
             except Exception:
