@@ -2006,7 +2006,7 @@ def once():
 def main():
     parser = argparse.ArgumentParser(description="QuantZhai top-style monitor")
     parser.add_argument("--once", "-1", action="store_true", help="print one snapshot and exit")
-    parser.add_argument("-i", "--interval", type=float, default=1.0, help="refresh interval in seconds")
+    parser.add_argument("-i", "--interval", type=float, default=0.5, help="refresh interval in seconds")
     args = parser.parse_args()
 
     if args.once:
