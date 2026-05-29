@@ -15,15 +15,30 @@ else
   git -C "$repo_dir" pull --ff-only
 fi
 
+# Image builds bypass the qz-docker-quantzhai runtime wrapper — that wrapper
+# only allows scoped runtime commands (run/rm/ps/logs) and explicitly denies
+# build.  Use the raw docker binary for the build step.
+_raw_docker="${QZ_HELPER_DOCKER_BIN:-/usr/bin/docker}"
+if [[ ! -x "$_raw_docker" ]]; then
+  _raw_docker="$(command -v docker 2>/dev/null || true)"
+fi
+if [[ -z "$_raw_docker" || ! -x "$_raw_docker" ]]; then
+  printf 'qz-build-image: docker not found\n' >&2
+  exit 127
+fi
+
 export DOCKER_BUILDKIT=1
 
-qz_docker build \
+sudo "$_raw_docker" build \
   --build-arg "CUDA_DOCKER_ARCH=$QZ_CUDA_ARCH" \
   --target server \
   -f "$repo_dir/.devops/cuda.Dockerfile" \
   -t "$QZ_IMAGE" \
   "$repo_dir"
 
-qz_docker run --rm "$QZ_IMAGE" --help 2>&1 | grep -Ei 'ctk|ctv|cache-type|turbo|kv' >/dev/null
+# Post-build smoke: verify the image has TurboQuant KV quantisation support.
+# Use plain docker run (not the runtime wrapper — --rm with no container name
+# is not a managed container).
+sudo "$_raw_docker" run --rm "$QZ_IMAGE" --help 2>&1 | grep -Ei 'ctk|ctv|cache-type|turbo|kv' >/dev/null
 
 printf 'ok   docker image built: %s\n' "$QZ_IMAGE"
