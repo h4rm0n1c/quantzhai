@@ -267,12 +267,17 @@ def _request_admission_state(
     launch_matches_selected: bool = False,
     gpu_required: bool = True,
     gpu_offload_state: str = "unknown",
+    router_status: str = "unloaded",
 ) -> str:
     if selected_model_ready:
         return "ready"
     # GPU gate: if require_gpu is set and GPU confirmed absent, report explicitly.
     if gpu_required and gpu_offload_state in ("cpu_fallback", "failed", "unknown_after_retries"):
         return "failed_gpu_not_available"
+    # Runtime crash: child was killed by signal (OOM abort, segfault) during
+    # serving.  Terminal — the model must be explicitly re-selected to retry.
+    if router_status == "crashed":
+        return "failed"
     if not selected_identity:
         return "unavailable"
     if last_load_result == "failed" or launch_model_error:
@@ -455,6 +460,24 @@ def build_model_status(handler: Any) -> dict[str, Any]:
             except Exception:
                 pass
 
+    # Runtime crash detection: if the model is now unloaded but the proxy
+    # confirmed it was loaded (and did not call unload_model_http()), the
+    # child process crashed at runtime (SIGABRT, SIGSEGV, OOM abort).
+    # The router does not set failed=True for signal-killed processes because
+    # WEXITSTATUS returns 0 for them — this is the only host-visible signal.
+    if router_status == "unloaded" and launch_model_path_basename:
+        model_stem = launch_model_path_basename
+        if model_stem.endswith(".gguf"):
+            model_stem = model_stem[:-5]
+        _confirmed_loaded = callable(getattr(mgr, "was_proxy_confirmed_loaded", None)) and \
+                            mgr.was_proxy_confirmed_loaded(model_stem)
+        _proxy_unloaded = callable(getattr(mgr, "was_proxy_unloaded_explicitly", None)) and \
+                          mgr.was_proxy_unloaded_explicitly(model_stem)
+        if _confirmed_loaded and not _proxy_unloaded:
+            router_status = "crashed"
+            if callable(getattr(mgr, "record_runtime_crash", None)):
+                mgr.record_runtime_crash(model_stem)
+
     # GPU gate: if require_gpu=True and GPU is not confirmed, model is not ready.
     # Blocking GPU states: cpu_fallback, failed, unknown_after_retries.
     # "unknown" (before retry completes) is non-blocking — admitted tentatively.
@@ -495,6 +518,7 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         launch_matches_selected=launch_matches_selected,
         gpu_required=gpu_required,
         gpu_offload_state=gpu_offload_state,
+        router_status=router_status,
     )
 
     recommended_action = _recommended_action(

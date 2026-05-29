@@ -657,14 +657,20 @@ class RequestRouter:
             if mgr is None:
                 return False
 
-            # Dedup: skip if a load for this exact target is already in flight.
-            # Avoids re-triggering a switch that is already in progress.
-            # Uses mgr.snapshot() + is_load_in_flight() — no build_model_status call.
+            # Dedup 1: skip if a load for this exact target is already in flight.
             if callable(getattr(mgr, "is_load_in_flight", None)) and mgr.is_load_in_flight():
                 snap = mgr.snapshot()
                 current_launch = (snap.get("launch_model_path_basename") or "").strip()
                 current_stem = current_launch[:-5] if current_launch.endswith(".gguf") else current_launch
                 if requested and requested in (current_launch, current_stem):
+                    return False
+
+            # Dedup 2: skip if this model crashed recently (runtime OOM/abort).
+            # Prevents tight reload→crash→reload loops while keeping the backend
+            # healthy for other models. The operator can override by explicitly
+            # selecting a model via POST /qz/model/select-and-restart.
+            if callable(getattr(mgr, "is_runtime_crash_recent", None)):
+                if mgr.is_runtime_crash_recent(requested):
                     return False
 
             self._set_manager_launch_model(requested, mgr)
