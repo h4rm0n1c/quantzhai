@@ -6,6 +6,33 @@ QuantZhai is a local Codex stack for running Qwen through a TurboQuant llama.cpp
 
 Keep the repo small and reproducible. Runtime state belongs in `var/`; source, config examples, scripts, and docs belong in git.
 
+## Proxy Experience Principle
+
+**The user sees a pause. They don't see an error.**
+
+This is the design ethos for every failure mode the proxy can encounter.
+
+When bad things happen — model switches, child crashes, VRAM exhaustion, backend
+timeouts, stale state — the proxy's job is to absorb the disruption and recover
+transparently. The SSE channel stays open. Keepalives flow. The inference resumes
+when the system is ready. Codex experiences latency, not failure.
+
+An error surfaced to Codex (`response.failed`, `503`, raw exception text) is a
+proxy design failure, not a backend failure. The backend is allowed to crash.
+The proxy is not allowed to pass that crash through.
+
+Concrete rules that follow from this:
+- Hold-open before forwarding. Never admit a request to a model that isn't ready.
+- When a child crashes mid-session, reload it and retry on the same SSE channel.
+- When switching models, hold-open until the new model is confirmed loaded.
+- When state is stale (last_load_result="failed"), clear it before the next attempt.
+- A `response.failed` event is a last resort — exhausted recovery budget, not first response.
+- BrokenPipe on the client side is a transport failure, not an error; swallow it.
+- Log failures internally. Expose recovery status as SSE comments, not as errors.
+
+When writing new failure paths: ask "does the user see a pause, or do they see an
+error?" If the answer is error, the path is not finished.
+
 ## Router Mode
 
 QuantZhai uses llama.cpp router mode. The container stays alive; models are loaded and unloaded via HTTP. See `docs/router-mode-migration-plan.md` for history and remaining P2 cleanup.
