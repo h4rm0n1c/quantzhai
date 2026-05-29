@@ -3906,6 +3906,93 @@ class RequestRouter:
                             runtime_log("latest-stream-runtime-error.txt", traceback.format_exc())
                         except Exception:
                             pass
+
+                        # --- Transparent dead-child recovery ---
+                        # When the inference child crashes the router keeps showing the
+                        # model as "loaded" but returns HTTP 500 on every forwarded request.
+                        # Detect this pattern (5xx + model still appears loaded) and trigger
+                        # a silent reload, holding the SSE channel open with keepalive comments
+                        # so Codex just experiences a pause rather than an error.
+                        _recovered = False
+                        import urllib.error as _ue
+                        if isinstance(e, _ue.HTTPError) and e.code >= 500:
+                            _mgr = getattr(self.handler, "backend_manager", None)
+                            if _mgr is not None:
+                                try:
+                                    _active = (
+                                        _mgr.get_active_model_ids()
+                                        if callable(getattr(_mgr, "get_active_model_ids", None))
+                                        else {}
+                                    )
+                                    _fname = (_mgr.snapshot().get("launch_model_path_basename") or "").strip()
+                                    if _active and _fname:
+                                        # Model shows loaded but requests are 500 → dead child.
+                                        # Unload the stale router entry and spawn a fresh child.
+                                        import threading as _thr
+                                        _ids = list(_active.keys())
+                                        def _dead_child_reload(_ids=_ids, _fname=_fname, _mgr=_mgr):
+                                            for _mid in _ids:
+                                                try: _mgr.unload_model_http(_mid)
+                                                except Exception: pass
+                                            try: _mgr.load_model_http(_fname)
+                                            except Exception: pass
+                                        _thr.Thread(target=_dead_child_reload, daemon=True).start()
+
+                                        # Wait for the fresh child to be ready (≤90s).
+                                        # Send SSE keepalive comments so Codex does not time out.
+                                        try:
+                                            from .qz_model_status import build_model_status as _bms
+                                        except ImportError:
+                                            from qz_model_status import build_model_status as _bms
+                                        _rdeadline = time.monotonic() + 90.0
+                                        while time.monotonic() < _rdeadline:
+                                            self._write_sse_chunk(b": qz model recovering\n\n")
+                                            time.sleep(1.0)
+                                            try:
+                                                _ms = _bms(self.handler)
+                                                if (
+                                                    _ms.get("selected_model_ready")
+                                                    and _ms.get("request_admission_state") == "ready"
+                                                ):
+                                                    _recovered = True
+                                                    break
+                                            except Exception:
+                                                pass
+                                except Exception:
+                                    pass
+
+                        if _recovered:
+                            # Retry the original request transparently on the same SSE channel.
+                            try:
+                                stream_result = self._run_responses_streaming_locally(
+                                    body,
+                                    client_model,
+                                    request_id=request_id,
+                                    selected_model=selected_model,
+                                    reasoning_stream_format=effective_reasoning_stream_format,
+                                )
+                                self._emit_request_telemetry(
+                                    "request_completed",
+                                    started_at,
+                                    upstream_path,
+                                    client_model,
+                                    backend_model=backend_model,
+                                    stream=True,
+                                    status=200,
+                                    usage=stream_result.get("usage") if isinstance(stream_result, dict) else None,
+                                    prompt_ms=stream_result.get("prompt_ms") if isinstance(stream_result, dict) else None,
+                                    gen_ms=stream_result.get("gen_ms") if isinstance(stream_result, dict) else None,
+                                    output_items=stream_result.get("output_items") if isinstance(stream_result, dict) else None,
+                                    runtime_metrics=runtime_metrics,
+                                    request_id=request_id,
+                                )
+                                self.handler.close_connection = True
+                                _ar.finish(request_id)
+                                return
+                            except Exception as e:
+                                # Retry also failed — fall through to response.failed.
+                                pass
+
                         self._emit_request_telemetry(
                             "request_failed",
                             started_at,
