@@ -638,6 +638,89 @@ def _probe_backend_process(container: str, timeout: float = 1.5) -> dict:
     return result
 
 
+def _probe_backend_memory(handler=None, base_url: str | None = None, timeout: float = 1.5) -> tuple[dict | None, str]:
+    """Fetch per-device VRAM breakdown from /v1/models meta.memory for the loaded model.
+
+    Returns (memory_dict, error_note).  memory_dict is None if unavailable or if the
+    loaded model entry does not carry meta.memory (old container without the patch).
+
+    Prefers the BackendManager's cached get_models_status() to avoid a redundant HTTP
+    round-trip when the proxy already has fresh router state.
+    """
+    # Fast path: BackendManager already fetched /v1/models recently
+    if handler is not None:
+        try:
+            mgr = getattr(handler, "backend_manager", None)
+            if mgr is not None and callable(getattr(mgr, "get_models_status", None)):
+                data = mgr.get_models_status(timeout=1.0) or {}
+                for entry in (data.get("data") or []):
+                    if not isinstance(entry, dict):
+                        continue
+                    s = entry.get("status") or {}
+                    if (s.get("value") if isinstance(s, dict) else s) != "loaded":
+                        continue
+                    # memory is a top-level key on the model entry, added by our
+                    # server.cpp patch.  Older containers without the patch omit it.
+                    mem = entry.get("memory")
+                    if isinstance(mem, dict) and isinstance(mem.get("gpus"), list):
+                        return mem, ""
+        except Exception:
+            pass
+
+    # HTTP fallback (e.g. when called without a handler)
+    url = (base_url or _backend_base_url()) + "/v1/models"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            data = _json.loads(resp.read().decode("utf-8", errors="replace"))
+        for entry in (data.get("data") or []):
+            if not isinstance(entry, dict):
+                continue
+            s = entry.get("status") or {}
+            if (s.get("value") if isinstance(s, dict) else s) != "loaded":
+                continue
+            mem = entry.get("memory")
+            if isinstance(mem, dict) and isinstance(mem.get("gpus"), list):
+                return mem, ""
+        return None, "no loaded model with memory field in /v1/models"
+    except Exception as exc:
+        return None, str(exc)
+
+
+def _gpus_from_backend_memory(mem: dict) -> list[dict]:
+    """Convert meta.memory GPU list to the snapshot GPU list format.
+
+    Used when nvidia-smi is unavailable. Fields that nvidia-smi would provide
+    (util_pct, power_w, temp_c) are absent — set to None.
+    """
+    MiB = 1024.0 * 1024.0
+    gpus = []
+    for i, g in enumerate((mem.get("gpus") or [])):
+        if not isinstance(g, dict):
+            continue
+        total_mib = max(0.0, g.get("total_bytes", 0) / MiB)
+        free_mib  = max(0.0, g.get("free_bytes",  0) / MiB)
+        used_mib  = max(0.0, total_mib - free_mib)
+        gpus.append({
+            "index":         str(i),
+            "name":          g.get("name", f"GPU{i}"),
+            "util_pct":      None,
+            "used_mib":      round(used_mib, 1),
+            "total_mib":     round(total_mib, 1),
+            "available_mib": round(free_mib, 1),
+            "power_w":       None,
+            "temp_c":        None,
+            "pcie_gen":      "",
+            "pcie_width":    "",
+            "source":        "backend-v1-models",
+            "confidence":    "backend-confirmed",
+            # Component breakdown from allocator (not available from nvidia-smi)
+            "model_mib":     round(g.get("model_bytes",   0) / MiB, 1),
+            "kv_mib":        round(g.get("kv_bytes",      0) / MiB, 1),
+            "compute_mib":   round(g.get("compute_bytes", 0) / MiB, 1),
+        })
+    return gpus
+
+
 def _parse_prometheus_text(text: str) -> dict[str, float]:
     """Parse Prometheus text format; return name → float. Ignores labels, skips bad lines."""
     metrics: dict[str, float] = {}
@@ -1206,6 +1289,7 @@ def _assemble_snapshot(
     catalog_entry: dict | None = None,
     catalog_entry_source: str = "unknown",
     kv_dtype: dict | None = None,
+    backend_memory: dict | None = None,
     cache_budget: dict | None = None,
 ) -> dict:
     """Assemble full qz.vram.snapshot.v1 dict from collected data.
@@ -1219,15 +1303,32 @@ def _assemble_snapshot(
     Backend allocator metrics always beat calibration or estimation.
     No estimate is ever marked backend_confirmed.
     """
+    # If nvidia-smi has no GPU data but backend memory is available, synthesise GPU
+    # entries from the allocator so totals and display are still populated.
+    _bmem = backend_memory or {}
+    _bmem_gpus = (_bmem.get("gpus") or []) if _bmem else []
+    if not gpus and _bmem_gpus:
+        gpus = _gpus_from_backend_memory(_bmem)
+
     host_observed         = len(gpus) > 0
     _bm                   = backend_metrics_summary or {}
-    backend_metrics_avail = bool(metrics) or bool(_bm.get("available"))
+    # backend_memory counts as backend-available even without Prometheus metrics
+    backend_metrics_avail = bool(metrics) or bool(_bm.get("available")) or bool(_bmem_gpus)
 
     total_used  = sum(g.get("used_mib", 0.0) for g in gpus)
     total_total = sum(g.get("total_mib", 0.0) for g in gpus)
     total_avail = max(0.0, total_total - total_used)
 
+    # When backend memory is present, derive backend_process_used from it directly
+    # (sum of used bytes per GPU) — more accurate than process-name matching.
     backend_process_used = backend_proc.get("process_used_mib")
+    if _bmem_gpus and backend_process_used is None:
+        MiB = 1024.0 * 1024.0
+        backend_process_used = sum(
+            max(0.0, g.get("total_bytes", 0) - g.get("free_bytes", 0)) / MiB
+            for g in _bmem_gpus if isinstance(g, dict)
+        ) or None
+
     normalized_metrics   = _normalize_prometheus_metrics(metrics) if metrics else {}
 
     catalog_entry = catalog_entry or {}
@@ -1235,7 +1336,7 @@ def _assemble_snapshot(
 
     # ------------------------------------------------------------------
     # KV_ALLOC — resolved first because MODEL calibration depends on it.
-    # Priority: backend metric > runtime cache budget > GGUF formula > unknown
+    # Priority: backend_memory > backend metric > runtime cache budget > GGUF formula
     # ------------------------------------------------------------------
     kv_alloc_mib               = None
     kv_alloc_src               = "unknown"
@@ -1246,8 +1347,19 @@ def _assemble_snapshot(
     kv_alloc_alt: dict         = {}
     kv_est: dict               = {}
 
+    # A-0. backend_memory (allocator-exact, highest priority)
+    if _bmem_gpus:
+        MiB = 1024.0 * 1024.0
+        raw = sum(g.get("kv_bytes", 0) for g in _bmem_gpus if isinstance(g, dict))
+        if raw > 0:
+            kv_alloc_mib               = max(0.0, raw / MiB)
+            kv_alloc_src               = "backend-v1-models/meta.memory"
+            kv_alloc_conf              = "backend-confirmed"
+            kv_alloc_estimated         = False
+            kv_alloc_backend_confirmed = True
+
     # A. Backend metric (backend-confirmed)
-    if "kv_cache_size_bytes" in normalized_metrics:
+    if kv_alloc_mib is None and "kv_cache_size_bytes" in normalized_metrics:
         raw = normalized_metrics["kv_cache_size_bytes"]
         if raw > 0:
             kv_alloc_mib               = max(0.0, raw / (1024.0 * 1024.0))
@@ -1326,8 +1438,21 @@ def _assemble_snapshot(
     model_is_calibrated     = False
     model_notes: list       = []
 
+    # A-0. backend_memory (allocator-exact, highest priority)
+    if _bmem_gpus:
+        MiB = 1024.0 * 1024.0
+        raw = sum(g.get("model_bytes", 0) for g in _bmem_gpus if isinstance(g, dict))
+        if raw > 0:
+            model_mib               = max(0.0, raw / MiB)
+            model_src               = "backend-v1-models/meta.memory"
+            model_conf              = "backend-confirmed"
+            model_label             = "MODEL_RUNTIME"
+            model_estimated         = False
+            model_backend_confirmed = True
+            model_is_calibrated     = False
+
     # A. Backend metric (backend-confirmed; wins over all estimates)
-    if "model_size_bytes" in normalized_metrics:
+    if model_mib is None and "model_size_bytes" in normalized_metrics:
         raw = normalized_metrics["model_size_bytes"]
         if raw > 0:
             model_mib               = max(0.0, raw / (1024.0 * 1024.0))
@@ -1688,6 +1813,7 @@ def build_vram_snapshot(handler=None, *, now: float | None = None) -> dict:
 
         gpus                      = _parse_nvidia_smi_gpus(timeout=2.0)
         backend_proc              = _probe_backend_process(container, timeout=1.5)
+        backend_memory, _bm_note  = _probe_backend_memory(handler, base_url, timeout=1.5)
         metrics, metrics_note     = _probe_backend_metrics(model_id, timeout=1.0)
         props, props_note         = _probe_props(model_id, base_url, timeout=1.0)
         slots, slots_note         = _probe_slots(model_id, base_url, timeout=1.0)
@@ -1710,6 +1836,7 @@ def build_vram_snapshot(handler=None, *, now: float | None = None) -> dict:
             catalog_entry_source=catalog_entry_source,
             kv_dtype=kv_dtype,
             cache_budget=cache_budget,
+            backend_memory=backend_memory,
         )
     except Exception as exc:
         return {
