@@ -14,7 +14,7 @@ class FakeWebRuntime:
     def __init__(self):
         self.calls = []
 
-    def execute_web_search_call(self, call, counters, seen_signatures, request_id=""):
+    def execute_web_search_call(self, call, counters, seen_signatures, request_id="", progress_cb=None):
         self.calls.append({
             "call": call,
             "counters": counters,
@@ -326,7 +326,7 @@ class LocalShellToolSearchItemContractTests(unittest.TestCase):
         from proxy.qz_proxy_tools import make_proxy_local_tool_registry
 
         class FakeWebRt:
-            def execute_web_search_call(self, call, counters, seen_signatures, request_id=""):
+            def execute_web_search_call(self, call, counters, seen_signatures, request_id="", progress_cb=None):
                 return type('R', (), {'public_item': {}, 'upstream_items': (), 'sources': ()})()
 
         registry = make_proxy_local_tool_registry(FakeWebRt())
@@ -347,7 +347,7 @@ class LocalShellToolSearchItemContractTests(unittest.TestCase):
         from proxy.qz_proxy_tools import make_proxy_local_tool_registry
 
         class FakeWebRt:
-            def execute_web_search_call(self, call, counters, seen_signatures, request_id=""):
+            def execute_web_search_call(self, call, counters, seen_signatures, request_id="", progress_cb=None):
                 return type('R', (), {'public_item': {}, 'upstream_items': (), 'sources': ()})()
 
         registry = make_proxy_local_tool_registry(FakeWebRt())
@@ -513,7 +513,7 @@ class OutOfScopeToolContractTests(unittest.TestCase):
         from proxy.qz_proxy_tools import make_proxy_local_tool_registry
 
         class FakeWebRt:
-            def execute_web_search_call(self, call, counters, seen_signatures, request_id=""):
+            def execute_web_search_call(self, call, counters, seen_signatures, request_id="", progress_cb=None):
                 return type('R', (), {'public_item': {}, 'upstream_items': (), 'sources': ()})()
 
         registry = make_proxy_local_tool_registry(FakeWebRt())
@@ -923,7 +923,7 @@ class SandboxPermissionsPreservationTests(unittest.TestCase):
         from proxy.qz_proxy_tools import make_proxy_local_tool_registry
 
         class FakeWebRt:
-            def execute_web_search_call(self, call, counters, seen_signatures, request_id=""):
+            def execute_web_search_call(self, call, counters, seen_signatures, request_id="", progress_cb=None):
                 return type('R', (), {'public_item': {}, 'upstream_items': (), 'sources': ()})()
 
         return make_proxy_local_tool_registry(FakeWebRt())

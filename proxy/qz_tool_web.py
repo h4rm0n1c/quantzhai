@@ -2049,7 +2049,14 @@ class WebSearchRuntime:
             self._cache_put(self.retrieval_cache, canonical, result)
         return result
 
-    def execute_web_search_call(self, call_item: dict, counters: dict, seen_signatures: set, request_id: str = ""):
+    def execute_web_search_call(self, call_item: dict, counters: dict, seen_signatures: set, request_id: str = "", progress_cb=None):
+        def _progress(msg: str) -> None:
+            if callable(progress_cb):
+                try:
+                    progress_cb(msg)
+                except Exception:
+                    pass
+
         args = self._parse_web_search_arguments(call_item.get("arguments") or "{}")
         action = args["action"]
         query = args.get("query")
@@ -2167,6 +2174,7 @@ class WebSearchRuntime:
             else:
                 counters["search"] += 1
                 effective_top_k = min(max(1, args.get("top_k") or eff_max_results), eff_max_results)
+                _progress(f"Searching: {query.strip()}")
                 payload = self._search_web(
                     query=query.strip(),
                     profile=profile,
@@ -2185,6 +2193,8 @@ class WebSearchRuntime:
                         if _af in r:
                             src[_af] = r[_af]
                     sources.append(src)
+                _n = len((payload or {}).get("results") or [])
+                _progress(f"Got {_n} result{'s' if _n != 1 else ''}")
 
         elif action == "open_page":
             if counters["open_page"] >= eff_max_opens:
@@ -2203,6 +2213,8 @@ class WebSearchRuntime:
                 error = "Missing url for open_page."
             else:
                 counters["open_page"] += 1
+                _short_url = url.strip()[:80]
+                _progress(f"Opening: {_short_url}")
                 payload = self._open_page(url.strip())
                 sources = [{"url": payload.get("url"), "title": payload.get("title")}]
 
@@ -2214,6 +2226,7 @@ class WebSearchRuntime:
             elif not page_id and not url:
                 error = "find_in_page requires page_id or url."
             else:
+                _progress(f"Searching in page: {query.strip()[:60]}")
                 payload = self._find_in_page(query=query.strip(), url=url, page_id=page_id)
                 sources = [{"url": payload.get("url"), "title": payload.get("title")}]
 
@@ -2244,6 +2257,7 @@ class WebSearchRuntime:
                 })
                 _t0 = _now_float()
                 counters["retrieve"] = counters.get("retrieve", 0) + 1
+                _progress(f"Retrieving: {str(url).strip()[:80]}")
                 payload = self._retrieve(str(url).strip(), retrieval_source, eff_max_retrieved_chars)
                 _dur = int((_now_float() - _t0) * 1000)
                 if payload.get("ok"):

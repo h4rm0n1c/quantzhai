@@ -2148,17 +2148,19 @@ class ResponsesStreamRuntime:
                                     self.proxy_tool_registry.telemetry_payload(hs.completed_call),
                                 )
                                 # Run execute() in a worker thread so the main thread
-                                # can send SSE keepalives during blocking I/O (e.g.
-                                # web search HTTP calls).  _chunk_lock serialises
-                                # concurrent wfile writes between the two threads.
+                                # can stream live progress events during blocking I/O.
+                                # _chunk_lock serialises concurrent wfile writes.
                                 import queue as _q
                                 import threading as _thr
+                                import uuid as _uuid
                                 _result_q: _q.Queue = _q.Queue()
+                                _progress_q: _q.Queue = _q.Queue()
                                 _exec_call = hs.completed_call
                                 _exec_ctx = ProxyToolExecutionContext(
                                     request_id=self.request_id,
                                     counters=counters,
                                     seen_signatures=seen_signatures,
+                                    progress_queue=_progress_q,
                                 )
                                 def _execute_worker():
                                     try:
@@ -2167,13 +2169,52 @@ class ResponsesStreamRuntime:
                                         _result_q.put(("err", _exc))
                                 _thr.Thread(target=_execute_worker, daemon=True).start()
 
-                                # Poll for result; send keepalives while waiting.
+                                # Open a streaming reasoning item for live progress.
+                                # The tool worker puts strings into _progress_q;
+                                # we drain it here and emit them as reasoning deltas
+                                # so users see "Searching: python async..." live.
+                                _prog_item_id = f"rs_exec_{self.request_id[:8]}_{_uuid.uuid4().hex[:6]}"
+                                _prog_idx = max(0, hs.max_output_index + 1)
+                                _prog_text: list[str] = []
+                                sequence += 1
+                                self._write_chunk(_sse_block_with_sequence("response.output_item.added", {
+                                    "output_index": _prog_idx,
+                                    "item": {"id": _prog_item_id, "type": "reasoning",
+                                             "summary": [], "encrypted_content": None,
+                                             "status": "in_progress"},
+                                }, sequence))
+                                sequence += 1
+                                self._write_chunk(_sse_block_with_sequence("response.reasoning_summary_part.added", {
+                                    "item_id": _prog_item_id, "output_index": _prog_idx,
+                                    "summary_index": 0,
+                                    "part": {"type": "summary_text", "text": ""},
+                                }, sequence))
+                                summary_started.add(_prog_item_id)
+
+                                def _flush_progress():
+                                    nonlocal sequence
+                                    while True:
+                                        try:
+                                            _msg = _progress_q.get_nowait()
+                                            _prog_text.append(_msg)
+                                            sequence += 1
+                                            self._write_chunk(_sse_block_with_sequence(
+                                                "response.reasoning_summary_text.delta",
+                                                {"item_id": _prog_item_id, "delta": _msg,
+                                                 "summary_index": 0},
+                                                sequence,
+                                            ))
+                                        except _q.Empty:
+                                            break
+
                                 _KEEPALIVE_INTERVAL = 1.5
                                 _exec_result = None
                                 _exec_error = None
                                 while True:
+                                    _flush_progress()
                                     try:
                                         _kind, _val = _result_q.get(timeout=_KEEPALIVE_INTERVAL)
+                                        _flush_progress()  # drain any final messages
                                         if _kind == "ok":
                                             _exec_result = _val
                                         else:
@@ -2181,6 +2222,18 @@ class ResponsesStreamRuntime:
                                         break
                                     except _q.Empty:
                                         self._write_chunk(b": qz tool executing\n\n")
+
+                                # Close the streaming reasoning item.
+                                _full_text = "\n".join(_prog_text)
+                                sequence += 1
+                                self._write_chunk(_sse_block_with_sequence("response.output_item.done", {
+                                    "output_index": _prog_idx,
+                                    "item": {"id": _prog_item_id, "type": "reasoning",
+                                             "summary": [{"type": "summary_text",
+                                                          "text": _full_text}],
+                                             "encrypted_content": None,
+                                             "status": "completed"},
+                                }, sequence))
 
                                 if _exec_error is not None:
                                     self._emit(

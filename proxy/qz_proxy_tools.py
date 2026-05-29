@@ -29,6 +29,18 @@ class ProxyToolExecutionContext:
     request_id: str = ""
     counters: dict = field(default_factory=dict)
     seen_signatures: set = field(default_factory=set)
+    # Optional progress queue: the tool executor puts short status strings here;
+    # the async stream loop drains it and emits live reasoning_summary_text.delta
+    # events so users see what the tool is doing in real time.
+    progress_queue: object = None  # queue.Queue[str] | None
+
+    def report_progress(self, message: str) -> None:
+        """Push a progress string to the SSE stream (best-effort, never raises)."""
+        try:
+            if self.progress_queue is not None:
+                self.progress_queue.put_nowait(message)
+        except Exception:
+            pass
 
 
 class ProxyLocalToolExecutor:
@@ -98,6 +110,7 @@ class WebSearchProxyToolExecutor(ProxyLocalToolExecutor):
             context.counters,
             context.seen_signatures,
             request_id=context.request_id,
+            progress_cb=context.report_progress,
         )
         return ToolContinuationResult(
             public_item=public_item,
