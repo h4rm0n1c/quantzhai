@@ -683,13 +683,40 @@ class RequestRouter:
                     return False
 
             # Dedup 2: skip if this model crashed recently (runtime OOM/abort).
-            # Prevents tight reload→OOM→crash→reload loops. The operator can
-            # override by explicitly calling POST /qz/model/select-and-restart.
-            # Also dedup if admission is already failed_runtime_crash to avoid
-            # spurious retriggers before crash is fully propagated.
             if callable(getattr(mgr, "is_runtime_crash_recent", None)):
                 if mgr.is_runtime_crash_recent(requested):
                     return False
+
+            # Same-underlying-model optimisation: if the requested profile/alias
+            # resolves to the same backend_target as a currently loaded model,
+            # skip the unload→load cycle entirely — just update the selection.
+            # Switching between e.g. kuato↔caveman (both → IQ4_XS) costs nothing.
+            try:
+                catalog = self.handler._model_catalog()
+                try:
+                    from .qz_model_catalog import match_model
+                except ImportError:
+                    from qz_model_catalog import match_model
+                new_entry = match_model(catalog.entries, requested)
+                if new_entry:
+                    new_target = (
+                        new_entry.get("backend_target") or new_entry.get("backend_id") or ""
+                    ).removesuffix(".gguf")
+                    if new_target and callable(getattr(mgr, "get_loaded_model_ids", None)):
+                        for loaded_id in mgr.get_loaded_model_ids():
+                            loaded_entry = match_model(catalog.entries, loaded_id)
+                            if loaded_entry:
+                                loaded_target = (
+                                    loaded_entry.get("backend_target") or
+                                    loaded_entry.get("backend_id") or ""
+                                ).removesuffix(".gguf")
+                                if loaded_target and loaded_target == new_target:
+                                    # Same GGUF already loaded — update selection only.
+                                    self._set_manager_launch_model(requested, mgr)
+                                    self._do_select_model(requested, source="qz_codex")
+                                    return True
+            except Exception:
+                pass  # fall through to normal load path
 
             self._set_manager_launch_model(requested, mgr)
 
