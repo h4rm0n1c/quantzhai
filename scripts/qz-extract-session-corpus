@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+"""
+qz-extract-session-corpus — Extract Codex session rollouts into a compaction corpus.
+
+Reads JSONL session files from var/codex-home/sessions/ and converts them into
+/v1/responses-compatible input arrays for testing the LLM v3 compaction system
+against long real-world coding conversations.
+
+Output: var/session-corpus/<session-id>/
+  - input.json        — full conversation as /v1/responses input array
+  - meta.json         — session metadata (token counts, compaction point, etc.)
+  - pre-compact.json  — turns before compaction (if compaction occurred)
+  - post-compact.json — turns after compaction (if compaction occurred)
+
+Usage:
+  scripts/qz-extract-session-corpus [--min-tokens N] [--output DIR]
+
+Defaults:
+  --min-tokens 8000   skip sessions shorter than this (too short to be useful)
+  --output var/session-corpus
+"""
+import argparse
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_SESSIONS = ROOT / "var" / "codex-home" / "sessions"
+DEFAULT_OUTPUT = ROOT / "var" / "session-corpus"
+
+# Harness noise patterns to strip from message content.
+# These are QuantZhai/Codex harness injections, not user/model content.
+_HARNESS_PREFIXES = (
+    "<permissions instructions>",
+    "<collaboration_mode>",
+    "<skills_instructions>",
+    "<environment_context>",
+    "you are qwen3.6turbo running locally through the codex cli",
+)
+
+
+def _is_harness_noise(text: str) -> bool:
+    if not isinstance(text, str):
+        return False
+    lower = text.strip().lower()
+    return any(lower.startswith(p.lower()) for p in _HARNESS_PREFIXES)
+
+
+def _extract_text(content) -> str:
+    """Flatten content field to plain text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                for key in ("text", "input_text", "output_text"):
+                    val = item.get(key)
+                    if isinstance(val, str) and val.strip():
+                        parts.append(val)
+                        break
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(parts)
+    return ""
+
+
+def extract_session(path: Path, min_tokens: int = 8000) -> dict | None:
+    """
+    Parse one JSONL session file into a structured corpus entry.
+
+    Returns None if the session is too short or malformed.
+    """
+    events = []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        events.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+    except OSError:
+        return None
+
+    if not events:
+        return None
+
+    # --- session metadata ---
+    meta_event = next((e for e in events if e.get("type") == "session_meta"), {})
+    session_meta = meta_event.get("payload", {})
+    session_id = session_meta.get("id", path.stem)
+    cwd = session_meta.get("cwd", "")
+    model_provider = session_meta.get("model_provider", "")
+
+    # --- token count tracking ---
+    # token_count events carry the running context size.
+    # task_started carries model_context_window at turn start.
+    peak_tokens = 0
+    compaction_token = None
+    compaction_index = None  # index in input_items where compaction happened
+
+    # --- build input_items array ---
+    input_items = []
+    compacted_at = None  # index just before compaction event
+
+    for event in events:
+        etype = event.get("type")
+        payload = event.get("payload") or {}
+
+        if etype == "event_msg":
+            msg_type = payload.get("type")
+
+            if msg_type == "token_count":
+                tokens = payload.get("token_count") or payload.get("count") or 0
+                if isinstance(tokens, (int, float)) and tokens > peak_tokens:
+                    peak_tokens = int(tokens)
+
+            elif msg_type == "task_started":
+                ctx = payload.get("model_context_window")
+                if isinstance(ctx, (int, float)) and ctx > peak_tokens:
+                    peak_tokens = int(ctx)
+
+            elif msg_type == "user_message":
+                text = _extract_text(payload.get("content") or payload.get("text") or "")
+                if text.strip() and not _is_harness_noise(text):
+                    input_items.append({
+                        "type": "message",
+                        "role": "user",
+                        "content": text.strip(),
+                    })
+
+            elif msg_type == "agent_message":
+                text = _extract_text(payload.get("content") or payload.get("text") or "")
+                if text.strip() and not _is_harness_noise(text):
+                    input_items.append({
+                        "type": "message",
+                        "role": "assistant",
+                        "content": text.strip(),
+                    })
+
+            elif msg_type == "context_compacted":
+                # Codex triggered compaction here.
+                compacted_at = len(input_items)
+                compaction_token = peak_tokens
+
+        elif etype == "response_item":
+            item_type = payload.get("type")
+
+            if item_type == "message":
+                role = payload.get("role", "assistant")
+                if role in ("developer", "system"):
+                    # Harness injections — skip
+                    continue
+                text = _extract_text(payload.get("content") or "")
+                if text.strip() and not _is_harness_noise(text):
+                    input_items.append({
+                        "type": "message",
+                        "role": role,
+                        "content": text.strip(),
+                    })
+
+            elif item_type == "reasoning":
+                # Keep reasoning as a message so compaction can see it.
+                # Mark role as "assistant" with a reasoning prefix.
+                text = _extract_text(
+                    payload.get("content") or payload.get("summary") or ""
+                )
+                if text.strip():
+                    input_items.append({
+                        "type": "message",
+                        "role": "assistant",
+                        "content": f"<think>\n{text.strip()}\n</think>",
+                    })
+
+            elif item_type == "function_call":
+                name = payload.get("name") or ""
+                args = payload.get("arguments") or payload.get("input") or ""
+                if isinstance(args, dict):
+                    args = json.dumps(args)
+                if name:
+                    input_items.append({
+                        "type": "function_call",
+                        "name": name,
+                        "arguments": args,
+                        "call_id": payload.get("call_id") or payload.get("id") or "",
+                    })
+
+            elif item_type == "function_call_output":
+                output = payload.get("output") or ""
+                if isinstance(output, dict):
+                    output = json.dumps(output)
+                # Truncate very long tool outputs — they dominate context
+                if isinstance(output, str) and len(output) > 4000:
+                    output = output[:2000] + "\n…[truncated]…\n" + output[-500:]
+                input_items.append({
+                    "type": "function_call_output",
+                    "call_id": payload.get("call_id") or payload.get("id") or "",
+                    "output": output,
+                })
+
+        elif etype == "compacted":
+            # The actual compaction blob — record it but don't add to input_items
+            compacted_at = len(input_items)
+
+    # --- filter ---
+    if len(input_items) < 4:
+        return None
+
+    # Estimate tokens from extracted content only (4 chars ≈ 1 token).
+    # peak_tokens comes from model_context_window which is the model's max,
+    # not the actual session length — don't use it for filtering.
+    est_tokens = sum(len(json.dumps(item)) // 4 for item in input_items)
+    if est_tokens < min_tokens:
+        return None
+
+    result = {
+        "session_id": session_id,
+        "source_path": str(path),
+        "cwd": cwd,
+        "model_provider": model_provider,
+        "item_count": len(input_items),
+        "peak_tokens": peak_tokens,
+        "estimated_tokens": est_tokens,
+        "has_compaction": compacted_at is not None,
+        "compaction_token": compaction_token,
+        "compaction_index": compacted_at,
+        "input_items": input_items,
+    }
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--sessions-dir", default=str(DEFAULT_SESSIONS))
+    parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
+    parser.add_argument("--min-tokens", type=int, default=8000,
+                        help="Skip sessions with fewer estimated tokens (default: 8000)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print what would be extracted without writing")
+    args = parser.parse_args()
+
+    sessions_dir = Path(args.sessions_dir)
+    output_dir = Path(args.output)
+
+    session_files = sorted(sessions_dir.rglob("*.jsonl"))
+    print(f"Found {len(session_files)} session files in {sessions_dir}")
+    print(f"Min-tokens filter: {args.min_tokens}")
+    print()
+
+    extracted = 0
+    skipped = 0
+
+    for path in session_files:
+        result = extract_session(path, min_tokens=args.min_tokens)
+        if result is None:
+            skipped += 1
+            continue
+
+        session_id = result["session_id"]
+        est = result["estimated_tokens"]
+        peak = result["peak_tokens"]
+        items = result["item_count"]
+        compact = "✓ compaction" if result["has_compaction"] else ""
+
+        print(f"  {session_id[:24]}  {items:4d} items  ~{est:6d} tok est  peak={peak:6d}  {compact}")
+
+        if not args.dry_run:
+            out = output_dir / session_id
+            out.mkdir(parents=True, exist_ok=True)
+
+            # Full input array
+            input_items = result.pop("input_items")
+            with open(out / "input.json", "w") as f:
+                json.dump(input_items, f, indent=2)
+
+            # Metadata
+            with open(out / "meta.json", "w") as f:
+                json.dump(result, f, indent=2)
+
+            # Pre/post compaction split (if applicable)
+            ci = result.get("compaction_index")
+            if ci is not None:
+                with open(out / "pre-compact.json", "w") as f:
+                    json.dump(input_items[:ci], f, indent=2)
+                with open(out / "post-compact.json", "w") as f:
+                    json.dump(input_items[ci:], f, indent=2)
+
+        extracted += 1
+
+    print()
+    print(f"Extracted: {extracted}  Skipped (too short): {skipped}")
+    if not args.dry_run:
+        print(f"Output: {output_dir}")
+
+
+if __name__ == "__main__":
+    main()
