@@ -179,16 +179,16 @@ class ThinkingModeBudgetTableTests(unittest.TestCase):
             self.assertIn(level, THINKING_MODE_BUDGET_TOKENS)
 
     def test_low_budget(self):
-        self.assertEqual(THINKING_MODE_BUDGET_TOKENS["low"], 16384)
+        self.assertEqual(THINKING_MODE_BUDGET_TOKENS["low"], 8192)
 
     def test_medium_budget(self):
-        self.assertEqual(THINKING_MODE_BUDGET_TOKENS["medium"], 24576)
+        self.assertEqual(THINKING_MODE_BUDGET_TOKENS["medium"], 12288)
 
     def test_high_budget(self):
-        self.assertEqual(THINKING_MODE_BUDGET_TOKENS["high"], 32768)
+        self.assertEqual(THINKING_MODE_BUDGET_TOKENS["high"], 16384)
 
     def test_xhigh_budget(self):
-        self.assertEqual(THINKING_MODE_BUDGET_TOKENS["xhigh"], 49152)
+        self.assertEqual(THINKING_MODE_BUDGET_TOKENS["xhigh"], 24576)
 
     def test_budgets_strictly_increasing(self):
         vals = [THINKING_MODE_BUDGET_TOKENS[l] for l in ("low", "medium", "high", "xhigh")]
@@ -234,11 +234,11 @@ class ApplyReasoningPolicyThinkingModeTests(unittest.TestCase):
 
     def test_low_effort_thinking_budget(self):
         out = self._apply("low", "thinking")
-        self.assertEqual(out["reasoning_budget_tokens"], 16384)
+        self.assertEqual(out["reasoning_budget_tokens"], 8192)
 
     def test_xhigh_effort_thinking_budget(self):
         out = self._apply("xhigh", "thinking")
-        self.assertEqual(out["reasoning_budget_tokens"], 49152)
+        self.assertEqual(out["reasoning_budget_tokens"], 24576)
 
     # --- non_thinking mode ---
 

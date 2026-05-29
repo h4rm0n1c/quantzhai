@@ -7,11 +7,13 @@ DEFAULT_REASONING_POLICY_MODE = "prompt"
 
 # Token budget per reasoning block for each effort level (thinking-mode models only).
 # These are per-block budgets, not total run caps.
+# Calibrated for ~90 t/s generation (RTX 3080 + V100 tensor-split 10,16).
+# low=~90s, medium=~136s, high=~3min, xhigh=~4.5min at current hardware speed.
 THINKING_MODE_BUDGET_TOKENS: Dict[str, int] = {
-    "low":    16384,
-    "medium": 24576,
-    "high":   32768,
-    "xhigh":  49152,
+    "low":    8192,
+    "medium": 12288,
+    "high":   16384,
+    "xhigh":  24576,
 }
 
 # Injected into the request as reasoning_budget_message when thinking_mode=thinking.
