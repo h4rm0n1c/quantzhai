@@ -859,25 +859,25 @@ class ThinkingModeRouterTests(_IsolatedModelEnvMixin, unittest.TestCase):
         entry = {"overrides": {}, "backend_id": "Qwen3.6-27B.gguf", "default_reasoning_level": "low"}
         r = self._router_for_entry({})
         budget = r.selected_thinking_budget_tokens(entry)
-        self.assertEqual(budget, 16384)
+        self.assertEqual(budget, 8192)
 
     def test_thinking_model_medium_budget(self):
         entry = {"overrides": {}, "backend_id": "Qwen3.6-27B.gguf", "default_reasoning_level": "medium"}
         r = self._router_for_entry({})
         budget = r.selected_thinking_budget_tokens(entry)
-        self.assertEqual(budget, 24576)
+        self.assertEqual(budget, 12288)
 
     def test_thinking_model_high_budget(self):
         entry = {"overrides": {}, "backend_id": "Qwen3.6-27B.gguf", "default_reasoning_level": "high"}
         r = self._router_for_entry({})
         budget = r.selected_thinking_budget_tokens(entry)
-        self.assertEqual(budget, 32768)
+        self.assertEqual(budget, 16384)
 
     def test_thinking_model_xhigh_budget(self):
         entry = {"overrides": {}, "backend_id": "Qwen3.6-27B.gguf", "default_reasoning_level": "xhigh"}
         r = self._router_for_entry({})
         budget = r.selected_thinking_budget_tokens(entry)
-        self.assertEqual(budget, 49152)
+        self.assertEqual(budget, 24576)
 
     def test_non_thinking_model_budget_is_none(self):
         entry = {"overrides": {}, "backend_id": "Qwen3-Coder-30B-Instruct.gguf"}

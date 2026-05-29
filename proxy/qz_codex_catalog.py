@@ -199,7 +199,11 @@ def catalog_defaults():
         "web_search_tool_type": "text",
         "supports_parallel_tool_calls": True,
         "supports_image_detail_original": False,
-        "effective_context_window_percent": 95,
+        # Derived from the autocompact buffer policy (16.5% reserve):
+        # effective = (1 - 0.165) * 100 = 83.5 → floor to 83
+        # This makes Codex's /context display show usage against the
+        # USABLE window (before compaction fires), not the raw context size.
+        "effective_context_window_percent": 83,
         "experimental_supported_tools": [],
         "input_modalities": ["text"],
         "supports_search_tool": False,
@@ -259,15 +263,21 @@ def build_live_model(entry, priority):
         except Exception:
             runtime_context = None
     if runtime_context is not None:
-        model["context_window"] = runtime_context
-        model["max_context_window"] = runtime_context
-        # Set Codex-side auto-compact threshold to the safe compaction budget:
-        #   autocompact_buffer_tokens = floor(context * 0.165)
-        #   model_auto_compact_token_limit = context - autocompact_buffer_tokens
-        # This aligns Codex's inline auto-compaction trigger with QuantZhai's
-        # proxy-side compaction budget (context_window_autocompact_buffer_v1).
+        # The safe compaction budget — the actual usable window before compaction fires.
+        # autocompact_buffer = floor(raw_context * 0.165)   (16.5% reserve)
+        # safe_budget = raw_context - autocompact_buffer
         _autocompact_buffer = int(runtime_context * 0.165)
-        model["model_auto_compact_token_limit"] = runtime_context - _autocompact_buffer
+        _safe_budget = runtime_context - _autocompact_buffer
+        # Expose the safe budget as context_window so Codex's /context display
+        # and token_count events show usage against the usable limit, not the raw
+        # model maximum.  max_context_window retains the raw value for reference.
+        model["context_window"] = _safe_budget
+        model["max_context_window"] = runtime_context
+        # model_auto_compact_token_limit = safe_budget (Codex inline compaction trigger)
+        model["model_auto_compact_token_limit"] = _safe_budget
+        # effective_context_window_percent is now 100% of context_window = safe_budget,
+        # so reset it to 100 when context_window already reflects the safe limit.
+        model["effective_context_window_percent"] = 100
     model["truncation_policy"] = {
         "mode": "tokens",
         "limit": truncation_limit(entry, overrides, runtime_context),
