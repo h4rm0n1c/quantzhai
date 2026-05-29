@@ -716,25 +716,8 @@ class BackendManagerLifecycleTests(unittest.TestCase):
         result = mgr.stop()
         self.assertFalse(result["ok"])
 
-    # --- restart() ---
-
-    def test_restart_emits_restart_and_eventually_healthy(self):
-        runner, calls = self._ok_runner()
-        health_checker = lambda url, timeout=3.0: True
-        mgr = _make_mgr(runner=runner, health_checker=health_checker)
-        mgr.start()
-        self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
-
-        result = mgr.restart()
-        self.assertTrue(result["ok"])
-        reached = self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED, timeout=5.0)
-        self.assertTrue(reached)
-        self.assertEqual(mgr.phase, PHASE_HEALTHY)
-
-    def test_restart_disabled_returns_error(self):
-        mgr = _make_mgr(autostart=False)
-        result = mgr.restart()
-        self.assertFalse(result["ok"])
+    # restart() removed — router mode: models are switched via HTTP, not container restart.
+    # Tests for restart() have been deleted.
 
     # --- begin_autostart() ---
 
@@ -813,18 +796,6 @@ class BackendManagerLifecycleTests(unittest.TestCase):
         if not result["ok"]:
             self.assertIn("in progress", result.get("error", ""))
         self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
-
-    def test_restart_clears_busy_and_reaches_healthy(self):
-        """_do_restart re-checks _busy before start phase to prevent double-start."""
-        runner, _ = self._ok_runner()
-        health_checker = lambda url, timeout=3.0: True
-        mgr = _make_mgr(runner=runner, health_checker=health_checker)
-        mgr.start()
-        self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED)
-        result = mgr.restart()
-        self.assertTrue(result["ok"])
-        self._wait_phase(mgr, PHASE_HEALTHY, PHASE_FAILED, timeout=5.0)
-        self.assertEqual(mgr.phase, PHASE_HEALTHY)
 
     def test_status_returns_ok_and_backend_manager_key(self):
         mgr = _make_mgr()
@@ -1758,12 +1729,6 @@ class BackendEndpointTests(unittest.TestCase):
         result = self.mgr.stop()
         self.assertFalse(result["ok"])
         self.assertIn("already", result["error"])
-
-    def test_restart_on_disabled_returns_error(self):
-        mgr = _make_mgr(autostart=False)
-        result = mgr.restart()
-        self.assertFalse(result["ok"])
-        self.assertIn("disabled", result["error"])
 
     def test_control_plane_includes_backend_manager(self):
         """backend_manager key present in control-plane payload when manager attached."""

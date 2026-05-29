@@ -227,10 +227,23 @@ class BackendState:
 # ---------------------------------------------------------------------------
 
 class BackendManager:
-    """Owns Docker lifecycle for the llama.cpp backend.
+    """Manages the TurboQuant llama.cpp Docker container in router mode.
 
-    Construction is side-effect-free. Call begin_autostart() once after the
-    proxy HTTP server is bound, or call start() / stop() / restart() directly.
+    The container is a persistent service — it starts once and stays alive.
+    Model switching uses HTTP (load_model_http / unload_model_http), never
+    a container restart.  The proxy reconnects to an already-running container
+    on restart rather than killing it.
+
+    Lifecycle:
+      start()           — start the container if not already running
+      stop()            — emergency teardown (qz-down); not for model switches
+      load_model_http() — load a model into the running router via HTTP
+      unload_model_http() — unload a model from the running router via HTTP
+
+    restart() and _do_restart() have been removed: they embodied the
+    pre-router-mode "kill-and-restart-on-model-switch" pattern that caused
+    CUDA_ERROR_INITIALIZATION_ERROR by restarting the container before the GPU
+    driver had released the previous session's context.
     """
 
     def __init__(
@@ -467,39 +480,10 @@ class BackendManager:
         return {"ok": True, "action": "stop",
                 "backend_manager": self.snapshot()}
 
-    def restart(self) -> dict:
-        """Request a backend restart. Returns immediately with a status dict."""
-        with self._lock:
-            phase = self._state.phase
-            if phase == PHASE_DISABLED:
-                return {"ok": False, "action": "restart",
-                        "error": "backend is disabled",
-                        "backend_manager": self._state.as_dict()}
-            if self._busy:
-                return {"ok": False, "action": "restart",
-                        "error": f"another operation is in progress ({phase})",
-                        "backend_manager": self._state.as_dict()}
-
-            if not self._launch_model_path_basename:
-                err = ("direct backend restart requires a launch model; "
-                       "POST /qz/model/select-and-restart with a valid model")
-                self._state.phase = PHASE_FAILED
-                self._state.launch_model_error = err
-                self._state.last_error = err
-                return {"ok": False, "action": "restart",
-                        "error": err,
-                        "backend_manager": self._state.as_dict()}
-
-            self._busy = True
-            self._state.phase = PHASE_STOPPING
-        self._emit("backend_restart_requested")
-        threading.Thread(
-            target=self._do_restart,
-            daemon=True,
-            name="qz-backend-restart",
-        ).start()
-        return {"ok": True, "action": "restart",
-                "backend_manager": self.snapshot()}
+    # restart() removed: in router mode the container is a persistent service.
+    # Model switching uses load_model_http() / unload_model_http() — the container
+    # is never killed for a model switch.  Callers that previously used restart()
+    # should use start() (container absent) or load_model_http() (model switch).
 
     def status(self) -> dict:
         """Return the current state snapshot."""
@@ -1054,7 +1038,6 @@ class BackendManager:
                     self._state.gpu_error = gpu_err
                 self._emit("backend_healthy")
                 return
-                time.sleep(self._health_check_interval)
 
             raise RuntimeError(
                 f"backend did not become healthy within {self._health_check_timeout:.0f}s"
@@ -1107,23 +1090,7 @@ class BackendManager:
                 self._busy = False
             self._emit("backend_stopped")
 
-    def _do_restart(self) -> None:
-        """Background: stop then start.
-
-        _do_stop() clears _busy=False. Before re-taking _busy for the start
-        phase, we check it again to avoid a race with a concurrent start().
-        """
-        self._do_stop()
-        with self._lock:
-            if self._state.phase != PHASE_STOPPED or self._busy:
-                # Stop failed, or another operation snuck in during the window.
-                return
-            self._busy = True
-            self._state.phase = PHASE_START_REQUESTED
-            self._state.last_start_requested_at = _iso_now()
-            self._state.last_error = None
-        self._emit("backend_start_requested")
-        self._do_start()
+    # _do_restart() removed: see restart() note above.
 
     # ------------------------------------------------------------------
     # OperationalStore event helper
