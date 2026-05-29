@@ -1123,6 +1123,158 @@ class GPUOffloadLogCheckTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # GPU offload grace window — provisional non-GPU states become healthy later
 # ---------------------------------------------------------------------------
+# _scan_gpu_log_lines unit tests
+# ---------------------------------------------------------------------------
+
+class ScanGpuLogLinesTests(unittest.TestCase):
+    """Unit tests for the module-level _scan_gpu_log_lines() helper."""
+
+    def _scan(self, text):
+        from proxy.qz_backend_manager import _scan_gpu_log_lines
+        return _scan_gpu_log_lines(text)
+
+    def test_offloaded_layers_returns_gpu(self):
+        state, _ = self._scan("offloaded 40/40 layers to GPU")
+        self.assertEqual(state, "gpu")
+
+    def test_cuda_init_fail_returns_failed(self):
+        state, err = self._scan("ggml_cuda_init: failed to initialize CUDA: initialization error")
+        self.assertEqual(state, "failed")
+        self.assertIsNotNone(err)
+
+    def test_no_usable_gpu_returns_failed(self):
+        state, _ = self._scan("no usable GPU found, --gpu-layers option will be ignored")
+        self.assertEqual(state, "failed")
+
+    def test_cpu_mapped_returns_cpu_fallback(self):
+        state, _ = self._scan("CPU_Mapped model buffer size = 1234 MiB")
+        self.assertEqual(state, "cpu_fallback")
+
+    def test_empty_returns_unknown(self):
+        self.assertEqual(self._scan("")[0], "unknown")
+
+    def test_success_after_fail_returns_gpu(self):
+        logs = "ggml_cuda_init: failed to initialize CUDA\noffloaded 40/40 layers to GPU"
+        self.assertEqual(self._scan(logs)[0], "gpu")
+
+    def test_fail_after_success_returns_failed(self):
+        logs = "offloaded 40/40 layers to GPU\nggml_cuda_init: failed to initialize CUDA"
+        self.assertEqual(self._scan(logs)[0], "failed")
+
+
+# ---------------------------------------------------------------------------
+# _check_gpu_offload_from_logs — child-line filtering
+# ---------------------------------------------------------------------------
+
+class GPULogChildFilterTests(unittest.TestCase):
+    """_check_gpu_offload_from_logs() must strip [PORT] child lines."""
+
+    def _mgr_with_raw_logs(self, raw_logs: str):
+        def runner(args, timeout=None):
+            if "logs" in args:
+                return 0, raw_logs, ""
+            return 0, "", ""
+        return _make_mgr(runner=runner, server_port=29999)
+
+    def test_child_cuda_fail_does_not_trigger_failed(self):
+        """[PORT] CUDA init failure in logs must be ignored by parent GPU check."""
+        logs = "[36459] ggml_cuda_init: failed to initialize CUDA: initialization error\n"
+        logs += "[36459] warning: no usable GPU found, --gpu-layers option will be ignored\n"
+        mgr = self._mgr_with_raw_logs(logs)
+        state, _ = mgr._check_gpu_offload_from_logs()
+        self.assertEqual(state, "unknown")  # child lines stripped → no signal
+
+    def test_parent_cuda_fail_still_triggers_failed(self):
+        """Untagged CUDA init failure (parent process) must still return failed."""
+        logs = "ggml_cuda_init: failed to initialize CUDA: initialization error\n"
+        mgr = self._mgr_with_raw_logs(logs)
+        state, _ = mgr._check_gpu_offload_from_logs()
+        self.assertEqual(state, "failed")
+
+    def test_child_gpu_success_lines_ignored(self):
+        """[PORT] GPU success lines must not count for parent GPU check."""
+        logs = "[36459] offloaded 40/40 layers to GPU\n"
+        mgr = self._mgr_with_raw_logs(logs)
+        state, _ = mgr._check_gpu_offload_from_logs()
+        self.assertEqual(state, "unknown")
+
+    def test_mixed_child_and_parent_lines(self):
+        """Child fail + parent GPU success → parent wins, returns gpu."""
+        logs = "[36459] ggml_cuda_init: failed to initialize CUDA\n"
+        logs += "offloaded 40/40 layers to GPU\n"
+        mgr = self._mgr_with_raw_logs(logs)
+        state, _ = mgr._check_gpu_offload_from_logs()
+        self.assertEqual(state, "gpu")
+
+
+# ---------------------------------------------------------------------------
+# _check_gpu_offload_for_loaded_model
+# ---------------------------------------------------------------------------
+
+class GPUOffloadForLoadedModelTests(unittest.TestCase):
+    """Unit tests for _check_gpu_offload_for_loaded_model()."""
+
+    def _make(self, logs_text, models_json, server_port=29999):
+        import json as _json
+
+        def runner(args, timeout=None):
+            if "logs" in args:
+                return 0, logs_text, ""
+            return 0, "", ""
+
+        mgr = _make_mgr(runner=runner, server_port=server_port)
+
+        from unittest.mock import patch, MagicMock
+        body = _json.dumps(models_json).encode()
+        resp = MagicMock()
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = MagicMock(return_value=False)
+        resp.status = 200
+        resp.read.return_value = body
+        return mgr, patch("urllib.request.urlopen", return_value=resp)
+
+    def test_loaded_model_with_gpu_returns_gpu(self):
+        inventory = {"data": [{"id": "kuato", "status": {
+            "value": "loaded",
+            "args": ["/app/llama-server", "--port", "42000", "--n-gpu-layers", "999"],
+        }}]}
+        logs = "[42000] offloaded 40/40 layers to GPU\n"
+        mgr, patch_url = self._make(logs, inventory)
+        with patch_url:
+            state, _ = mgr._check_gpu_offload_for_loaded_model("kuato", retry_count=1, retry_delay=0)
+        self.assertEqual(state, "gpu")
+
+    def test_cuda_init_fail_in_child_returns_failed(self):
+        inventory = {"data": [{"id": "kuato", "status": {
+            "value": "loaded",
+            "args": ["/app/llama-server", "--port", "36459", "--n-gpu-layers", "999"],
+        }}]}
+        logs = "[36459] ggml_cuda_init: failed to initialize CUDA: initialization error\n"
+        logs += "[36459] warning: no usable GPU found, --gpu-layers option will be ignored\n"
+        mgr, patch_url = self._make(logs, inventory)
+        with patch_url:
+            state, _ = mgr._check_gpu_offload_for_loaded_model("kuato", retry_count=1, retry_delay=0)
+        self.assertEqual(state, "failed")
+
+    def test_model_not_loaded_returns_unknown(self):
+        inventory = {"data": [{"id": "kuato", "status": {"value": "loading", "args": []}}]}
+        mgr, patch_url = self._make("", inventory)
+        with patch_url:
+            state, _ = mgr._check_gpu_offload_for_loaded_model("kuato", retry_count=1, retry_delay=0)
+        self.assertEqual(state, "unknown")
+
+    def test_wrong_model_id_returns_unknown(self):
+        inventory = {"data": [{"id": "other-model", "status": {
+            "value": "loaded",
+            "args": ["/app/llama-server", "--port", "42000"],
+        }}]}
+        mgr, patch_url = self._make("[42000] offloaded 40/40 layers to GPU\n", inventory)
+        with patch_url:
+            state, _ = mgr._check_gpu_offload_for_loaded_model("kuato", retry_count=1, retry_delay=0)
+        self.assertEqual(state, "unknown")
+
+
+# ---------------------------------------------------------------------------
 
 class GPUOffloadGraceWindowTests(unittest.TestCase):
     """Tests for the bounded grace window that lets gpu_state evolve after /health.

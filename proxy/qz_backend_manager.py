@@ -100,6 +100,63 @@ def _default_health_checker(url: str, timeout: float = 3.0) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# GPU log scanner — shared by startup check and post-load check
+# ---------------------------------------------------------------------------
+
+_GPU_HARD_FAIL_PATTERNS: tuple[str, ...] = (
+    "ggml_cuda_init: failed to initialize CUDA",
+    "no usable GPU found",
+    "--gpu-layers option will be ignored",
+    "compiled without support for GPU offload",
+)
+_GPU_SUCCESS_PATTERNS: tuple[str, ...] = (
+    r"offloaded \d+/\d+ layers to GPU",
+    r"offloaded .* layers to GPU",
+    r"CUDA\d+ model buffer size",
+    r"CUDA_Host model buffer size",
+)
+_GPU_CPU_MAPPED = "CPU_Mapped model buffer size"
+
+
+def _scan_gpu_log_lines(logs: str) -> tuple[str, str | None]:
+    """Scan a block of log text for GPU offload signals.
+
+    Uses "latest relevant signal wins" so that small CPU_Mapped residual
+    buffers that appear alongside CUDA/offload lines do not falsely trigger
+    cpu_fallback.
+
+    Returns (state, error_msg):
+      'gpu'          — GPU offload confirmed
+      'cpu_fallback' — CPU_Mapped present, no GPU success anywhere
+      'failed'       — hard CUDA init/compile failure
+      'unknown'      — no recognisable signal
+    """
+    last_fail = -1
+    last_fail_msg: str | None = None
+    last_success = -1
+    last_cpu_mapped = -1
+
+    for i, line in enumerate(logs.splitlines()):
+        for pat in _GPU_HARD_FAIL_PATTERNS:
+            if pat in line:
+                last_fail = i
+                last_fail_msg = pat
+        for pat in _GPU_SUCCESS_PATTERNS:
+            if re.search(pat, line):
+                last_success = i
+        if _GPU_CPU_MAPPED in line:
+            last_cpu_mapped = i
+
+    if last_success >= 0 and last_success >= last_fail:
+        return "gpu", None
+    if last_fail >= 0 and last_fail > last_success:
+        return "failed", f"GPU not used: {last_fail_msg!r} in container logs"
+    if last_cpu_mapped >= 0:
+        return "cpu_fallback", f"GPU not used: {_GPU_CPU_MAPPED!r} in container logs"
+    return "unknown", None
+
+
+# ---------------------------------------------------------------------------
 # BackendState
 # ---------------------------------------------------------------------------
 
@@ -646,6 +703,60 @@ class BackendManager:
     # GPU offload verification
     # ------------------------------------------------------------------
 
+    def _check_gpu_offload_for_loaded_model(
+        self,
+        model_id: str,
+        retry_count: int = 15,
+        retry_delay: float = 2.0,
+    ) -> tuple[str, str | None]:
+        """Post-load GPU check scoped to a specific model's child process.
+
+        After ``load_model_http()`` returns, polls ``/v1/models`` until the
+        target model shows as ``loaded`` and its child port is known, then
+        filters docker logs to that port's prefix and runs the pattern scanner.
+
+        Retries up to ``retry_count`` times with ``retry_delay`` between
+        attempts so the child has time to write its startup log lines.
+
+        Returns the same states as ``_check_gpu_offload_from_logs()``:
+          'gpu'          — GPU offload confirmed in child's log lines
+          'cpu_fallback' — CPU_Mapped present, no GPU success
+          'failed'       — hard CUDA init/compile failure in child's logs
+          'unknown'      — child not yet loaded, port unavailable, or no signal
+        """
+        for _ in range(max(1, retry_count)):
+            status = self.get_models_status()
+            if status:
+                for entry in (status.get("data") or []):
+                    if not isinstance(entry, dict) or entry.get("id") != model_id:
+                        continue
+                    s = entry.get("status") or {}
+                    if not isinstance(s, dict) or s.get("value") != "loaded":
+                        break  # not loaded yet — retry after sleep
+                    args = s.get("args") or []
+                    port = next(
+                        (args[i + 1] for i, a in enumerate(args)
+                         if a == "--port" and i + 1 < len(args)),
+                        None,
+                    )
+                    if not port:
+                        return "unknown", None
+                    rc, logs_out, logs_err = self._runner(
+                        self.build_docker_logs_args(), timeout=15.0)
+                    if rc != 0:
+                        return "unknown", None
+                    raw = (logs_out or "") + "\n" + (logs_err or "")
+                    prefix = f"[{port}]"
+                    child_lines = "\n".join(
+                        l for l in raw.splitlines()
+                        if l.strip().startswith(prefix)
+                    )
+                    if not child_lines.strip():
+                        break  # child hasn't written load lines yet — retry
+                    return _scan_gpu_log_lines(child_lines)
+            time.sleep(retry_delay)
+        return "unknown", None
+
     def _check_gpu_offload_from_models_api(self) -> tuple[str, str | None]:
         """Check GPU offload via the /v1/models inventory.
 
@@ -679,67 +790,29 @@ class BackendManager:
     def _check_gpu_offload_from_logs(self) -> tuple[str, str | None]:
         """Inspect container logs for GPU offload evidence after health passes.
 
-        Uses a "latest relevant signal wins" strategy so that small CPU_Mapped
-        residual buffers that appear alongside CUDA/offload lines do not falsely
-        trigger cpu_fallback.  (llama.cpp routinely maps a small host-side buffer
-        even when the bulk of the model is on GPU.)
+        Scans only the parent router's own log lines — child process lines
+        (prefixed ``[PORT]``) are filtered out.  In router mode the parent is
+        a pure message-router that never loads a model itself, so child CUDA
+        failures must not trigger a global PHASE_FAILED on the parent backend.
+        Per-model GPU verification after a load is handled by
+        ``_check_gpu_offload_for_loaded_model()``.
 
         Returns (state, error_msg):
           'gpu'          — GPU offload confirmed (success signal is the last signal)
           'cpu_fallback' — CPU_Mapped present, no GPU success signal anywhere
           'failed'       — hard CUDA init/compile failure is the last signal
           'unknown'      — logs unavailable or no recognisable signal
-
-        Note: docker logs sends container-stdout to client-stdout and
-        container-stderr to client-stderr.  llama-server writes its model-load
-        lines (offload counts, CUDA buffer sizes) to stderr.  We combine both
-        streams so GPU offload evidence is detected regardless of which fd the
-        container process used.
         """
         rc, logs_out, logs_err = self._runner(self.build_docker_logs_args(), timeout=15.0)
         if rc != 0:
             return "unknown", None
-        logs = (logs_out or "") + "\n" + (logs_err or "")
-
-        _HARD_FAIL_PATTERNS = [
-            "ggml_cuda_init: failed to initialize CUDA",
-            "no usable GPU found",
-            "--gpu-layers option will be ignored",
-            "compiled without support for GPU offload",
-        ]
-        _SUCCESS_PATTERNS = [
-            r"offloaded \d+/\d+ layers to GPU",
-            r"offloaded .* layers to GPU",
-            r"CUDA\d+ model buffer size",
-            r"CUDA_Host model buffer size",
-        ]
-        _CPU_MAPPED = "CPU_Mapped model buffer size"
-
-        last_fail = -1
-        last_fail_msg: str | None = None
-        last_success = -1
-        last_cpu_mapped = -1
-
-        for i, line in enumerate(logs.splitlines()):
-            for pat in _HARD_FAIL_PATTERNS:
-                if pat in line:
-                    last_fail = i
-                    last_fail_msg = pat
-            for pat in _SUCCESS_PATTERNS:
-                if re.search(pat, line):
-                    last_success = i
-            if _CPU_MAPPED in line:
-                last_cpu_mapped = i
-
-        # Latest relevant signal wins.
-        if last_success >= 0 and last_success >= last_fail:
-            return "gpu", None
-        if last_fail >= 0 and last_fail > last_success:
-            return "failed", f"GPU not used: {last_fail_msg!r} in container logs"
-        if last_cpu_mapped >= 0:
-            # CPU_Mapped with no GPU success anywhere: full CPU fallback.
-            return "cpu_fallback", f"GPU not used: {_CPU_MAPPED!r} in container logs"
-        return "unknown", None
+        raw = (logs_out or "") + "\n" + (logs_err or "")
+        # Strip child-process lines so child CUDA failures don't kill the parent.
+        _child_prefix = re.compile(r"^\s*\[\d+\]")
+        parent_logs = "\n".join(
+            l for l in raw.splitlines() if not _child_prefix.match(l)
+        )
+        return _scan_gpu_log_lines(parent_logs)
 
     # ------------------------------------------------------------------
     # Background lifecycle workers

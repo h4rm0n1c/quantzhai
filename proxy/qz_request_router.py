@@ -692,7 +692,24 @@ class RequestRouter:
                     def _unload_then_load(ids_to_unload, new_filename):
                         for mid in ids_to_unload:
                             mgr.unload_model_http(mid)
-                        mgr.load_model_http(new_filename)
+                        load_result = mgr.load_model_http(new_filename)
+                        if not load_result.get("ok"):
+                            return  # POST /models/load failed — router will mark failed
+
+                        # Post-load GPU verification: if require_gpu is set and the
+                        # child loaded on CPU (CUDA init failed), unload immediately so
+                        # the proxy does not silently serve a CPU-only model.
+                        snap = mgr.snapshot() if callable(getattr(mgr, "snapshot", None)) else {}
+                        if not snap.get("gpu_required", True):
+                            return
+                        if not callable(getattr(mgr, "_check_gpu_offload_for_loaded_model", None)):
+                            return
+                        model_id = new_filename[:-5] if new_filename.endswith(".gguf") else new_filename
+                        gpu_state, _gpu_err = mgr._check_gpu_offload_for_loaded_model(
+                            model_id, retry_count=15, retry_delay=2.0
+                        )
+                        if gpu_state in ("failed", "cpu_fallback"):
+                            mgr.unload_model_http(model_id)
 
                     threading.Thread(
                         target=_unload_then_load,
