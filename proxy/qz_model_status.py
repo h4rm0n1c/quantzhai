@@ -281,7 +281,12 @@ def _request_admission_state(
     if not selected_identity:
         return "unavailable"
     if last_load_result == "failed" or launch_model_error:
-        return "failed"
+        # Suppress stale failure when a load is actively in progress.
+        # router_status=="loading" means the router has accepted a load request
+        # but the model isn't confirmed yet.  Returning "failed" here would
+        # terminate the hold-open immediately with a 503, losing the new load.
+        if router_status not in ("loading",):
+            return "failed"
     if backend_phase in ("start_requested", "starting"):
         return "starting"
     if backend_phase in ("running",):

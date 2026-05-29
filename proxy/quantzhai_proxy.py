@@ -883,7 +883,12 @@ def main():
 
         key = entry.get("key") or entry.get("slug") or entry.get("filename") or ""
         backend_id = entry.get("backend_id") or key
-        filename = entry.get("filename") or entry.get("backend_target") or backend_id
+        # Use backend_target first so profile symlinks load by their real GGUF name.
+        # Loading by filename (the symlink) registers the model under the alias in
+        # the router, but requests are forwarded using backend_id (the real name).
+        # That split causes router 404 on every request.  Using backend_target here
+        # keeps load-name and forward-name consistent.
+        filename = entry.get("backend_target") or entry.get("filename") or backend_id
         if isinstance(filename, str) and filename and not filename.endswith(".gguf"):
             filename = f"{filename}.gguf"
 

@@ -783,6 +783,21 @@ class RequestRouter:
 
             if triggered:
                 self._do_select_model(requested, source="qz_codex")
+                # Clear any stale load failure so hold-open doesn't see
+                # request_admission_state="failed" during the unload→load window.
+                # Without this, a prior failed load attempt for any model causes
+                # immediate 503 before the new model has a chance to load.
+                try:
+                    from .qz_model_state import load_model_state, update_load_observation, write_model_state
+                except ImportError:
+                    from qz_model_state import load_model_state, update_load_observation, write_model_state
+                try:
+                    _sp = self.handler._model_router().model_state_path()
+                    _env = load_model_state(_sp)
+                    if _env.state.last_load_result == "failed":
+                        write_model_state(_sp, update_load_observation(_env.state, result=""))
+                except Exception:
+                    pass
                 return True
             return False
         except Exception:
@@ -2516,9 +2531,13 @@ class RequestRouter:
         existing = load_model_state(state_path).state
 
         # Classify failure from recent container logs when BackendManager is wired.
+        # Only classify on failure paths — when resolve_succeeded=True the wait loop
+        # already confirmed the model is loaded, and stale log messages from previous
+        # load attempts would produce false positives (e.g. old VRAM OOM appears after
+        # a same-GGUF shortcut that never actually loaded anything).
         failure = None
         mgr = getattr(self.handler, "backend_manager", None)
-        if mgr is not None and callable(getattr(mgr, "fetch_recent_logs", None)):
+        if not resolve_succeeded and mgr is not None and callable(getattr(mgr, "fetch_recent_logs", None)):
             try:
                 logs = mgr.fetch_recent_logs()
             except Exception:
@@ -2596,22 +2615,14 @@ class RequestRouter:
         key = entry.get("key") or entry.get("slug") or entry.get("filename") or requested
         backend_id = entry.get("backend_id") or key
         backend_target = (entry.get("backend_target") or backend_id or "").removesuffix(".gguf")
-        entry_id = (entry.get("id") or "").removesuffix(".gguf")
 
-        # Profile symlinks: entry.id differs from backend_target (e.g. "qwen-blank" vs
-        # "Qwen3.6-35B-A3B-...").  Load by the PROFILE name so the router registers and
-        # serves requests under the alias — the router has both the symlink and the real
-        # file in its inventory and they are separate loadable entries.  Loading by the
-        # resolved backend_target bypasses the alias and causes the proxy's inventory
-        # check to look for the wrong name.
-        is_profile_alias = bool(entry_id and backend_target and entry_id != backend_target)
-        if is_profile_alias:
-            filename = f"{entry_id}.gguf"
-        else:
-            filename = entry.get("filename") or entry.get("backend_target") or backend_id
-            if isinstance(filename, str) and filename and not filename.endswith(".gguf"):
-                filename = f"{filename}.gguf"
-        if not filename:
+        # Always load by backend_target (the real GGUF stem, not a symlink alias).
+        # The proxy forwards requests as backend_id, which resolves to backend_target.
+        # Loading by symlink name would register "qwen-blank" in the router while
+        # requests arrive as "Qwen3.6-35B-A3B-..." — the router would 404 every request.
+        load_stem = backend_target or backend_id.removesuffix(".gguf") or (key or requested).removesuffix(".gguf")
+        filename = f"{load_stem}.gguf"
+        if not load_stem:
             raise RuntimeError(f"could not resolve launch filename for {requested!r}")
 
         mgr.set_launch_model(key=key, backend_id=backend_id, path_basename=filename)
@@ -2628,6 +2639,17 @@ class RequestRouter:
             else:
                 filename = (mgr.snapshot().get("launch_model_path_basename") or "").strip()
                 if filename and callable(getattr(mgr, "load_model_http", None)):
+                    filename_stem = filename.removesuffix(".gguf")
+                    # Same-model shortcut: already loaded under the exact ID — skip.
+                    active_getter = getattr(mgr, "get_active_model_ids", None)
+                    active = mgr.get_active_model_ids() if callable(active_getter) else {}
+                    if active.get(filename_stem) == "loaded" or active.get(filename) == "loaded":
+                        return entry, "model already loaded"
+                    # Unload all currently loaded models before loading the new one.
+                    # QuantZhai supports one model at a time (single-GPU VRAM budget).
+                    if callable(getattr(mgr, "get_loaded_model_ids", None)) and callable(getattr(mgr, "unload_model_http", None)):
+                        for mid in mgr.get_loaded_model_ids():
+                            mgr.unload_model_http(mid)
                     load_res = mgr.load_model_http(filename)
                     if not load_res.get("ok"):
                         raise RuntimeError(load_res.get("error") or "HTTP model load failed")
