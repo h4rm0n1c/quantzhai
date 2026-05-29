@@ -289,6 +289,164 @@ def extract_claude_session(path: Path) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Opencode SQLite extractor
+# ---------------------------------------------------------------------------
+
+def extract_opencode_sessions(db_path: Path) -> list[dict]:
+    """
+    Extract all qualifying sessions from an opencode SQLite database.
+
+    Opencode stores conversation as typed parts linked to messages:
+      text      → user or assistant prose
+      reasoning → assistant thinking (ACTUAL content, not empty like Claude)
+      tool      → tool invocation (name + state with input/output)
+      patch     → code patch (treated as assistant message)
+      compaction → marks where context was compacted; tail_start_id gives split point
+      step-start/step-finish → lifecycle markers, skipped
+
+    Returns a list of normalised session dicts (same schema as Codex extractor).
+    """
+    import sqlite3
+
+    if not db_path.exists():
+        return []
+
+    results = []
+    try:
+        con = sqlite3.connect(str(db_path))
+    except Exception:
+        return []
+
+    # Fetch all sessions with their directory
+    sessions = con.execute(
+        "SELECT id, directory, title FROM session"
+    ).fetchall()
+
+    for sess_id, directory, title in sessions:
+        cwd = directory or ""
+
+        # Fetch parts joined to messages for role info, ordered by creation time
+        rows = con.execute("""
+            SELECT p.id, m.id as msg_id, m.data as msg_data, p.data as part_data,
+                   p.time_created
+            FROM part p
+            JOIN message m ON m.id = p.message_id
+            WHERE p.session_id = ?
+            ORDER BY p.time_created ASC
+        """, (sess_id,)).fetchall()
+
+        if not rows:
+            continue
+
+        input_items = []
+        compaction_points = []  # list of (item_index, msg_id_at_tail)
+        reasoning_count = 0
+        peak_tokens = 0
+
+        # Track the last user message text to avoid duplicating tool-call inputs
+        for part_id, msg_id, msg_data_raw, part_data_raw, ts in rows:
+            try:
+                msg_data = json.loads(msg_data_raw) if msg_data_raw else {}
+                part_data = json.loads(part_data_raw) if part_data_raw else {}
+            except Exception:
+                continue
+
+            role = msg_data.get("role", "assistant")
+            ptype = part_data.get("type", "")
+
+            if ptype in ("step-start", "step-finish"):
+                continue
+
+            elif ptype == "text":
+                text = part_data.get("text", "")
+                if isinstance(text, str) and text.strip() and not _is_harness(text):
+                    input_items.append({
+                        "type": "message",
+                        "role": role,
+                        "content": text.strip(),
+                    })
+
+            elif ptype == "reasoning":
+                text = part_data.get("text", "")
+                if isinstance(text, str) and text.strip():
+                    reasoning_count += 1
+                    input_items.append({
+                        "type": "message",
+                        "role": "assistant",
+                        "content": f"<think>\n{text.strip()}\n</think>",
+                    })
+
+            elif ptype == "tool":
+                name = part_data.get("tool", "")
+                state_raw = part_data.get("state", {})
+                if isinstance(state_raw, str):
+                    try:
+                        state = json.loads(state_raw)
+                    except Exception:
+                        state = {"raw": state_raw}
+                else:
+                    state = state_raw or {}
+                call_id = part_data.get("callID", "")
+                inp = state.get("input", {})
+                output = state.get("output", "")
+                if isinstance(inp, dict):
+                    inp = json.dumps(inp)
+                if isinstance(output, str) and len(output) > 4000:
+                    output = output[:2000] + "\n…[truncated]…\n" + output[-500:]
+                if name:
+                    input_items.append({
+                        "type": "function_call",
+                        "name": name,
+                        "arguments": inp,
+                        "call_id": call_id,
+                    })
+                if output:
+                    input_items.append({
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": output,
+                    })
+
+            elif ptype == "patch":
+                text = part_data.get("text", "") or part_data.get("patch", "")
+                if isinstance(text, str) and text.strip():
+                    input_items.append({
+                        "type": "message",
+                        "role": "assistant",
+                        "content": f"[patch]\n{text.strip()}",
+                    })
+
+            elif ptype == "compaction":
+                tail_msg_id = part_data.get("tail_start_id", "")
+                compaction_points.append((len(input_items), tail_msg_id))
+
+        if len(input_items) < 4:
+            continue
+        est_tokens = sum(len(json.dumps(i)) // 4 for i in input_items)
+        if est_tokens < MIN_TOKENS:
+            continue
+
+        results.append({
+            "session_id": str(sess_id),
+            "source": "opencode",
+            "source_path": str(db_path),
+            "cwd": cwd,
+            "title": title or "",
+            "model_provider": "opencode",
+            "item_count": len(input_items),
+            "estimated_tokens": est_tokens,
+            "peak_tokens": peak_tokens,
+            "reasoning_count": reasoning_count,
+            "compaction_count": len(compaction_points),
+            "compaction_points": compaction_points,
+            "input_items": input_items,
+        })
+
+    con.close()
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Curation filter
 # ---------------------------------------------------------------------------
 
@@ -322,30 +480,38 @@ def select_sessions(candidates: list[dict]) -> list[dict]:
     """
     Apply curation: diversity over volume.
 
-    Priority order within each project:
-      1. Sessions with most compaction events (ground truth pairs)
-      2. Largest estimated token count (longest context)
+    Priority order within each project (per source):
+      1. Sessions with most reasoning content (reasoning_count desc) — opencode
+      2. Sessions with most compaction events (ground truth pairs)
+      3. Largest estimated token count (longest context)
 
-    Caps:
-      - QUANTZHAI_MAX total for the quantzhai project
-      - MAX_PER_PROJECT for all other projects
+    Caps per slug×source:
+      - QUANTZHAI_MAX per source for quantzhai (already represented)
+      - MAX_PER_PROJECT per source for other slugs
     """
-    by_project = defaultdict(list)
+    # Group by slug×source so caps apply per source independently
+    by_slug_source = defaultdict(list)
     for c in candidates:
         slug = cwd_slug(c.get("cwd", ""))
-        by_project[slug].append(c)
+        source = c.get("source", "codex")
+        by_slug_source[(slug, source)].append(c)
 
     selected = []
-    for slug, sessions in sorted(by_project.items()):
+    for (slug, source), sessions in sorted(by_slug_source.items()):
         if slug in _SKIP_SLUGS:
-            print(f"  {slug:35s}  {len(sessions):3d} candidates → skipped (scratch/tmp)")
+            print(f"  {slug:35s} [{source}]  {len(sessions):3d} → skipped (scratch/tmp)")
             continue
         cap = QUANTZHAI_MAX if is_quantzhai(slug) else MAX_PER_PROJECT
-        # Sort: compaction events descending, then token count descending
-        ranked = sorted(sessions, key=lambda s: (s.get("compaction_count", 0),
-                                                  s.get("estimated_tokens", 0)), reverse=True)
+        # Sort priority: reasoning_count (opencode), then compactions, then size
+        ranked = sorted(sessions, key=lambda s: (
+            s.get("reasoning_count", 0),
+            s.get("compaction_count", 0),
+            s.get("estimated_tokens", 0),
+        ), reverse=True)
         taken = ranked[:cap]
-        print(f"  {slug:35s}  {len(sessions):3d} candidates → keeping {len(taken)}")
+        rc_total = sum(s.get("reasoning_count", 0) for s in taken)
+        rc_str = f" [🧠{rc_total}]" if rc_total else ""
+        print(f"  {slug:30s} [{source:8s}] {len(sessions):3d} → {len(taken)}{rc_str}")
         selected.extend(taken)
 
     return selected
@@ -397,49 +563,60 @@ def main():
     output_dir = Path(args.output)
     existing = {d.name for d in output_dir.iterdir()} if output_dir.exists() else set()
 
-    # Discover session files from all sources
-    # Claude Code sessions (.claude/projects/) are excluded: thinking blocks
-    # are stored as empty strings — reasoning content is not persisted.
-    sources = [
-        # QuantZhai local sessions (partially extracted; new ones added)
+    # Discover session files from all sources.
+    # Claude Code excluded: thinking blocks are empty strings.
+    # Antigravity excluded: encrypted .pb format, no accessible schema.
+    # Gemini history excluded: only .project_root marker files, no conversation.
+    codex_sources = [
         ROOT / "var" / "codex-home" / "sessions",
-        # All Codex sessions in home dir (diverse domains: game, search, web, pico)
         Path.home() / ".codex" / "sessions",
+    ]
+    opencode_dbs = [
+        Path.home() / ".local" / "share" / "opencode" / "opencode.db",
     ]
 
     print("Scanning sources...")
     candidates = []
-    for source_dir in sources:
+
+    for source_dir in codex_sources:
         if not source_dir.exists():
             continue
-        is_claude = "claude" in str(source_dir)
         files = sorted(source_dir.rglob("*.jsonl"))
-        print(f"  {source_dir}: {len(files)} files ({'claude' if is_claude else 'codex'})")
+        print(f"  {source_dir}: {len(files)} files (codex)")
         for path in files:
             if path.stem in existing and not args.dry_run:
-                continue  # already extracted
-            if is_claude:
-                result = extract_claude_session(path)
-            else:
-                result = extract_codex_session(path)
+                continue
+            result = extract_codex_session(path)
             if result:
                 candidates.append(result)
 
+    for db_path in opencode_dbs:
+        if not db_path.exists():
+            continue
+        print(f"  {db_path} (opencode SQLite)")
+        oc_sessions = extract_opencode_sessions(db_path)
+        # Skip already-extracted opencode sessions
+        oc_sessions = [s for s in oc_sessions
+                       if s["session_id"] not in existing or args.dry_run]
+        print(f"    {len(oc_sessions)} qualifying opencode sessions")
+        candidates.extend(oc_sessions)
+
     print(f"\n{len(candidates)} qualifying sessions before curation\n")
-    print("Curation (per-project caps):")
+    print("Curation (per-project×source caps):")
     selected = select_sessions(candidates)
 
     print(f"\n{len(selected)} sessions selected\n")
-    print(f"{'SOURCE':8} {'SLUG':30} {'EST_TOK':>8} {'COMPACTS':>8} {'ITEMS':>6}")
-    print("-" * 70)
-    for s in sorted(selected, key=lambda x: (cwd_slug(x['cwd']), -x.get('estimated_tokens',0))):
+    print(f"{'SOURCE':10} {'SLUG':28} {'EST_TOK':>9} {'COMPACT':>7} {'REASON':>7} {'ITEMS':>6}")
+    print("-" * 75)
+    for s in sorted(selected, key=lambda x: (cwd_slug(x['cwd']), x['source'],
+                                              -x.get('estimated_tokens', 0))):
         slug = cwd_slug(s['cwd'])
         src = s['source']
         est = s.get('estimated_tokens', 0)
         compacts = s.get('compaction_count', 0)
+        reasoning = s.get('reasoning_count', 0)
         items = s.get('item_count', 0)
-        think = f" [{s['thinking_block_count']}🧠]" if s.get('thinking_block_count') else ""
-        print(f"{src:8} {slug:30} {est:>8,} {compacts:>8} {items:>6}{think}")
+        print(f"{src:10} {slug:28} {est:>9,} {compacts:>7} {reasoning:>7} {items:>6}")
 
     if not args.dry_run:
         print(f"\nWriting to {output_dir}...")
