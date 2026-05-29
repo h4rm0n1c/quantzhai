@@ -61,12 +61,36 @@ class WebSearchProxyToolExecutor(ProxyLocalToolExecutor):
 
     def started_public_item(self, call: dict, public_index: int) -> dict:
         item_id = call.get("id") or call.get("call_id") or f"{self.lifecycle.name}_local_{public_index}"
-        return {
+        item = {
             "id": item_id,
             "type": self.lifecycle.public_item_type,
             "status": "in_progress",
             "call_id": call.get("call_id"),
         }
+        # Include the action so Codex renders the query detail immediately:
+        # "Searching the web: <query>" instead of a blank "Searching the web".
+        # Codex parses web_search_call action using WebSearchAction:
+        #   Search { query } → shows the query string
+        #   OpenPage { url } → shows the URL
+        #   FindInPage { url, pattern } → shows pattern + URL
+        try:
+            import json as _j
+            args = _j.loads(call.get("arguments") or "{}")
+            if isinstance(args, dict):
+                action_type = str(args.get("action") or "search")
+                if action_type in ("search", "retrieve", "capabilities"):
+                    item["action"] = {"type": "search", "query": args.get("query") or ""}
+                elif action_type == "open_page":
+                    item["action"] = {"type": "open_page", "url": args.get("url") or ""}
+                elif action_type == "find_in_page":
+                    item["action"] = {
+                        "type": "find_in_page",
+                        "url": args.get("url") or "",
+                        "pattern": args.get("query") or args.get("pattern") or "",
+                    }
+        except Exception:
+            pass
+        return item
 
     def execute(self, call: dict, context: ProxyToolExecutionContext) -> ToolContinuationResult:
         public_item, tool_output_item, sources = self.web_runtime.execute_web_search_call(
