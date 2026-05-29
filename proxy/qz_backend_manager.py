@@ -473,6 +473,13 @@ class BackendManager:
         ]
         if self._spec_default:
             args.append("--spec-default")
+        # Per-model spec overrides: if models-preset.ini exists in the models dir,
+        # pass it to the router so each model section can add e.g. spec-type = draft-mtp
+        # without affecting models that don't have MTP heads.
+        import os as _os
+        _preset_host = _os.path.join(self._model_dir, "models-preset.ini")
+        if _os.path.isfile(_preset_host):
+            args += ["--models-preset", "/models/models-preset.ini"]
         return args
 
     def build_docker_run_args(self) -> list[str]:
