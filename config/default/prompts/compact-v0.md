@@ -27,6 +27,18 @@ Do not include markdown fences, explanatory prose, or section commentary.
   commands, etc.). Weave them into the semantic sections where they are
   contextually relevant — for example, a SHA belongs next to the fix it
   describes, a file path belongs next to the change being discussed.
+- A survival-hint block may appear below the conversation, structured as:
+    - `verbatim:` exact atoms — copy character-for-character into the
+      relevant semantic section; never reword these.
+    - `context:` contextual atoms — preserve in the relevant section;
+      exactness still matters (do not invent a new symbol or path).
+    - `concepts:` semantic markers (causal explanations, constraint
+      discoveries, corrections, investigation outcomes, failure records).
+      For each marker, locate the sentence in the conversation that contains
+      it and preserve the *meaning* of that sentence in the summary. You
+      may paraphrase the surface form, but you must not drop the concept,
+      invert its polarity, or strip the cause/effect link. A `concepts`
+      marker is a pointer to a discovered fact, not a string to copy.
 - Preserve negative constraints verbatim (e.g. "do not set X to Y").
 - Preserve behavioral guardrails and user corrections as first-class entries.
 - Preserve evidence-to-decision chains:
