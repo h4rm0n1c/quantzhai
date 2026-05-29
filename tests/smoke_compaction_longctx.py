@@ -253,12 +253,26 @@ def main():
     # Filter for SHORT, specific identifiers (< 60 chars) — these are the
     # atoms that must survive verbatim because they cannot be expressed another
     # way.  Long git commands or multi-file lists are legitimately abstracted.
+    # Extract short, meaningful identifiers — single tokens, no spaces, not noise.
+    # Exclude: __pycache__, .pyc, /tmp/, old/private paths, env var expansions.
+    def _is_meaningful_atom(text: str) -> bool:
+        t = text.strip()
+        if not (8 < len(t) < 60):
+            return False
+        if " " in t:
+            return False
+        if any(noise in t for noise in ("__pycache__", ".pyc", "/tmp/", "cpython-",
+                                         "/home/harri/", "${", ":-", "SEARXNG_",
+                                         "QZ_BUILD_DIR", "QZ_TQ_")):
+            return False
+        if t.lower().startswith(("not", "never", "no ", "without", "unless",
+                                  "error:", "failed:", "git ")):
+            return False
+        return True
+
     heavy_atoms = sorted(
         {s.text for s in all_spans if s.level == 1 and s.weight == "heavy"
-         and 8 < len(s.text) < 60
-         and not s.text.lower().startswith(("not", "never", "no ", "without",
-                                            "unless", "error:", "failed:", "git "))
-         and " " not in s.text.strip()},  # prefer single-token identifiers
+         and _is_meaningful_atom(s.text)},
         key=len, reverse=True
     )[:8]
 
