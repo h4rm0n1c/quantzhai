@@ -2556,9 +2556,22 @@ class RequestRouter:
             raise RuntimeError(f"model {requested!r} not found in catalog")
         key = entry.get("key") or entry.get("slug") or entry.get("filename") or requested
         backend_id = entry.get("backend_id") or key
-        filename = entry.get("filename") or entry.get("backend_target") or backend_id
-        if isinstance(filename, str) and filename and not filename.endswith(".gguf"):
-            filename = f"{filename}.gguf"
+        backend_target = (entry.get("backend_target") or backend_id or "").removesuffix(".gguf")
+        entry_id = (entry.get("id") or "").removesuffix(".gguf")
+
+        # Profile symlinks: entry.id differs from backend_target (e.g. "qwen-blank" vs
+        # "Qwen3.6-35B-A3B-...").  Load by the PROFILE name so the router registers and
+        # serves requests under the alias — the router has both the symlink and the real
+        # file in its inventory and they are separate loadable entries.  Loading by the
+        # resolved backend_target bypasses the alias and causes the proxy's inventory
+        # check to look for the wrong name.
+        is_profile_alias = bool(entry_id and backend_target and entry_id != backend_target)
+        if is_profile_alias:
+            filename = f"{entry_id}.gguf"
+        else:
+            filename = entry.get("filename") or entry.get("backend_target") or backend_id
+            if isinstance(filename, str) and filename and not filename.endswith(".gguf"):
+                filename = f"{filename}.gguf"
         if not filename:
             raise RuntimeError(f"could not resolve launch filename for {requested!r}")
 
