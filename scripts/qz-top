@@ -184,16 +184,16 @@ def docker(args: List[str], timeout=3.0) -> str:
 
 
 def curl_health(host: str, port: str) -> bool:
+    """Check /health over HTTP using urllib — works locally and remotely."""
     try:
-        out = subprocess.check_output(
-            ["curl", "-fsS", f"http://{host}:{port}/health"],
-            stderr=subprocess.DEVNULL,
-            text=True,
-            timeout=1.0,
-        )
+        import urllib.request
+        with urllib.request.urlopen(
+            f"http://{host}:{port}/health", timeout=1.0
+        ) as r:
+            body = r.read().decode("utf-8", errors="replace")
+            return r.status == 200 and ("status" in body or body.strip() in ("OK", "ok"))
     except Exception:
         return False
-    return "status" in out or out.strip() == "OK" or out.strip() == "ok"
 
 
 def fetch_vram_snapshot(cp: Optional[dict]) -> Optional[dict]:
@@ -806,6 +806,37 @@ def parse_gpus() -> List[GpuRow]:
     return rows
 
 
+def gpus_from_vram_snap(vram_snap: Optional[dict]) -> List[GpuRow]:
+    """Convert proxy vram_snapshot gpus list to GpuRow objects.
+
+    The proxy already runs nvidia-smi server-side and exposes the result
+    via /qz/status → vram → gpus.  Using this avoids a redundant local
+    nvidia-smi call and makes qz-top work over HTTP without a local GPU.
+    """
+    if not isinstance(vram_snap, dict):
+        return []
+    raw = vram_snap.get("gpus") or []
+    rows = []
+    for g in raw:
+        if not isinstance(g, dict):
+            continue
+        try:
+            rows.append(GpuRow(
+                index=str(g.get("index", "")),
+                name=str(g.get("name", "")),
+                util=float(g.get("util_pct") or 0),
+                mem_used=float(g.get("used_mib") or 0),
+                mem_total=float(g.get("total_mib") or 0),
+                power=float(g.get("power_w") or 0),
+                temp=float(g.get("temp_c") or 0),
+                gen=str(g.get("pcie_gen") or ""),
+                width=str(g.get("pcie_width") or ""),
+            ))
+        except (TypeError, ValueError):
+            continue
+    return rows
+
+
 def telemetry_row(event: dict) -> Optional[Tuple[str, str]]:
     payload = event.get("payload") if isinstance(event, dict) else {}
     if not isinstance(payload, dict):
@@ -1408,9 +1439,33 @@ class UI:
             self.add(y + 10, x + 2, "RECOVERY", self.dim | self.bold)
             self.add(y + 10, x + 12, clip("  ".join(rec_parts), w - 14), rec_attr)
 
-    def draw_container(self, y: int, x: int, h: int, w: int):
+    def draw_container(self, y: int, x: int, h: int, w: int, cp: Optional[dict] = None):
         self.box(y, x, h, w, "CONTAINER")
         self.add(y + 1, x + 2, f"{'NAME':<16} {'STATUS':<27} PORTS", self.dim | self.bold)
+
+        # Prefer proxy backend_manager data (works over HTTP, no docker dependency).
+        # Fall back to local docker ps only when proxy data is unavailable.
+        bmgr = (cp or {}).get("backend_manager") if isinstance(cp, dict) else None
+        if isinstance(bmgr, dict) and bmgr.get("container_name"):
+            name = bmgr.get("container_name", "")
+            running = bmgr.get("container_running")
+            phase = bmgr.get("phase", "")
+            healthy = bmgr.get("backend_health_ok")
+            if running and healthy and phase == "healthy":
+                status = "Up (healthy)"
+            elif running:
+                status = f"Up ({phase})" if phase else "Up"
+            else:
+                status = "Exited" if phase else "Not running"
+            server_port = os.environ.get("QZ_SERVER_PORT", "18084")
+            ports = f"0.0.0.0:{server_port}->8080/tcp"
+            attr = self.green if running else self.red | self.bold
+            self.add(y + 2, x + 2, f"{clip(name, 16):<16} ", self.white)
+            self.add(y + 2, x + 19, f"{clip(status, 27):<27}", attr)
+            self.add(y + 2, x + 47, clip(ports, w - 50), self.white)
+            return
+
+        # Fallback: local docker ps (only works when co-located with backend)
         out = docker(
             [
                 "ps",
@@ -1607,7 +1662,6 @@ class UI:
             os.environ.get("QZ_PROXY_HOST", "127.0.0.1"),
             os.environ.get("QZ_PROXY_PORT", "18180"),
         )
-        gpus = parse_gpus()
 
         rates = Rates(recent=[])
         cp = None
@@ -1624,6 +1678,14 @@ class UI:
             model_status = ModelStatus()
         srs = service_recovery_from_control_plane(cp)
         vram_snap = fetch_vram_snapshot(cp)
+
+        # GPU data: prefer proxy vram_snapshot (already sourced from nvidia-smi
+        # server-side, works over HTTP).  Fall back to local nvidia-smi only when
+        # the proxy hasn't provided per-GPU data.
+        gpus = gpus_from_vram_snap(vram_snap)
+        if not gpus:
+            gpus = parse_gpus()
+
         benchmark = latest_benchmark()
 
         self.draw_header(backend_ok, proxy_ok, gpus, vram_snap=vram_snap)
@@ -1636,7 +1698,7 @@ class UI:
         full_w = w - 2
         gpu_h = 8 + min(2, len(gpus))  # +3 vs original: physical TOTAL + VRAM + COMP rows
         self.draw_profile(3, 0, 12, full_w, model_status, srs, cp_is_none=(cp is None))
-        self.draw_container(15, 0, 5, full_w)
+        self.draw_container(15, 0, 5, full_w, cp=cp)
         self.draw_gpu(20, 0, gpu_h, full_w, gpus, vram_snap=vram_snap)
         throughput_y = 20 + gpu_h
         self.draw_throughput(throughput_y, 0, 9, full_w, rates)
