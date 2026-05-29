@@ -690,7 +690,10 @@ class RequestRouter:
             # Same-underlying-model optimisation: if the requested profile/alias
             # resolves to the same backend_target as a currently loaded model,
             # skip the unload→load cycle entirely — just update the selection.
-            # Switching between e.g. kuato↔caveman (both → IQ4_XS) costs nothing.
+            # Same-underlying-GGUF check: prevent dual-loading when a profile
+            # alias (symlink) and its target are both requested simultaneously.
+            # Checks BOTH loaded AND loading models — the loading state covers
+            # the window where a load is in progress under a different alias.
             try:
                 catalog = self.handler._model_catalog()
                 try:
@@ -702,16 +705,25 @@ class RequestRouter:
                     new_target = (
                         new_entry.get("backend_target") or new_entry.get("backend_id") or ""
                     ).removesuffix(".gguf")
-                    if new_target and callable(getattr(mgr, "get_loaded_model_ids", None)):
-                        for loaded_id in mgr.get_loaded_model_ids():
-                            loaded_entry = match_model(catalog.entries, loaded_id)
-                            if loaded_entry:
-                                loaded_target = (
-                                    loaded_entry.get("backend_target") or
-                                    loaded_entry.get("backend_id") or ""
-                                ).removesuffix(".gguf")
-                                if loaded_target and loaded_target == new_target:
+                    active_getter = getattr(mgr, "get_active_model_ids", None)
+                    active = mgr.get_active_model_ids() if callable(active_getter) else {}
+                    for active_id, active_state in active.items():
+                        active_entry = match_model(catalog.entries, active_id)
+                        if active_entry:
+                            active_target = (
+                                active_entry.get("backend_target") or
+                                active_entry.get("backend_id") or ""
+                            ).removesuffix(".gguf")
+                            if active_target and new_target and active_target == new_target:
+                                if active_state == "loaded":
                                     # Same GGUF already loaded — update selection only.
+                                    self._set_manager_launch_model(requested, mgr)
+                                    self._do_select_model(requested, source="qz_codex")
+                                    return True
+                                elif active_state == "loading":
+                                    # Same GGUF already loading under a different alias.
+                                    # Don't start a second load — update selection and
+                                    # let the hold-open loop wait for the existing load.
                                     self._set_manager_launch_model(requested, mgr)
                                     self._do_select_model(requested, source="qz_codex")
                                     return True

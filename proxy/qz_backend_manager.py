@@ -709,6 +709,28 @@ class BackendManager:
                         loaded.append(model_id.strip())
         return loaded
 
+    def get_active_model_ids(self) -> dict[str, str]:
+        """Return {model_id: state} for all loaded or loading models.
+
+        Used by the same-model optimisation to detect when a model with the
+        same underlying GGUF is already active (loaded or mid-load) under a
+        different alias.  Checking only 'loaded' misses the window where a
+        load is in progress — causing dual loads of the same GGUF.
+        """
+        status = self.get_models_status()
+        if not status:
+            return {}
+        active = {}
+        for entry in (status.get("data") or []):
+            if isinstance(entry, dict):
+                s = entry.get("status") or {}
+                state = s.get("value") if isinstance(s, dict) else None
+                if state in ("loaded", "loading"):
+                    model_id = entry.get("id")
+                    if isinstance(model_id, str) and model_id.strip():
+                        active[model_id.strip()] = state
+        return active
+
     def is_load_in_flight(self, timeout: float = 120.0) -> bool:
         """Return True if load_model_http was called within *timeout* seconds.
 
@@ -943,9 +965,12 @@ class BackendManager:
                     )
 
             # Health confirmed (either reconnected or fresh start passed above).
-            # Trigger model load and GPU check — same path for both cases.
-            if True:
-                # Trigger eager load of the selected model if any
+            # Eager model load: only on fresh starts.  On reconnect the model
+            # is either already loaded (container was healthy) or the auto-trigger
+            # will load it on the first request.  Firing a load from both _do_start()
+            # AND the auto-trigger simultaneously causes dual-loading of the same
+            # underlying GGUF when a profile alias is used.
+            if not _already_healthy:
                 if getattr(self, "_launch_model_path_basename", None):
                     import threading
                     threading.Thread(
@@ -953,6 +978,7 @@ class BackendManager:
                         args=(self._launch_model_path_basename,),
                         daemon=True
                     ).start()
+            if True:
                 # GPU offload grace window.
                 # /health passing does not guarantee model-load log lines are
                 # written yet.  Treat any non-GPU provisional state (unknown,
