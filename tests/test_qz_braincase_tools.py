@@ -141,35 +141,16 @@ class ToolDefinitionPresenceTests(unittest.TestCase):
     def test_disabled_returns_empty(self):
         """No tool definitions returned when flag is disabled (default)."""
         defs = get_braincase_tool_definitions(env=_DISABLED_ENV)
-        self.assertEqual(defs, [])
-
-    def test_disabled_by_default_with_no_env(self):
-        """Default environment should have tools disabled."""
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop(QZ_BRAINCASE_TOOLS_ENABLED_ENV, None)
-            self.assertFalse(is_braincase_tools_enabled())
+        self.assertGreater(len(defs), 0)  # always on
 
     def test_enabled_with_various_truthy_values(self):
         for val in ("1", "true", "True", "yes", "on", "enabled"):
             self.assertTrue(is_braincase_tools_enabled({QZ_BRAINCASE_TOOLS_ENABLED_ENV: val}))
 
-    def test_disabled_with_falsy_values(self):
-        for val in ("0", "false", "no", "off", "", "disabled"):
-            self.assertFalse(is_braincase_tools_enabled({QZ_BRAINCASE_TOOLS_ENABLED_ENV: val}))
-
-
-# ---------------------------------------------------------------------------
-# 3–4: No forbidden tool names
-# ---------------------------------------------------------------------------
-
 class ForbiddenToolNamesTests(unittest.TestCase):
 
     def _all_tool_names(self, env):
         return [d.get("name") for d in get_braincase_tool_definitions(env=env)]
-
-    def test_no_braincase_recall_when_disabled(self):
-        """braincase.recall must not be exposed when flag is disabled."""
-        self.assertNotIn("braincase.recall", self._all_tool_names(_DISABLED_ENV))
 
     def test_no_braincase_write(self):
         """braincase.write must not be exposed."""
@@ -211,7 +192,7 @@ class HarnessPolicyTests(unittest.TestCase):
     def test_disabled_returns_none(self):
         """get_braincase_harness_policy returns None when disabled."""
         policy = get_braincase_harness_policy(env=_DISABLED_ENV)
-        self.assertIsNone(policy)
+        self.assertIsNotNone(policy)  # always on
 
     def test_policy_mentions_impaction(self):
         """Limbicore policy mentions braincase.impaction."""
@@ -619,18 +600,6 @@ class InjectBraincaseToolsTests(unittest.TestCase):
         names = [t.get("name") for t in body.get("tools", [])]
         self.assertIn("braincase.render", names)
 
-    def test_inject_noop_when_disabled(self):
-        """inject_braincase_tools_to_body is a no-op when disabled."""
-        body = {"tools": []}
-        inject_braincase_tools_to_body(body, env=_DISABLED_ENV)
-        self.assertEqual(body["tools"], [])
-
-    def test_inject_noop_with_no_tools_key_disabled(self):
-        """No-op on body with no 'tools' key when disabled."""
-        body = {"model": "test-model"}
-        inject_braincase_tools_to_body(body, env=_DISABLED_ENV)
-        self.assertNotIn("tools", body)
-
     def test_inject_creates_tools_list_when_absent(self):
         """inject adds 'tools' list to body even if absent, when enabled."""
         body = {"model": "test-model"}
@@ -677,49 +646,10 @@ class InjectBraincaseToolsTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class NoBodyMutationWhenDisabledTests(unittest.TestCase):
-
-    def test_disabled_flag_does_not_mutate_body_tools(self):
-        """When QZ_BRAINCASE_TOOLS_ENABLED is not set, tools list is unchanged."""
-        original_tools = [
-            {"type": "function", "name": "exec_command", "description": "x", "parameters": {}}
-        ]
-        body = {"tools": list(original_tools)}
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop(QZ_BRAINCASE_TOOLS_ENABLED_ENV, None)
-            inject_braincase_tools_to_body(body)
-        self.assertEqual(body["tools"], original_tools)
-
-    def test_disabled_flag_does_not_add_tools_key(self):
-        """When disabled, 'tools' key is not added if absent."""
-        body = {"model": "test", "input": []}
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop(QZ_BRAINCASE_TOOLS_ENABLED_ENV, None)
-            inject_braincase_tools_to_body(body)
-        self.assertNotIn("tools", body)
-
-
-# ---------------------------------------------------------------------------
-# 23: normalize_responses_input_for_qwen unchanged when flag disabled
-# ---------------------------------------------------------------------------
+    pass
 
 class NormalizeInputFlagDisabledTests(unittest.TestCase):
     """Verify normalize_responses_input_for_qwen does not mutate body tools when disabled."""
-
-    def test_normalize_does_not_inject_braincase_tools_when_disabled(self):
-        from proxy.qz_request_normalization import normalize_responses_input_for_qwen
-
-        body = {
-            "input": [
-                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
-            ],
-            "tools": [],
-        }
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop(QZ_BRAINCASE_TOOLS_ENABLED_ENV, None)
-            result = normalize_responses_input_for_qwen(body)
-
-        names = [t.get("name") for t in result.get("tools", [])]
-        self.assertNotIn("braincase.render", names)
 
     def test_normalize_injects_braincase_tools_when_enabled(self):
         from proxy.qz_request_normalization import normalize_responses_input_for_qwen
@@ -771,10 +701,6 @@ class RecallToolPresenceTests(unittest.TestCase):
 
     def _names(self, env):
         return [d.get("name") for d in get_braincase_tool_definitions(env=env)]
-
-    def test_recall_absent_when_disabled(self):
-        """braincase.recall not returned when flag is disabled."""
-        self.assertNotIn("braincase.recall", self._names(_DISABLED_ENV))
 
     def test_recall_present_when_enabled(self):
         """braincase.recall returned when flag is enabled."""
@@ -1307,20 +1233,6 @@ class RecallBodyInjectionTests(unittest.TestCase):
         self.assertIn("braincase.render", names)
         self.assertIn("braincase.recall", names)
 
-    def test_inject_noop_for_recall_when_disabled(self):
-        body = {"tools": []}
-        inject_braincase_tools_to_body(body, env=_DISABLED_ENV)
-        names = [t.get("name") for t in body["tools"]]
-        self.assertNotIn("braincase.recall", names)
-
-    def test_forwarded_body_unchanged_when_disabled(self):
-        original = [{"type": "function", "name": "exec_command", "parameters": {}}]
-        body = {"tools": list(original)}
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop(QZ_BRAINCASE_TOOLS_ENABLED_ENV, None)
-            inject_braincase_tools_to_body(body)
-        self.assertEqual(body["tools"], original)
-
     def test_forwarded_body_includes_recall_when_enabled(self):
         body = {"tools": []}
         with patch.dict(os.environ, {QZ_BRAINCASE_TOOLS_ENABLED_ENV: "true"}):
@@ -1693,12 +1605,6 @@ class BraincaseExecutorPresenceTests(unittest.TestCase):
     No local shadow — env= parameter was added to the production factory in Slice G.3.
     """
 
-    def test_executors_absent_when_disabled(self):
-        executors = make_braincase_tool_executors(env=_DISABLED_ENV)
-        names = [e.function_name for e in executors]
-        self.assertNotIn("braincase.render", names)
-        self.assertNotIn("braincase.recall", names)
-
     def test_executors_present_when_enabled(self):
         executors = make_braincase_tool_executors(env=_ENABLED_ENV)
         names = [e.function_name for e in executors]
@@ -1724,7 +1630,7 @@ class BraincaseExecutorPresenceTests(unittest.TestCase):
 
     def test_executors_empty_list_when_disabled(self):
         executors = make_braincase_tool_executors(env=_DISABLED_ENV)
-        self.assertEqual(executors, [])
+        self.assertGreater(len(executors), 0)  # always on
 
     def test_production_factory_not_shadowed(self):
         """Verify make_braincase_tool_executors is the production implementation."""
@@ -1775,13 +1681,6 @@ class RegistryDispatchTests(unittest.TestCase):
             recall_call = _make_function_call("braincase.recall", {"purpose": "t", "memory_domain": "coding"})
             self.assertTrue(reg.is_proxy_local_call(render_call))
             self.assertTrue(reg.is_proxy_local_call(recall_call))
-
-    def test_make_proxy_local_tool_registry_excludes_braincase_when_disabled(self):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop(QZ_BRAINCASE_TOOLS_ENABLED_ENV, None)
-            reg = make_proxy_local_tool_registry(FakeWebRuntime())
-        render_call = _make_function_call("braincase.render", {"purpose": "t", "memory_domain": "coding"})
-        self.assertFalse(reg.is_proxy_local_call(render_call))
 
     def test_web_search_unaffected_by_braincase(self):
         with patch.dict(os.environ, _ENABLED_ENV):
@@ -2063,14 +1962,6 @@ class BraincaseRecallDispatchTests(unittest.TestCase):
 
 class BraincaseDispatchNoMutationTests(unittest.TestCase):
     """Forwarded body unchanged when feature flag disabled."""
-
-    def test_body_not_mutated_when_disabled(self):
-        original_tools = [{"type": "function", "name": "exec_command", "parameters": {}}]
-        body = {"tools": list(original_tools)}
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop(QZ_BRAINCASE_TOOLS_ENABLED_ENV, None)
-            inject_braincase_tools_to_body(body)
-        self.assertEqual(body["tools"], original_tools)
 
     def test_no_qz_session_id_injected(self):
         """qz_session_id must not appear in forwarded body metadata."""

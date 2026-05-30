@@ -575,7 +575,7 @@ BRAINCASE_HARNESS_POLICY_WITH_WRITE: str = (
 )
 
 # ---------------------------------------------------------------------------
-# Feature flag
+# Feature flags
 # ---------------------------------------------------------------------------
 
 def _env_truthy(source: dict, key: str) -> bool:
@@ -583,39 +583,32 @@ def _env_truthy(source: dict, key: str) -> bool:
 
 
 def is_braincase_tools_enabled(env: dict | None = None) -> bool:
-    """Return True if QZ_BRAINCASE_TOOLS_ENABLED is set to a truthy value."""
-    return _env_truthy(os.environ if env is None else env, QZ_BRAINCASE_TOOLS_ENABLED_ENV)
+    """BrainCase substrate is always on. env parameter kept for API compat."""
+    return True
 
 
 def is_braincase_limbicore_enabled(env: dict | None = None) -> bool:
-    """Return True when Limbicore session tools should be injected.
+    """Limbicore session tools (impaction + percolate) are always on.
 
-    Default behaviour: on whenever QZ_BRAINCASE_TOOLS_ENABLED is set
-    (the substrate is available). QZ_BRAINCASE_LIMBICORE_ENABLED can
-    override in either direction if an explicit value is present.
-
-    The memory_domain per session is configured in model-overrides.json
-    (memory_domain: "coding" etc.) — not via an env var.
+    QZ_BRAINCASE_LIMBICORE_ENABLED can be set to '0'/'false' to explicitly
+    disable if needed, but the default is unconditionally on.
+    The memory_domain per session is configured in model-overrides.json.
     """
     source = os.environ if env is None else env
     if QZ_BRAINCASE_LIMBICORE_ENABLED_ENV in source:
         return _env_truthy(source, QZ_BRAINCASE_LIMBICORE_ENABLED_ENV)
-    return _env_truthy(source, QZ_BRAINCASE_TOOLS_ENABLED_ENV)
+    return True
 
 
 def is_braincase_write_candidate_enabled(env: dict | None = None) -> bool:
-    """Return True when BOTH QZ_BRAINCASE_TOOLS_ENABLED and
-    QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED are set to truthy values.
+    """Return True when QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED is set.
 
-    write_candidate requires both flags because write exposure is higher-risk
-    than read. Operators enabling render/recall should not automatically enable
-    candidate writes.
+    write_candidate is the older lower-level write path. Kept gated because
+    it exposes more of the record schema than impaction does. The primary
+    write path for sessions is braincase.impaction (always on).
     """
     source = os.environ if env is None else env
-    return (
-        _env_truthy(source, QZ_BRAINCASE_TOOLS_ENABLED_ENV)
-        and _env_truthy(source, QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED_ENV)
-    )
+    return _env_truthy(source, QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED_ENV)
 
 
 def get_braincase_tool_definitions(env: dict | None = None) -> list[dict]:
