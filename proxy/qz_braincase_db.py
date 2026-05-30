@@ -56,9 +56,14 @@ def default_db_path(root: str | Path | None = None) -> Path:
 
 
 def _env_enabled(value: str | None) -> bool:
+    # Default enabled when not explicitly set — BrainCase DB is always on.
+    # QZ_STATE_DB_ENABLED=0/false/no can still disable explicitly if needed.
     if value is None:
+        return True
+    stripped = value.strip().lower()
+    if stripped in {"0", "false", "no", "off", "disabled"}:
         return False
-    return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    return True
 
 
 class BrainCaseDB:

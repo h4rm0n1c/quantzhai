@@ -60,15 +60,19 @@ class BrainCaseDBTests(unittest.TestCase):
             self.assertFalse(db_path.exists())
             self.assertEqual(db.health()["schema_version"], None)
 
-    def test_from_env_defaults_disabled_even_with_default_path(self):
+    def test_from_env_defaults_enabled(self):
+        # BrainCase DB is always on by default now.
         with tempfile.TemporaryDirectory() as td:
-            env = {
-                "QZ_ROOT": td,
-            }
+            env = {"QZ_ROOT": td}
             db = BrainCaseDB.from_env(env)
+            self.assertTrue(db.enabled)
 
+    def test_from_env_can_be_explicitly_disabled(self):
+        with tempfile.TemporaryDirectory() as td:
+            env = {"QZ_ROOT": td, "QZ_STATE_DB_ENABLED": "0"}
+            db = BrainCaseDB.from_env(env)
             self.assertFalse(db.enabled)
-            self.assertEqual(db.path, Path(td) / "var" / "qz-state.sqlite3")
+            self.assertEqual(db.path, Path(td) / "var" / "state" / "braincase.sqlite3")
             self.assertFalse(db.path.exists())
 
     def test_enabled_tmpdir_path_creates_db(self):
@@ -231,10 +235,10 @@ class BrainCaseDBSliceBTests(unittest.TestCase):
 
     # --- 2. schema version / user_version updated to 3 ---
 
-    def test_schema_version_is_3(self):
-        self.assertEqual(QZ_BRAINCASE_DB_SCHEMA_VERSION, 3)
+    def test_schema_version_is_4(self):
+        self.assertEqual(QZ_BRAINCASE_DB_SCHEMA_VERSION, 4)
 
-    def test_user_version_is_3(self):
+    def test_user_version_is_4(self):
         with tempfile.TemporaryDirectory() as td:
             db = self._fresh_db(td)
             db.close()
@@ -246,8 +250,8 @@ class BrainCaseDBSliceBTests(unittest.TestCase):
                 ).fetchone()[0]
             finally:
                 conn.close()
-            self.assertEqual(user_version, 3)
-            self.assertEqual(meta_version, "3")
+            self.assertEqual(user_version, 4)
+            self.assertEqual(meta_version, "4")
 
     # --- 3. put/get source ref round-trips fixture ---
 
