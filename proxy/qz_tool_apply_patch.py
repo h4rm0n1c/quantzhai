@@ -729,18 +729,11 @@ class ApplyPatchToolAdapter:
     def to_upstream_tool(self, tool: dict) -> dict:
         description = tool.get("description") or (
             "Emit a single file operation (create, update, delete, move) to Codex.\n"
-            "\n"
-            "To update a file correctly:\n"
-            "1. Run: exec bash -c 'cat path/to/file' — read the CURRENT file content.\n"
-            "2. Build the diff using ONLY lines copied verbatim from that output.\n"
-            "   Every ' ' (context) line must be an exact byte-for-byte copy.\n"
-            "3. Call apply_patch with the diff.\n"
-            "\n"
-            "Do NOT wrap the diff in markdown code fences (no ```diff or ```).\n"
-            "Do NOT include --- a/file or +++ b/file headers.\n"
-            "A 'verification failed' error means context lines did not match — "
-            "it is a patch format problem, NOT a filesystem permission problem. "
-            "The working directory is writable. Go back to step 1 and re-read the file."
+            "For update_file: read the file first with exec cat, then build the diff "
+            "using ONLY lines copied verbatim from that output. "
+            "Every ' ' (context) line must be an exact copy — do not paraphrase. "
+            "Do NOT wrap the diff in markdown code fences. "
+            "Do NOT include --- a/file or +++ b/file headers."
         )
         return function_tool("apply_patch", description, _apply_patch_function_parameters())
 
