@@ -727,11 +727,17 @@ class ApplyPatchToolAdapter:
         return tool_type == "apply_patch" or (tool_type == "custom" and tool_name == "apply_patch")
 
     def to_upstream_tool(self, tool: dict) -> dict:
-        return function_tool(
-            "apply_patch",
-            tool.get("description") or "Emit a single Codex apply_patch operation. QuantZhai adapts this call but does not apply files.",
-            _apply_patch_function_parameters(),
+        description = tool.get("description") or (
+            "Emit a single file operation (create, update, delete, move) to Codex.\n"
+            "For update_file: the diff field must be a unified diff where every context "
+            "line (' ') is a verbatim copy from the current file. Read the file first, "
+            "copy lines exactly — do not paraphrase or invent context lines.\n"
+            "Do NOT wrap the diff in markdown code fences (no ```diff or ```rust).\n"
+            "If apply_patch returns a verification error, do NOT retry with another patch. "
+            "Instead, write the complete replacement file content using exec:\n"
+            "  exec bash -c 'cat > path/to/file << \\'HEREDOC\\'\\n<full content>\\nHEREDOC'"
         )
+        return function_tool("apply_patch", description, _apply_patch_function_parameters())
 
     def normalize_tool_choice(self, tool_choice: dict):
         if not isinstance(tool_choice, dict):
@@ -766,7 +772,11 @@ class ApplyPatchToolAdapter:
             )
         reason = _describe_args_failure(arguments)
         return ToolCoercionResult(
-            error_message=f"apply_patch: {reason}"
+            error_message=(
+                f"apply_patch argument error: {reason} "
+                "— Do not retry apply_patch. Use exec to write the complete file content instead: "
+                "exec bash -c 'cat > <path> << \\'HEREDOC\\'\\n<full content>\\nHEREDOC'"
+            )
         )
 
     def output_to_codex(self, item: dict, output_style: str = "custom"):
