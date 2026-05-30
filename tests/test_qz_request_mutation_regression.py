@@ -88,7 +88,7 @@ class FakeHandler:
     def _initialization_payload(self):
         return {"state": "ready", "ready": True, "catalog_ready": True}
 
-    def _send_json(self, status, body):
+    def _send_json(self, status, body, headers=None):
         pass
 
     def _request_id(self, ts):

@@ -98,7 +98,7 @@ class _FakeHandler:
 
     # --- proxy contract ---
 
-    def _send_json(self, status_code, payload):
+    def _send_json(self, status_code, payload, headers=None):
         self.sent.append((status_code, payload))
 
     def _model_catalog(self):

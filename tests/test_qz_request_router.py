@@ -1011,7 +1011,7 @@ class WebSearchCapabilitiesEndpointTests(unittest.TestCase):
             path = "/qz/web-search/capabilities"
             sent = None
 
-            def _send_json(self, status, payload):
+            def _send_json(self, status, payload, headers=None):
                 self.sent = (status, payload)
 
             def _handle_ollama_get(self):
@@ -1039,7 +1039,7 @@ class WebSearchCapabilitiesEndpointTests(unittest.TestCase):
             path = "/qz/web-search/capabilities"
             sent = None
 
-            def _send_json(self, status, payload):
+            def _send_json(self, status, payload, headers=None):
                 self.sent = (status, payload)
 
             def _handle_ollama_get(self):
