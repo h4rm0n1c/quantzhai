@@ -2078,6 +2078,41 @@ class ResponsesStreamRuntime:
                                 public_index = hs.max_output_index + 1
                             public_index += rs.output_index_offset
 
+                            # E-1: correct exec_command 'command' → 'cmd'.
+                            # The exec_command schema requires 'cmd' but models
+                            # sometimes use 'command' (common in other shell tools).
+                            # Correct silently before Codex sees the call.
+                            if (
+                                isinstance(hs.completed_call, dict)
+                                and hs.completed_call.get("name") == "exec_command"
+                            ):
+                                try:
+                                    _e1_orig = hs.completed_call.get("arguments") or "{}"
+                                    _e1_parsed = json.loads(_e1_orig)
+                                    if not _e1_parsed.get("cmd") and _e1_parsed.get("command"):
+                                        _e1_parsed["cmd"] = _e1_parsed.pop("command")
+                                        _e1_corr = json.dumps(_e1_parsed, ensure_ascii=False)
+                                        hs.completed_call = dict(hs.completed_call, arguments=_e1_corr)
+                                        _e1_cid = hs.completed_call.get("call_id") or hs.completed_call.get("id") or ""
+                                        if _e1_cid:
+                                            try:
+                                                _get_correction_tracker().register(_e1_cid, _e1_orig, _e1_corr)
+                                            except Exception:
+                                                pass
+                                        try:
+                                            from .qz_tool_apply_patch import _probe_log
+                                        except ImportError:
+                                            from qz_tool_apply_patch import _probe_log
+                                        _probe_log("exec_command_e1_command_renamed_to_cmd", {
+                                            "cmd_value": str(_e1_parsed.get("cmd", ""))[:80],
+                                        })
+                                        self._emit("exec_command_e1_corrected", {
+                                            "call_id": _e1_cid,
+                                            "cmd": str(_e1_parsed.get("cmd", ""))[:80],
+                                        })
+                                except Exception:
+                                    pass
+
                             escalation = self._check_sandbox_escalation(hs.completed_call)
                             if escalation:
                                 self._emit("tool_escalation_requested", escalation)
@@ -2117,26 +2152,6 @@ class ResponsesStreamRuntime:
                                             _get_correction_tracker().register(_cid, _orig_args, _corr_args)
                                         except Exception:
                                             pass
-
-                            # E-1 probe: exec_command with 'command' instead of 'cmd'.
-                            if (
-                                isinstance(hs.completed_call, dict)
-                                and hs.completed_call.get("name") == "exec_command"
-                            ):
-                                try:
-                                    _e1_args = json.loads(
-                                        hs.completed_call.get("arguments") or "{}"
-                                    )
-                                    if not _e1_args.get("cmd") and _e1_args.get("command"):
-                                        try:
-                                            from .qz_tool_apply_patch import _probe_log
-                                        except ImportError:
-                                            from qz_tool_apply_patch import _probe_log
-                                        _probe_log("exec_command_wrong_field_command_vs_cmd", {
-                                            "command_value": str(_e1_args.get("command", ""))[:80],
-                                        })
-                                except Exception:
-                                    pass
 
                             if decision.kind == "signal":
                                 # Advisory signal: inject output upstream,

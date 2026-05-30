@@ -343,6 +343,14 @@ def _build_correction_note(original_args: str, corrected_args: str) -> str:
         parts.append("stripped markdown code fences")
     if ("--- " in original_args or "+++ " in original_args) and "--- " not in corrected_args:
         parts.append("stripped unified diff headers")
+    # E-1: exec_command 'command' field renamed to 'cmd'
+    try:
+        orig = json.loads(original_args)
+        corr = json.loads(corrected_args)
+        if orig.get("command") and corr.get("cmd") and not orig.get("cmd"):
+            parts.append("renamed field 'command' → 'cmd' (exec_command requires 'cmd')")
+    except Exception:
+        pass
     if not parts:
         parts.append("normalised argument structure")
     return ", ".join(parts)
@@ -388,7 +396,7 @@ class CorrectionTracker:
                 if note:
                     output = item.get("output") or ""
                     if isinstance(output, str):
-                        suffix = f"\n\n[Proxy auto-corrected apply_patch format: {note}]"
+                        suffix = f"\n\n[Proxy auto-corrected tool call: {note}]"
                         result.append(dict(item, output=output + suffix))
                         changed = True
                         continue

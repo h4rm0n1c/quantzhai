@@ -512,6 +512,16 @@ def test_round_trip_full_escalation():
 # _build_correction_note
 # ---------------------------------------------------------------------------
 
+def test_build_correction_note_e1_field_rename():
+    import json as _j
+    orig = _j.dumps({"command": "ls -la", "workdir": "/tmp"})
+    corr = _j.dumps({"cmd": "ls -la", "workdir": "/tmp"})
+    note = _build_correction_note(orig, corr)
+    assert "command" in note
+    assert "cmd" in note
+    assert "renamed" in note
+
+
 def test_build_correction_note_markdown_fences():
     note = _build_correction_note("```json\n{\"diff\":\"..\"}\n```", "{\"diff\":\"..\"}")
     assert "markdown code fences" in note
