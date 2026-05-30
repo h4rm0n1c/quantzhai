@@ -60,6 +60,7 @@ try:
     from .qz_active_requests import ACTIVE_REQUESTS
     from .qz_recovery_jobs import RECOVERY_JOBS
     from .qz_vram_snapshot import get_cached_vram_snapshot
+    from .qz_sandbox_escalation import build_escalation_sse, get_correction_tracker as _get_correction_tracker, get_manager as _get_esc_manager
     from .qz_search_policy import resolve_search_policy_selection
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, build_web_search_capabilities, _safe_json_file, _unique_sources
     from .qz_runtime_io import (
@@ -115,6 +116,7 @@ except ImportError:
     from qz_active_requests import ACTIVE_REQUESTS
     from qz_recovery_jobs import RECOVERY_JOBS
     from qz_vram_snapshot import get_cached_vram_snapshot
+    from qz_sandbox_escalation import build_escalation_sse, get_correction_tracker as _get_correction_tracker, get_manager as _get_esc_manager
     from qz_search_policy import resolve_search_policy_selection
     from qz_tool_web import WEB_SEARCH_MAX_HOPS, WebSearchRuntime, build_web_search_capabilities, _safe_json_file, _unique_sources
     from qz_runtime_io import (
@@ -3843,6 +3845,37 @@ class RequestRouter:
                         _expand_local_compaction_items(input_items)
                     )
 
+                # Transparent sandbox escalation: detect exec denials, retry
+                # with require_escalated before the LLM ever sees the failure.
+                try:
+                    _esc_mgr = _get_esc_manager()
+                    _cur_input = body.get("input")
+                    if isinstance(_cur_input, list):
+                        # Phase 2: this is a follow-up after a pending escalation.
+                        _rewritten = _esc_mgr.check_pending_resolution(_cur_input)
+                        if _rewritten is not None:
+                            body["input"] = _rewritten
+                        else:
+                            # Phase 1: check if this turn contains a fresh sandbox denial.
+                            _esc_call, _orig_cid = _esc_mgr.check_for_denial(_cur_input)
+                            if _esc_call is not None and client_wants_stream:
+                                if not sse_response_started:
+                                    self._open_responses_sse()
+                                    sse_response_started = True
+                                sse_bytes = build_escalation_sse(_esc_call)
+                                self._write_sse_chunk(sse_bytes, request_id=request_id)
+                                self._emit_request_telemetry(
+                                    "request_completed",
+                                    started_at,
+                                    upstream_path,
+                                    client_model,
+                                    status=200,
+                                    suppressed="sandbox_escalation_injected",
+                                )
+                                return
+                except Exception:
+                    pass
+
                 # Support context_management.compact_threshold
                 context_mgmt = body.get("context_management")
                 if isinstance(context_mgmt, dict):
@@ -3873,6 +3906,19 @@ class RequestRouter:
                             )
                             return
                 body = normalize_responses_input_for_qwen(body, selected_model=selected_model)
+
+                # Inject apply_patch correction acknowledgements into outputs
+                # that correspond to calls where outgoing coercion silently fixed
+                # the model's arguments (e.g. stripped markdown fences).
+                try:
+                    _corr_input = body.get("input")
+                    if isinstance(_corr_input, list):
+                        _updated = _get_correction_tracker().inject_notes(_corr_input)
+                        if _updated is not _corr_input:
+                            body["input"] = _updated
+                except Exception:
+                    pass
+
                 _tool_norm_report = _normalize_tool_request(body, write_captures=True)
                 self._emit_schema_normalization_telemetry(_tool_norm_report, request_id)
 

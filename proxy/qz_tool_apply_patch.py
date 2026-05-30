@@ -1,7 +1,30 @@
 #!/usr/bin/env python3
 import json
+import os
 import re
 import time
+
+
+def _probe_log(event: str, payload: dict) -> None:
+    """Write a data-collection probe event to var/state/intercept-probes.jsonl.
+
+    Only writes when QZ_ROOT is explicitly set in the environment — this
+    prevents unit test runs from polluting the live session probe log.
+    Best-effort: any failure is silently swallowed.
+    """
+    try:
+        root = os.environ.get("QZ_ROOT", "")
+        if not root:
+            return  # not a live proxy run; skip
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            return  # running under pytest; keep probe log clean
+        path = os.path.join(root, "var", "state", "intercept-probes.jsonl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        line = json.dumps({"ts": time.time(), "event": event, **payload}) + "\n"
+        with open(path, "a") as f:
+            f.write(line)
+    except Exception:
+        pass
 
 try:
     from .qz_tools import ToolCoercionResult, ToolLifecycleSpec, ToolRegistry, function_tool
@@ -127,6 +150,10 @@ def _coerce_apply_patch_operation(value) -> dict | None:
 
 
 def _parse_apply_patch_arguments(arguments: str) -> dict | None:
+    # Pre-pass: the model sometimes wraps the entire JSON arguments string in
+    # markdown code fences (e.g. ```json\n{...}\n```).  Strip them before
+    # attempting JSON parse so we don't error out before any coercion runs.
+    arguments = _strip_markdown_code_fences((arguments or "").strip())
     try:
         data = json.loads(arguments or "{}")
     except Exception:
@@ -320,6 +347,30 @@ def _strip_unified_diff_headers(diff: str, path: str | None = None) -> str:
 
     trailing_newline = "\n" if diff.endswith("\n") else ""
     return "\n".join(stripped) + trailing_newline
+
+
+def _find_empty_hunk(diff: str) -> int | None:
+    """Return the 0-based index of the first @@ hunk that has no content lines,
+    or None if all hunks are non-empty.
+
+    A hunk is empty when the @@ marker is followed by the next @@ marker (or
+    end-of-diff) without any '+', '-', or ' ' content lines between them.
+    """
+    lines = diff.splitlines()
+    hunk_index = -1
+    has_content = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == "@@" or stripped.startswith("@@ "):
+            if hunk_index >= 0 and not has_content:
+                return hunk_index
+            hunk_index += 1
+            has_content = False
+        elif hunk_index >= 0 and line and line[0] in (" ", "+", "-"):
+            has_content = True
+    if hunk_index >= 0 and not has_content:
+        return hunk_index
+    return None
 
 
 def _normalize_unified_diff_hunk_header(line: str) -> str | None:
@@ -765,9 +816,81 @@ class ApplyPatchToolAdapter:
         arguments = call.get("arguments") or "{}" if isinstance(call, dict) else "{}"
         operation = _parse_apply_patch_arguments(arguments)
         if operation:
+            # AP-1: detect empty diff after stripping.  _apply_patch_operation_to_patch_text
+            # runs _strip_unified_diff_headers before building the Codex envelope; if the
+            # result is empty the Codex parser returns "Update file hunk is empty" which
+            # costs a full LLM retry.  Catch it here and return a precise error immediately.
+            op_type = operation.get("type")
+            if op_type in {"update_file", "move_file"}:
+                diff_raw = operation.get("diff") or ""
+                diff_stripped = _strip_unified_diff_headers(diff_raw, operation.get("path"))
+                if not diff_stripped.strip():
+                    _probe_log("apply_patch_ap1_empty_diff", {
+                        "op_type": op_type,
+                        "path": operation.get("path", ""),
+                        "diff_raw_len": len(diff_raw),
+                    })
+                    return ToolCoercionResult(
+                        error_message=(
+                            "apply_patch argument error: diff field is empty after stripping "
+                            "headers and code fences — include actual @@ hunks with context "
+                            "and changed lines (lines starting with ' ', '+', or '-')."
+                        )
+                    )
+                # AP-1b: multi-hunk diff where a trailing @@ has no content lines.
+                # Model generated two hunks but truncated at the second @@ boundary.
+                # Confirmed in live session: 3 occurrences in a single task (2026-05-31).
+                empty_hunk_idx = _find_empty_hunk(diff_stripped)
+                if empty_hunk_idx is not None:
+                    _probe_log("apply_patch_ap1b_empty_hunk", {
+                        "op_type": op_type,
+                        "path": operation.get("path", ""),
+                        "hunk_index": empty_hunk_idx,
+                    })
+                    return ToolCoercionResult(
+                        error_message=(
+                            f"apply_patch argument error: hunk {empty_hunk_idx + 1} has no "
+                            "content lines — include at least one '+', '-', or context line "
+                            "after each @@ marker, or remove the empty hunk."
+                        )
+                    )
+            # Data-collection probes for AP-2 / AP-3 / E-1 (issue #83).
+            # These log occurrences to the proxy runtime log so we can count
+            # frequencies over real sessions and decide whether to implement fixes.
+            if op_type in {"update_file", "move_file"} and diff_stripped:
+                # AP-2: unprefixed context lines (lines that should start with ' ')
+                hunk_active = False
+                unprefixed = []
+                for line in diff_stripped.splitlines():
+                    if line.startswith("@@ ") or line == "@@":
+                        hunk_active = True
+                        continue
+                    if hunk_active and line and line[0] not in (" ", "+", "-", "\\", "*"):
+                        unprefixed.append(line[:60])
+                if unprefixed:
+                    _probe_log("apply_patch_unprefixed_context_lines", {
+                        "path": operation.get("path", ""),
+                        "count": len(unprefixed),
+                        "sample": unprefixed[0],
+                    })
+                # AP-3: CRLF line endings in diff
+                crlf_count = sum(1 for l in diff_stripped.splitlines() if l.endswith("\r"))
+                if crlf_count:
+                    _probe_log("apply_patch_crlf_diff", {
+                        "path": operation.get("path", ""),
+                        "count": crlf_count,
+                    })
+            _probe_log("apply_patch_coerce_success", {
+                "op_type": op_type or "",
+                "path": operation.get("path", ""),
+                "diff_len": len(locals().get("diff_stripped") or ""),
+            })
             return ToolCoercionResult(
                 corrected_arguments=json.dumps({"operation": operation}, ensure_ascii=False)
             )
+        # E-1 probe: model used 'command' instead of 'cmd' for exec_command.
+        # (Checked at apply_patch coerce time is wrong — this belongs in exec handling,
+        # but we log it here if we can detect it from the arguments shape.)
         reason = _describe_args_failure(arguments)
         return ToolCoercionResult(
             error_message=(

@@ -148,6 +148,8 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 | Reasoning policy | [Qwen reasoning effort policy](qwen-reasoning-effort-policy.md) | Two-axis thinking control: `thinking_mode` × `reasoning_effort`; per-block budgets; profile config; TheTom budget field compat. |
 | Backend compat | [TheTom OAI responses compat](thetom-oai-responses-compat.md) | `/v1/responses` path reads `thinking_budget_tokens`, not `reasoning_budget_tokens`; why both fields must be mirrored; validation evidence. |
 | Proxy roadmap | [Proxy capability roadmap](proxy-capability-roadmap.md) | Proxy feature expansion and compatibility work. |
+| Proxy intercepts | [Proxy transparent intercept contract](proxy-transparent-intercept-contract.md) | Sandbox escalation and apply_patch correction: detection signals, two-phase intercept/rewrite loop, correction acknowledgement, guard rules, and integration test expectations. |
+| Proxy intercepts | [Proxy intercept research](proxy-intercept-research.md) | Evidence-based survey of save-an-LLM-call opportunities: AP-1–AP-4 (apply_patch), E-1–E-2 (exec_command), data collection plan, and implementation order. |
 | Conversation history | [Conversation history audit plan](conversation-history-audit-plan.md) | Plan for auditing/using conversation history safely. |
 | Signal inventory | [Codex request signal inventory](codex-request-signal-inventory.md) | Historical signal checklist; use current parser/tests for implementation state. |
 

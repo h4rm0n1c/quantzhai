@@ -30,6 +30,7 @@ try:
     from .qz_tool_lifecycle import StreamToolCallState
     from .qz_tool_web import WEB_SEARCH_MAX_HOPS
     from .qz_tool_apply_patch import inspect_apply_patch_arguments
+    from .qz_sandbox_escalation import get_correction_tracker as _get_correction_tracker
     from .qz_telemetry import RequestTelemetryEmitter
     from .qz_file_signal import record_tool_call, seed_repeated_read_state
     from .qz_native_signal import record_native_tool_call, seed_native_advisory_state
@@ -74,6 +75,7 @@ except ImportError:
     from qz_tool_lifecycle import StreamToolCallState
     from qz_tool_web import WEB_SEARCH_MAX_HOPS
     from qz_tool_apply_patch import inspect_apply_patch_arguments
+    from qz_sandbox_escalation import get_correction_tracker as _get_correction_tracker
     from qz_telemetry import RequestTelemetryEmitter
     from qz_file_signal import record_tool_call, seed_repeated_read_state
     from qz_native_signal import record_native_tool_call, seed_native_advisory_state
@@ -446,6 +448,9 @@ def _looks_like_output_tool_artifact(text: str) -> bool:
 
 PRIVATE_FUNCTION_CALL_TIMEOUT_S = float(os.environ.get("QZ_PRIVATE_TOOL_CALL_TIMEOUT_S", "120"))
 PRIVATE_FUNCTION_CALL_DELTA_LIMIT = int(os.environ.get("QZ_PRIVATE_TOOL_CALL_DELTA_LIMIT", "1200"))
+# apply_patch diffs are bounded by file size — no runaway risk.  Higher limit
+# avoids aborting mid-diff on large file rewrites.  -1 = unlimited.
+APPLY_PATCH_DELTA_LIMIT = int(os.environ.get("QZ_APPLY_PATCH_DELTA_LIMIT", "-1"))
 REASONING_ONLY_TIMEOUT_S = float(os.environ.get("QZ_REASONING_ONLY_TIMEOUT_S", "120"))
 REASONING_ONLY_CHAR_LIMIT = int(os.environ.get("QZ_REASONING_ONLY_CHAR_LIMIT", "-1"))
 REASONING_ARTIFACT_SCAN_LIMIT = int(os.environ.get("QZ_REASONING_ARTIFACT_SCAN_LIMIT", "8192"))
@@ -1960,10 +1965,15 @@ class ResponsesStreamRuntime:
                                     except Exception:
                                         pass
                                 _status_injected_for_call = True
+                            _eff_delta_limit = (
+                                APPLY_PATCH_DELTA_LIMIT
+                                if hs.tool_call_state.call_name == "apply_patch"
+                                else self.private_function_call_delta_limit
+                            )
                             abort_reason = hs.tool_call_state.abort_reason(
                                 time.time(),
                                 self.private_function_call_timeout_s,
-                                self.private_function_call_delta_limit,
+                                _eff_delta_limit,
                             )
                             if abort_reason:
                                 forwarded_chunks = 0
@@ -2087,6 +2097,46 @@ class ResponsesStreamRuntime:
                             if built:
                                 _coercion_event, _coercion_payload = built
                                 self._emit(_coercion_event, _coercion_payload)
+
+                            # When apply_patch coercion silently fixed the model's
+                            # output, register the correction so the result seen by
+                            # the LLM includes an acknowledgement note.
+                            if (
+                                decision.kind == "public"
+                                and decision.coercion_applied
+                                and not decision.coercion_error
+                                and isinstance(decision.call, dict)
+                                and decision.call.get("name") == "apply_patch"
+                            ):
+                                _orig_args = (hs.completed_call or {}).get("arguments") or ""
+                                _corr_args = decision.call.get("arguments") or ""
+                                if _orig_args != _corr_args:
+                                    _cid = decision.call.get("call_id") or decision.call.get("id") or ""
+                                    if _cid:
+                                        try:
+                                            _get_correction_tracker().register(_cid, _orig_args, _corr_args)
+                                        except Exception:
+                                            pass
+
+                            # E-1 probe: exec_command with 'command' instead of 'cmd'.
+                            if (
+                                isinstance(hs.completed_call, dict)
+                                and hs.completed_call.get("name") == "exec_command"
+                            ):
+                                try:
+                                    _e1_args = json.loads(
+                                        hs.completed_call.get("arguments") or "{}"
+                                    )
+                                    if not _e1_args.get("cmd") and _e1_args.get("command"):
+                                        try:
+                                            from .qz_tool_apply_patch import _probe_log
+                                        except ImportError:
+                                            from qz_tool_apply_patch import _probe_log
+                                        _probe_log("exec_command_wrong_field_command_vs_cmd", {
+                                            "command_value": str(_e1_args.get("command", ""))[:80],
+                                        })
+                                except Exception:
+                                    pass
 
                             if decision.kind == "signal":
                                 # Advisory signal: inject output upstream,

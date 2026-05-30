@@ -693,6 +693,166 @@ class ApplyPatchCoerceTests(unittest.TestCase):
         self.assertIsNotNone(result.error_message)
 
 
+class ApplyPatchAP1EmptyDiffTests(unittest.TestCase):
+    """AP-1: empty diff after strip — coercion returns precise error immediately.
+
+    When the diff field strips to nothing (all fences / headers / whitespace),
+    the coerce() method must return a ToolCoercionResult error immediately so
+    Codex never sees the call and no round-trip retry turn is needed.
+
+    Evidence: fd-test logs — 'apply_patch verification failed: invalid hunk at
+    line 2, Update file hunk for path ... is empty' after the model generated a
+    diff consisting entirely of markdown fences.  Issue #83.
+    """
+
+    def _call(self, arguments: str) -> dict:
+        return {"type": "function_call", "call_id": "c1", "name": "apply_patch",
+                "arguments": arguments}
+
+    def _update_file_call(self, diff: str) -> dict:
+        import json
+        return self._call(json.dumps({"operation": {
+            "type": "update_file", "path": "src/foo.py", "diff": diff,
+        }}))
+
+    def test_empty_diff_returns_coercion_error(self):
+        """Diff that is whitespace-only returns error, not corrected arguments."""
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(self._update_file_call("   \n  "))
+        self.assertFalse(result.succeeded())
+        self.assertIn("empty after stripping", result.error_message)
+
+    def test_diff_of_only_markdown_fences_returns_coercion_error(self):
+        """Diff that is only ``` fences (after stripping the outer JSON layer) is empty."""
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(self._update_file_call("```diff\n```"))
+        self.assertFalse(result.succeeded())
+        self.assertIn("empty after stripping", result.error_message)
+
+    def test_diff_of_only_headers_returns_coercion_error(self):
+        """Diff that strips to nothing because it only contained --- / +++ headers."""
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(
+            self._update_file_call("--- a/src/foo.py\n+++ b/src/foo.py\n")
+        )
+        self.assertFalse(result.succeeded())
+        self.assertIn("empty after stripping", result.error_message)
+
+    def test_diff_of_fences_plus_headers_returns_coercion_error(self):
+        """Common model failure: ```diff\\n--- a/...\\n+++ b/...\\n``` produces empty diff."""
+        import json
+        diff = "```diff\n--- a/src/foo.py\n+++ b/src/foo.py\n```"
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(self._update_file_call(diff))
+        self.assertFalse(result.succeeded())
+        self.assertIn("empty after stripping", result.error_message)
+
+    def test_error_message_is_actionable(self):
+        """Error message tells model exactly what to include."""
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(self._update_file_call(""))
+        self.assertIn("@@ hunks", result.error_message)
+        self.assertIn("context", result.error_message)
+
+    def test_valid_diff_with_hunk_still_succeeds(self):
+        """A diff with an actual @@ hunk must not be rejected."""
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(
+            self._update_file_call("@@ @@\n-old\n+new\n")
+        )
+        self.assertTrue(result.succeeded())
+
+    def test_fences_around_valid_hunk_still_succeeds(self):
+        """Fences around a real hunk should be stripped and succeed, not reject."""
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(
+            self._update_file_call("```diff\n@@ @@\n-old\n+new\n```")
+        )
+        self.assertTrue(result.succeeded())
+
+    def test_move_file_empty_diff_returns_coercion_error(self):
+        """move_file with empty diff after strip also returns coercion error."""
+        import json
+        call = self._call(json.dumps({"operation": {
+            "type": "move_file", "path": "src/old.py",
+            "destination": "src/new.py",
+            "diff": "--- a/src/old.py\n+++ b/src/new.py\n",
+        }}))
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(call)
+        self.assertFalse(result.succeeded())
+        self.assertIn("empty after stripping", result.error_message)
+
+    def test_create_file_empty_diff_not_rejected(self):
+        """create_file with empty diff is allowed — the file content IS the diff."""
+        import json
+        call = self._call(json.dumps({"operation": {
+            "type": "create_file", "path": "src/new.py", "diff": "",
+        }}))
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(call)
+        # create_file may succeed even with empty content (empty file creation)
+        # It must NOT be caught by the AP-1 empty-diff check (which is only for
+        # update_file / move_file where an empty diff is always a bug).
+        self.assertNotIn("empty after stripping", result.error_message or "")
+
+    # --- AP-1b: empty trailing hunk in multi-hunk diff ---
+
+    def test_two_hunk_diff_second_hunk_empty_returns_error(self):
+        """Model truncated diff at second @@ boundary — hunk 2 has no content."""
+        import json as _json
+        diff = "@@ @@\n-old\n+new\n@@\n"   # second @@ with nothing after
+        call = self._call(_json.dumps({"operation": {
+            "type": "update_file", "path": "src/foo.py", "diff": diff,
+        }}))
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(call)
+        self.assertFalse(result.succeeded())
+        self.assertIn("hunk", result.error_message)
+        self.assertIn("no content lines", result.error_message)
+
+    def test_two_hunk_diff_first_hunk_empty_returns_error(self):
+        """First @@ has no content before the second one."""
+        import json as _json
+        diff = "@@ @@\n@@\n-old\n+new\n"   # first @@ empty, second has content
+        call = self._call(_json.dumps({"operation": {
+            "type": "update_file", "path": "src/foo.py", "diff": diff,
+        }}))
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(call)
+        self.assertFalse(result.succeeded())
+        self.assertIn("hunk 1", result.error_message)
+
+    def test_two_hunk_diff_both_have_content_succeeds(self):
+        """Two hunks both with content — must not be rejected."""
+        import json as _json
+        diff = "@@ @@\n-old1\n+new1\n@@ @@\n-old2\n+new2\n"
+        call = self._call(_json.dumps({"operation": {
+            "type": "update_file", "path": "src/foo.py", "diff": diff,
+        }}))
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(call)
+        self.assertTrue(result.succeeded())
+
+    def test_single_hunk_with_content_not_rejected(self):
+        """Single @@ with content — must not be flagged as empty."""
+        import json as _json
+        diff = "@@ @@\n-old\n+new\n context_line\n"
+        call = self._call(_json.dumps({"operation": {
+            "type": "update_file", "path": "src/foo.py", "diff": diff,
+        }}))
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(call)
+        self.assertTrue(result.succeeded())
+
+    def test_error_message_names_hunk_number(self):
+        """Error message must name which hunk is empty so model can fix it."""
+        import json as _json
+        diff = "@@ @@\n-old\n+new\n@@ @@\n"
+        call = self._call(_json.dumps({"operation": {
+            "type": "update_file", "path": "x.py", "diff": diff,
+        }}))
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(call)
+        self.assertIn("hunk 2", result.error_message)
+
+    def test_delete_file_not_affected(self):
+        """delete_file has no diff field and must not be caught by AP-1."""
+        import json
+        call = self._call(json.dumps({"operation": {
+            "type": "delete_file", "path": "src/old.py",
+        }}))
+        result = APPLY_PATCH_TOOL_ADAPTER.coerce(call)
+        # delete_file is valid, coercion should succeed
+        self.assertTrue(result.succeeded())
+
+
 class ApplyPatchAP2CoercionSafetyTests(unittest.TestCase):
     """Slice AP2: Coercion error safety — call_id preserved, raw args not leaked.
 

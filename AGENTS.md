@@ -33,6 +33,60 @@ Concrete rules that follow from this:
 When writing new failure paths: ask "does the user see a pause, or do they see an
 error?" If the answer is error, the path is not finished.
 
+## Deterministic Intercept Principle
+
+**Any failure that is deterministically predictable from the tool call shape is a proxy responsibility to fix — not a model problem to retry.**
+
+The proxy sits between the LLM and every tool execution layer. When the model generates a call that will fail for a known, structurally-detectable reason, every turn spent on confused retrying is a proxy design failure.
+
+Three intervention levels, in order of preference:
+
+**1. Pre-execution correction (coerce path)**
+Bad shape detected from call arguments alone, before any tool runs.
+- If the fix is unambiguous: apply silently, inject a correction note so the model learns.
+- If the fix requires model input: return a precise error immediately with the exact cause.
+- Cost: zero Codex round-trips. Model sees success + note, or sees one actionable error.
+
+**2. Post-execution interception (escalation path)**
+Tool ran, failed for a deterministically-fixable reason (e.g. sandbox denial).
+- Intercept the failure before it reaches the model.
+- Apply the fix (re-emit call with corrected parameters, rewrite history).
+- Inform the model in plain English what happened — no internal parameter names.
+- Cost: zero extra model turns. The model sees the success result with a transparent explanation.
+
+**3. Advisory injection**
+Failure can't be auto-fixed (e.g. apply_patch context mismatch — proxy lacks file content)
+but the cause is deterministically knowable from the error text.
+- Inject a precise advisory into the model's next input naming the cause and the recovery action.
+- This breaks the model's confused-retry loop before it generates another wrong call.
+- Cost: saves 1–N retry turns compared to the model discovering the fix by trial and error.
+
+**When evaluating a new tool failure pattern, ask:**
+1. Is the failure deterministic for this call shape? (same inputs → same failure every time)
+2. Is the fix deterministic? (known correct transformation exists)
+3. Is the fix safe? (no semantic ambiguity — we can't guess at intent)
+
+If 1+2+3: implement pre-execution correction.
+If 1+2, fix requires tool re-run: implement post-execution interception.
+If 1 only (can't fix): implement advisory injection.
+If none: it's a model reasoning problem, not a proxy problem.
+
+**Do not expose proxy internal parameter names in model-visible notes.** Strings like
+`sandbox_permissions="require_escalated"` look like config keys the model tries to set
+globally; plain-English explanations ("the proxy escalated permissions") are understood
+correctly and don't trigger false inferences about policy settings.
+
+See `proxy/qz_sandbox_escalation.py`, `docs/proxy-transparent-intercept-contract.md`,
+and `docs/proxy-intercept-research.md` for the current implementation and known patterns.
+
+Concrete rules added 2026-05-30/31:
+- exec sandbox denial → `SandboxEscalationManager` two-phase intercept + plain-English note.
+- apply_patch outer JSON fence → pre-pass strip in `_parse_apply_patch_arguments`.
+- apply_patch empty diff / empty trailing hunk (AP-1/AP-1b) → coerce() precise error.
+- apply_patch silent corrections → `CorrectionTracker` note in tool result.
+- apply_patch delta_limit = -1 (unlimited) — diffs are file-size-bounded, no runaway risk.
+- AP-4 (context mismatch) advisory → next item, see issue #83.
+
 ## Router Mode
 
 QuantZhai uses llama.cpp router mode. The container stays alive; models are loaded and unloaded via HTTP. See `docs/router-mode-migration-plan.md` for history and remaining P2 cleanup.
