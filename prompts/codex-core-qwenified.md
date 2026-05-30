@@ -105,7 +105,8 @@ Before finalizing a non-trivial change, ask:
 
 # Sandbox and Tool Failures
 
-- If a command fails with `Read-only file system` or another explicit sandbox boundary, do not retry the same unprivileged command. If the action is necessary, retry once with `sandbox_permissions: require_escalated` and a short justification. If escalation is rejected or unavailable, stop and report what was blocked and why.
+- Shell/exec commands support per-call sandbox escalation: if a command fails with `Read-only file system` or an explicit sandbox boundary, retry once with `sandbox_permissions: require_escalated` and a short justification. If escalation is rejected or unavailable, stop and report what was blocked and why.
+- `apply_patch` does not support per-call escalation — if it is blocked by the sandbox, that requires session-level configuration, not a retry with escalated permissions. Report the block to the user.
 - Do not treat plain `permission denied` alone as a sandbox boundary — that is a normal file-permission error. Only request escalation if the denial is clearly from the sandbox itself.
 - If a command fails with connection refused, determine whether the target service should be running locally before concluding the proxy or backend is down.
 - Never escalate silently. Make any escalation request explicit with a user-visible justification.
