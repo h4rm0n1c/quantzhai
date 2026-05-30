@@ -588,14 +588,19 @@ def is_braincase_tools_enabled(env: dict | None = None) -> bool:
 
 
 def is_braincase_limbicore_enabled(env: dict | None = None) -> bool:
-    """Return True when QZ_BRAINCASE_LIMBICORE_ENABLED is set.
+    """Return True when Limbicore session tools should be injected.
 
-    Controls braincase.impaction and braincase.percolate — the main session
-    interface tools that the model uses directly to read and write memory.
-    Independent of the lower-level render/recall/write_candidate tools.
+    Default behaviour: on whenever QZ_BRAINCASE_TOOLS_ENABLED is set
+    (the substrate is available). QZ_BRAINCASE_LIMBICORE_ENABLED can
+    override in either direction if an explicit value is present.
+
+    The memory_domain per session is configured in model-overrides.json
+    (memory_domain: "coding" etc.) — not via an env var.
     """
     source = os.environ if env is None else env
-    return _env_truthy(source, QZ_BRAINCASE_LIMBICORE_ENABLED_ENV)
+    if QZ_BRAINCASE_LIMBICORE_ENABLED_ENV in source:
+        return _env_truthy(source, QZ_BRAINCASE_LIMBICORE_ENABLED_ENV)
+    return _env_truthy(source, QZ_BRAINCASE_TOOLS_ENABLED_ENV)
 
 
 def is_braincase_write_candidate_enabled(env: dict | None = None) -> bool:
@@ -1738,7 +1743,7 @@ def braincase_impaction_tool(db: "BrainCaseDB", args: dict) -> dict:
     if not isinstance(tags, list):
         tags = []
     tags = [str(t) for t in tags if t][:20]
-    memory_domain = str(args.get("memory_domain") or os.environ.get("QZ_BRAINCASE_DEFAULT_DOMAIN", "default")).strip()
+    memory_domain = str(args.get("memory_domain") or "isolated").strip()
 
     # Derive a minimal summary from claim + context
     summary = claim
@@ -1802,7 +1807,7 @@ def braincase_percolate_tool(db: "BrainCaseDB", args: dict) -> dict:
     if not query:
         return {"ok": False, "error": "query required", "rendered_text": ""}
 
-    memory_domain = str(args.get("memory_domain") or os.environ.get("QZ_BRAINCASE_DEFAULT_DOMAIN", "default")).strip()
+    memory_domain = str(args.get("memory_domain") or "isolated").strip()
     limit = min(20, max(1, int(args.get("limit") or 8)))
     tiers = args.get("tiers")
     if not isinstance(tiers, list):
@@ -1840,6 +1845,11 @@ class BraincaseImpactionProxyToolExecutor(_BraincaseBaseExecutor):
     def execute(self, call: dict, context: "ProxyToolExecutionContext") -> "ToolContinuationResult":
         db = self._get_db()
         args = self._parse_args(call)
+        # Inject memory_domain from session context when the LLM didn't supply it.
+        # Domain comes from model-overrides.json (memory_domain: "coding" etc.)
+        # threaded through selected_model → ProxyToolExecutionContext.memory_domain.
+        if not args.get("memory_domain") and getattr(context, "memory_domain", "isolated") != "isolated":
+            args = dict(args, memory_domain=context.memory_domain)
         result = braincase_impaction_tool(db, args)
         return self._make_result(call, result)
 
@@ -1859,6 +1869,8 @@ class BraincasePercolateProxyToolExecutor(_BraincaseBaseExecutor):
     def execute(self, call: dict, context: "ProxyToolExecutionContext") -> "ToolContinuationResult":
         db = self._get_db()
         args = self._parse_args(call)
+        if not args.get("memory_domain") and getattr(context, "memory_domain", "isolated") != "isolated":
+            args = dict(args, memory_domain=context.memory_domain)
         result = braincase_percolate_tool(db, args)
         return self._make_result(call, result)
 

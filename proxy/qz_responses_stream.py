@@ -2161,6 +2161,10 @@ class ResponsesStreamRuntime:
                                     counters=counters,
                                     seen_signatures=seen_signatures,
                                     progress_queue=_progress_q,
+                                    memory_domain=(
+                                        (self.selected_model.get("memory_domain") or "isolated")
+                                        if isinstance(self.selected_model, dict) else "isolated"
+                                    ),
                                 )
                                 def _execute_worker():
                                     try:

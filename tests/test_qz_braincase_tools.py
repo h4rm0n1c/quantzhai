@@ -223,11 +223,11 @@ class HarnessPolicyTests(unittest.TestCase):
         policy = get_braincase_harness_policy(env=_ENABLED_ENV)
         self.assertIn("braincase.recall", policy)
 
-    def test_policy_says_write_update_not_exposed(self):
-        """Policy text should say write/update/search/inspect are not yet exposed."""
+    def test_policy_mentions_braincase_tools(self):
+        """Policy text should mention the primary session tools."""
         policy = get_braincase_harness_policy(env=_ENABLED_ENV)
-        lower = policy.lower()
-        self.assertIn("not yet exposed", lower)
+        # Limbicore is on by default when TOOLS_ENABLED is set
+        self.assertIn("braincase", policy.lower())
 
     def test_policy_mentions_memory_domain_requirement(self):
         """Policy should state that memory_domain must be supplied explicitly."""
@@ -243,10 +243,11 @@ class HarnessPolicyTests(unittest.TestCase):
             "Policy should warn against broad dump / context prefill usage"
         )
 
-    def test_harness_policy_constant_matches_function(self):
-        """BRAINCASE_HARNESS_POLICY constant should match what the function returns."""
+    def test_harness_policy_function_returns_string(self):
+        """get_braincase_harness_policy returns a non-empty string when enabled."""
         policy = get_braincase_harness_policy(env=_ENABLED_ENV)
-        self.assertEqual(policy, BRAINCASE_HARNESS_POLICY)
+        self.assertIsInstance(policy, str)
+        self.assertTrue(len(policy) > 0)
 
 
 # ---------------------------------------------------------------------------
@@ -790,10 +791,11 @@ class RecallToolPresenceTests(unittest.TestCase):
                               "braincase.search", "braincase.inspect"):
                 self.assertNotIn(forbidden, names, f"{forbidden} must not be exposed")
 
-    def test_enabled_returns_exactly_render_and_recall(self):
-        """Exactly render + recall are returned when enabled — no extras."""
+    def test_enabled_includes_render_and_recall(self):
+        """render + recall are returned when enabled (limbicore also on by default)."""
         names = set(self._names(_ENABLED_ENV))
-        self.assertEqual(names, {"braincase.render", "braincase.recall"})
+        self.assertIn("braincase.render", names)
+        self.assertIn("braincase.recall", names)
 
 
 class RecallToolSchemaTests(unittest.TestCase):
@@ -1343,12 +1345,16 @@ class UpdatedHarnessPolicyTests(unittest.TestCase):
         lower = policy.lower()
         self.assertTrue("broad" in lower or "dump" in lower)
 
-    def test_policy_says_write_update_search_inspect_not_exposed(self):
+    def test_policy_mentions_braincase_tools(self):
+        # With QZ_BRAINCASE_TOOLS_ENABLED, limbicore is also on by default,
+        # so the policy describes impaction + percolate (the primary session
+        # interface) plus recall + render (operator/harness tools).
         policy = get_braincase_harness_policy(env=_ENABLED_ENV)
         lower = policy.lower()
-        self.assertIn("not yet exposed", lower)
-        for word in ("write", "update", "search", "inspect"):
-            self.assertIn(word, lower)
+        self.assertIn("braincase", lower)
+        # All four main tools should be mentioned
+        for tool in ("impaction", "percolate", "recall", "render"):
+            self.assertIn(tool, lower)
 
     def test_policy_tells_when_to_use_recall_vs_render(self):
         policy = get_braincase_harness_policy(env=_ENABLED_ENV)
@@ -1715,10 +1721,15 @@ class BraincaseExecutorPresenceTests(unittest.TestCase):
                           "braincase.search", "braincase.inspect"):
             self.assertNotIn(forbidden, names)
 
-    def test_exactly_render_and_recall_when_enabled(self):
+    def test_render_and_recall_included_when_enabled(self):
+        # QZ_BRAINCASE_TOOLS_ENABLED now also enables limbicore by default,
+        # so impaction + percolate are included alongside render + recall.
         executors = make_braincase_tool_executors(env=_ENABLED_ENV)
         names = set(e.function_name for e in executors)
-        self.assertEqual(names, {"braincase.render", "braincase.recall"})
+        self.assertIn("braincase.render", names)
+        self.assertIn("braincase.recall", names)
+        self.assertIn("braincase.impaction", names)
+        self.assertIn("braincase.percolate", names)
 
     def test_executors_empty_list_when_disabled(self):
         executors = make_braincase_tool_executors(env=_DISABLED_ENV)

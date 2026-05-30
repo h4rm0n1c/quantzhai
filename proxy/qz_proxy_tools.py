@@ -33,6 +33,10 @@ class ProxyToolExecutionContext:
     # the async stream loop drains it and emits live reasoning_summary_text.delta
     # events so users see what the tool is doing in real time.
     progress_queue: object = None  # queue.Queue[str] | None
+    # Memory domain for BrainCase tools — resolved from selected model's
+    # model-overrides.json entry (memory_domain: "coding" etc.).
+    # Falls back to "isolated" (no cross-session memory) when not configured.
+    memory_domain: str = "isolated"
 
     def report_progress(self, message: str) -> None:
         """Push a progress string to the SSE stream (best-effort, never raises)."""
