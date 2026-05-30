@@ -733,9 +733,9 @@ class ApplyPatchToolAdapter:
             "line (' ') is a verbatim copy from the current file. Read the file first, "
             "copy lines exactly — do not paraphrase or invent context lines.\n"
             "Do NOT wrap the diff in markdown code fences (no ```diff or ```rust).\n"
-            "If apply_patch returns a verification error, do NOT retry with another patch. "
-            "Instead, write the complete replacement file content using exec:\n"
-            "  exec bash -c 'cat > path/to/file << \\'HEREDOC\\'\\n<full content>\\nHEREDOC'"
+            "A 'verification failed' error means context lines did not match the file — "
+            "it is NOT a filesystem permission error. Re-read the file and retry with "
+            "exact verbatim context from the current file content."
         )
         return function_tool("apply_patch", description, _apply_patch_function_parameters())
 
@@ -774,8 +774,7 @@ class ApplyPatchToolAdapter:
         return ToolCoercionResult(
             error_message=(
                 f"apply_patch argument error: {reason} "
-                "— Do not retry apply_patch. Use exec to write the complete file content instead: "
-                "exec bash -c 'cat > <path> << \\'HEREDOC\\'\\n<full content>\\nHEREDOC'"
+                "— Check the operation type and path fields, then retry."
             )
         )
 
