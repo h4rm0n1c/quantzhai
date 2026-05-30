@@ -84,7 +84,7 @@ class FakeWebRuntime:
     def __init__(self):
         self.calls = []
 
-    def execute_web_search_call(self, call_item, counters, seen_signatures, request_id=""):
+    def execute_web_search_call(self, call_item, counters, seen_signatures, request_id="", progress_cb=None):
         self.calls.append({
             "call_item": call_item,
             "counters": dict(counters),
