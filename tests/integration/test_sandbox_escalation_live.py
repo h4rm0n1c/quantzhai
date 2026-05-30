@@ -209,38 +209,43 @@ if passed < total:
             print(f"    - {label}")
 
 
-# -----------------------------------------------------------------------
-# Test E-1: exec_command 'command' → 'cmd' field rename
-# -----------------------------------------------------------------------
-print("\n=== Test E-1: exec_command field rename 'command' → 'cmd' ===")
 
-# We can't easily trigger the rename through the proxy HTTP API since the
-# correction happens in the outgoing SSE stream (model → Codex direction),
-# not on the incoming Codex → proxy → LLM direction.
-# Test it via the unit path instead.
-
+# -----------------------------------------------------------------------
+# Test E-1: exec_command 'command' → 'cmd' correction (unit path)
+#
+# The E-1 correction fires in the OUTGOING SSE stream (LLM → Codex),
+# not the incoming direction. Cross-process live verification is not
+# feasible without a fake LLM server — the proxy process has its own
+# CorrectionTracker singleton. Tests here verify the correction logic
+# directly; full end-to-end confirmation requires a live session where
+# the model generates the wrong field name.
+# -----------------------------------------------------------------------
+print("\n=== Test E-1: exec_command 'command' → 'cmd' (unit path) ===")
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'proxy'))
 
 try:
-    from qz_sandbox_escalation import _build_correction_note, CorrectionTracker
-    import json as _json
+    from qz_sandbox_escalation import CorrectionTracker, _build_correction_note
+    import json as _j
 
-    orig = _json.dumps({"command": "ls -la", "workdir": "/tmp"})
-    corr = _json.dumps({"cmd": "ls -la", "workdir": "/tmp"})
+    orig = _j.dumps({"command": "echo hello", "workdir": "/tmp"})
+    corr = _j.dumps({"cmd": "echo hello", "workdir": "/tmp"})
+
     note = _build_correction_note(orig, corr)
-    check("E-1 correction note mentions field rename", "command" in note and "cmd" in note, note)
+    check("E-1 note describes field rename",
+          "command" in note and "cmd" in note and "renamed" in note, note)
 
-    # Tracker injects the note into exec result
     ct = CorrectionTracker()
-    ct.register("exec_e1_test", orig, corr)
-    items = [{"type": "function_call_output", "call_id": "exec_e1_test",
-              "output": "Exit code: 0\nls output here"}]
+    ct.register("e1_unit", orig, corr)
+    items = [{"type": "function_call_output", "call_id": "e1_unit",
+              "output": "Exit code: 0\nhello\n"}]
     result = ct.inject_notes(items)
-    check("E-1 tracker injects note into exec result",
-          "command" in result[0]["output"] and "renamed" in result[0]["output"],
-          result[0]["output"][:120])
+    check("E-1 note injected into exec result",
+          "renamed" in result[0]["output"] and "cmd" in result[0]["output"])
     check("E-1 original output preserved", "Exit code: 0" in result[0]["output"])
+    check("E-1 no proxy parameter names in note", "sandbox_permissions" not in result[0]["output"])
     check("E-1 tracker clears after inject", ct.inject_notes(items) is items)
+    print("  (NOTE: full proxy-process live verification requires a session")
+    print("   where the model generates {\"command\": ...} for exec_command)")
 except Exception as exc:
     check("E-1 unit checks ran", False, str(exc))
