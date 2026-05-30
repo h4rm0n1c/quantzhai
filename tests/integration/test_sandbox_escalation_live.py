@@ -249,3 +249,18 @@ try:
     print("   where the model generates {\"command\": ...} for exec_command)")
 except Exception as exc:
     check("E-1 unit checks ran", False, str(exc))
+
+
+# -----------------------------------------------------------------------
+# E-1 live trigger note
+#
+# Attempted to trigger E-1 by instructing an abliterated model to
+# deliberately use {"command": "..."} instead of {"cmd": "..."}.
+# The model's schema grounding was too strong — it consistently used
+# "cmd" even when told to use the wrong field name, across 20+ attempts.
+#
+# Conclusion: E-1 is a safety net for edge cases (different model
+# versions, unusual prompting, schema drift). Unit tests cover the
+# correction path completely. The probe log will confirm live occurrences
+# when they happen in real usage.
+# -----------------------------------------------------------------------
