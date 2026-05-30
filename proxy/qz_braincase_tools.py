@@ -1333,6 +1333,83 @@ def _bc_result(ok: bool, record_id: str, operation: str, detail: str = "") -> di
     return {"ok": ok, "record_id": record_id, "operation": operation, "detail": detail}
 
 
+def bc_read_tool(db: "BrainCaseDB", args: dict) -> dict:
+    """Fetch the full content of one or more records for content review.
+
+    args: {record_ids: list[str]}  OR  {record_id: str}
+
+    Returns full claim, summary, tags, tier, retention, status, and
+    temporal metadata for each record.  Used by the memory manager LLM
+    when the one-line landscape entry is not enough to make a decision.
+    """
+    ids = args.get("record_ids") or (
+        [args["record_id"]] if args.get("record_id") else []
+    )
+    ids = [str(i).strip() for i in ids if i][:10]  # cap at 10 per call
+    if not ids:
+        return {"ok": False, "error": "record_ids or record_id required", "records": []}
+
+    records = []
+    for rid in ids:
+        rec = db.get_state_record(rid)
+        if rec is None:
+            records.append({"record_id": rid, "found": False})
+            continue
+        records.append({
+            "record_id": rid,
+            "found": True,
+            "tier": rec.get("tier"),
+            "retention": rec.get("retention"),
+            "status": rec.get("status"),
+            "claim": rec.get("claim"),
+            "summary": rec.get("summary"),
+            "tags": rec.get("tags") or [],
+            "importance": rec.get("importance"),
+            "confidence": rec.get("confidence"),
+            "created_at_ms": rec.get("created_at_ms"),
+            "last_accessed_at_ms": rec.get("last_accessed_at_ms"),
+            "access_count": rec.get("access_count", 0),
+            "supersedes": rec.get("supersedes"),
+            "superseded_by": rec.get("superseded_by"),
+        })
+    return {"ok": True, "records": records}
+
+
+def bc_search_tool(db: "BrainCaseDB", args: dict) -> dict:
+    """Search the DB by query string to find related or overlapping records.
+
+    Used by the memory manager to check for redundancy before promoting,
+    or to find merge candidates. FTS5-backed, same as braincase.percolate.
+
+    args: {query: str, memory_domain?: str, limit?: int}
+    """
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return {"ok": False, "error": "query required", "records": []}
+    memory_domain = str(args.get("memory_domain") or "").strip() or None
+    limit = min(20, max(1, int(args.get("limit") or 10)))
+
+    try:
+        rows = db.search_state_records(query, memory_domain=memory_domain, limit=limit)
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "records": []}
+
+    records = []
+    for r in (rows or []):
+        if not isinstance(r, dict):
+            continue
+        records.append({
+            "record_id": r.get("record_id"),
+            "tier": r.get("tier"),
+            "status": r.get("status"),
+            "claim": r.get("claim"),
+            "summary": r.get("summary"),
+            "tags": r.get("tags") or [],
+            "access_count": r.get("access_count", 0),
+        })
+    return {"ok": True, "records": records, "count": len(records)}
+
+
 def bc_promote_tool(db: "BrainCaseDB", args: dict) -> dict:
     """Promote a candidate record to confirmed status.
 

@@ -128,6 +128,8 @@ def dispatch_memory_tool_calls(
                 bc_update_tier_tool,
                 bc_tag_tool,
                 bc_merge_tool,
+                bc_read_tool,
+                bc_search_tool,
             )
         except ImportError:
             from qz_braincase_tools import (
@@ -136,6 +138,8 @@ def dispatch_memory_tool_calls(
                 bc_update_tier_tool,
                 bc_tag_tool,
                 bc_merge_tool,
+                bc_read_tool,
+                bc_search_tool,
             )
     except Exception as exc:
         return [{"ok": False, "error": f"import failed: {exc}"}]
@@ -146,6 +150,8 @@ def dispatch_memory_tool_calls(
         "bc_update_tier": bc_update_tier_tool,
         "bc_tag":         bc_tag_tool,
         "bc_merge":       bc_merge_tool,
+        "bc_read":        bc_read_tool,
+        "bc_search":      bc_search_tool,
     }
 
     results = []
@@ -181,17 +187,19 @@ def dispatch_memory_tool_calls(
 # Landscape serialisation (text format for prompt injection)
 # ---------------------------------------------------------------------------
 
-def _format_landscape_for_prompt(metrics: list[dict]) -> str:
-    """Serialise compute_landscape_metrics() output as compact prompt text.
+def _format_landscape_for_prompt(metrics: list[dict], records_by_id: dict | None = None) -> str:
+    """Serialise compute_landscape_metrics() as compact one-liners for the prompt.
 
-    Each record becomes one line:
-      [id] tier=X ret=Y age=Zd acc=N class=CLASS | claim_snippet
+    Each record is one line — enough to scan and identify which records need
+    closer inspection. The LLM calls bc_read(record_ids=[...]) to pull full
+    claim + summary + tags for any records it wants to examine before deciding.
+
     Sorted weakest-first (as compute_landscape_metrics returns).
     """
     lines = []
     for m in metrics:
-        rid = m.get("record_id", "?")[:16]
-        tier = m.get("tier", "?")[:12]
+        rid = str(m.get("record_id") or "?")[:20]
+        tier = m.get("tier", "?")[:14]
         ret = m.get("retention", "?")[:8]
         age = f"{m.get('age_days', '?')}d"
         acc = m.get("access_count", 0)
@@ -200,10 +208,11 @@ def _format_landscape_for_prompt(metrics: list[dict]) -> str:
         l1 = surv.get("l1", 0)
         l2 = surv.get("l2", 0)
         ret_action = m.get("retention_action", "keep")
+        status = m.get("status", "")
         claim = m.get("claim_snippet", "")[:80]
         lines.append(
             f"[{rid}] tier={tier} ret={ret} age={age} acc={acc} "
-            f"L1={l1} L2={l2} policy={ret_action} class={cls} | {claim}"
+            f"L1={l1} L2={l2} policy={ret_action} class={cls} status={status} | {claim}"
         )
     return "\n".join(lines) if lines else "(no records)"
 
