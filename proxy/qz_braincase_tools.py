@@ -55,6 +55,7 @@ except ImportError:
 
 QZ_BRAINCASE_TOOLS_ENABLED_ENV = "QZ_BRAINCASE_TOOLS_ENABLED"
 QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED_ENV = "QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED"
+QZ_BRAINCASE_LIMBICORE_ENABLED_ENV = "QZ_BRAINCASE_LIMBICORE_ENABLED"
 
 _RENDER_PACKET_SCHEMA = "braincase/render-packet@1"
 _WRITE_CANDIDATE_RESULT_SCHEMA = "braincase/write-candidate-result@1"
@@ -407,6 +408,103 @@ BRAINCASE_WRITE_CANDIDATE_TOOL_DEF: dict = {
 }
 
 # ---------------------------------------------------------------------------
+# Limbicore session interface — braincase.impaction and braincase.percolate
+# ---------------------------------------------------------------------------
+
+BRAINCASE_IMPACTION_TOOL_DEF: dict = {
+    "type": "function",
+    "name": "braincase.impaction",
+    "description": (
+        "Elect something for long-term memory consideration. "
+        "Use when you encounter a fact, constraint, decision, or insight that should "
+        "survive beyond this session — something a future version of you would want to know. "
+        "The memory system will assess it and decide whether to keep it. "
+        "Do not use for transient observations, every turn, chatter, or raw logs. "
+        "Prefer facts with specific atoms: file paths, commands, constraint values, "
+        "causal explanations, lessons from failures."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "claim": {
+                "type": "string",
+                "description": (
+                    "The thing to remember — a specific, durable fact or constraint. "
+                    "Be precise. Include numbers, paths, or exact names where relevant. "
+                    "Max 500 chars."
+                ),
+                "maxLength": 500,
+            },
+            "context": {
+                "type": "string",
+                "description": (
+                    "Why this matters — what prompted it, what problem it solves, "
+                    "or what goes wrong without it. Max 300 chars."
+                ),
+                "maxLength": 300,
+            },
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional retrieval tags (e.g. ['vram', 'v100', 'constraint']).",
+            },
+            "memory_domain": {
+                "type": "string",
+                "description": "Memory isolation domain. Supply if known from session context.",
+            },
+        },
+        "required": ["claim"],
+        "additionalProperties": False,
+    },
+}
+
+BRAINCASE_PERCOLATE_TOOL_DEF: dict = {
+    "type": "function",
+    "name": "braincase.percolate",
+    "description": (
+        "Surface relevant memories for the current task. "
+        "Use when you suspect there is prior knowledge stored about a topic — "
+        "configurations, constraints, decisions, procedures, or lessons from past sessions. "
+        "Returns rendered memory content if anything relevant exists. "
+        "Returns empty if nothing is stored. Do not assume memory exists before calling."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": (
+                    "What to look for — keywords, concepts, or a brief question. "
+                    "Specific terms work better than broad ones. "
+                    "E.g. 'V100 VRAM limit' or 'apply_patch failure handling'."
+                ),
+            },
+            "memory_domain": {
+                "type": "string",
+                "description": "Memory isolation domain. Supply if known from session context.",
+            },
+            "tiers": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Optional tier filter. Defaults to all active tiers. "
+                    "E.g. ['project_state', 'procedural_memory']."
+                ),
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max records to surface. Default 8, max 20.",
+                "default": 8,
+                "minimum": 1,
+                "maximum": 20,
+            },
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    },
+}
+
+# ---------------------------------------------------------------------------
 # Harness policy text
 # ---------------------------------------------------------------------------
 
@@ -443,6 +541,21 @@ Not yet exposed: braincase.write, braincase.update, braincase.search,
 braincase.inspect. These remain internal until future slices define their
 semantics and operator exposure policies."""
 
+_HARNESS_LIMBICORE_SECTION: str = """\
+**braincase.impaction** — elect something for long-term memory.
+- Use when you find a fact worth keeping across sessions: a constraint, a decision,
+  a lesson from a failure, a specific path or value that took effort to discover.
+- Be precise in the claim. Include numbers, paths, exact names.
+- The memory system will assess and decide what to do with it. You don't manage that.
+- Don't use for every turn. Use for things a future session would genuinely need.
+
+**braincase.percolate** — surface relevant memories before starting a task.
+- Use when you suspect prior knowledge exists: configurations, constraints,
+  procedures, lessons. Don't assume it exists — just ask and see.
+- Specific queries work better than broad ones.
+- Chain two or three calls with different queries to triangulate what's stored.
+- Returns nothing if nothing relevant is stored. That's fine."""
+
 BRAINCASE_HARNESS_POLICY: str = (
     "## BrainCase Memory Tools\n\n"
     "BrainCase memory is opt-in and tool-mediated. Use only when scoped project/domain\n"
@@ -474,6 +587,17 @@ def is_braincase_tools_enabled(env: dict | None = None) -> bool:
     return _env_truthy(os.environ if env is None else env, QZ_BRAINCASE_TOOLS_ENABLED_ENV)
 
 
+def is_braincase_limbicore_enabled(env: dict | None = None) -> bool:
+    """Return True when QZ_BRAINCASE_LIMBICORE_ENABLED is set.
+
+    Controls braincase.impaction and braincase.percolate — the main session
+    interface tools that the model uses directly to read and write memory.
+    Independent of the lower-level render/recall/write_candidate tools.
+    """
+    source = os.environ if env is None else env
+    return _env_truthy(source, QZ_BRAINCASE_LIMBICORE_ENABLED_ENV)
+
+
 def is_braincase_write_candidate_enabled(env: dict | None = None) -> bool:
     """Return True when BOTH QZ_BRAINCASE_TOOLS_ENABLED and
     QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED are set to truthy values.
@@ -492,27 +616,37 @@ def is_braincase_write_candidate_enabled(env: dict | None = None) -> bool:
 def get_braincase_tool_definitions(env: dict | None = None) -> list[dict]:
     """Return braincase tool definitions based on enabled flags.
 
-    Returns [] when QZ_BRAINCASE_TOOLS_ENABLED is disabled (default).
-    Returns [render, recall] when only QZ_BRAINCASE_TOOLS_ENABLED is true.
-    Returns [render, recall, write_candidate] when both flags are true.
+    Returns [] when no braincase flags are set (default).
 
-    braincase.write, update, search, inspect, promote_candidate are never included.
+    QZ_BRAINCASE_LIMBICORE_ENABLED → [impaction, percolate]  (main session interface)
+    QZ_BRAINCASE_TOOLS_ENABLED     → [render, recall]         (operator/harness tools)
+    Both + QZ_BRAINCASE_WRITE_CANDIDATE_ENABLED → adds write_candidate
+
+    Limbicore tools are the primary session interface; the lower-level tools
+    remain available for harness/operator use when explicitly enabled.
     """
-    if not is_braincase_tools_enabled(env):
-        return []
-    defs = [BRAINCASE_RENDER_TOOL_DEF, BRAINCASE_RECALL_TOOL_DEF]
-    if is_braincase_write_candidate_enabled(env):
-        defs.append(BRAINCASE_WRITE_CANDIDATE_TOOL_DEF)
+    defs: list[dict] = []
+    if is_braincase_limbicore_enabled(env):
+        defs += [BRAINCASE_IMPACTION_TOOL_DEF, BRAINCASE_PERCOLATE_TOOL_DEF]
+    if is_braincase_tools_enabled(env):
+        defs += [BRAINCASE_RENDER_TOOL_DEF, BRAINCASE_RECALL_TOOL_DEF]
+        if is_braincase_write_candidate_enabled(env):
+            defs.append(BRAINCASE_WRITE_CANDIDATE_TOOL_DEF)
     return defs
 
 
 def get_braincase_harness_policy(env: dict | None = None) -> str | None:
-    """Return the BrainCase harness policy text based on enabled flags.
-
-    Returns None when QZ_BRAINCASE_TOOLS_ENABLED is not set (default).
-    Returns read-only policy when only QZ_BRAINCASE_TOOLS_ENABLED is true.
-    Returns read+write_candidate policy when both flags are true.
-    """
+    """Return the BrainCase harness policy text based on enabled flags."""
+    if is_braincase_limbicore_enabled(env):
+        base = (
+            "## BrainCase Memory\n\n"
+            "You have access to persistent cross-session memory via braincase tools.\n"
+            "Use it when relevant — not on every turn.\n\n"
+            + _HARNESS_LIMBICORE_SECTION
+        )
+        if is_braincase_tools_enabled(env):
+            base += "\n\n" + _HARNESS_READ_SECTION
+        return base
     if not is_braincase_tools_enabled(env):
         return None
     if is_braincase_write_candidate_enabled(env):
@@ -1332,30 +1466,169 @@ def bc_merge_tool(db: "BrainCaseDB", args: dict) -> dict:
     }
 
 
+def braincase_impaction_tool(db: "BrainCaseDB", args: dict) -> dict:
+    """Execute braincase.impaction — simplified ingestion for the main session LLM.
+
+    Stages a candidate record with sensible defaults. The LLM supplies only
+    claim, optional context, and optional tags. The memory manager decides
+    tier, retention, importance, and whether to promote it.
+    """
+    if not isinstance(args, dict):
+        args = {}
+    ts = int(time.time() * 1000)
+
+    claim = str(args.get("claim") or "").strip()
+    if not claim:
+        return {"ok": False, "queued": False, "error": "claim required"}
+
+    context_text = str(args.get("context") or "").strip()
+    tags = args.get("tags")
+    if not isinstance(tags, list):
+        tags = []
+    tags = [str(t) for t in tags if t][:20]
+    memory_domain = str(args.get("memory_domain") or os.environ.get("QZ_BRAINCASE_DEFAULT_DOMAIN", "default")).strip()
+
+    # Derive a minimal summary from claim + context
+    summary = claim
+    if context_text:
+        summary = f"{claim} — {context_text}"
+    if len(summary) > 500:
+        summary = summary[:497] + "..."
+
+    import uuid as _uuid
+    record_id = f"bc_imp_{_uuid.uuid4().hex[:12]}"
+    record = {
+        "record_id": record_id,
+        "record_schema": "qz.braincase.state_record.v1",
+        "memory_domain": memory_domain,
+        "tier": "session_state",       # memory manager will re-tier
+        "record_type": "project_state",  # generic; manager will refine
+        "claim": claim,
+        "summary": summary,
+        "status": "candidate",
+        "visibility": "internal",
+        "confidence": 0.7,
+        "importance": 0.7,
+        "retention": "project",
+        "created_at_ms": ts,
+        "updated_at_ms": ts,
+        "tags_json": __import__("json").dumps(tags),
+        "supersedes": None,
+        "superseded_by": None,
+        "metadata_json": __import__("json").dumps({
+            "source": "braincase.impaction",
+            "why_it_matters": context_text,
+        }) if context_text else None,
+    }
+
+    ok = False
+    try:
+        ok = db.put_state_record(record)
+    except Exception as exc:
+        return {"ok": False, "queued": False, "record_id": record_id,
+                "error": f"{type(exc).__name__}: {exc}"}
+
+    return {
+        "ok": ok,
+        "queued": ok,
+        "record_id": record_id if ok else "",
+        "message": "Queued for memory assessment." if ok else (db.last_error or "Failed to stage"),
+    }
+
+
+def braincase_percolate_tool(db: "BrainCaseDB", args: dict) -> dict:
+    """Execute braincase.percolate — simplified recall for the main session LLM.
+
+    Surfaces relevant memories by query. The LLM supplies a query string;
+    the proxy handles search strategy and rendering.
+    """
+    if not isinstance(args, dict):
+        args = {}
+    ts = int(time.time() * 1000)
+
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return {"ok": False, "error": "query required", "rendered_text": ""}
+
+    memory_domain = str(args.get("memory_domain") or os.environ.get("QZ_BRAINCASE_DEFAULT_DOMAIN", "default")).strip()
+    limit = min(20, max(1, int(args.get("limit") or 8)))
+    tiers = args.get("tiers")
+    if not isinstance(tiers, list):
+        tiers = None
+
+    return braincase_recall_packet(
+        db,
+        purpose=f"percolate: {query[:80]}",
+        memory_domain=memory_domain,
+        query=query,
+        tiers=tiers,
+        recall_mode="task",
+        budget_tokens=800,
+        limit=limit,
+        now_ms=ts,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Limbicore executor classes
+# ---------------------------------------------------------------------------
+
+class BraincaseImpactionProxyToolExecutor(_BraincaseBaseExecutor):
+    """Proxy-local executor for braincase.impaction."""
+
+    function_name = "braincase.impaction"
+    lifecycle = ToolLifecycleSpec(
+        name="braincase.impaction",
+        execution="proxy_local",
+        public_item_type="function_call_output",
+        telemetry_name="braincase_impaction",
+        continuation_hops=1,
+    )
+
+    def execute(self, call: dict, context: "ProxyToolExecutionContext") -> "ToolContinuationResult":
+        db = self._get_db()
+        args = self._parse_args(call)
+        result = braincase_impaction_tool(db, args)
+        return self._make_result(call, result)
+
+
+class BraincasePercolateProxyToolExecutor(_BraincaseBaseExecutor):
+    """Proxy-local executor for braincase.percolate."""
+
+    function_name = "braincase.percolate"
+    lifecycle = ToolLifecycleSpec(
+        name="braincase.percolate",
+        execution="proxy_local",
+        public_item_type="function_call_output",
+        telemetry_name="braincase_percolate",
+        continuation_hops=1,
+    )
+
+    def execute(self, call: dict, context: "ProxyToolExecutionContext") -> "ToolContinuationResult":
+        db = self._get_db()
+        args = self._parse_args(call)
+        result = braincase_percolate_tool(db, args)
+        return self._make_result(call, result)
+
+
 def make_braincase_tool_executors(
     db: "BrainCaseDB | None" = None,
     env: "dict | None" = None,
 ) -> list:
-    """Return BrainCase proxy-local executors based on enabled flags.
-
-    env: optional dict to check instead of os.environ (useful for tests).
-         Omit or pass None to use os.environ (production default).
-
-    Returns [] when QZ_BRAINCASE_TOOLS_ENABLED is not set.
-    Returns [render, recall] when only QZ_BRAINCASE_TOOLS_ENABLED is true.
-    Returns [render, recall, write_candidate] when both flags are true.
-
-    write/update/search/inspect/promote_candidate are never included.
-    No automatic ingestion. No raw StateRecord exposure.
-    """
-    if not is_braincase_tools_enabled(env):
-        return []
-    executors: list = [
-        BraincaseRenderProxyToolExecutor(db=db),
-        BraincaseRecallProxyToolExecutor(db=db),
-    ]
-    if is_braincase_write_candidate_enabled(env):
-        executors.append(BraincaseWriteCandidateProxyToolExecutor(db=db))
+    """Return BrainCase proxy-local executors based on enabled flags."""
+    executors: list = []
+    if is_braincase_limbicore_enabled(env):
+        executors += [
+            BraincaseImpactionProxyToolExecutor(db=db),
+            BraincasePercolateProxyToolExecutor(db=db),
+        ]
+    if is_braincase_tools_enabled(env):
+        executors += [
+            BraincaseRenderProxyToolExecutor(db=db),
+            BraincaseRecallProxyToolExecutor(db=db),
+        ]
+        if is_braincase_write_candidate_enabled(env):
+            executors.append(BraincaseWriteCandidateProxyToolExecutor(db=db))
     return executors
 
 
