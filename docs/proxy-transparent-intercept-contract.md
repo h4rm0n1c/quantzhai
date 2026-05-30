@@ -51,9 +51,16 @@ remain `Decision::Forbidden` regardless.
 
 ### Detection signals
 
-Only sandbox-specific kernel/Codex strings — broad OS strings (`permission
-denied`, `operation not permitted`) are intentionally excluded to avoid false
-positives on normal filesystem ACL errors:
+Two signal families — both are unambiguous sandbox strings that cannot be
+produced by legitimate failures (real network errors, filesystem ACL errors,
+etc.). Broad OS strings (`permission denied`, `operation not permitted`) remain
+excluded.
+
+**Filesystem signals** — kernel/LSM messages and Codex apply_patch text:
+**Network signals** — Codex network proxy response bodies and header values
+(`network-proxy/src/responses.rs:blocked_message()`). These strings appear in
+exec output ONLY when the Codex network proxy rejects a connection; they are
+never produced by real network failures (server down, DNS, timeout).
 
 ```python
 SANDBOX_DENIAL_SIGNALS = (

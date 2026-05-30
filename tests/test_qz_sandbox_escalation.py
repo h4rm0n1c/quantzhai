@@ -87,6 +87,27 @@ def test_is_sandbox_denial_seccomp():
     assert _is_sandbox_denial("seccomp violation")
 
 
+def test_is_sandbox_denial_network_allowlist():
+    assert _is_sandbox_denial("Domain not in allowlist.")
+
+
+def test_is_sandbox_denial_network_local_policy():
+    assert _is_sandbox_denial("Sandbox policy blocks local/private network addresses.")
+
+
+def test_is_sandbox_denial_network_mitm():
+    assert _is_sandbox_denial("MITM required for limited HTTPS.")
+
+
+def test_is_sandbox_denial_network_proxy_header_allowlist():
+    # x-proxy-error header value appears in curl -v output
+    assert _is_sandbox_denial("< x-proxy-error: blocked-by-allowlist")
+
+
+def test_is_sandbox_denial_network_proxy_header_local():
+    assert _is_sandbox_denial("blocked-by-local-network-policy")
+
+
 def test_is_sandbox_denial_apply_patch_message():
     assert _is_sandbox_denial(
         "patch rejected: writing is blocked by read-only sandbox; rejected by user approval settings"
@@ -373,6 +394,7 @@ def test_check_pending_resolution_appends_escalation_note():
     assert "sandbox" in note_text.lower()
     assert "proxy" in note_text.lower()
     assert "succeeded" in note_text.lower()
+    assert "sandbox" in note_text.lower()
     assert "Exit code: 0" in note_text  # original success output preserved
     # Must NOT expose internal parameter names that confuse the model
     assert "sandbox_permissions" not in note_text
