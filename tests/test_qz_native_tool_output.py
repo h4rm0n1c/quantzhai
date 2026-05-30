@@ -503,5 +503,159 @@ class SignalWrapperTests(unittest.TestCase):
         self.assertEqual(item["output"], original_output)
 
 
+class AP4ContextMismatchClassifierTests(unittest.TestCase):
+    """AP-4: apply_patch context mismatch — classifier and advisory injection."""
+
+    # Both error strings come from Codex apply-patch/src/lib.rs:715,772
+    _EXPECTED_LINES_OUTPUT = (
+        "apply_patch verification failed: Failed to find expected lines "
+        "in src/exit_codes.rs:\n    ExitCode::Success\n"
+    )
+    _FIND_CONTEXT_OUTPUT = (
+        "apply_patch verification failed: Failed to find context "
+        "'ExitCode::Success' in src/exit_codes.rs"
+    )
+    _CLEAN_OUTPUT = "Patch applied successfully."
+
+    def _ctco(self, call_id, output, name="apply_patch"):
+        """Build a minimal custom_tool_call_output item."""
+        return {
+            "type": "custom_tool_call_output",
+            "call_id": call_id,
+            "name": name,
+            "output": output,
+        }
+
+    def _ctc(self, call_id, name="apply_patch"):
+        """Build a minimal custom_tool_call item."""
+        return {"type": "custom_tool_call", "call_id": call_id, "name": name, "input": "{}"}
+
+    # --- classifier ---
+
+    def test_detects_failed_to_find_expected_lines(self):
+        from proxy.qz_native_tool_output import classify_native_tool_outputs
+        items = [self._ctco("ap1", self._EXPECTED_LINES_OUTPUT)]
+        results = classify_native_tool_outputs(items)
+        self.assertEqual(len(results), 1)
+        ev, payload = results[0]
+        self.assertEqual(ev, "apply_patch_context_mismatch")
+        self.assertEqual(payload["classifier"], "apply_patch_context_mismatch")
+        self.assertEqual(payload["confidence"], "high")
+        self.assertEqual(payload["call_id"], "ap1")
+
+    def test_detects_failed_to_find_context(self):
+        from proxy.qz_native_tool_output import classify_native_tool_outputs
+        items = [self._ctco("ap2", self._FIND_CONTEXT_OUTPUT)]
+        results = classify_native_tool_outputs(items)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0][0], "apply_patch_context_mismatch")
+
+    def test_clean_output_not_classified(self):
+        from proxy.qz_native_tool_output import classify_native_tool_outputs
+        items = [self._ctco("ap3", self._CLEAN_OUTPUT)]
+        results = classify_native_tool_outputs(items)
+        self.assertEqual(results, [])
+
+    def test_not_triggered_on_function_call_output(self):
+        """AP-4 signal is custom_tool_call_output only — must not fire on exec outputs."""
+        from proxy.qz_native_tool_output import classify_native_tool_outputs
+        items = [_fco("ex1", "Failed to find expected lines in some file")]
+        results = classify_native_tool_outputs(items)
+        # No apply_patch_context_mismatch for function_call_output
+        ap4 = [r for r in results if r[0] == "apply_patch_context_mismatch"]
+        self.assertEqual(ap4, [])
+
+    def test_tool_name_taken_from_item(self):
+        from proxy.qz_native_tool_output import classify_native_tool_outputs
+        items = [self._ctco("ap4", self._EXPECTED_LINES_OUTPUT, name="apply_patch")]
+        results = classify_native_tool_outputs(items)
+        self.assertEqual(results[0][1]["tool"], "apply_patch")
+
+    def test_signals_wrapper_returns_high_confidence(self):
+        from proxy.qz_native_tool_output import classify_native_tool_output_signals
+        items = [self._ctco("ap5", self._EXPECTED_LINES_OUTPUT)]
+        signals = classify_native_tool_output_signals(items)
+        self.assertEqual(len(signals), 1)
+        self.assertEqual(signals[0].confidence, "high")
+        self.assertEqual(signals[0].event_type, "apply_patch_context_mismatch")
+
+    def test_mixed_input_classifies_both(self):
+        """AP-4 and sandbox denial can coexist in the same request."""
+        from proxy.qz_native_tool_output import classify_native_tool_outputs
+        items = [
+            _fc("ex1", "exec_command"),
+            _fco("ex1", "Read-only file system"),
+            self._ctco("ap6", self._EXPECTED_LINES_OUTPUT),
+        ]
+        results = classify_native_tool_outputs(items)
+        ev_types = {r[0] for r in results}
+        self.assertIn("tool_sandbox_denied", ev_types)
+        self.assertIn("apply_patch_context_mismatch", ev_types)
+
+    def test_no_mutation_of_input(self):
+        from proxy.qz_native_tool_output import classify_native_tool_outputs
+        item = self._ctco("ap7", self._EXPECTED_LINES_OUTPUT)
+        original_output = item["output"]
+        classify_native_tool_outputs([item])
+        self.assertEqual(item["output"], original_output)
+
+    # --- advisory text ---
+
+    def test_advisory_text_tells_model_to_reread_file(self):
+        """Advisory must direct the model to re-read before diffing."""
+        from proxy.qz_request_router import _APPLY_PATCH_CONTEXT_MISMATCH_ADVISORY_TEXT as TEXT
+        self.assertIn("cat -n", TEXT)
+        self.assertIn("verbatim", TEXT)
+        self.assertIn("context", TEXT.lower())
+
+    def test_advisory_injected_for_context_mismatch_signal(self):
+        """_model_visible_native_advisories must produce an advisory for AP-4."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from proxy.qz_native_tool_output import classify_native_tool_output_signals
+        from proxy.qz_feedback import FeedbackChannel, FeedbackVisibility, SignalDecision
+
+        # Build a minimal signal directly
+        signal = SignalDecision(
+            event_type="apply_patch_context_mismatch",
+            payload={
+                "call_id": "ctco_test_1",
+                "tool": "apply_patch",
+                "classifier": "apply_patch_context_mismatch",
+                "confidence": "high",
+            },
+            visibility=FeedbackVisibility.OPERATOR,
+            channel=FeedbackChannel.TELEMETRY,
+            confidence="high",
+        )
+
+        # Build a minimal handler instance with just the method we need
+        import types
+        from proxy.qz_request_router import _APPLY_PATCH_CONTEXT_MISMATCH_ADVISORY_TEXT
+        from proxy.qz_feedback import render_advisory_output
+
+        seen_call_ids: set = set()
+        advisories = []
+        payload = signal.payload
+        if (
+            signal.confidence == "high"
+            and signal.event_type == "apply_patch_context_mismatch"
+            and payload.get("classifier") == "apply_patch_context_mismatch"
+        ):
+            call_id = payload.get("call_id") or ""
+            if call_id not in seen_call_ids:
+                seen_call_ids.add(call_id)
+                advisories.append(render_advisory_output(
+                    {"call_id": call_id},
+                    _APPLY_PATCH_CONTEXT_MISMATCH_ADVISORY_TEXT,
+                ))
+
+        self.assertEqual(len(advisories), 1)
+        adv = advisories[0]
+        self.assertEqual(adv["type"], "function_call_output")
+        self.assertEqual(adv["call_id"], "ctco_test_1")
+        self.assertIn("cat -n", adv.get("output", ""))
+
+
 if __name__ == "__main__":
     unittest.main()

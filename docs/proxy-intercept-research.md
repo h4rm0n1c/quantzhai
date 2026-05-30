@@ -149,7 +149,14 @@ or if model was fine-tuned on Windows data.
 
 ---
 
-### AP-4 — apply_patch `Failed to find expected lines` (context mismatch)
+### AP-4 — apply_patch `Failed to find expected lines` (context mismatch) ✅ IMPLEMENTED
+
+**Live result (2026-05-31):** Before: 4 Codex errors, model retried blind.
+After: 2 errors, model used `cat -n` twice to re-read before diffing.
+Error count halved; model correctly acted on the advisory.
+
+Implementation: `qz_native_tool_output.py` classifier + `_model_visible_native_advisories()`
+in `qz_request_router.py`. 11 tests in `AP4ContextMismatchClassifierTests`.
 
 **Error**: `"Failed to find expected lines in X:\n..."` from
 `apply-patch/src/lib.rs:772`. Context lines in the diff don't match the

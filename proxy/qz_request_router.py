@@ -146,6 +146,12 @@ RECOVERY_TRIGGER_SCHEMA = "qz.recovery.trigger.v1"
 
 # Advisory text injected when a native tool call is blocked by a read-only filesystem.
 # Plain text — not a JSON error shape. The model may use or ignore the advisory.
+_APPLY_PATCH_CONTEXT_MISMATCH_ADVISORY_TEXT = (
+    "apply_patch failed because the diff context lines did not match the current file content. "
+    "Re-read the file first with exec cat -n, then build the diff using only lines copied "
+    "verbatim from that output. Every context line (starting with a space) must be an exact "
+    "copy — do not paraphrase or reconstruct from memory."
+)
 _SANDBOX_READONLY_ADVISORY_TEXT = (
     "The previous native tool call failed because the sandbox reported a read-only filesystem. "
     "Do not retry the same write operation unchanged. "
@@ -919,6 +925,9 @@ class RequestRouter:
         - event_type:   request_permissions_outcome
         - classifier:   request_permissions_denied_or_unavailable
         - confidence:   high
+        - event_type:   apply_patch_context_mismatch
+        - classifier:   apply_patch_context_mismatch
+        - confidence:   high
 
         Deduplicates per call_id within a single request: if multiple signals match
         for the same call_id, only one advisory is injected.
@@ -926,7 +935,7 @@ class RequestRouter:
         Does not produce advisories for:
         - connection_refused (telemetry-only)
         - request_permissions_granted
-        - non-high-confidence sandbox signals
+        - non-high-confidence signals
         - generic permission denied
 
         Does not mutate signal objects or the input list.
@@ -958,6 +967,11 @@ class RequestRouter:
                     and payload.get("classifier") == "request_permissions_denied_or_unavailable"
                 ):
                     message = _PERMISSION_OUTCOME_ADVISORY_TEXT
+                elif (
+                    signal.event_type == "apply_patch_context_mismatch"
+                    and payload.get("classifier") == "apply_patch_context_mismatch"
+                ):
+                    message = _APPLY_PATCH_CONTEXT_MISMATCH_ADVISORY_TEXT
                 else:
                     continue
                 call_id = payload.get("call_id") or ""

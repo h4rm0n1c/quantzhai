@@ -23,6 +23,11 @@ Classifier table (conservative — only high-signal strings / source-backed shap
   native_tool_connection_refused          "Connection refused"
                                           → tool_connection_failed
 
+  apply_patch_context_mismatch       "Failed to find expected lines"       (AP-4)
+                                      "Failed to find context"
+                                      in custom_tool_call_output
+                                          → apply_patch_context_mismatch
+
 Deliberately NOT classified:
   plain "permission denied" alone  (too common — normal file ACLs)
   "Process exited with code 1"     (any failing command)
@@ -39,12 +44,25 @@ CLASSIFIERS: List[Dict[str, Any]] = [
         "event": "tool_sandbox_denied",
         "triggers": ["Read-only file system"],
         "confidence": "high",
+        "item_types": {"function_call_output"},
     },
     {
         "id": "native_tool_connection_refused",
         "event": "tool_connection_failed",
         "triggers": ["Connection refused", "connection refused"],
         "confidence": "medium",
+        "item_types": {"function_call_output"},
+    },
+    {
+        # AP-4: apply_patch context mismatch.
+        # Codex apply-patch/src/lib.rs:715,772 — both strings are produced when
+        # the diff context lines don't match the current file content.  These
+        # arrive as custom_tool_call_output (apply_patch is a custom_tool_call).
+        "id": "apply_patch_context_mismatch",
+        "event": "apply_patch_context_mismatch",
+        "triggers": ["Failed to find expected lines", "Failed to find context"],
+        "confidence": "high",
+        "item_types": {"custom_tool_call_output"},
     },
 ]
 
@@ -194,7 +212,8 @@ def classify_native_tool_outputs(
     for item in input_items:
         if not isinstance(item, dict):
             continue
-        if item.get("type") != "function_call_output":
+        item_type = item.get("type")
+        if item_type not in ("function_call_output", "custom_tool_call_output"):
             continue
 
         output = item.get("output")
@@ -202,21 +221,32 @@ def classify_native_tool_outputs(
             continue
 
         call_id = str(item.get("call_id") or "")
-        tool = call_id_to_name.get(call_id) or "unknown"
+        # For custom_tool_call_output, the tool name is on the item itself;
+        # for function_call_output, look it up from the sibling function_call.
+        tool = (
+            str(item.get("name") or "")
+            if item_type == "custom_tool_call_output"
+            else call_id_to_name.get(call_id) or "unknown"
+        )
         exit_code = _parse_exit_code(output)
         preview = _safe_output_preview(output, 200)
 
-        request_permissions_result = _classify_request_permissions_output(
-            output,
-            call_id=call_id,
-            tool=tool,
-            preview=preview,
-        )
-        if request_permissions_result is not None:
-            results.append(request_permissions_result)
-            continue
+        if item_type == "function_call_output":
+            request_permissions_result = _classify_request_permissions_output(
+                output,
+                call_id=call_id,
+                tool=tool,
+                preview=preview,
+            )
+            if request_permissions_result is not None:
+                results.append(request_permissions_result)
+                continue
 
         for classifier in CLASSIFIERS:
+            # Respect the item_types filter if present.
+            allowed_types = classifier.get("item_types")
+            if allowed_types and item_type not in allowed_types:
+                continue
             matched = next(
                 (trigger for trigger in classifier["triggers"] if trigger in output),
                 None,
@@ -226,7 +256,7 @@ def classify_native_tool_outputs(
                     classifier["event"],
                     {
                         "call_id": call_id,
-                        "tool": tool,
+                        "tool": tool or "apply_patch",
                         "classifier": classifier["id"],
                         "matched_string": matched,
                         "exit_code": exit_code,
