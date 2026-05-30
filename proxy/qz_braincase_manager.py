@@ -408,28 +408,30 @@ def _format_landscape_for_prompt(metrics: list[dict], records_by_id: dict | None
 # Orchestrator shell
 # ---------------------------------------------------------------------------
 
-_PROMPT_PLACEHOLDER = """\
-[MEMORY MANAGER PROMPT -- NOT YET FINALISED]
+def _load_manager_prompt() -> str:
+    """Load the memory manager prompt from config. Falls back to inline stub."""
+    import os as _os
+    candidates = [
+        _os.path.join(_os.environ.get("QZ_ROOT", ""), "config/default/prompts/memory-manager-v0.md"),
+        _os.path.join(_os.path.dirname(__file__), "..", "config/default/prompts/memory-manager-v0.md"),
+    ]
+    for path in candidates:
+        try:
+            text = open(path, encoding="utf-8").read().strip()
+            if text:
+                return text
+        except Exception:
+            pass
+    # Minimal fallback if file is missing
+    return (
+        "You are a memory arbitration agent. Output JSON tool calls only.\n"
+        "Session: {session_summary}\nLandscape: {landscape}\n"
+        "Retire frieza records (L1=0, L2=0, policy=retire). "
+        "Read neutral records before deciding. Challenge risky retires."
+    )
 
-You are a memory arbitration agent. You do NOT respond to the user.
-You make structured tool calls to manage a persistent memory store.
 
-Session context (survival-weighted summary of current session):
-{session_summary}
-
-Memory landscape (sorted weakest-first):
-{landscape}
-
-Available tools: bc_promote, bc_retire, bc_update_tier, bc_tag, bc_merge.
-
-Make tool calls based on temporal survival scoring:
-- Temporal Saiyan (class=saiyan): leave alone or promote
-- Temporal Frieza (class=frieza): retire unless survival score is high
-- Neutral with L2 signals: review -- promote if claim is a constraint or lesson
-- Redundant records with similar claims: merge
-
-Use only tool calls. No prose.
-"""
+_MANAGER_PROMPT = _load_manager_prompt()
 
 
 def run_memory_manager(
@@ -513,11 +515,10 @@ def run_memory_manager(
         landscape_text = "(landscape unavailable)"
 
     # --- 3. Build prompt ---
-    prompt_template = prompt_override or _PROMPT_PLACEHOLDER
+    prompt_template = prompt_override or _MANAGER_PROMPT
     try:
-        prompt = prompt_template.format(
-            session_summary=summary,
-            landscape=landscape_text,
+        prompt = prompt_template.replace("{{SESSION_SUMMARY}}", summary).replace(
+            "{{LANDSCAPE}}", landscape_text
         )
     except Exception as exc:
         result["errors"].append(f"prompt format failed: {exc}")
