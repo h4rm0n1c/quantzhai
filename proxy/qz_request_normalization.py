@@ -419,6 +419,40 @@ def normalize_responses_input_for_qwen(body: dict, selected_model: dict | None =
     if bc_policy:
         harness_blocks = list(harness_blocks) + [bc_policy]
 
+        # Inject memory pressure hint when the queue is elevated — gives the
+        # model ambient awareness so it can self-initiate a powernap without
+        # needing to call percolate first.
+        try:
+            try:
+                from .qz_braincase_db import BrainCaseDB
+                from .qz_braincase_manager import compute_management_pressure
+            except ImportError:
+                from qz_braincase_db import BrainCaseDB
+                from qz_braincase_manager import compute_management_pressure
+            _db = BrainCaseDB.from_env()
+            _db.init()
+            if _db.available:
+                _pressure = compute_management_pressure(_db)
+                _score = _pressure.get("pressure_score", 0)
+                _pending = _pressure.get("pending_candidates", 0)
+                if _score >= 30:
+                    # High pressure — hard to ignore, needs servicing
+                    _hint = (
+                        f"\n[Memory pressure HIGH: {_pending} candidate(s) queued, "
+                        f"score={_score}. Call braincase.powernap soon.]"
+                    )
+                    harness_blocks = list(harness_blocks) + [_hint]
+                elif _score >= 10:
+                    # Moderate — noticeable, worth acting on at a break
+                    _hint = (
+                        f"\n[Memory: {_pending} candidate(s) pending, "
+                        f"score={_score}. braincase.powernap at next natural break.]"
+                    )
+                    harness_blocks = list(harness_blocks) + [_hint]
+                # Below 10: no hint — not worth the noise
+        except Exception:
+            pass
+
     _strip_turn_harnesses(clean_input, harness_blocks=harness_blocks)
     if not turn_harness_report["available"] and not bc_policy:
         turn_harness_report["applied"] = False

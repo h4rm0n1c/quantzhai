@@ -554,7 +554,14 @@ _HARNESS_LIMBICORE_SECTION: str = """\
   procedures, lessons. Don't assume it exists — just ask and see.
 - Specific queries work better than broad ones.
 - Chain two or three calls with different queries to triangulate what's stored.
-- Returns nothing if nothing relevant is stored. That's fine."""
+- Returns a memory_pressure field: pending_candidates and should_consolidate.
+  If should_consolidate is true, consider calling braincase.powernap.
+
+**braincase.powernap** — consolidate accumulated memory.
+- Call at natural task boundaries when percolate shows should_consolidate=true,
+  or when you've made several impactions and want them processed.
+- Non-blocking: returns immediately, consolidation runs in the background.
+- Like a brief rest that processes what you've learned before continuing."""
 
 BRAINCASE_HARNESS_POLICY: str = (
     "## BrainCase Memory Tools\n\n"
@@ -625,7 +632,8 @@ def get_braincase_tool_definitions(env: dict | None = None) -> list[dict]:
     """
     defs: list[dict] = []
     if is_braincase_limbicore_enabled(env):
-        defs += [BRAINCASE_IMPACTION_TOOL_DEF, BRAINCASE_PERCOLATE_TOOL_DEF]
+        defs += [BRAINCASE_IMPACTION_TOOL_DEF, BRAINCASE_PERCOLATE_TOOL_DEF,
+                 BRAINCASE_POWERNAP_TOOL_DEF]
     if is_braincase_tools_enabled(env):
         defs += [BRAINCASE_RENDER_TOOL_DEF, BRAINCASE_RECALL_TOOL_DEF]
         if is_braincase_write_candidate_enabled(env):
@@ -1807,7 +1815,7 @@ def braincase_percolate_tool(db: "BrainCaseDB", args: dict) -> dict:
     if not isinstance(tiers, list):
         tiers = None
 
-    return braincase_recall_packet(
+    packet = braincase_recall_packet(
         db,
         purpose=f"percolate: {query[:80]}",
         memory_domain=memory_domain,
@@ -1818,6 +1826,105 @@ def braincase_percolate_tool(db: "BrainCaseDB", args: dict) -> dict:
         limit=limit,
         now_ms=ts,
     )
+
+    # Include memory pressure context so the agent can see the state of the
+    # memory queue and decide whether to call braincase.powernap.
+    try:
+        try:
+            from .qz_braincase_manager import compute_management_pressure
+        except ImportError:
+            from qz_braincase_manager import compute_management_pressure
+        pressure = compute_management_pressure(db, now_ms=ts)
+        packet["memory_pressure"] = {
+            "pending_candidates": pressure["pending_candidates"],
+            "pressure_score":     pressure["pressure_score"],
+            "should_consolidate": pressure["should_run"],
+            "days_since_consolidation": pressure["days_since_run"],
+        }
+    except Exception:
+        pass
+
+    return packet
+
+
+def braincase_powernap_tool(db, args: dict, context=None) -> dict:
+    """Trigger an immediate memory consolidation pass.
+
+    The agent calls this when it decides conditions are right for
+    consolidation — typically after extended work, when percolate shows
+    high memory_pressure.pending_candidates, or at a natural task boundary.
+
+    Fires the memory manager in a background thread (non-blocking).
+    Returns immediately with the current pressure state and whether a
+    consolidation run was started.
+
+    args: {} — no arguments required
+    """
+    ts = int(time.time() * 1000)
+    try:
+        try:
+            from .qz_braincase_manager import maybe_run_manager_async, compute_management_pressure
+        except ImportError:
+            from qz_braincase_manager import maybe_run_manager_async, compute_management_pressure
+
+        import os as _os
+        _root = _os.environ.get("QZ_ROOT", "")
+
+        # Get context from executor if available
+        _llm_base_url = ""
+        _llm_model = ""
+        _memory_domain = str(args.get("memory_domain") or "isolated").strip()
+
+        if context is not None:
+            _memory_domain = getattr(context, "memory_domain", _memory_domain)
+
+        # Always fire — agent explicitly requested consolidation.
+        # Lower the threshold to 0 so it runs regardless of current pressure.
+        pressure = compute_management_pressure(db, now_ms=ts, root=_root, threshold=0)
+        result = maybe_run_manager_async(
+            [],  # no session input available here; manager uses DB state only
+            db,
+            root=_root,
+            llm_base_url=_llm_base_url,
+            llm_model=_llm_model,
+            memory_domain=_memory_domain if _memory_domain != "isolated" else None,
+            threshold=0,  # always fire when agent requests it
+        )
+
+        return {
+            "ok": True,
+            "consolidation_started": result.get("fired", False),
+            "pending_candidates": pressure["pending_candidates"],
+            "pressure_score": pressure["pressure_score"],
+            "message": (
+                "Memory consolidation started in the background. "
+                "Continues while you work — no need to wait."
+                if result.get("fired") else
+                "Memory consolidation already up to date or DB unavailable."
+            ),
+        }
+    except Exception as exc:
+        return {"ok": False, "consolidation_started": False,
+                "message": f"Powernap failed: {type(exc).__name__}: {exc}"}
+
+
+BRAINCASE_POWERNAP_TOOL_DEF: dict = {
+    "type": "function",
+    "name": "braincase.powernap",
+    "description": (
+        "Trigger a memory consolidation pass. "
+        "Call this at natural task boundaries when you've accumulated several "
+        "impactions, when percolate shows high pending_candidates, or when "
+        "you sense the memory queue needs processing. "
+        "Non-blocking — returns immediately while consolidation runs in the background. "
+        "Like a brief rest that consolidates what you've learned."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    },
+}
 
 
 # ---------------------------------------------------------------------------
@@ -1869,6 +1976,25 @@ class BraincasePercolateProxyToolExecutor(_BraincaseBaseExecutor):
         return self._make_result(call, result)
 
 
+class BraincasePowernapProxyToolExecutor(_BraincaseBaseExecutor):
+    """Proxy-local executor for braincase.powernap."""
+
+    function_name = "braincase.powernap"
+    lifecycle = ToolLifecycleSpec(
+        name="braincase.powernap",
+        execution="proxy_local",
+        public_item_type="function_call_output",
+        telemetry_name="braincase_powernap",
+        continuation_hops=1,
+    )
+
+    def execute(self, call: dict, context: "ProxyToolExecutionContext") -> "ToolContinuationResult":
+        db = self._get_db()
+        args = self._parse_args(call)
+        result = braincase_powernap_tool(db, args, context=context)
+        return self._make_result(call, result)
+
+
 def make_braincase_tool_executors(
     db: "BrainCaseDB | None" = None,
     env: "dict | None" = None,
@@ -1879,6 +2005,7 @@ def make_braincase_tool_executors(
         executors += [
             BraincaseImpactionProxyToolExecutor(db=db),
             BraincasePercolateProxyToolExecutor(db=db),
+            BraincasePowernapProxyToolExecutor(db=db),
         ]
     if is_braincase_tools_enabled(env):
         executors += [
