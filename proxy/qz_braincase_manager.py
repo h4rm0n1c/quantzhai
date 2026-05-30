@@ -552,18 +552,63 @@ def run_memory_manager(
         result["elapsed_ms"] = round((time.time() - t0) * 1000)
         return result
 
-    # --- 5. Parse tool calls from LLM response ---
-    # The LLM should return JSON tool calls. Extract them from the response text.
-    tool_calls = _extract_tool_calls(llm_response)
-    result["tool_calls_made"] = len(tool_calls)
+    # --- 5. Two-turn orchestration loop ---
+    # Turn 1: LLM scans landscape, calls bc_read/bc_search to examine suspects.
+    # Turn 2: LLM sees read results, outputs bc_promote/bc_retire/bc_merge decisions.
+    # Read/search calls are non-destructive so executing them between turns is safe.
+    _READ_TOOLS = {"bc_read", "bc_search", "bc_challenge"}
+    _WRITE_TOOLS = {"bc_promote", "bc_retire", "bc_merge", "bc_update_tier", "bc_tag"}
 
-    # --- 6. Dispatch tool calls ---
-    if tool_calls and db is not None:
-        actions = dispatch_memory_tool_calls(tool_calls, db)
-        result["actions"] = actions
-        errors = [a for a in actions if not a.get("ok")]
-        for e in errors:
-            result["errors"].append(f"tool {e.get('name')}: {e.get('error', 'failed')}")
+    all_actions: list[dict] = []
+    total_calls = 0
+
+    for turn in range(2):
+        tool_calls = _extract_tool_calls(llm_response)
+        total_calls += len(tool_calls)
+
+        if not tool_calls:
+            break
+
+        # Separate read vs write calls
+        read_calls = [c for c in tool_calls if c.get("name") in _READ_TOOLS]
+        write_calls = [c for c in tool_calls if c.get("name") in _WRITE_TOOLS]
+
+        if turn == 0 and read_calls and db is not None:
+            # Execute reads, collect results, then do a second LLM turn
+            read_results = dispatch_memory_tool_calls(read_calls, db)
+            all_actions.extend(read_results)
+            # Only do second turn if there were reads and no writes yet
+            if not write_calls:
+                read_summary = json.dumps(read_results, indent=2)
+                continuation = (
+                    f"\n\nRead results:\n{read_summary}\n\n"
+                    "Now output only bc_promote, bc_retire, bc_merge, bc_update_tier, "
+                    "or bc_tag calls based on the content above. "
+                    "No more reads. One JSON object per line."
+                )
+                try:
+                    llm_response, llm_reason = _call_llm_compactor(
+                        prompt + continuation,
+                        llm_base_url=effective_url,
+                        llm_model=llm_model or "",
+                    )
+                except Exception as exc:
+                    result["errors"].append(f"turn-2 LLM call failed: {exc}")
+                    break
+                continue  # go to turn 1 (index 1) to dispatch write calls
+
+        # Execute all remaining calls (writes on turn 0 if no reads, or turn 1)
+        remaining = write_calls if turn == 0 else tool_calls
+        if remaining and db is not None:
+            write_results = dispatch_memory_tool_calls(remaining, db)
+            all_actions.extend(write_results)
+        break
+
+    result["tool_calls_made"] = total_calls
+    result["actions"] = all_actions
+    errors = [a for a in all_actions if not a.get("ok")]
+    for e in errors:
+        result["errors"].append(f"tool {e.get('name')}: {e.get('error', 'failed')}")
 
     result["ok"] = True
     result["elapsed_ms"] = round((time.time() - t0) * 1000)

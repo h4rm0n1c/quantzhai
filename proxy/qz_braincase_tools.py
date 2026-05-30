@@ -919,6 +919,15 @@ def _recall_candidate_records(
                 tier=tier,
                 limit=per_tier_limit,
             )
+            # FTS uses AND by default — multi-word queries can return 0 results even
+            # when relevant records exist. Fall back to listing the tier so the agent
+            # always sees what's stored, even when query terms are spread across records.
+            if not records:
+                records = db.list_state_records(
+                    memory_domain=memory_domain,
+                    tier=tier,
+                    limit=per_tier_limit,
+                )
         else:
             records = db.list_state_records(
                 memory_domain=memory_domain,
@@ -1604,7 +1613,7 @@ def bc_promote_tool(db: "BrainCaseDB", args: dict) -> dict:
     ok = db.promote_state_record(
         record_id,
         new_status="active",
-        new_visibility="operator",
+        new_visibility="renderable",  # promoted records are model-visible via percolate/recall
         reason=reason,
     )
     return _bc_result(ok, record_id, "promote", db.last_error or "")
@@ -1760,7 +1769,7 @@ def braincase_impaction_tool(db: "BrainCaseDB", args: dict) -> dict:
         "record_id": record_id,
         "schema": "qz.braincase.state_record.v1",
         "memory_domain": memory_domain,
-        "tier": "session_state",       # memory manager will re-tier
+        "tier": "project_state",       # memory manager will re-tier; project_state is in task recall
         "record_type": "project_state",  # generic; manager will refine
         "claim": claim,
         "summary": summary,
