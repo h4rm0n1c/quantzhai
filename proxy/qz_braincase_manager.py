@@ -1,33 +1,217 @@
 #!/usr/bin/env python3
-"""BrainCase memory manager — mechanical pipeline (steps 1-3 of the orchestrator).
+"""BrainCase memory manager -- mechanical pipeline + management pressure.
 
-This module provides:
+Additional entry points:
+
+  compute_management_pressure(db, now_ms)
+    Returns a pressure dict: pending_candidates, stale_records, days_since_run,
+    pressure_score, should_run.  Pure computation -- no DB writes.
+
+  record_manager_run(root)
+    Write var/state/manager-last-run.json after a successful run.
+
+  maybe_run_manager_async(input_items, db, *, root, llm_base_url, llm_model)
+    Check pressure and fire run_memory_manager() in a background thread
+    if pressure threshold is exceeded.  Returns immediately; never blocks.
+    Safe to call from the compaction hot path.
+
+Original entry points:
 
   compact_for_context(input_items, llm_base_url, llm_model)
-    Run the survival-weighted compactor over a conversation input array.
-    Returns the summary string only — no side effects on session context.
-    Used to give the memory manager a filtered view of the current session
-    without requiring a full threshold-triggered compaction event.
-
   dispatch_memory_tool_calls(tool_calls, db)
-    Parse and execute bc_* tool calls returned by the memory manager LLM.
-    Routes to the bc_promote/retire/merge/update_tier/tag functions.
-    Returns a list of result dicts.
-
-  run_memory_manager(input_items, db, llm_base_url, llm_model, *, prompt_override)
-    Orchestrator shell: compact_for_context → compute_landscape → build prompt →
-    LLM call → dispatch tool calls → return action summary.
-    The prompt_override parameter is the step-4 placeholder — pass the final
-    prompt once it exists; the shell works with any prompt injected here.
-
-All functions are best-effort and never raise. Failures are returned as
-structured error dicts so callers can log and continue.
+  run_memory_manager(input_items, db, ...)
 """
 from __future__ import annotations
 
 import json
+import os
 import time
+from pathlib import Path
 from typing import Any
+
+_DAY_S = 86_400.0
+
+# ---------------------------------------------------------------------------
+# Management pressure
+# ---------------------------------------------------------------------------
+
+# Pressure weights -- tunable without code changes.
+_CANDIDATE_WEIGHT     = 2   # each unreviewed candidate adds this to pressure
+_STALE_WEIGHT         = 1   # each policy-stale/retire record adds this
+_DAYS_SINCE_RUN_WEIGHT = 1  # each idle day adds this (capped at 14d)
+_DEFAULT_THRESHOLD    = 10  # fire manager run when score >= this
+
+
+def _last_run_path(root: str | Path | None = None) -> Path:
+    r = Path(root or os.environ.get("QZ_ROOT", Path(__file__).resolve().parents[1]))
+    return r / "var" / "state" / "manager-last-run.json"
+
+
+def _load_last_run(root: str | Path | None = None) -> dict:
+    try:
+        return json.loads(_last_run_path(root).read_text())
+    except Exception:
+        return {}
+
+
+def record_manager_run(root: str | Path | None = None, result: dict | None = None) -> None:
+    """Write var/state/manager-last-run.json after a successful run. Best-effort."""
+    try:
+        path = _last_run_path(root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "ran_at_ms": int(time.time() * 1000),
+            "ran_at_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "actions": len((result or {}).get("actions", [])) if result else 0,
+            "errors": len((result or {}).get("errors", [])) if result else 0,
+        }
+        path.write_text(json.dumps(payload, indent=2))
+    except Exception:
+        pass
+
+
+def compute_management_pressure(
+    db: Any,
+    now_ms: int | None = None,
+    root: str | Path | None = None,
+    threshold: int = _DEFAULT_THRESHOLD,
+) -> dict:
+    """Compute accumulated management debt. Pure computation -- no DB writes.
+
+    Returns:
+      pending_candidates  -- candidate records awaiting assessment
+      stale_records       -- records retention policy wants to retire/mark stale
+      days_since_run      -- days since last manager run (None if never run)
+      pressure_score      -- weighted sum
+      should_run          -- True when pressure_score >= threshold
+      threshold           -- the threshold used
+    """
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
+
+    pending_candidates = 0
+    stale_records = 0
+
+    if db is not None and getattr(db, "available", False):
+        try:
+            candidates = db.list_state_records_by_status(status="candidate", limit=200) or []
+            pending_candidates = len(candidates)
+        except Exception:
+            pass
+
+        try:
+            from .qz_braincase_metrics import compute_record_metrics
+        except ImportError:
+            try:
+                from qz_braincase_metrics import compute_record_metrics
+            except ImportError:
+                compute_record_metrics = None  # type: ignore[assignment]
+
+        if compute_record_metrics is not None:
+            try:
+                active = db.list_state_records(limit=200) or []
+                for r in active:
+                    if not isinstance(r, dict):
+                        continue
+                    m = compute_record_metrics(r, now_ms)
+                    if m.get("retention_action") in ("stale", "retire"):
+                        stale_records += 1
+            except Exception:
+                pass
+
+    # Time since last run
+    last_run = _load_last_run(root)
+    days_since_run: float | None = None
+    idle_days_score = 0
+    if last_run.get("ran_at_ms"):
+        days_since_run = (now_ms - last_run["ran_at_ms"]) / (_DAY_S * 1000)
+        idle_days_score = min(14, int(days_since_run)) * _DAYS_SINCE_RUN_WEIGHT
+    else:
+        idle_days_score = 14 * _DAYS_SINCE_RUN_WEIGHT  # never run → max idle pressure
+
+    pressure_score = (
+        pending_candidates * _CANDIDATE_WEIGHT
+        + stale_records * _STALE_WEIGHT
+        + idle_days_score
+    )
+
+    return {
+        "pending_candidates": pending_candidates,
+        "stale_records": stale_records,
+        "days_since_run": round(days_since_run, 1) if days_since_run is not None else None,
+        "idle_days_score": idle_days_score,
+        "pressure_score": pressure_score,
+        "should_run": pressure_score >= threshold,
+        "threshold": threshold,
+    }
+
+
+def maybe_run_manager_async(
+    input_items: list[dict],
+    db: Any,
+    *,
+    root: str | Path | None = None,
+    llm_base_url: str = "",
+    llm_model: str = "",
+    memory_domain: str | None = None,
+    threshold: int = _DEFAULT_THRESHOLD,
+    prompt_override: str | None = None,
+) -> dict:
+    """Check management pressure and fire the manager in a background thread if needed.
+
+    Returns the pressure dict immediately. Never blocks the caller.
+    Safe to call from the compaction hot path -- fire-and-forget.
+
+    The manager run:
+      1. compact_for_context(input_items) → session summary
+      2. compute_landscape_metrics(db) → scored records
+      3. LLM call with placeholder prompt (or prompt_override)
+      4. dispatch bc_* tool calls
+      5. record_manager_run() -- resets idle pressure
+
+    Backend occupancy: the manager LLM call uses the same inference backend
+    as Codex.  While it runs, any incoming Codex /v1/responses request will
+    wait in the backend queue (hold-open on the proxy side).  This is the
+    intended behaviour -- the user sees a brief pause on their next turn.
+    Manager calls are fired post-compaction at a natural session break where
+    the user is reading the compacted context before composing a reply, so
+    the timing typically works out.
+
+    If db is unavailable or pressure is below threshold, returns immediately
+    with should_run=False and no background thread is started.
+    """
+    import threading as _thr
+
+    pressure = compute_management_pressure(db, root=root, threshold=threshold)
+
+    if not pressure["should_run"]:
+        pressure["fired"] = False
+        return pressure
+
+    if db is None or not getattr(db, "available", False):
+        pressure["fired"] = False
+        pressure["skip_reason"] = "db_unavailable"
+        return pressure
+
+    def _background():
+        try:
+            result = run_memory_manager(
+                input_items,
+                db,
+                llm_base_url=llm_base_url,
+                llm_model=llm_model,
+                memory_domain=memory_domain,
+                prompt_override=prompt_override,
+            )
+            if result.get("ok"):
+                record_manager_run(root, result)
+        except Exception:
+            pass
+
+    _thr.Thread(target=_background, daemon=True, name="qz-memory-manager").start()
+    pressure["fired"] = True
+    return pressure
+
 
 # ---------------------------------------------------------------------------
 # compact_for_context
@@ -43,7 +227,7 @@ def compact_for_context(
 ) -> tuple[str | None, str]:
     """Run the survival-weighted compactor over input_items and return the summary.
 
-    This is NOT a full compaction event — no new context is written, no threshold
+    This is NOT a full compaction event -- no new context is written, no threshold
     is checked, no session state is modified.  The output is a survival-weighted
     anchored summary of whatever is in input_items.
 
@@ -51,8 +235,8 @@ def compact_for_context(
     session before it decides what to promote, retire, or merge.
 
     Returns (summary_text, reason):
-      summary_text  — the anchored summary string, or None on failure
-      reason        — "ok" on success, error code on failure
+      summary_text  -- the anchored summary string, or None on failure
+      reason        -- "ok" on success, error code on failure
     """
     try:
         try:
@@ -71,13 +255,13 @@ def compact_for_context(
         if not input_items:
             return None, "empty_input"
 
-        # Resolve LLM backend URL — same priority as normal compaction.
+        # Resolve LLM backend URL -- same priority as normal compaction.
         effective_url = (llm_base_url or "").rstrip("/") or _active_backend_base_url()
         if not effective_url:
             return None, "no_backend"
 
         prompt = _build_survival_weighted_compaction_prompt(
-            previous_summary="",   # no prior summary — fresh pass over current session
+            previous_summary="",   # no prior summary -- fresh pass over current session
             new_items=input_items,
             max_input_chars=max_input_chars,
         )
@@ -154,7 +338,7 @@ def dispatch_memory_tool_calls(
         "bc_merge":       bc_merge_tool,
         "bc_read":        bc_read_tool,
         "bc_search":      bc_search_tool,
-        "bc_challenge":   bc_challenge_tool,  # adversarial review — no writes
+        "bc_challenge":   bc_challenge_tool,  # adversarial review -- no writes
     }
 
     results = []
@@ -193,7 +377,7 @@ def dispatch_memory_tool_calls(
 def _format_landscape_for_prompt(metrics: list[dict], records_by_id: dict | None = None) -> str:
     """Serialise compute_landscape_metrics() as compact one-liners for the prompt.
 
-    Each record is one line — enough to scan and identify which records need
+    Each record is one line -- enough to scan and identify which records need
     closer inspection. The LLM calls bc_read(record_ids=[...]) to pull full
     claim + summary + tags for any records it wants to examine before deciding.
 
@@ -225,7 +409,7 @@ def _format_landscape_for_prompt(metrics: list[dict], records_by_id: dict | None
 # ---------------------------------------------------------------------------
 
 _PROMPT_PLACEHOLDER = """\
-[MEMORY MANAGER PROMPT — NOT YET FINALISED]
+[MEMORY MANAGER PROMPT -- NOT YET FINALISED]
 
 You are a memory arbitration agent. You do NOT respond to the user.
 You make structured tool calls to manage a persistent memory store.
@@ -241,7 +425,7 @@ Available tools: bc_promote, bc_retire, bc_update_tier, bc_tag, bc_merge.
 Make tool calls based on temporal survival scoring:
 - Temporal Saiyan (class=saiyan): leave alone or promote
 - Temporal Frieza (class=frieza): retire unless survival score is high
-- Neutral with L2 signals: review — promote if claim is a constraint or lesson
+- Neutral with L2 signals: review -- promote if claim is a constraint or lesson
 - Redundant records with similar claims: merge
 
 Use only tool calls. No prose.

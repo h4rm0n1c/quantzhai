@@ -530,6 +530,45 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         self._send_json(200, out)
 
+        # Post-compaction memory pressure check — fire the memory manager in a
+        # background thread if accumulated management debt exceeds the threshold.
+        # The manager call uses the same backend so the next Codex request will
+        # see a hold-open wait while it runs (user sees a brief pause — intended).
+        try:
+            from .qz_braincase_db import BrainCaseDB
+            from .qz_braincase_manager import maybe_run_manager_async
+        except ImportError:
+            try:
+                from qz_braincase_db import BrainCaseDB
+                from qz_braincase_manager import maybe_run_manager_async
+            except ImportError:
+                BrainCaseDB = None  # type: ignore[assignment,misc]
+                maybe_run_manager_async = None  # type: ignore[assignment]
+        if maybe_run_manager_async is not None and BrainCaseDB is not None:
+            try:
+                _db = BrainCaseDB.from_env()
+                _db.init()
+                if _db.available:
+                    _input_items = list(body.get("input") or [])
+                    _selected = getattr(self.__class__, "model_catalog", None)
+                    _domain = None
+                    try:
+                        _sel_entry = _selected.selected if _selected else None
+                        if isinstance(_sel_entry, dict):
+                            _domain = _sel_entry.get("memory_domain")
+                    except Exception:
+                        pass
+                    maybe_run_manager_async(
+                        _input_items,
+                        _db,
+                        root=os.environ.get("QZ_ROOT", ""),
+                        llm_base_url=llm_base_url,
+                        llm_model=str((backend_resolution_detail or {}).get("launch_model_backend_id") or ""),
+                        memory_domain=_domain,
+                    )
+            except Exception:
+                pass
+
 
     def _write_transformed_sse_stream(self, resp, raw_log=None, started_at=None):
         summary_started = set()
