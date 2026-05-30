@@ -52,7 +52,7 @@ def default_db_path(root: str | Path | None = None) -> Path:
     root = Path(
         root if root is not None else os.environ.get("QZ_ROOT", Path(__file__).resolve().parents[1])
     )
-    return root / "var" / "qz-state.sqlite3"
+    return root / "var" / "state" / "braincase.sqlite3"
 
 
 def _env_enabled(value: str | None) -> bool:
