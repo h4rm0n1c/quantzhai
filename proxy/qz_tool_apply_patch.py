@@ -37,7 +37,17 @@ def _apply_patch_function_parameters() -> dict:
                     },
                     "diff": {
                         "type": "string",
-                        "description": "Patch payload. For create_file, include the exact full file content. For update_file, include a V4A diff hunk. For move_file/rename_file in Codex custom patch mode, include a V4A context hunk for the source file. For delete_file, omit or use an empty string.",
+                        "description": (
+                            "Patch content. Rules:\n"
+                            "- update_file: unified diff lines. Each line starts with ' ' (context, must match file EXACTLY), '+' (add), or '-' (remove). "
+                            "Include 1-3 lines of context before and after each change. "
+                            "Context lines must be verbatim copies from the current file — do NOT invent or paraphrase context. "
+                            "Do NOT wrap in markdown code fences (no ```diff or ```). "
+                            "Do NOT include --- a/file or +++ b/file headers.\n"
+                            "- create_file: the complete new file content (no diff markers needed).\n"
+                            "- delete_file: omit or empty string.\n"
+                            "- move_file/rename_file: context hunk from the source file."
+                        ),
                     },
                     "destination": {
                         "type": "string",
@@ -259,8 +269,37 @@ def _normalize_apply_patch_operation_for_codex(operation: dict) -> dict:
     return operation
 
 
+def _strip_markdown_code_fences(diff: str) -> str:
+    """Strip markdown code fence markers that models sometimes wrap diffs in.
+
+    The model may generate:
+        ```diff
+        - old
+        + new
+        ```
+    or:
+        ```rust
+        ...
+        ```
+    Strip the opening ``` or ```lang and closing ``` lines so the actual
+    diff content reaches the patch verifier.
+    """
+    lines = diff.splitlines(keepends=True)
+    if not lines:
+        return diff
+    # Strip leading code fence
+    first = lines[0].rstrip()
+    if re.match(r"^`{3,}[a-zA-Z]*$", first):
+        lines = lines[1:]
+    # Strip trailing code fence
+    if lines and re.match(r"^`{3,}\s*$", lines[-1].rstrip()):
+        lines = lines[:-1]
+    return "".join(lines)
+
+
 def _strip_unified_diff_headers(diff: str, path: str | None = None) -> str:
     """Drop file-level unified diff metadata before Codex-facing output."""
+    diff = _strip_markdown_code_fences(diff)
     lines = diff.splitlines()
     if not lines:
         return diff
