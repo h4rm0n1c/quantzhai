@@ -357,6 +357,14 @@ def braincase_render_packet(
     else:
         records = db.list_state_records(memory_domain=memory_domain, limit=limit)
 
+    # Track access: every record surfaced to the model via render counts as accessed.
+    accessed_ids = [r["record_id"] for r in records if isinstance(r, dict) and r.get("record_id")]
+    if accessed_ids and callable(getattr(db, "record_access", None)):
+        try:
+            db.record_access(accessed_ids)
+        except Exception:
+            pass
+
     return render_pack(
         records,
         purpose=purpose,

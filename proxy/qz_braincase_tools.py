@@ -688,6 +688,17 @@ def braincase_recall_packet(
         now_ms=ts,
     )
 
+    # Track access: every record surfaced via recall counts as accessed.
+    accessed_ids = [
+        r["record_id"] for r in candidates
+        if isinstance(r, dict) and r.get("record_id")
+    ]
+    if accessed_ids and callable(getattr(db, "record_access", None)):
+        try:
+            db.record_access(accessed_ids)
+        except Exception:
+            pass
+
     if dropped_out_of_mode:
         packet["warnings"].append("tier_narrowing_dropped_out_of_mode")
 
@@ -1173,6 +1184,152 @@ class BraincaseWriteCandidateProxyToolExecutor(_BraincaseBaseExecutor):
         args = self._parse_args(call)
         result = braincase_write_candidate_tool(db, args)
         return self._make_result(call, result)
+
+
+# ---------------------------------------------------------------------------
+# Memory management tool executors (bc_promote, bc_retire, bc_merge,
+# bc_update_tier, bc_tag) — used by the BrainCase memory manager LLM.
+#
+# These are NOT exposed to Codex directly. They are called by the
+# memory management orchestrator when it dispatches the LLM's tool calls.
+# All writes go through existing DB primitives; revision log always updated.
+# ---------------------------------------------------------------------------
+
+def _bc_result(ok: bool, record_id: str, operation: str, detail: str = "") -> dict:
+    return {"ok": ok, "record_id": record_id, "operation": operation, "detail": detail}
+
+
+def bc_promote_tool(db: "BrainCaseDB", args: dict) -> dict:
+    """Promote a candidate record to confirmed status.
+
+    args: {record_id: str, reason: str}
+    """
+    record_id = str(args.get("record_id") or "").strip()
+    reason = str(args.get("reason") or "memory_manager_promote").strip()
+    if not record_id:
+        return _bc_result(False, "", "promote", "record_id required")
+    ok = db.promote_state_record(
+        record_id,
+        new_status="active",
+        new_visibility="operator",
+        reason=reason,
+    )
+    return _bc_result(ok, record_id, "promote", db.last_error or "")
+
+
+def bc_retire_tool(db: "BrainCaseDB", args: dict) -> dict:
+    """Retire a record (temporal Frieza — mark as retired, never delete).
+
+    args: {record_id: str, reason: str}
+    """
+    record_id = str(args.get("record_id") or "").strip()
+    reason = str(args.get("reason") or "memory_manager_retire").strip()
+    if not record_id:
+        return _bc_result(False, "", "retire", "record_id required")
+    ok = db.retire_state_record(record_id, reason=reason)
+    return _bc_result(ok, record_id, "retire", db.last_error or "")
+
+
+def bc_update_tier_tool(db: "BrainCaseDB", args: dict) -> dict:
+    """Move a record between short/medium/long-term tiers.
+
+    args: {record_id: str, tier: str, reason: str}
+    """
+    record_id = str(args.get("record_id") or "").strip()
+    tier = str(args.get("tier") or "").strip()
+    reason = str(args.get("reason") or "memory_manager_tier_update").strip()
+    valid_tiers = {"short_term", "medium_term", "long_term"}
+    if not record_id:
+        return _bc_result(False, "", "update_tier", "record_id required")
+    if tier not in valid_tiers:
+        return _bc_result(False, record_id, "update_tier",
+                          f"tier must be one of {sorted(valid_tiers)}")
+    ok = db.patch_state_record(record_id, tier=tier, reason=reason)
+    return _bc_result(ok, record_id, "update_tier", db.last_error or "")
+
+
+def bc_tag_tool(db: "BrainCaseDB", args: dict) -> dict:
+    """Add or replace retrieval tags on a record.
+
+    args: {record_id: str, tags: list[str], reason: str}
+    """
+    record_id = str(args.get("record_id") or "").strip()
+    tags = args.get("tags")
+    reason = str(args.get("reason") or "memory_manager_tag").strip()
+    if not record_id:
+        return _bc_result(False, "", "tag", "record_id required")
+    if not isinstance(tags, list):
+        return _bc_result(False, record_id, "tag", "tags must be a list of strings")
+    tags = [str(t) for t in tags if t][:20]
+    ok = db.patch_state_record(record_id, tags=tags, reason=reason)
+    return _bc_result(ok, record_id, "tag", db.last_error or "")
+
+
+def bc_merge_tool(db: "BrainCaseDB", args: dict) -> dict:
+    """Merge two or more overlapping records into one.
+
+    Supersedes all source records with the new merged record.
+    args: {
+      source_ids: list[str],
+      claim: str,
+      summary: str,
+      tier: str,
+      retention: str,
+      reason: str
+    }
+    """
+    source_ids = [str(i) for i in (args.get("source_ids") or []) if i]
+    claim = str(args.get("claim") or "").strip()
+    summary = str(args.get("summary") or "").strip()
+    tier = str(args.get("tier") or "medium_term").strip()
+    retention = str(args.get("retention") or "project").strip()
+    reason = str(args.get("reason") or "memory_manager_merge").strip()
+
+    if len(source_ids) < 2:
+        return _bc_result(False, "", "merge", "source_ids must contain ≥2 record_ids")
+    if not claim:
+        return _bc_result(False, "", "merge", "claim required")
+    if not summary:
+        return _bc_result(False, "", "merge", "summary required")
+
+    # Fetch the first source record to use as a base for the merged record.
+    base = db.get_state_record(source_ids[0])
+    if base is None:
+        return _bc_result(False, source_ids[0], "merge", "source record not found")
+
+    import uuid as _uuid, time as _time
+    now_ms = int(_time.time() * 1000)
+    new_id = f"bc_merge_{_uuid.uuid4().hex[:12]}"
+    new_record = dict(base)
+    new_record["record_id"] = new_id
+    new_record["claim"] = claim
+    new_record["summary"] = summary
+    new_record["tier"] = tier
+    new_record["retention"] = retention
+    new_record["status"] = "active"
+    new_record["visibility"] = "operator"
+    new_record["created_at_ms"] = now_ms
+    new_record["updated_at_ms"] = now_ms
+    new_record["last_accessed_at_ms"] = None
+    new_record["access_count"] = 0
+    new_record["supersedes"] = None
+    new_record["superseded_by"] = None
+
+    # Supersede each source with the new merged record.
+    results = []
+    for sid in source_ids:
+        ok = db.supersede_state_record(sid, new_record, reason=reason)
+        results.append((sid, ok))
+    succeeded = [sid for sid, ok in results if ok]
+    failed = [sid for sid, ok in results if not ok]
+    return {
+        "ok": len(failed) == 0,
+        "operation": "merge",
+        "new_record_id": new_id if succeeded else "",
+        "superseded": succeeded,
+        "failed": failed,
+        "detail": db.last_error or "",
+    }
 
 
 def make_braincase_tool_executors(

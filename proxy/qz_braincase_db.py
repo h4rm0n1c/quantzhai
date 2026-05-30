@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-QZ_BRAINCASE_DB_SCHEMA_VERSION = 3
+QZ_BRAINCASE_DB_SCHEMA_VERSION = 4
 QZ_STATE_DB_ENABLED_ENV = "QZ_STATE_DB_ENABLED"
 QZ_STATE_DB_PATH_ENV = "QZ_STATE_DB_PATH"
 
@@ -315,6 +315,29 @@ class BrainCaseDB:
             self.last_error = f"{type(exc).__name__}: {exc}"
             return False
 
+    def record_access(self, record_ids: list[str]) -> None:
+        """Update last_accessed_at_ms and increment access_count for each record.
+
+        Called by render and recall tools after fetching records for the model.
+        Best-effort: never raises, silently no-ops on disabled DB or error.
+        """
+        if not record_ids or not self.enabled or self._conn is None or not self.available:
+            return
+        now_ms = int(time.time() * 1000)
+        try:
+            self._conn.executemany(
+                """
+                UPDATE qz_braincase_state_records
+                SET last_accessed_at_ms = ?,
+                    access_count = COALESCE(access_count, 0) + 1
+                WHERE record_id = ?
+                """,
+                [(now_ms, rid) for rid in record_ids if isinstance(rid, str)],
+            )
+            self._conn.commit()
+        except Exception as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
+
     def get_state_record(self, record_id: str) -> dict | None:
         """Fetch a StateRecord by ID. Returns None on disabled DB, not found, or error."""
         if not self.enabled:
@@ -510,6 +533,66 @@ class BrainCaseDB:
                 WHERE record_id = ?
                 """,
                 (new_status, new_visibility, ts, record_id),
+            )
+            self._conn.commit()
+            self.last_error = None
+            return True
+        except Exception as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            return False
+
+    def patch_state_record(
+        self,
+        record_id: str,
+        *,
+        reason: str,
+        tier: str | None = None,
+        importance: float | None = None,
+        tags: list[str] | None = None,
+        now_ms: int | None = None,
+    ) -> bool:
+        """Update mutable fields (tier, importance, tags) on a StateRecord.
+
+        All changes are recorded in the revision log.
+        Returns False on disabled DB, record not found, or nothing to patch.
+        """
+        if not self.enabled:
+            return False
+        if self._conn is None or not self.available:
+            if self._conn is None and not self.init():
+                return False
+        if tier is None and importance is None and tags is None:
+            return False
+        try:
+            assert self._conn is not None
+            ts = now_ms if now_ms is not None else int(time.time() * 1000)
+            old = self.get_state_record(record_id)
+            if old is None:
+                self.last_error = f"Record not found: {record_id}"
+                return False
+            prev_json = json.dumps(old)
+            sets: list[str] = ["updated_at_ms = ?"]
+            params: list = [ts]
+            new = dict(old, updated_at_ms=ts)
+            if tier is not None:
+                sets.append("tier = ?"); params.append(tier); new["tier"] = tier
+            if importance is not None:
+                sets.append("importance = ?"); params.append(float(importance)); new["importance"] = importance
+            if tags is not None:
+                tags_json = json.dumps(tags)
+                sets.append("tags_json = ?"); params.append(tags_json); new["tags"] = tags
+            params.append(record_id)
+            self._conn.execute(
+                f"UPDATE qz_braincase_state_records SET {', '.join(sets)} WHERE record_id = ?",
+                params,
+            )
+            self._conn.execute(
+                """
+                INSERT INTO qz_braincase_record_revisions(
+                    record_id, operation, previous_record_json, new_record_json, reason, created_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (record_id, "patch", prev_json, json.dumps(new), reason, ts),
             )
             self._conn.commit()
             self.last_error = None
@@ -907,6 +990,18 @@ class BrainCaseDB:
             )
             """
         )
+        self._conn.commit()
+        # Schema v4 migration: temporal access tracking columns.
+        # ALTER TABLE IF NOT EXISTS is not supported in older SQLite; catch
+        # OperationalError if the column already exists (idempotent migration).
+        for _col_sql in [
+            "ALTER TABLE qz_braincase_state_records ADD COLUMN last_accessed_at_ms INTEGER",
+            "ALTER TABLE qz_braincase_state_records ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0",
+        ]:
+            try:
+                self._conn.execute(_col_sql)
+            except Exception:
+                pass  # column already exists — safe to ignore
         self._conn.commit()
         # Slice 3: optional FTS5 virtual table for claim/summary/tags search.
         # Degrades gracefully if FTS5 is not available in this SQLite build.
