@@ -1410,6 +1410,181 @@ def bc_search_tool(db: "BrainCaseDB", args: dict) -> dict:
     return {"ok": True, "records": records, "count": len(records)}
 
 
+def bc_challenge_tool(db: "BrainCaseDB", args: dict) -> dict:
+    """Adversarial snap-judgement review of a pending memory action.
+
+    Run before committing bc_promote, bc_retire, bc_merge, bc_update_tier.
+    Argues AGAINST the pending action — surfaces the strongest counterargument.
+    Never blocks; the manager decides whether to overcome the challenge or concede.
+
+    args: {
+      action: "retire" | "promote" | "merge" | "update_tier",
+      record_id: str,          # primary record (or first source for merge)
+      reason: str,             # manager's stated reason for the action
+      target_tier?: str,       # for update_tier: the intended new tier
+      source_ids?: list[str],  # for merge: all source record ids
+    }
+
+    Returns:
+      ok, action, record_id, warnings[], challenge, recommendation, heuristics
+      recommendation: "proceed" | "review" | "reconsider"
+    """
+    try:
+        try:
+            from .qz_braincase_metrics import compute_record_metrics
+        except ImportError:
+            from qz_braincase_metrics import compute_record_metrics
+    except Exception as exc:
+        return {"ok": False, "error": f"import failed: {exc}"}
+
+    if not isinstance(args, dict):
+        args = {}
+
+    action   = str(args.get("action") or "").strip().lower()
+    record_id = str(args.get("record_id") or "").strip()
+    reason   = str(args.get("reason") or "").strip()
+    now_ms   = int(time.time() * 1000)
+
+    if not action or not record_id:
+        return {"ok": False, "error": "action and record_id required"}
+
+    # Fetch the primary record
+    rec = db.get_state_record(record_id) if record_id else None
+    warnings: list[str] = []
+    heuristics: dict = {}
+
+    if rec is None:
+        return {"ok": False, "error": f"record not found: {record_id}",
+                "warnings": [], "challenge": "", "recommendation": "proceed"}
+
+    metrics = compute_record_metrics(rec, now_ms)
+    surv    = metrics.get("survival", {})
+    l1      = surv.get("l1", 0)
+    l2      = surv.get("l2", 0)
+    score   = surv.get("score", 0)
+    atoms   = surv.get("atoms", [])
+    t_class = metrics.get("temporal_class", "neutral")
+    ret_act = metrics.get("retention_action", "keep")
+    claim   = str(rec.get("claim") or "")
+
+    heuristics["survival_score"] = score
+    heuristics["temporal_class"] = t_class
+    heuristics["l1_atoms"] = atoms
+    heuristics["l2_hits"] = l2
+
+    # --- Action-specific checks ---
+
+    if action == "retire":
+        # Challenge: is there any reason this shouldn't be retired?
+        if l2 >= 1:
+            warnings.append(
+                f"Record has {l2} L2 semantic signal(s) — retiring may lose "
+                f"constraint/causal knowledge that is not derivable from context."
+            )
+        if l1 >= 2:
+            warnings.append(
+                f"Record has {l1} L1 atoms ({atoms[:3]}) — specific irreproducible "
+                f"values. Once retired, these cannot be recovered."
+            )
+        # Uniqueness check: search for similar content
+        try:
+            query_terms = " ".join(atoms[:3]) if atoms else claim[:40]
+            similar = db.search_state_records(query_terms, limit=5) or []
+            active_similar = [r for r in similar
+                              if r.get("record_id") != record_id
+                              and r.get("status") not in ("retired", "superseded")]
+            heuristics["similar_active_count"] = len(active_similar)
+            if not active_similar and score >= 1:
+                warnings.append(
+                    "No similar active records found — this knowledge appears unique. "
+                    "Retiring it leaves a gap with no replacement."
+                )
+        except Exception:
+            pass
+
+    elif action == "promote":
+        # Challenge: is there already something covering this?
+        try:
+            query_terms = " ".join(atoms[:3]) if atoms else claim[:40]
+            similar = db.search_state_records(query_terms, limit=5) or []
+            active_confirmed = [r for r in similar
+                                if r.get("record_id") != record_id
+                                and r.get("status") == "active"]
+            heuristics["active_duplicates"] = len(active_confirmed)
+            if active_confirmed:
+                dup = active_confirmed[0]
+                warnings.append(
+                    f"Similar active record already exists: [{dup.get('record_id')}] "
+                    f"'{str(dup.get('claim',''))[:60]}'. Promoting this may create redundancy."
+                )
+        except Exception:
+            pass
+        if score == 0:
+            warnings.append(
+                "Record has no L1 atoms or L2 signals — low survival score. "
+                "Consider whether this claim is durable enough to confirm."
+            )
+
+    elif action == "merge":
+        # Challenge: are the source records actually compatible for merging?
+        source_ids = [str(i) for i in (args.get("source_ids") or []) if i]
+        if len(source_ids) < 2:
+            source_ids = [record_id]
+        source_atoms: set = set(atoms)
+        overlap_count = 0
+        for sid in source_ids[1:]:
+            src_rec = db.get_state_record(sid)
+            if src_rec:
+                src_m = compute_record_metrics(src_rec, now_ms)
+                src_atoms = set(src_m.get("survival", {}).get("atoms", []))
+                overlap = source_atoms & src_atoms
+                overlap_count += len(overlap)
+        heuristics["atom_overlap"] = overlap_count
+        if overlap_count == 0 and len(source_ids) > 1:
+            warnings.append(
+                "No L1 atom overlap detected between source records — they may not "
+                "be the same concept. Merging could conflate distinct knowledge."
+            )
+
+    elif action == "update_tier":
+        target_tier = str(args.get("target_tier") or "").strip()
+        current_tier = str(rec.get("tier") or "")
+        tier_order = {"working_state": 0, "session_state": 1, "project_state": 2,
+                      "semantic_memory": 3, "procedural_memory": 4, "episodic_memory": 3,
+                      "artifact_memory": 2, "preference_constraint_memory": 4}
+        cur_rank = tier_order.get(current_tier, 2)
+        tgt_rank = tier_order.get(target_tier, 2)
+        heuristics["tier_direction"] = "demotion" if tgt_rank < cur_rank else "promotion"
+        if tgt_rank < cur_rank:
+            if metrics.get("access_count", 0) > 0:
+                warnings.append(
+                    f"Demoting from {current_tier!r} to {target_tier!r} but "
+                    f"access_count={metrics.get('access_count')} — record has been "
+                    "retrieved before. Demotion may reduce future recall quality."
+                )
+
+    # Build challenge text
+    if warnings:
+        challenge = (
+            f"Challenging {action} of [{record_id}] (reason: {reason!r}):\n"
+            + "\n".join(f"  • {w}" for w in warnings)
+        )
+        recommendation = "reconsider" if len(warnings) >= 2 else "review"
+    else:
+        challenge = f"No issues found with {action} of [{record_id}]. Proceed."
+        recommendation = "proceed"
+
+    return {
+        "ok": True,
+        "action": action,
+        "record_id": record_id,
+        "warnings": warnings,
+        "challenge": challenge,
+        "recommendation": recommendation,
+        "heuristics": heuristics,
+    }
+
+
 def bc_promote_tool(db: "BrainCaseDB", args: dict) -> dict:
     """Promote a candidate record to confirmed status.
 
@@ -1576,7 +1751,7 @@ def braincase_impaction_tool(db: "BrainCaseDB", args: dict) -> dict:
     record_id = f"bc_imp_{_uuid.uuid4().hex[:12]}"
     record = {
         "record_id": record_id,
-        "record_schema": "qz.braincase.state_record.v1",
+        "schema": "qz.braincase.state_record.v1",
         "memory_domain": memory_domain,
         "tier": "session_state",       # memory manager will re-tier
         "record_type": "project_state",  # generic; manager will refine

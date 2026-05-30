@@ -130,6 +130,7 @@ def dispatch_memory_tool_calls(
                 bc_merge_tool,
                 bc_read_tool,
                 bc_search_tool,
+                bc_challenge_tool,
             )
         except ImportError:
             from qz_braincase_tools import (
@@ -140,6 +141,7 @@ def dispatch_memory_tool_calls(
                 bc_merge_tool,
                 bc_read_tool,
                 bc_search_tool,
+                bc_challenge_tool,
             )
     except Exception as exc:
         return [{"ok": False, "error": f"import failed: {exc}"}]
@@ -152,6 +154,7 @@ def dispatch_memory_tool_calls(
         "bc_merge":       bc_merge_tool,
         "bc_read":        bc_read_tool,
         "bc_search":      bc_search_tool,
+        "bc_challenge":   bc_challenge_tool,  # adversarial review — no writes
     }
 
     results = []
