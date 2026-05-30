@@ -213,15 +213,15 @@ class HarnessPolicyTests(unittest.TestCase):
         policy = get_braincase_harness_policy(env=_DISABLED_ENV)
         self.assertIsNone(policy)
 
-    def test_policy_mentions_render(self):
-        """Policy text should mention braincase.render."""
+    def test_policy_mentions_impaction(self):
+        """Limbicore policy mentions braincase.impaction."""
         policy = get_braincase_harness_policy(env=_ENABLED_ENV)
-        self.assertIn("braincase.render", policy)
+        self.assertIn("braincase.impaction", policy)
 
-    def test_policy_mentions_recall(self):
-        """Policy text should mention braincase.recall (now exposed in Slice G)."""
+    def test_policy_mentions_percolate(self):
+        """Limbicore policy mentions braincase.percolate."""
         policy = get_braincase_harness_policy(env=_ENABLED_ENV)
-        self.assertIn("braincase.recall", policy)
+        self.assertIn("braincase.percolate", policy)
 
     def test_policy_mentions_braincase_tools(self):
         """Policy text should mention the primary session tools."""
@@ -229,10 +229,11 @@ class HarnessPolicyTests(unittest.TestCase):
         # Limbicore is on by default when TOOLS_ENABLED is set
         self.assertIn("braincase", policy.lower())
 
-    def test_policy_mentions_memory_domain_requirement(self):
-        """Policy should state that memory_domain must be supplied explicitly."""
+    def test_policy_is_nonempty_string(self):
+        """Policy should return a non-empty string when enabled."""
         policy = get_braincase_harness_policy(env=_ENABLED_ENV)
-        self.assertIn("memory_domain", policy)
+        self.assertIsInstance(policy, str)
+        self.assertGreater(len(policy), 0)
 
     def test_policy_no_broad_dump_warning(self):
         """Policy should warn against using it as a broad memory dump."""
@@ -1334,33 +1335,23 @@ class RecallBodyInjectionTests(unittest.TestCase):
 
 class UpdatedHarnessPolicyTests(unittest.TestCase):
 
-    def test_policy_mentions_recall_modes(self):
+    def test_policy_mentions_primary_tools(self):
+        # Limbicore is on by default when TOOLS_ENABLED is set.
+        # Policy shows only impaction + percolate — recall and render are
+        # operator tools intentionally omitted to keep the passive two-tool interface clean.
         policy = get_braincase_harness_policy(env=_ENABLED_ENV)
         lower = policy.lower()
-        for mode in ("task", "project", "procedure", "artifact", "open_loops"):
-            self.assertIn(mode, lower, f"Policy should mention recall_mode {mode!r}")
+        self.assertIn("impaction", lower)
+        self.assertIn("percolate", lower)
 
-    def test_policy_warns_no_broad_dump(self):
-        policy = get_braincase_harness_policy(env=_ENABLED_ENV)
-        lower = policy.lower()
-        self.assertTrue("broad" in lower or "dump" in lower)
-
-    def test_policy_mentions_braincase_tools(self):
-        # With QZ_BRAINCASE_TOOLS_ENABLED, limbicore is also on by default,
-        # so the policy describes impaction + percolate (the primary session
-        # interface) plus recall + render (operator/harness tools).
+    def test_policy_frames_passive_use(self):
+        # Policy should frame use as passive/natural (like web search),
+        # not as a task to explicitly perform.
         policy = get_braincase_harness_policy(env=_ENABLED_ENV)
         lower = policy.lower()
         self.assertIn("braincase", lower)
-        # All four main tools should be mentioned
-        for tool in ("impaction", "percolate", "recall", "render"):
-            self.assertIn(tool, lower)
-
-    def test_policy_tells_when_to_use_recall_vs_render(self):
-        policy = get_braincase_harness_policy(env=_ENABLED_ENV)
-        # Both tools should be mentioned with guidance
-        self.assertIn("braincase.recall", policy)
-        self.assertIn("braincase.render", policy)
+        # "every turn" caution should be present
+        self.assertIn("every turn", lower)
 
 
 # =============================================================================

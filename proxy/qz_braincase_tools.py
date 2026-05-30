@@ -643,15 +643,16 @@ def get_braincase_tool_definitions(env: dict | None = None) -> list[dict]:
 def get_braincase_harness_policy(env: dict | None = None) -> str | None:
     """Return the BrainCase harness policy text based on enabled flags."""
     if is_braincase_limbicore_enabled(env):
-        base = (
+        # Primary session interface: impaction + percolate only.
+        # recall and render are operator/harness tools and intentionally
+        # omitted here — they would dilute the two-tool passive interface.
+        return (
             "## BrainCase Memory\n\n"
             "You have access to persistent cross-session memory via braincase tools.\n"
-            "Use it when relevant — not on every turn.\n\n"
+            "Reach for them the same way you reach for web search — when they'd help,\n"
+            "not on every turn.\n\n"
             + _HARNESS_LIMBICORE_SECTION
         )
-        if is_braincase_tools_enabled(env):
-            base += "\n\n" + _HARNESS_READ_SECTION
-        return base
     if not is_braincase_tools_enabled(env):
         return None
     if is_braincase_write_candidate_enabled(env):
