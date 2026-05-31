@@ -3,6 +3,29 @@
 `scripts/qz-benchmark` runs fixed prompts through `codex exec --json` and writes
 repeatable benchmark artifacts under `var/benchmarks/`.
 
+`scripts/qz-bench-models` runs the same prompts across multiple models, switching
+models one at a time via `/qz/model/select-and-restart`.
+
+## Pre-flight: GPU contention check
+
+Before running any benchmark, verify no non-QuantZhai processes are using the GPU:
+
+```bash
+nvidia-smi --query-compute-apps=pid,process_name --format=csv,noheader
+ps aux | grep -E "llama|Xorg|wine|Xvfb"
+```
+
+Competing GPU processes (native llama-server, Xorg, wine, NX remote desktop) will
+cause OOM, false model load failures, and skewed timing results. The benchmark
+script (`qz-bench-models`) runs this check automatically and warns if conflicts
+are found. Kill them before benchmarking:
+
+```bash
+kill <pid>                          # native llama-server, Xvfb, wine
+sudo kill <pid>                      # Xorg
+sudo /usr/NX/bin/nxserver --stop    # NX remote desktop
+```
+
 Default run:
 
 ```bash

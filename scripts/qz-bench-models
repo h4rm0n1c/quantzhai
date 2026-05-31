@@ -78,6 +78,44 @@ fi
 # qz-env defaults to off; we override unconditionally.
 export QZ_CAPTURE_MODE=latest
 
+# Pre-flight: check for competing GPU processes that would skew results or
+# cause OOM. Anything using the GPU outside QuantZhai (native llama-server,
+# Xorg, wine, NX, etc.) must be stopped first.
+_check_gpu_conflicts() {
+  local _conflicts
+  _conflicts=$(python3 -c "
+import subprocess, sys
+try:
+    out = subprocess.run(['nvidia-smi', '--query-compute-apps=pid,process_name', '--format=csv,noheader'],
+        capture_output=True, text=True, timeout=5).stdout.strip()
+    if out:
+        lines = [l.strip() for l in out.split(chr(10)) if l.strip()]
+        # Filter out our own docker container and quantzhai proxy
+        ours = {'quantzhai_proxy.py', 'llama-server'}
+        others = []
+        for l in lines:
+            parts = l.split(', ', 1)
+            if len(parts) == 2:
+                name = parts[1].strip().lower()
+                if not any(o in name for o in ours):
+                    others.append(l)
+        if others:
+            print('GPU processes found:')
+            for o in others:
+                print(f'  {o}')
+            sys.exit(1)
+except FileNotFoundError:
+    pass  # nvidia-smi not available
+")
+  if [ $? -ne 0 ]; then
+    printf 'WARNING: Non-QuantZhai GPU processes detected!\n' >&2
+    printf '%s\n' "$_conflicts" >&2
+    printf 'Kill them first or results will be unreliable.\n' >&2
+    printf '  nvidia-smi | grep python\n  ps aux | grep -E \"llama|Xorg|wine\"\n' >&2
+  fi
+}
+_check_gpu_conflicts
+
 proxy_url="http://$QZ_PROXY_HOST:$QZ_PROXY_PORT"
 if ! curl -fsS "$proxy_url/health" >/dev/null 2>&1; then
   printf 'QuantZhai proxy is not healthy at %s\n' "$proxy_url" >&2
