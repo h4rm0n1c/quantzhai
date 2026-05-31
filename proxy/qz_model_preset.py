@@ -16,12 +16,18 @@ _ARCH_OVERRIDES: Dict[str, Dict[str, str]] = {
     # Gemma 4 doesn't support --reasoning on or --reasoning-format deepseek.
     "gemma4": {
         "reasoning": "off",
-        "reasoning-format": "",
+        "reasoning-format": "auto",
     },
-    # Mistral 3 (Devstral) — same issues as Gemma 4.
+    # Mistral 3 (Devstral) — same reasoning issues as Gemma 4, plus its layer
+    # sizes don't split evenly across our dual-GPU tensor-split (10,16).
+    # Putting it entirely on GPU 1 (V100, 16GB) avoids CUDA0 allocation errors.
     "mistral3": {
         "reasoning": "off",
-        "reasoning-format": "",
+        "reasoning-format": "auto",
+        "cache-type-k": "f16",
+        "cache-type-v": "f16",
+        "tensor-split": "0,26",
+        "ctx-size": "65536",
     },
     # Qwen3.6 MoE with MTP heads: enable self-speculative decoding.
     # Detected by filename containing "MTP" or "APEX" — not architecture alone
