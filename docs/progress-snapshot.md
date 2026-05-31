@@ -1,6 +1,6 @@
 # QuantZhai Progress Snapshot
 
-Last updated: 2026-05-30 (profile alias routing, hold-open 503, VRAM backend metrics, SSE visibility, async tool executor).
+Last updated: 2026-05-31 (BrainCase memory manager, deterministic intercept layer, system prompt v2).
 
 See `docs/current-stocktake.md` for the full point-in-time state summary.
 
@@ -9,41 +9,37 @@ we overall?" without rereading every roadmap.
 
 ## Overall
 
-Current estimate: **98% through stabilisation for the local Codex + Qwen goal**.
+Current estimate: **99% through stabilisation for the local Codex + Qwen goal**.
 
-The 2026-05-30 session delivered:
+The 2026-05-31 session delivered:
 
-Router-mode contract violations all closed: profile alias routing fixed (symlinks
-load by real GGUF so load-name and forward-name match), hold-open 503 eliminated,
-dual-load prevention complete, same-GGUF switches instant (<50ms).
+**BrainCase memory manager (#82)** — full Limbicore session stack now live:
+- Session interface: `braincase.impaction` (LLM-initiated claim ingestion) and `braincase.percolate` (FTS search + render).
+- Memory manager orchestrator: compact-for-context → temporal metrics → LLM call → dispatch (bc_promote/bc_retire/bc_update_tier/bc_tag/bc_merge).
+- Management pressure: `_should_inject_context_pressure_signal()` tracks token headroom; auto-triggers memory manager when compaction fires or pressure threshold crossed.
+- `braincase.powernap` (intra-session lightweight recall) injected into system prompt when pressure is active.
+- `bc_read` + `bc_search` for manager content review; `bc_challenge` for adversarial snap-judgement review before writes.
+- BrainCase always on (gate removed); `memory_domain` auto-resolved from model config; `limbicore` on by default.
+- End-to-end tests fixed for tier, visibility, two-turn, and FTS fallback paths. 
 
-VRAM backend metrics (#52 closed): TurboQuant C++ patch adds per-device
-{model_bytes, kv_bytes, compute_bytes, free_bytes} to /v1/models via
-llama_get_memory_breakdown(). Proxy vram snapshot now uses these as backend-confirmed
-sources instead of nvidia-smi calibration for MODEL_RUNTIME and KV_ALLOC.
+**Deterministic intercept layer (#83)** — proxy saves LLM turns on known-fixable failures:
+- Sandbox escalation: exec sandbox denial → `SandboxEscalationManager` two-phase intercept, model receives success + plain-English note.
+- Network proxy escalation: network denial blocks handled by the same escalation manager.
+- E-1 fix: exec_command `command` field → `cmd` field correction before the call reaches the sandbox.
+- AP-1/AP-1b: apply_patch empty diff / empty trailing hunk → precise coercion error returned immediately.
+- AP-4: apply_patch context mismatch → advisory injection via `qz_native_tool_output.py` CLASSIFIERS; halved context-mismatch retries in live session.
+- `CorrectionTracker`: silent coercions inject a plain-English note into the next tool result.
+- apply_patch delta_limit = -1 (unlimited); AP-2/AP-3 probe-only (zero live occurrences).
 
-SSE visibility: web_search_call output_item.added now includes the action/query field
-so Codex shows "Searching the web: [exact query]" immediately. Working-status
-synthetic reasoning items injected before function_call suppression ("Applying
-changes...", "Running command...", etc.). "Loading [model]..." during hold-open.
+**System prompt v2** — HSM-research-informed additions: working memory framing, tool discipline, self-correction patterns.
 
-Async proxy-local tool executor: execute() runs in a worker thread; main loop sends
-SSE keepalives every 1.5s during blocking I/O. _chunk_lock serialises concurrent
-wfile writes. Python GIL releases during urllib socket I/O — real parallelism.
+The 2026-05-30 session delivered: router-mode contract violations all closed (profile alias
+routing, hold-open 503 elimination, dual-load prevention, same-GGUF instant switch); VRAM
+backend metrics live (#52 closed); SSE visibility and async proxy-local tool executor.
 
-"User sees a pause, not an error" principle codified in AGENTS.md.
-
-The 2026-05-29 session delivered: router mode fully live (seamless in-session model
-switching confirmed end-to-end), two GPU/crash reliability fixes (issues #79 and #80),
-LLM v3 compaction fixed, survival scorer generalised across 10-repo corpus, compaction
-schema redesigned for better LLM-guided output, MTP draft speculation working on
-IQ4_XS, and tensor split corrected to 10,16.
-
-The 2026-05-20 run closed: #37 (stream seam extraction, Slices 1–2J), #56 (generated
-artifact migration, A1/A2/A3 under var/generated/). Major structural work is now done.
-
-The remaining risk is the state substrate: SQLite operational store has not been
-designed or implemented. This is the next architectural decision.
+The 2026-05-29 session delivered: router mode fully live, GPU/crash reliability fixes
+(#79 and #80), LLM v3 compaction, survival scorer generalised to 10-repo corpus, MTP
+draft speculation confirmed, tensor split corrected to 10,16.
 
 Control sheet:
 
@@ -55,20 +51,21 @@ docs/current-stocktake.md
 Current strategic direction:
 
 ```text
-P1 #51/#46 Slice A-design — operational store boundary + session identity (NEXT)
+P1 #51/#46 Slice B-impl — create qz_operational_store.py (schema_meta/runtime_events/runtime_facts)
 P2 #39 Search config split — when search work resumes
 P3 Repeated-read v2 — after operational-store session identity is defined
+P4 Issue #82/#83 close-out — both near-complete; AP-2/AP-3 probe-only, operational store next
 ```
 
 Recently closed: #5, #37, #53, #54, #56, #57, #58, #3/#4/#43.
-2615 tests passing. All generated artifacts under var/generated/.
+4266 tests passing.
 
 ## Area estimates
 
 - **Core usable stack:** 99%
   Router mode fully correct: profile alias routing fixed, hold-open 503 eliminated,
   same-GGUF instant switch confirmed (<50ms), real model switch verified (26-45s).
-  4187+ tests pass. GPU detection, runtime crash detection, and compaction all working.
+  4266 tests pass. GPU detection, runtime crash detection, and compaction all working.
   Live smoke (`scripts/qz-live-smoke`) validates the end-to-end path reliably.
 - **Config/model/profile correctness:** 95%
   qz.profiles.v1 is the active format. memory_domain is wired. Profile alias
@@ -77,61 +74,65 @@ Recently closed: #5, #37, #53, #54, #56, #57, #58, #3/#4/#43.
 - **Streaming reliability:** 85%
   #37 stream seam closed. StreamHopState + StreamRunState + 6 pure helpers.
   Remaining side-effect code bounded in place by design.
-- **Tool handling:** 91%
-  Sandbox/tool-failure telemetry landed (Slice 1 escalation, Slice 2 native
-  tool-output classifier, harness guidance). Repeated-read signalling is planned
-  but not yet implemented.
+- **Tool handling:** 96%
+  Deterministic intercept layer live: sandbox escalation, network escalation, E-1 field
+  correction, AP-1/AP-1b coercion, AP-4 advisory, CorrectionTracker. Live-tested and
+  measurably reducing Codex error counts. Repeated-read v2 blocked on SQLite.
 - **Observability/status:** 90%
   VRAM telemetry live in qz-top (#6 closed). Provenance-labelled panel with
   calibrated MODEL_RUNTIME, MODEL_FILE provenance, KV_ALLOC from runtime budget.
-  Recovery system fully operational. Compaction/stream hang watchdog (#40) and
-  backend allocator metrics (#52, upstream-blocked) remain.
+  Recovery system fully operational. Backend allocator metrics (#52, upstream-blocked) remain.
 - **LLM signal system:** 78%
   Reasoning-effort prompts simplified. Compaction bridge delivered and now
   working end-to-end: LLM v3 (anchored summary, survival-weighted) confirmed
-  live; survival scorer generalised to 10-repo corpus (PHP/SQL/web coverage added);
-  schema redesigned — no atom-bucket sections, hints guide LLM contextually.
-  Repeated-read v1 plan is approved; not yet implemented.
-- **State/memory substrate:** 78%
-  BrainCaseDB is the first concrete LimbiCore technology (#53/#54 closed).
-  render/recall/write_candidate tools live; operator review and retention CLI live.
-  Retention policy enforced via operator prune. No automatic ingestion.
-  Remaining: operational-state store (#51/#46 — needs design slice next).
-- **Docs/tests/replay:** 95%
+  live; survival scorer generalised to 10-repo corpus; schema redesigned.
+  Repeated-read v1 done; repeated-read v2 blocked on SQLite.
+- **State/memory substrate:** 88%
+  BrainCaseDB proven (#53/#54 closed). Full Limbicore session stack now live:
+  impaction/percolate session tools, memory manager orchestrator, management pressure
+  auto-trigger, powernap intra-session recall. No automatic ingestion; all writes
+  are explicit tool calls.
+  Remaining: operational-state store (#51/#46 — Slice B-impl next).
+- **Docs/tests/replay:** 97%
   Docs refreshed post-stabilisation. Active task hierarchy and progress snapshot
-  are current. Runtime observability notes describe the live stack smoke and
-  sandbox telemetry paths.
+  are current. Intercept contract and research docs are current.
 - **Packaging/architecture:** 35%
   Unchanged. Split proxy/package/backend adapter work remains later.
 
 ## Current blockers and sequencing
 
-### P1: BrainCase memory tool API
+### P1: BrainCase Limbicore session stack (#82)
 
 Status:
 
 ```text
-Slices A–I.1 complete. #53 CLOSED after close-out audit passed.
-  BrainCaseDB is the first concrete LimbiCore memory substrate, proven in QuantZhai.
-  LimbiCore is the broader umbrella; BrainCaseDB is its first component.
-  Exposed tools: braincase.render, braincase.recall, braincase.write_candidate.
-  Unexposed: braincase.write/update/search/inspect/promote_candidate.
-  Operator CLI: scripts/qz-braincase-review (list/inspect/promote/reject).
-  Smoke: scripts/qz-braincase-smoke (12/12 PASS). 2239 tests passing.
-  #54 retention/lifetime policy — Slices A–D complete. CLOSED after audit.
-  See docs/braincase-memory-tool-api.md and docs/braincase-architecture-landscape-and-scope.md.
+Near-complete. Steps 1–5 all shipped:
+  Step 1-3: DB access tracking, temporal metrics, write executors — done.
+  Session interface: braincase.impaction + braincase.percolate — done.
+  Orchestrator shell + pressure management: management pressure, powernap,
+    post-compaction auto-trigger — done.
+  Memory manager v0 prompt: HSM-informed — done.
+  bc_challenge, bc_read, bc_search: review interface — done.
+  BrainCase always on, memory_domain from model config — done.
+Issue #82 remains open; close after a live session confirms the full path
+works end-to-end without regression.
 ```
 
-Scope:
+### P2: Deterministic intercept (#83)
+
+Status:
 
 ```text
-Tool-mediated memory plane: LLM + harness -> memory tools -> deterministic helpers
--> BrainCaseDB / indexes -> renderers -> scoped model-visible memory packets.
-Do not add automatic ingestion. No request/session/turn logging.
-No model-visible memory by default.
+Core patterns all implemented. Live-tested, error counts measurably reduced.
+  I1 exec sandbox: ✅  I2 JSON fence: ✅  I3 diff headers: ✅
+  I4 coerce paths: ✅  I5 CorrectionTracker: ✅
+  AP-1/AP-1b: ✅  AP-4 advisory: ✅  E-1 field correction: ✅
+  Network proxy blocks: ✅
+  AP-2/AP-3: probe-only; zero live occurrences — no intercept yet.
+Issue #83 remains open for AP-2/AP-3 monitoring.
 ```
 
-### P2: config/var/script cleanup (#5)
+### P3: config/var/script cleanup (#5)
 
 Status:
 
@@ -140,27 +141,21 @@ Safe any time. Good incremental work between larger features.
 Focus: /qz/config/effective coverage, prompt-file warnings, catalog generation.
 ```
 
-### P3: telemetry filter ergonomics
-
-Status:
-
-```text
-Low priority. Implement when the noisy-window problem recurs in practice.
-```
-
 ### P4: operational-state persistence (#51/#46)
 
 Status:
 
 ```text
-Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
+Slice A-design + A.2-correction complete. Slice B-impl: create
+qz_operational_store.py (schema_meta/runtime_events/runtime_facts only).
+BrainCaseDB is NOT the target for operational state.
 ```
 
 ## Immediate next priorities
 
-1. **Docs / contracts audit pass** — router mode migration plan, current-task-hierarchy, and master-stabilisation-plan all need update to reflect 2026-05-29 work.
-2. **Issue #80 P2 follow-up** — `_unload_then_load` needs to surface the crash to model state (`last_load_result = failed`) so it persists across proxy restarts; auto-revert to `last_good` on crash is deferred.
-3. **#46 Slice B-impl** — create `qz_operational_store.py` (schema_meta/runtime_events/runtime_facts only). A-design + A.2-correction complete.
+1. **Live session validation of Limbicore stack** — run a real Codex session with BrainCase always-on; confirm impaction/percolate/powernap work end-to-end without regression. Close #82 if clean.
+2. **#46 Slice B-impl** — create `qz_operational_store.py`. A-design + A.2-correction complete.
+3. **#83 AP-2/AP-3 monitoring** — keep probes live; implement only when live evidence shows frequency warrants it.
 
 ## Remaining big rocks
 
@@ -187,12 +182,14 @@ Deferred. BrainCaseDB is NOT the target. Needs operational-store decision first.
 21. ~~Runtime crash detection (#80)~~ — done (2026-05-29); inventory delta tracking, 120s backoff, actionable messages.
 22. ~~LLM v3 compaction~~ — done (2026-05-29); correct model backend_id, survival scorer generalised, schema redesigned.
 23. ~~MTP draft speculation~~ — done (2026-05-29); models-preset.ini, confirmed on IQ4_XS at 10,16 split.
-24. Streaming reliability — structurally improved; side-effect residual bounded in place by design.
-25. LLM signal system — repeated-read v1 done; repeated-read v2 blocked on SQLite.
-26. Phase 1 SQLite substrate — parked (#2); BrainCaseDB proven but operational store TBD.
-27. qz-write-runtime-state replacement (#46) — OperationalStore Slice B+C (next concrete work).
-28. Recovery/backoff state persistence (#51) — needs reframing; backoff/cooldown persistence NOT wanted.
-29. Split proxy into a conventional Python package — later.
-30. Add backend adapter boundary — later.
-31. Later: MCP/app bridge, search packet mode, redaction, run grouping, rendered
+24. ~~BrainCase Limbicore session stack (#82)~~ — done (2026-05-31); impaction/percolate, orchestrator, management pressure, powernap.
+25. ~~Deterministic intercept layer (#83)~~ — done (2026-05-31); sandbox/network escalation, AP-1/AP-1b/AP-4, E-1, CorrectionTracker.
+26. Streaming reliability — structurally improved; side-effect residual bounded in place by design.
+27. LLM signal system — repeated-read v1 done; repeated-read v2 blocked on SQLite.
+28. Phase 1 SQLite substrate — parked (#2); BrainCaseDB proven but operational store TBD.
+29. qz-write-runtime-state replacement (#46) — OperationalStore Slice B+C (next concrete work).
+30. Recovery/backoff state persistence (#51) — needs reframing; backoff/cooldown persistence NOT wanted.
+31. Split proxy into a conventional Python package — later.
+32. Add backend adapter boundary — later.
+33. Later: MCP/app bridge, search packet mode, redaction, run grouping, rendered
     state packets, roleplay/HSM-specific renderers.

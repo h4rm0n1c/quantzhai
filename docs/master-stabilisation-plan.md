@@ -2,12 +2,18 @@
 
 ## Status
 
+**2026-05-31 update**: BrainCase Limbicore session stack shipped (#82 near-done):
+impaction/percolate session tools, memory manager orchestrator, management pressure
+auto-trigger, braincase.powernap. Deterministic intercept layer shipped (#83
+near-done): sandbox/network escalation, E-1 field correction, AP-1/AP-1b coercion,
+AP-4 advisory, CorrectionTracker. System prompt v2 live. 4266 tests pass.
+Active focus: operational-store Slice B-impl (#46); AP-2/AP-3 probe monitoring.
+
 **2026-05-29 update**: Router mode migration complete. GPU reliability fixes (#79
 load-time CPU fallback, #80 runtime crash detection) shipped. LLM v3 compaction
 working end-to-end. Survival scorer generalised to 10-repo corpus. MTP draft
 speculation confirmed on IQ4_XS. See `docs/router-mode-migration-plan.md` for
-the full completion checklist. Active focus: operational-store substrate (#46)
-and docs/contracts audit pass.
+the full completion checklist.
 
 Open master plan. Phase 1 breakage fixes, telemetry schema base, monitor
 fallback cleanup, concurrent monitor smoke, stream timing telemetry, qz-top

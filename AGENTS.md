@@ -81,11 +81,14 @@ and `docs/proxy-intercept-research.md` for the current implementation and known 
 
 Concrete rules added 2026-05-30/31:
 - exec sandbox denial → `SandboxEscalationManager` two-phase intercept + plain-English note.
+- exec network proxy denial → same escalation manager; network blocks are escalatable.
+- exec_command `command` field → `cmd` field correction (E-1) — pre-execution coerce in `SandboxEscalationManager`, saves a turn.
 - apply_patch outer JSON fence → pre-pass strip in `_parse_apply_patch_arguments`.
 - apply_patch empty diff / empty trailing hunk (AP-1/AP-1b) → coerce() precise error.
 - apply_patch silent corrections → `CorrectionTracker` note in tool result.
 - apply_patch delta_limit = -1 (unlimited) — diffs are file-size-bounded, no runaway risk.
-- AP-4 (context mismatch) advisory → next item, see issue #83.
+- AP-4 (context mismatch) → advisory injection via `CLASSIFIERS` in `qz_native_tool_output.py`; advisory text in `qz_request_router.py:_model_visible_native_advisories()`.
+- AP-2 (unprefixed context lines) and AP-3 (CRLF) → probe-instrumented only; zero live occurrences, no intercept yet.
 
 ## Router Mode
 

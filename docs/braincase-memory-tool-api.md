@@ -1,8 +1,11 @@
 # BrainCase Memory Tool API
 
-Date: 2026-05-15
+Date: 2026-05-15 (design); 2026-05-31 (implementation shipped)
 
-Status: design/doctrine doc. No implementation yet.
+Status: design/doctrine doc + implementation live. Full Limbicore session stack
+shipped as of 2026-05-31. See `docs/progress-snapshot.md §State/memory substrate`
+and `docs/current-task-hierarchy.md §2026-05-31` for what was delivered.
+Core doctrine below is authoritative; implementation details are in the proxy source.
 
 ---
 

@@ -1,7 +1,94 @@
 # QuantZhai Current Task Hierarchy
 
-Date: 2026-05-30
-Status: active control sheet — router mode correct; VRAM metrics live (#52 closed); SSE visibility shipped; async tool executor done; next: operational store design (#51/#46).
+Date: 2026-05-31
+Status: active control sheet — BrainCase Limbicore stack live (#82 near-done); deterministic intercept layer live (#83 near-done); next: operational store Slice B-impl (#46).
+
+## 2026-05-31: BrainCase memory manager + deterministic intercept layer
+
+```text
+COMPLETE — full Limbicore session stack + intercept layer shipped; 4266 tests pass.
+
+BrainCase memory manager (#82):
+
+  Session interface (commits 79124ac, c33d2c6):
+    braincase.impaction — LLM supplies a claim; proxy routes to candidate queue.
+    braincase.percolate — FTS search + render; chainable 2-3 times per turn.
+    Injected into body["tools"] for every /v1/responses when limbicore is on.
+    memory_domain resolved from model config (engineering profiles have it set).
+    limbicore on by default; BrainCase always on (gate removed ae6b388).
+
+  Manager tools (commit b7e46a2):
+    bc_promote_tool, bc_retire_tool, bc_update_tier_tool, bc_tag_tool, bc_merge_tool.
+    Called by orchestrator only — not exposed to session LLM.
+
+  Orchestrator (commits f4eeb48, 01238cc, 4bb6957, ccad811):
+    bc_read + bc_search for content review; bc_challenge adversarial snap-judgement.
+    Memory manager v0 prompt: HSM-research-informed — temporal class framing
+    (saiyan/neutral/frieza), retention_action, dedup rules.
+    Management pressure: _should_inject_context_pressure_signal() triggers
+    manager when token headroom < threshold or compaction just fired.
+    Post-compaction auto-trigger: quantzhai_proxy.py fires manager after compaction.
+    braincase.powernap: intra-session lightweight recall injected into system prompt
+    when management pressure is active.
+
+  Test fixes (commit 7a9f69b):
+    End-to-end BrainCase tests fixed for tier, visibility, two-turn, FTS fallback.
+
+Deterministic intercept layer (#83 commits 6039ed5, f000222, e1d9aff, e7b0a16):
+
+  Sandbox escalation (SandboxEscalationManager):
+    Phase 1: detect sandbox denial patterns in exec_command output.
+    Phase 2: re-emit same command with sandbox_permissions: require_escalated.
+    Rewrite history so model receives success + plain-English note.
+    Extended to network proxy denials (commit e1d9aff): same manager, same phases.
+
+  E-1 field correction (commit e7b0a16):
+    exec_command with field name "command" instead of "cmd" corrected before
+    any tool execution. Pre-execution coerce; saves one full LLM turn.
+    Verified with unit tests; live trigger not reproducible in current env
+    (process boundary limitation — E-1 only fires when model actually generates
+    the wrong field; not observable in synthetic tests past the proxy boundary).
+
+  AP-1 / AP-1b coercion (commit 6039ed5):
+    AP-1: apply_patch with fully-empty diff → precise coercion error.
+    AP-1b: multi-hunk diff with empty trailing hunk → precise error naming
+    the hunk index. Confirmed from live session: 3/6 Codex errors were AP-1b.
+    _find_empty_hunk() helper; 15 tests in ApplyPatchAP1EmptyDiffTests.
+
+  AP-4 advisory (commit f000222):
+    apply_patch context mismatch ("Failed to find expected lines") → advisory:
+    "Re-read the file first with exec cat -n, then build the diff using only
+    lines copied verbatim from that output."
+    Live result: halved context-mismatch errors per session (4→2).
+    Classifier in qz_native_tool_output.py CLASSIFIERS; advisory in
+    qz_request_router.py:_model_visible_native_advisories().
+    11 tests in AP4ContextMismatchClassifierTests.
+
+  CorrectionTracker (commit 6039ed5):
+    Silent coercions inject a plain-English note into the model's next tool result.
+    Model learns what was fixed without seeing proxy internals.
+
+  AP-2 / AP-3 / network E-1 — probe-only:
+    Telemetry instrumented (var/state/intercept-probes.jsonl).
+    Zero live occurrences across all sessions. No intercept implemented yet.
+
+System prompt v2 (commit dcef7e2):
+  HSM-research-informed additions: working memory framing, tool discipline,
+  self-correction patterns, exec escalation guidance.
+  Exec escalation guidance is per-call (not a session-level setting).
+
+Live validation (2026-05-31):
+  - 3 Codex sessions on fd-test (src/exit_codes.rs) — all with active proxy.
+  - AP-1b confirmed: 3 occurrences in session 1; 0 in sessions 2-3.
+  - AP-4 advisory confirmed: error count dropped from 4 to 2 per session.
+  - delta_limit=unlimited confirmed: session 3 had 7 clean apply_patch calls.
+  - AP-2/AP-3/E-1: 0 occurrences across all sessions.
+  - 4266 tests pass.
+
+Open remaining:
+  - #82 OPEN: live session end-to-end validation of full Limbicore path.
+  - #83 OPEN: AP-2/AP-3 probe monitoring; implement if live evidence warrants.
+```
 
 ## 2026-05-30: Profile alias routing, hold-open 503, dual-load prevention
 
@@ -325,10 +412,14 @@ Codex audit SHA: 46f30d02828bd4c52827e5f0482a6f2a982cce5b (unchanged).
 
    Gap                                                                                      │ Issue / status
   ────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────
-   Native advisory Slice C.1 (escalation)                                                  │ #61 OPEN — next
+   BrainCase Limbicore live validation                                                      │ #82 OPEN — near-done; close after live session confirms
+   AP-2/AP-3 probe monitoring; intercept if frequency warrants                              │ #83 OPEN — probe-only; all other patterns implemented
+   Native advisory Slice C.1 (escalation retry advisory)                                   │ #61 OPEN — next
    Native advisory Slice C.2/C.3 (writes/write_stdin, needs live evidence)                 │ #61 OPEN — pending evidence
-   Backend-confirmed VRAM allocator metrics                                │ #52 OPEN — upstream-blocked
-   Survival-weighted compaction RFC                                         │ #8 OPEN — long-term RFC
+   OperationalStore Slice B-impl (qz_operational_store.py)                                 │ #46 OPEN — Slice A-design done, next concrete work
+   qz-compact TUI                                                                           │ #81 OPEN — parked
+   Backend-confirmed VRAM allocator metrics                                                 │ #52 OPEN — upstream-blocked
+   Survival-weighted compaction RFC                                                         │ #8 OPEN — long-term RFC
 
 ```text
 Status: COMPLETE — commits 2bda8ca, 315103f, 76aca3c; 3629 tests pass.
