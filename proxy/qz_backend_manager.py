@@ -521,19 +521,21 @@ class BackendManager:
             "-ctk", self._kv_key,
             "-ctv", self._kv_value,
             "--metrics",
-            "--reasoning-format", "deepseek",
+            # Reasoning format is model-specific; leaving it unset lets the
+            # server auto-detect the format from the GGUF metadata.
+            #"--reasoning-format", "deepseek",
         ]
         if self._spec_default:
             args.append("--spec-default")
+        # Per-model spec overrides: if models-preset.ini exists in the models dir,
+        # pass it to the router so each model section can add e.g. spec-type = draft-mtp
+        # without affecting models that don't have MTP heads.
+        import os as _os
         # Router-side model load timeout: how long the router waits for a child
         # process to load before giving up.  Uses the same env as the proxy's
         # outer timeout but with a larger default (300 vs 120) so the proxy
         # always waits longer than the router.
         args += ["--model-load-timeout", str(_os.environ.get("QZ_ROUTER_LOAD_TIMEOUT", _os.environ.get("QZ_MODEL_LOAD_TIMEOUT", "300")))]
-        # Per-model spec overrides: if models-preset.ini exists in the models dir,
-        # pass it to the router so each model section can add e.g. spec-type = draft-mtp
-        # without affecting models that don't have MTP heads.
-        import os as _os
         _preset_host = _os.path.join(self._model_dir, "models-preset.ini")
         if _os.path.isfile(_preset_host):
             args += ["--models-preset", "/models/models-preset.ini"]

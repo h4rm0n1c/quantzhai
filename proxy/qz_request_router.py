@@ -2404,6 +2404,16 @@ class RequestRouter:
             })
             return
 
+        # Auto-configure models-preset.ini for this model's architecture.
+        # Different model families (gemma4, mistral3, etc.) need different
+        # server flags. The ini is bind-mounted into the router container
+        # and re-read on every model load, so updates take effect immediately.
+        try:
+            from .qz_model_preset import ensure_models_preset
+        except ImportError:
+            from qz_model_preset import ensure_models_preset
+        ensure_models_preset(self.handler)
+
         state_path = self._model_state_path_for_endpoint()
         existing = load_model_state(state_path).state if state_path else None
         runtime_context = entry.get("runtime_context_length")
