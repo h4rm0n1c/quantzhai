@@ -525,6 +525,11 @@ class BackendManager:
         ]
         if self._spec_default:
             args.append("--spec-default")
+        # Router-side model load timeout: how long the router waits for a child
+        # process to load before giving up.  Uses the same env as the proxy's
+        # outer timeout but with a larger default (300 vs 120) so the proxy
+        # always waits longer than the router.
+        args += ["--model-load-timeout", str(_os.environ.get("QZ_ROUTER_LOAD_TIMEOUT", _os.environ.get("QZ_MODEL_LOAD_TIMEOUT", "300")))]
         # Per-model spec overrides: if models-preset.ini exists in the models dir,
         # pass it to the router so each model section can add e.g. spec-type = draft-mtp
         # without affecting models that don't have MTP heads.
