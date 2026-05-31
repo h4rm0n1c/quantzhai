@@ -521,9 +521,7 @@ class BackendManager:
             "-ctk", self._kv_key,
             "-ctv", self._kv_value,
             "--metrics",
-            # Reasoning format is model-specific; leaving it unset lets the
-            # server auto-detect the format from the GGUF metadata.
-            #"--reasoning-format", "deepseek",
+            "--reasoning-format", "deepseek",
         ]
         if self._spec_default:
             args.append("--spec-default")

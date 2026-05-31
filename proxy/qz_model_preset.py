@@ -13,13 +13,15 @@ from typing import Any, Dict, Optional
 # These are appended to the base server args.  Only overrides that differ
 # from the base should be listed — the router merges base + preset.
 _ARCH_OVERRIDES: Dict[str, Dict[str, str]] = {
-    # Gemma 4 doesn't support --reasoning on (crash during model init).
+    # Gemma 4 doesn't support --reasoning on or --reasoning-format deepseek.
     "gemma4": {
         "reasoning": "off",
+        "reasoning-format": "",
     },
-    # Mistral 3 (Devstral) — same issue as Gemma 4 with reasoning.
+    # Mistral 3 (Devstral) — same issues as Gemma 4.
     "mistral3": {
         "reasoning": "off",
+        "reasoning-format": "",
     },
     # Qwen3.6 MoE with MTP heads: enable self-speculative decoding.
     # Detected by filename containing "MTP" or "APEX" — not architecture alone
