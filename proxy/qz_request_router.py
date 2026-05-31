@@ -2730,14 +2730,67 @@ class RequestRouter:
                     active = mgr.get_active_model_ids() if callable(active_getter) else {}
                     if active.get(filename_stem) == "loaded" or active.get(filename) == "loaded":
                         return entry, "model already loaded"
-                    # Unload all currently loaded models before loading the new one.
+                    # Unload all currently active models — including mid-load ones
+                    # that are still in 'loading' state — before loading the new one.
                     # QuantZhai supports one model at a time (single-GPU VRAM budget).
-                    if callable(getattr(mgr, "get_loaded_model_ids", None)) and callable(getattr(mgr, "unload_model_http", None)):
-                        for mid in mgr.get_loaded_model_ids():
-                            mgr.unload_model_http(mid)
+                    # Use get_active_model_ids (loaded OR loading) not get_loaded_model_ids
+                    # (loaded only), otherwise a model mid-load is missed and both end up
+                    # in VRAM simultaneously causing OOM.
+                    # Unload all currently active models — including mid-load ones.
+                    # MUST wait for unload to complete before loading, or both models
+                    # end up in VRAM simultaneously (OOM). Abort if unload fails.
+                    if callable(getattr(mgr, "get_active_model_ids", None)) and callable(getattr(mgr, "unload_model_http", None)):
+                        unload_targets = set()
+                        for _ in range(3):  # retry loop: router sometimes ignores first unload
+                            _active = mgr.get_active_model_ids()
+                            _new_targets = {
+                                mid for mid, st in _active.items()
+                                if mid != filename_stem
+                            }
+                            unload_targets.update(_new_targets)
+                            if not _new_targets:
+                                break  # nothing to unload
+                            for mid in _new_targets:
+                                result = mgr.unload_model_http(mid)
+                                if not result.get("ok"):
+                                    raise RuntimeError(
+                                        f"failed to unload model {mid}: {result.get('error', 'unknown')}"
+                                    )
+                            import time as _time
+                            _unload_deadline = _time.time() + 30.0
+                            while _time.time() < _unload_deadline:
+                                _current_active = mgr.get_active_model_ids()
+                                _still_present = {
+                                    m for m in _new_targets
+                                    if m in _current_active
+                                }
+                                if not _still_present:
+                                    break
+                                _time.sleep(1)
+                            else:
+                                continue  # retry: another round of unload + poll
+                            break  # all targets gone, exit retry loop
+                        else:
+                            # All retries exhausted — router refuses to unload.
+                            still_list = sorted(
+                                m for m in unload_targets
+                                if m in (mgr.get_active_model_ids() or {})
+                            )
+                            raise RuntimeError(
+                                f"unload timed out for models: {', '.join(still_list)}"
+                            )
                     load_res = mgr.load_model_http(filename)
                     if not load_res.get("ok"):
-                        raise RuntimeError(load_res.get("error") or "HTTP model load failed")
+                        # load_model_http can return an error even when the model
+                        # loads successfully — the router sometimes returns 400
+                        # ("model is already running") for a duplicate /models/load
+                        # call (e.g. when a previous attempt was still in-flight).
+                        # Re-check the router's actual state before deciding it failed.
+                        _actual = mgr.get_active_model_ids() if callable(getattr(mgr, "get_active_model_ids", None)) else {}
+                        if filename_stem in _actual and _actual[filename_stem] in ("loaded", "loading"):
+                            pass  # model is actually loaded/loading — trust the router
+                        else:
+                            raise RuntimeError(load_res.get("error") or "HTTP model load failed")
 
         # Wait for the backend to settle: healthy = success, failed = error.
         deadline = time.time() + float(getattr(self.handler.__class__, "model_load_timeout", 600.0))

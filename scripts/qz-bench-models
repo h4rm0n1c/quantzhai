@@ -1,0 +1,935 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/qz-codex-common"
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/qz-bench-models [options] -- <model_key> [model_key ...]
+
+Run coding-agent scenarios across multiple models and compare results.
+
+Each model is loaded one at a time via select-and-restart. For each scenario,
+the repo is staged to a fresh temp directory, the task is run via codex exec,
+and results are captured. Temp dirs are cleaned up after each task.
+
+Options:
+  --scenarios FILE   Scenario fixture JSON (default: config/default/bench-models-scenarios.json)
+  --output-dir DIR   Benchmark output root (default: var/bench-models)
+  --run-id ID        Run id prefix (default: UTC timestamp)
+  --only ID          Run only one scenario id; repeatable
+  --sandbox MODE     Codex sandbox mode (default: read-write)
+  --approval POLICY  Codex approval policy (default: never)
+  --timeout SECONDS  Per-case timeout (default: 600)
+  --dry-run          Print planned runs without executing Codex
+  --keep-scratch     Keep staging dirs after run (for debugging)
+  -h, --help         Show this help
+
+Examples:
+  scripts/qz-bench-models -- "Qwen3.6-35B-A3B-APEX-I-Compact.gguf" "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+  scripts/qz-bench-models --only click-readme --only fd-main -- "Qwen3.6-35B-A3B-APEX-I-Compact.gguf"
+EOF
+}
+
+scenarios_file="$QZ_ROOT/config/default/bench-models-scenarios.json"
+output_dir="$QZ_VAR_DIR/bench-models"
+run_id=""
+sandbox_mode="read-only"
+approval_policy="never"
+timeout_seconds=600
+dry_run=0
+keep_scratch=0
+only_ids=()
+models=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --scenarios) scenarios_file="$2"; shift 2 ;;
+    --output-dir) output_dir="$2"; shift 2 ;;
+    --run-id) run_id="$2"; shift 2 ;;
+    --only) only_ids+=("$2"); shift 2 ;;
+    --sandbox) sandbox_mode="$2"; shift 2 ;;
+    --approval) approval_policy="$2"; shift 2 ;;
+    --timeout) timeout_seconds="$2"; shift 2 ;;
+    --dry-run) dry_run=1; shift ;;
+    --keep-scratch) keep_scratch=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; while [[ $# -gt 0 ]]; do models+=("$1"); shift; done ;;
+    -*) printf 'unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+    *) models+=("$1"); shift ;;
+  esac
+done
+
+if [[ ${#models[@]} -eq 0 ]]; then
+  printf 'error: at least one model key is required\n' >&2
+  usage >&2
+  exit 1
+fi
+
+if [[ ! -f "$scenarios_file" ]]; then
+  printf 'scenarios file not found: %s\n' "$scenarios_file" >&2
+  exit 1
+fi
+
+# Force capture mode on so we get request/response captures.
+# qz-env defaults to off; we override unconditionally.
+export QZ_CAPTURE_MODE=latest
+
+proxy_url="http://$QZ_PROXY_HOST:$QZ_PROXY_PORT"
+if ! curl -fsS "$proxy_url/health" >/dev/null 2>&1; then
+  printf 'QuantZhai proxy is not healthy at %s\n' "$proxy_url" >&2
+  printf 'Run scripts/qz-up first.\n' >&2
+  exit 1
+fi
+
+# Check capture mode from qz-thoughts; warn if not capturing
+capture_mode=$(scripts/qz-thoughts --once 2>/dev/null | grep "^  capture" | grep -o "mode=[a-z]*" | head -1 | cut -d= -f2)
+if [[ "$capture_mode" != "latest" ]] && [[ "$capture_mode" != "on" ]] && [[ "$capture_mode" != "all" ]]; then
+  printf 'WARNING: capture mode is %s — request/response captures disabled.\n' "$capture_mode" >&2
+  printf '  Restart with: QZ_CAPTURE_MODE=latest scripts/qz-up\n' >&2
+fi
+
+qz_prepare_codex_home
+
+safe_name() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-'; }
+
+now_seconds() {
+  python3 -c 'import time; print(f"{time.time():.6f}")'
+}
+
+# Check current model status via /qz/model/status
+check_current_model() {
+  curl -s "$proxy_url/qz/model/status" 2>/dev/null | python3 -c "
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    if d.get('selected_model_ready') and d.get('backend_loaded_model'):
+        print(d['backend_loaded_model'])
+    else:
+        print('')
+except: print('')
+"
+}
+
+# Wait until /qz/model/status shows the requested model is ready
+wait_for_model_ready() {
+  local model_key="$1"
+  local max_attempts=180
+  local attempt=0
+  printf '  waiting for model %s ... ' "$model_key" >&2
+  while [[ $attempt -lt $max_attempts ]]; do
+    local status
+    status=$(curl -s "$proxy_url/qz/model/status" 2>/dev/null || echo "")
+    if echo "$status" | python3 -c "
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    if d.get('selected_model_ready') and d.get('backend_loaded_model'):
+        sys.exit(0)
+except: pass
+sys.exit(1)
+" 2>/dev/null; then
+      printf 'ready\n' >&2
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 2
+  done
+  printf 'TIMEOUT\n' >&2
+  return 1
+}
+
+# Select a model, but only restart if it's different from the currently loaded one
+select_model() {
+  local model_key="$1"
+  local current
+  current=$(check_current_model)
+  local expected_backend_id="${model_key%.gguf}"
+
+  if [[ "$current" == "$expected_backend_id" ]]; then
+    printf 'model %s already loaded, skipping restart\n' "$model_key"
+    return 0
+  fi
+
+  printf 'switching to model: %s (was: %s)\n' "$model_key" "$current"
+  curl -s -X POST "$proxy_url/qz/model/select-and-restart" \
+    -H 'Content-Type: application/json' \
+    -d "{\"model\": \"$model_key\"}" > /dev/null 2>&1 || true
+
+  if ! wait_for_model_ready "$model_key"; then
+    printf '  ERROR: model %s failed to load\n' "$model_key" >&2
+    return 1
+  fi
+  printf '  model loaded: %s\n' "$model_key"
+}
+
+clear_latest_captures() {
+  rm -f \
+    "$QZ_VAR_DIR/captures/latest-request.json" \
+    "$QZ_VAR_DIR/captures/latest-normalized-request.json" \
+    "$QZ_VAR_DIR/captures/latest-forwarded.json" \
+    "$QZ_VAR_DIR/captures/latest-upstream-response.raw" \
+    "$QZ_VAR_DIR/captures/latest-upstream-status.txt" \
+    "$QZ_VAR_DIR/captures/latest-synthetic-sse.raw" \
+    "$QZ_VAR_DIR/captures/latest-web-runtime-final.json"
+}
+
+copy_latest_captures() {
+  local capture_dir="$1"
+  mkdir -p "$capture_dir"
+  for name in \
+    latest-request.json \
+    latest-normalized-request.json \
+    latest-forwarded.json \
+    latest-upstream-response.raw \
+    latest-upstream-status.txt \
+    latest-synthetic-sse.raw \
+    latest-web-runtime-final.json \
+    latest-json-api.log; do
+    if [[ -f "$QZ_VAR_DIR/captures/$name" ]]; then
+      cp "$QZ_VAR_DIR/captures/$name" "$capture_dir/$name"
+    fi
+  done
+}
+
+# Capture proxy telemetry snapshot (includes VRAM, recent events, corrections)
+capture_proxy_snapshot() {
+  local dest="$1"
+  mkdir -p "$(dirname "$dest")"
+  curl -s "$proxy_url/qz/telemetry/recent?limit=50" > "$dest" 2>/dev/null || echo '{"error":"telemetry_unavailable"}' > "$dest"
+}
+
+# Capture qz-thoughts to get prompt policy, tool schema, reasoning, SSE event overview
+capture_qz_thoughts() {
+  local dest="$1"
+  mkdir -p "$(dirname "$dest")"
+  scripts/qz-thoughts --once > "$dest" 2>/dev/null || echo "qz-thoughts unavailable" > "$dest"
+}
+
+# Capture full proxy backend status (model info, GPU, health)
+capture_proxy_status() {
+  local dest="$1"
+  mkdir -p "$(dirname "$dest")"
+  curl -s "$proxy_url/qz/backend/status" > "$dest" 2>/dev/null || echo '{"error":"status_unavailable"}' > "$dest"
+  # Also capture full control plane
+  curl -s "$proxy_url/qz/control-plane" > "${dest%.json}-control-plane.json" 2>/dev/null || true
+}
+
+stage_repo() {
+  local repo_id="$1"
+  local rid="$2"
+  python3 - "$repo_id" "$rid" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.join(os.environ.get("QZ_ROOT", ""), "scripts"))
+from qz_dogfood_corpus_lib import load_repos_config, ensure_mirror, stage_repo
+repos = load_repos_config()
+target = [r for r in repos if r["id"] == sys.argv[1]]
+if not target:
+    print(f"ERROR: unknown repo {sys.argv[1]}", file=sys.stderr)
+    sys.exit(1)
+repo = target[0]
+rid = sys.argv[2]
+mp = ensure_mirror(repo)
+if not mp:
+    sys.exit(1)
+sp = stage_repo(repo, rid, force=True)
+if not sp:
+    sys.exit(1)
+print(sp)
+PY
+}
+
+clean_scratch() {
+  if [[ "$keep_scratch" == "1" ]]; then
+    return
+  fi
+  local repo_id="$1"
+  local rid="$2"
+  python3 - "$repo_id" "$rid" <<'PY'
+import sys, os, shutil
+sys.path.insert(0, os.path.join(os.environ.get("QZ_ROOT", ""), "scripts"))
+from qz_dogfood_corpus_lib import scratch_path, load_repos_config
+repos = load_repos_config()
+target = [r for r in repos if r["id"] == sys.argv[1]]
+if target:
+    rid = sys.argv[2]
+    sp = scratch_path(target[0], rid)
+    if os.path.isdir(sp):
+        shutil.rmtree(sp)
+PY
+}
+
+# Load and validate scenarios
+printf 'loading scenarios from %s\n' "$scenarios_file"
+scenarios_jsonl=$(mktemp)
+trap 'rm -f "$scenarios_jsonl"' EXIT
+
+python3 - "$scenarios_file" "${only_ids[@]}" > "$scenarios_jsonl" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+only = set(sys.argv[2:])
+data = json.loads(path.read_text(encoding="utf-8"))
+scenarios = data.get("scenarios", [])
+if only:
+    scenarios = [s for s in scenarios if s.get("id") in only]
+missing = only - {s.get("id") for s in scenarios}
+if missing:
+    raise SystemExit(f"missing scenario ids: {', '.join(sorted(missing))}")
+if not scenarios:
+    raise SystemExit("no scenarios selected")
+for s in scenarios:
+    if not s.get("id") or not s.get("repo") or not s.get("prompt"):
+        raise SystemExit(f"each scenario needs id, repo, and prompt")
+    print(json.dumps(s, ensure_ascii=False, sort_keys=True))
+PY
+
+scenario_count=$(wc -l < "$scenarios_jsonl" | tr -d ' ')
+printf 'loaded %d scenario(s)\n' "$scenario_count"
+
+overall_start="$(now_seconds)"
+model_index=0
+
+for model_key in "${models[@]}"; do
+  model_index=$((model_index + 1))
+  model_slug="$(safe_name "$model_key")"
+
+  if [[ -z "$run_id" ]]; then
+    model_run_id="$(date -u +%Y%m%dT%H%M%SZ)-${model_slug}"
+  else
+    model_run_id="${run_id}-${model_slug}"
+  fi
+
+  model_dir="$output_dir/$model_run_id"
+  mkdir -p "$model_dir"
+  printf '%s\n' "$model_key" > "$model_dir/model.txt"
+
+  printf '\n=== [%d/%d] Model: %s ===\n' "$model_index" "${#models[@]}" "$model_key"
+
+  if [[ "$dry_run" == "1" ]]; then
+    printf '[dry-run] would load model %s\n' "$model_key"
+  else
+    if ! select_model "$model_key"; then
+      printf '  SKIPPING model %s (load failed)\n' "$model_key" >&2
+      printf 'failed\n' > "$model_dir/load_status.txt"
+      continue
+    fi
+    printf 'loaded\n' > "$model_dir/load_status.txt"
+    # Capture full proxy status for this model
+    capture_proxy_status "$model_dir/proxy-status.json"
+  fi
+
+  scenario_index=0
+
+  while IFS= read -r scenario_json; do
+    scenario_index=$((scenario_index + 1))
+
+    scenario_id="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["id"])' "$scenario_json")"
+    scenario_repo="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["repo"])' "$scenario_json")"
+    scenario_prompt="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["prompt"])' "$scenario_json")"
+    scenario_category="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("category",""))' "$scenario_json")"
+    scenario_expected="$(python3 -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1]).get("expected_tools",[])))' "$scenario_json")"
+    scenario_slug="$(safe_name "$scenario_id")"
+
+    printf '  [%d/%d] scenario=%s repo=%s\n' "$scenario_index" "$scenario_count" "$scenario_id" "$scenario_repo"
+
+    case_dir="$model_dir/$(printf '%02d' "$scenario_index")-${scenario_slug}"
+    mkdir -p "$case_dir"
+    printf '%s\n' "$scenario_prompt" > "$case_dir/prompt.txt"
+    printf '%s\n' "$scenario_repo" > "$case_dir/repo.txt"
+    printf '%s\n' "$scenario_category" > "$case_dir/category.txt"
+
+    if [[ "$dry_run" == "1" ]]; then
+      printf '    [dry-run] scenario %s -> %s\n' "$scenario_id" "$case_dir"
+      continue
+    fi
+
+    # Stage repo
+    printf '    staging repo %s ... ' "$scenario_repo"
+    export QZ_DOGFOOD_RUN_ID="bench-${model_slug}-${scenario_id}"
+    repo_path=""
+    if ! repo_path=$(stage_repo "$scenario_repo" "$QZ_DOGFOOD_RUN_ID" 2>"$case_dir/stage-stderr.txt"); then
+      printf 'FAILED\n'
+      printf 'staging failed\n' > "$case_dir/status.txt"
+      continue
+    fi
+    repo_path="$(echo "$repo_path" | tail -1)"
+    printf '%s\n' "$repo_path"
+    printf '%s\n' "$repo_path" > "$case_dir/repo-path.txt"
+
+    # Use the model key directly as the codex model, no profile resolution needed
+    codex_model="$model_key"
+
+    # Build command
+    cmd=(codex -a "$approval_policy" exec --json --color never -C "$repo_path" -m "$codex_model" -s "$sandbox_mode" -o "$case_dir/final.txt")
+    cmd+=(-- "$scenario_prompt")
+
+    printf '%q ' "${cmd[@]}" > "$case_dir/command.sh"
+    printf '\n' >> "$case_dir/command.sh"
+
+    clear_latest_captures
+
+    # Pre-scenario proxy snapshot (VRAM, events, corrections)
+    capture_proxy_snapshot "$case_dir/pre-telemetry.json"
+
+    start_ts="$(now_seconds)"
+    set +e
+    if command -v timeout >/dev/null 2>&1; then
+      timeout "$timeout_seconds" "${cmd[@]}" < /dev/null > "$case_dir/events.jsonl" 2> "$case_dir/stderr.txt"
+      exit_code=$?
+    else
+      "${cmd[@]}" < /dev/null > "$case_dir/events.jsonl" 2> "$case_dir/stderr.txt"
+      exit_code=$?
+    fi
+    set -e
+    end_ts="$(now_seconds)"
+    timed_out=0
+    if [[ "$exit_code" == "124" ]]; then
+      timed_out=1
+    fi
+
+    # Post-scenario proxy snapshot (VRAM, events, corrections)
+    capture_proxy_snapshot "$case_dir/post-telemetry.json"
+
+    # Capture qz-thoughts to get prompt policy, tool schema, reasoning settings
+    capture_qz_thoughts "$case_dir/qz-thoughts.txt"
+
+    copy_latest_captures "$case_dir/captures"
+    printf '%d\n' "$exit_code" > "$case_dir/exit_code.txt"
+
+    # Clean scratch
+    if [[ "$keep_scratch" != "1" ]]; then
+      clean_scratch "$scenario_repo" "$QZ_DOGFOOD_RUN_ID" > /dev/null 2>&1 || true
+    fi
+
+    # Emit result JSON with VRAM, corrections, proxy data
+    python3 - "$case_dir" "$model_key" "$scenario_id" "$scenario_category" "$scenario_expected" "$exit_code" "$timed_out" "$start_ts" "$end_ts" <<'PY'
+import hashlib, json, math, os, sys
+from pathlib import Path
+
+case_dir = Path(sys.argv[1])
+model = sys.argv[2]
+scenario_id = sys.argv[3]
+category = sys.argv[4]
+expected_tools = json.loads(sys.argv[5]) if len(sys.argv) > 5 else []
+exit_code = int(sys.argv[6])
+timed_out = sys.argv[7] == "1"
+start_ts = float(sys.argv[8])
+end_ts = float(sys.argv[9])
+
+def approx_tokens(text):
+    if not text: return 0
+    return max(1, math.ceil(len(text) / 4))
+
+def token_count(value, fallback=0):
+    try: return int(value)
+    except: return fallback
+
+def load_json(path):
+    try: return json.loads(path.read_text(encoding="utf-8"))
+    except: return None
+
+def walk(value):
+    if isinstance(value, dict):
+        yield value
+        for child in value.values(): yield from walk(child)
+    elif isinstance(value, list):
+        for child in value: yield from walk(child)
+
+def collect_usages(value):
+    usages = []
+    for item in walk(value):
+        keys = set(item)
+        if {"input_tokens","output_tokens"}.issubset(keys) or {"prompt_tokens","completion_tokens"}.issubset(keys):
+            it = token_count(item.get("input_tokens"), token_count(item.get("prompt_tokens")))
+            ot = token_count(item.get("output_tokens"), token_count(item.get("completion_tokens")))
+            tt = token_count(item.get("total_tokens"), it + ot)
+            usages.append({"input_tokens": it, "output_tokens": ot, "total_tokens": max(tt, it+ot)})
+    return usages
+
+def best_usage(usages):
+    return max(usages, key=lambda u: u.get("total_tokens",0)) if usages else {}
+
+def extract_vram(telemetry):
+    if not isinstance(telemetry, dict): return {}
+    vram = telemetry.get("vram") or {}
+    totals = vram.get("totals") or {}
+    return {
+        "used_mib": totals.get("used_mib"),
+        "total_mib": totals.get("total_mib"),
+        "available_mib": totals.get("available_mib"),
+        "ok": vram.get("ok", False),
+        "error": vram.get("error"),
+    }
+
+def extract_throughput_events(telemetry, start_ts, end_ts):
+    """Extract throughput_sample events within time window with full fields."""
+    if not isinstance(telemetry, dict): return []
+    results = []
+    for ev in (telemetry.get("events") or []):
+        ts = ev.get("ts") or ev.get("wall_ts") or 0
+        if ev.get("type") == "throughput_sample" and start_ts <= ts <= end_ts:
+            p = ev.get("payload") or {}
+            results.append(p)
+    return results
+
+def extract_state_counters(telemetry):
+    if not isinstance(telemetry, dict): return {}
+    state = telemetry.get("state") or {}
+    return {
+        "event_count": state.get("event_count"),
+        "capacity": state.get("capacity"),
+        "uptime_seconds": state.get("uptime_seconds"),
+        "counters": state.get("counters"),
+    }
+
+def count_correction_notes(events_list):
+    count = 0
+    for e in events_list:
+        for c in [e, e.get("payload",{})]:
+            if isinstance(c, dict):
+                for key in ("output","text","content","message"):
+                    val = c.get(key,"")
+                    if isinstance(val, str) and "[Proxy auto-corrected" in val:
+                        count += 1
+    return count
+
+def parse_qz_thoughts_file(path):
+    """Parse full qz-thoughts output into structured dict."""
+    if not path.exists():
+        return {}
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return {}
+    data = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("THOUGHT") or line.startswith("ANSWER"):
+            data["has_reasoning"] = True
+            continue
+        if line.startswith("QZ-THOUGHTS"):
+            for part in line.split()[1:]:
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    data[k] = v
+            continue
+        # Contract line: starts with "contract="
+        if line.startswith("contract="):
+            for part in line.split():
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    data["contract_" + k] = v
+            continue
+        # source=proxy-telemetry, model=..., response=...
+        if "=" in line and not line.startswith("  "):
+            for part in line.split():
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    data[k] = v
+            continue
+        # Activity lines: indented <label>  <content>
+        if line.startswith("  ") and not line.startswith("   "):
+            parts = line.split(None, 1)
+            if len(parts) == 2:
+                label = parts[0].lower()
+                rest = parts[1]
+                fields = {}
+                tokens = rest.split()
+                for token in tokens:
+                    if "=" in token:
+                        k, v = token.split("=", 1)
+                        fields[k] = v
+                # Store raw activity fields under the label
+                data["act_" + label] = fields
+                # Also store positional fields for key labels
+                if label == "reasoning" and tokens:
+                    data["reasoning_level"] = tokens[0] if "=" not in tokens[0] else fields.get("level","")
+                    data["reasoning_policy"] = fields.get("policy","")
+                    data["reasoning_temperature"] = fields.get("temperature","")
+                    data["reasoning_top_p"] = fields.get("top_p","")
+                    data["reasoning_top_k"] = fields.get("top_k","")
+                    data["reasoning_min_p"] = fields.get("min_p","")
+                    data["reasoning_presence_penalty"] = fields.get("presence_penalty","")
+                    data["reasoning_repeat_penalty"] = fields.get("repeat_penalty","")
+                elif label == "prompt":
+                    data["system_prompt"] = rest
+                elif label == "policy":
+                    data["prompt_policy"] = fields.get("mode","")
+                elif label == "schema":
+                    if "translated" in fields:
+                        data["schema_translated"] = fields["translated"]
+                        data["schema_dropped"] = int(fields.get("dropped","0"))
+                    if "replaced" in fields:
+                        data["schema_replaced"] = fields["replaced"]
+                elif label == "request":
+                    data["request_path"] = rest.split("  ")[0] if "  " in rest else rest
+                    for token in tokens:
+                        if token.endswith("ms") and "=" not in token:
+                            data["request_ms"] = int(token.replace("ms",""))
+                elif label == "usage":
+                    data["usage_in"] = int(fields.get("in",0))
+                    data["usage_out"] = int(fields.get("out",0))
+                    data["usage_cached"] = int(fields.get("cached",0))
+                elif label == "capture":
+                    data["capture_mode"] = fields.get("mode","")
+                elif label == "model":
+                    data["qz_model"] = tokens[0] if tokens else ""
+                elif label == "service":
+                    data["service_state"] = rest
+                elif label == "recovery":
+                    for k, v in fields.items():
+                        data["recovery_" + k] = v
+                elif label == "backend":
+                    for k, v in fields.items():
+                        data["backend_" + k] = v
+    return data
+
+# --- Load events ---
+events = []
+ep = case_dir / "events.jsonl"
+if ep.exists():
+    for line in ep.read_text(encoding="utf-8",errors="replace").splitlines():
+        line = line.strip()
+        if line:
+            try: events.append(json.loads(line))
+            except: pass
+
+# --- Load captures ---
+final_text = ""
+fp = case_dir / "final.txt"
+if fp.exists():
+    final_text = fp.read_text(encoding="utf-8",errors="replace")
+captures = case_dir / "captures"
+request = load_json(captures / "latest-request.json") if captures.exists() else None
+normalized = load_json(captures / "latest-normalized-request.json") if captures.exists() else None
+runtime_final = load_json(captures / "latest-web-runtime-final.json") if captures.exists() else None
+request_body = normalized or request or {}
+instructions = request_body.get("instructions","") if isinstance(request_body, dict) else ""
+
+usage_sources = {
+    "codex_events": best_usage([u for e in events for u in collect_usages(e)]),
+    "runtime_final": best_usage(collect_usages(runtime_final)),
+}
+preferred = usage_sources["codex_events"] or usage_sources["runtime_final"] or {}
+
+# --- Tool use ---
+_TOOL_MAP = {
+    "shell":"shell","exec_command":"shell","command":"shell","command_execution":"shell",
+    "file_read":"read","read_file":"read",
+    "file_change":"apply_patch","apply_patch":"apply_patch","apply_patch_call":"apply_patch",
+    "web_search":"web_search","web_search_call":"web_search",
+}
+tools_called = []
+seen_ids = set()
+for e in events:
+    for c in [e, e.get("payload",{})]:
+        if isinstance(c, dict) and c.get("type") == "item.completed":
+            item = c.get("item",{})
+            raw_type = str(item.get("type","")).lower()
+            canon = _TOOL_MAP.get(raw_type)
+            if canon:
+                cid = item.get("call_id") or item.get("id") or ""
+                if cid and cid not in seen_ids:
+                    seen_ids.add(cid)
+                    tools_called.append(canon)
+turn_count = 0
+for e in events:
+    for c in [e, e.get("payload",{})]:
+        if isinstance(c, dict) and c.get("type") == "turn.completed":
+            turn_count += 1
+missing_expected = sorted(set(expected_tools) - set(tools_called))
+
+# --- Telemetry analysis ---
+pre_tele = load_json(case_dir / "pre-telemetry.json") or {}
+post_tele = load_json(case_dir / "post-telemetry.json") or {}
+pre_vram = extract_vram(pre_tele)
+post_vram = extract_vram(post_tele)
+# Throughput samples from post-telemetry within our time window
+throughput = extract_throughput_events(post_tele, start_ts, end_ts)
+best_throughput = max(throughput, key=lambda p: p.get("elapsed_ms",0)) if throughput else {}
+telem_counters = extract_state_counters(post_tele)
+# Count ALL event types within window
+telemetry_event_types = {}
+for ev in (post_tele.get("events") or []):
+    ts = ev.get("ts") or ev.get("wall_ts") or 0
+    if start_ts <= ts <= end_ts:
+        t = ev.get("type","unknown")
+        telemetry_event_types[t] = telemetry_event_types.get(t, 0) + 1
+
+correction_notes = count_correction_notes(events)
+
+# --- qz-thoughts ---
+qz_thoughts_data = parse_qz_thoughts_file(case_dir / "qz-thoughts.txt")
+
+# --- Probe log ---
+_qz_root = os.environ.get("QZ_ROOT", "")
+_probe_log_path = Path(_qz_root) / "var" / "state" / "intercept-probes.jsonl"
+probe_events = []
+if _probe_log_path.exists():
+    try:
+        for line in _probe_log_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line: continue
+            try: probe = json.loads(line)
+            except: continue
+            ts = probe.get("t") or probe.get("timestamp") or 0
+            if start_ts <= ts <= end_ts:
+                probe_events.append({
+                    "event": probe.get("event",""),
+                    "payload": {k:v for k,v in probe.items() if k not in ("t","timestamp","event")},
+                })
+    except Exception: pass
+coerce_count = sum(1 for p in probe_events if "coerce" in p["event"])
+advise_count = sum(1 for p in probe_events if "ap" in p["event"] and "coerce" not in p["event"])
+for e in events:
+    for c in [e, e.get("payload",{})]:
+        if isinstance(c, dict):
+            for key in ("output","text","content","message"):
+                val = c.get(key,"")
+                if isinstance(val, str) and "[Proxy advisory" in val:
+                    advise_count += 1
+
+result = {
+    "model": model,
+    "scenario_id": scenario_id,
+    "category": category,
+    "exit_code": exit_code,
+    "timed_out": timed_out,
+    "wall_seconds": round(max(0.0, end_ts - start_ts), 3),
+    "event_count": len(events),
+    "final_chars": len(final_text),
+    "final_est_tokens": approx_tokens(final_text),
+    "usage": preferred,
+    "usage_sources": usage_sources,
+    "instructions": {
+        "chars": len(instructions),
+        "est_tokens": approx_tokens(instructions),
+        "sha256": hashlib.sha256(instructions.encode("utf-8")).hexdigest() if instructions else "",
+    },
+    "tool_use": {
+        "tools_called": tools_called,
+        "tools_called_set": sorted(set(tools_called)),
+        "tool_call_count": len(tools_called),
+        "turn_count": turn_count,
+        "expected_tools": expected_tools,
+        "missing_expected_tools": missing_expected,
+        "expected_tools_satisfied": len(missing_expected) == 0,
+    },
+    "proxy": {
+        "vram": {"pre": pre_vram, "post": post_vram},
+        "telemetry": {
+            "event_count_during": sum(telemetry_event_types.values()),
+            "event_types": telemetry_event_types,
+            "throughput": {
+                "prompt_tokens": best_throughput.get("prompt_tokens"),
+                "gen_tokens": best_throughput.get("gen_tokens"),
+                "total_tokens": best_throughput.get("total_tokens"),
+                "prompt_ms": best_throughput.get("prompt_ms"),
+                "gen_ms": best_throughput.get("gen_ms"),
+                "elapsed_ms": best_throughput.get("elapsed_ms"),
+                "prompt_rate_tps": best_throughput.get("prompt_rate"),
+                "gen_rate_tps": best_throughput.get("gen_rate"),
+                "total_rate_tps": best_throughput.get("total_rate"),
+                "reasoning_level": best_throughput.get("active_reasoning_level") or best_throughput.get("reasoning_level"),
+                "context_length": best_throughput.get("selected_context_length") or best_throughput.get("backend_context_length"),
+                "restart_required": best_throughput.get("restart_required"),
+            },
+            "state_counters": telem_counters,
+        },
+        "interventions": {
+            "total": len(probe_events),
+            "coerce": coerce_count,
+            "advise": advise_count,
+            "auto_correction_notes": correction_notes,
+            "probes": probe_events,
+        },
+        "qz_thoughts": qz_thoughts_data,
+    },
+}
+(case_dir / "result.json").write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+print(f"    exit={exit_code} wall={result['wall_seconds']}s tools={len(tools_called)} turns={turn_count} tokens={preferred.get('total_tokens','?')} "
+      f"gen={best_throughput.get('gen_rate','')}tps ctx={best_throughput.get('selected_context_length','')}")
+PY
+
+  done < "$scenarios_jsonl"
+
+done
+
+overall_end="$(now_seconds)"
+printf '\n=== All runs complete (%.1fs) ===\n' "$(python3 -c "print($overall_end - $overall_start)")"
+
+# Generate comparison summary
+printf '\n--- Generating comparison summary ---\n'
+python3 - "$output_dir" "$run_id" <<'PY'
+import json, math, shutil, sys
+from collections import defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
+
+output_dir = Path(sys.argv[1])
+run_id_prefix = sys.argv[2]
+
+all_results = []
+for model_dir in sorted(output_dir.iterdir()):
+    if not model_dir.is_dir():
+        continue
+    model_key = ""
+    mp = model_dir / "model.txt"
+    if mp.exists():
+        model_key = mp.read_text(encoding="utf-8").strip()
+    for case_path in sorted(model_dir.glob("*/result.json")):
+        try:
+            result = json.loads(case_path.read_text(encoding="utf-8"))
+            result["model_key"] = model_key
+            result["case_dir"] = str(case_path.parent.relative_to(output_dir))
+            all_results.append(result)
+        except Exception as e:
+            print(f"warning: skipping {case_path}: {e}", file=sys.stderr)
+
+if not all_results:
+    print("No results found.", file=sys.stderr)
+    sys.exit(0)
+
+models_in_results = sorted(set(r["model_key"] for r in all_results))
+scenario_ids = sorted(set(r["scenario_id"] for r in all_results))
+baseline_model = models_in_results[0]
+
+lines = []
+lines.append(f"# QuantZhai Model Comparison Benchmark")
+lines.append("")
+lines.append(f"Generated: {datetime.now(timezone.utc).isoformat()}")
+lines.append(f"Models: {', '.join(models_in_results)}")
+lines.append(f"Scenarios: {len(scenario_ids)}")
+lines.append(f"Cases: {len(all_results)}")
+lines.append(f"Baseline: {baseline_model}")
+lines.append("")
+
+by_model = defaultdict(list)
+for r in all_results:
+    by_model[r["model_key"]].append(r)
+
+lines.append("## Aggregate Metrics")
+lines.append("")
+line = "| Model | Scenarios | Avg wall s | Total tokens | Avg tools | Avg turns | Satisfied % | Timeout % | Avg gen TPS | Events | Coerced | Advised |"
+lines.append(line)
+lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+
+for model in models_in_results:
+    cases = by_model[model]
+    n = len(cases)
+    avg_wall = round(sum(c.get("wall_seconds",0) for c in cases) / n, 1) if n else 0
+    total_tok = sum((c.get("usage") or {}).get("total_tokens",0) for c in cases)
+    avg_tools = round(sum((c.get("tool_use") or {}).get("tool_call_count",0) for c in cases) / n, 1) if n else 0
+    avg_turns = round(sum((c.get("tool_use") or {}).get("turn_count",0) for c in cases) / n, 1) if n else 0
+    satisfied = sum(1 for c in cases if (c.get("tool_use") or {}).get("expected_tools_satisfied", False))
+    sat_pct = f"{round(100 * satisfied / n)}%" if n else "-"
+    timeout_n = sum(1 for c in cases if c.get("timed_out"))
+    tout_pct = f"{round(100 * timeout_n / n)}%" if n else "-"
+    total_telemetry = sum((c.get("proxy") or {}).get("telemetry",{}).get("event_count_during",0) for c in cases)
+    total_coerced = sum(((c.get("proxy") or {}).get("interventions") or {}).get("coerce",0) for c in cases)
+    total_advised = sum(((c.get("proxy") or {}).get("interventions") or {}).get("advise",0) for c in cases)
+    gen_tps_list = [((c.get("proxy") or {}).get("telemetry",{}).get("throughput") or {}).get("gen_rate_tps") for c in cases]
+    gen_tps_vals = [g for g in gen_tps_list if isinstance(g,(int,float))]
+    avg_gen = f"{round(sum(gen_tps_vals)/len(gen_tps_vals),1)}" if gen_tps_vals else "-"
+    lines.append(f"| {model} | {n} | {avg_wall} | {total_tok} | {avg_tools} | {avg_turns} | {sat_pct} | {tout_pct} | {avg_gen} | {total_telemetry} | {total_coerced} | {total_advised} |")
+
+lines.append("")
+lines.append("## Per-Scenario Comparison")
+lines.append("")
+lines.append("| Scenario | Model | Cat | Exit | Wall s | Tools | Turns | Satisfied | Timeout | Ev | Gen TPS | Prompt TPS | Cache | Ctx | Reason | In tok | Out tok | Total |")
+lines.append("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |")
+
+for sid in scenario_ids:
+    for model in models_in_results:
+        matches = [r for r in all_results if r["scenario_id"] == sid and r["model_key"] == model]
+        if not matches:
+            continue
+        r = matches[0]
+        tu = r.get("tool_use") or {}
+        usage = r.get("usage") or {}
+        sat = "OK" if tu.get("expected_tools_satisfied") else "MISS"
+        timeout_s = "TIMEOUT" if r.get("timed_out") else ""
+        tools_str = ", ".join(tu.get("tools_called_set",[])) if tu.get("tools_called_set") else "-"
+        telemetry_n = (r.get("proxy") or {}).get("telemetry") or {}
+        ev_count = telemetry_n.get("event_count_during",0)
+        tp = telemetry_n.get("throughput") or {}
+        gen_tps = tp.get("gen_rate_tps","")
+        prompt_tps = tp.get("prompt_rate_tps","")
+        ctx = tp.get("context_length","")
+        reason_lvl = tp.get("reasoning_level","")
+        cache_hit = (r.get("proxy") or {}).get("qz_thoughts",{}).get("cached","")
+        corr_notes = (r.get("proxy") or {}).get("interventions") or {}
+        coerced = corr_notes.get("coerce",0)
+        advised = corr_notes.get("advise",0)
+        notes_str = f"{ev_count}" if ev_count else "-"
+        if coerced or advised:
+            notes_str += f" c{coerced}a{advised}"
+        gen_str = f"{gen_tps:.1f}" if isinstance(gen_tps,(int,float)) else "-"
+        pps_str = f"{prompt_tps:.0f}" if isinstance(prompt_tps,(int,float)) else "-"
+        lines.append(
+            f"| {sid} | {model} | {r.get('category','')} | {r['exit_code']} | "
+            f"{r['wall_seconds']} | {tools_str} | {tu.get('turn_count','')} | {sat} | {timeout_s} | {notes_str} | "
+            f"{gen_str} | {pps_str} | {cache_hit} | {ctx} | {reason_lvl} | "
+            f"{usage.get('input_tokens',0)} | {usage.get('output_tokens',0)} | {usage.get('total_tokens',0)} |"
+        )
+
+# VRAM summary
+vram_models = {}
+for model in models_in_results:
+    cases = by_model[model]
+    post_vrams = [((c.get("proxy") or {}).get("vram") or {}).get("post") or {} for c in cases]
+    used = [v.get("used_mib") for v in post_vrams if v.get("used_mib") is not None]
+    total = [v.get("total_mib") for v in post_vrams if v.get("total_mib") is not None]
+    vram_models[model] = {
+        "used_mib": round(sum(used)/len(used), 0) if used else None,
+        "total_mib": total[0] if total else None,
+    }
+
+lines.append("")
+lines.append("## VRAM Usage")
+lines.append("")
+lines.append("| Model | VRAM used (MiB) | VRAM total (MiB) |")
+lines.append("| --- | ---: | ---: |")
+for model in models_in_results:
+    v = vram_models.get(model, {})
+    used = v.get("used_mib", "N/A")
+    total = v.get("total_mib", "N/A")
+    lines.append(f"| {model} | {used} | {total} |")
+
+lines.append("")
+lines.append("## Tool-Use Satisfaction Detail")
+lines.append("")
+for model in models_in_results:
+    cases = by_model[model]
+    satisfied_cases = [(r.get("scenario_id",""), r.get("category",""))
+                       for r in cases if (r.get("tool_use") or {}).get("expected_tools_satisfied", False)]
+    missing_cases = [(r.get("scenario_id",""), r.get("category",""),
+                      (r.get("tool_use") or {}).get("missing_expected_tools",[]))
+                     for r in cases if not (r.get("tool_use") or {}).get("expected_tools_satisfied", True)]
+    lines.append(f"### {model}")
+    lines.append("")
+    lines.append(f"- Satisfied: {len(satisfied_cases)}/{len(cases)}")
+    for sid, cat in satisfied_cases:
+        lines.append(f"  - OK {sid} ({cat})")
+    for sid, cat, missing in missing_cases:
+        lines.append(f"  - MISS {sid} ({cat}) -- missing: {', '.join(missing)}")
+    lines.append("")
+
+now_str = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+summary_name = f"comparison-{run_id_prefix or now_str}"
+summary_md = output_dir / f"{summary_name}.md"
+summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+latest_link = output_dir / "latest-comparison.md"
+if latest_link.exists():
+    latest_link.unlink()
+shutil.copy2(summary_md, latest_link)
+
+print(f"summary: {summary_md}")
+PY

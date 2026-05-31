@@ -140,6 +140,7 @@ No automatic promotion, cross-domain sharing, or model-visible memory by default
 | Search | [Search roadmap](search-roadmap.md) | Planned search capabilities, routing, and local SearXNG policy direction. |
 | Search | [Profiled web search pickup README](profiled-web-search-pickup-README.md) | Pickup notes for the profiled web-search implementation/policy work. |
 | Research | [Deep research report](deep-research-report.md) | Longer-form research/background notes relevant to QuantZhai direction. |
+| Model research | [Model ecosystem research](model-ecosystem-research/README.md) | 2026-05-31 survey: SOTA coding model candidates, MTP/speculative decoding, community GGUF quality reports, adversarial review of current assumptions, and verdict. |
 | Tooling roadmap | [Patch tool roadmap](patch-tool-roadmap.md) | Patch/edit tooling plans for safer repo modification. |
 | Backend lifecycle | [Backend lifecycle control plane](backend-lifecycle-control-plane.md) | #65: BackendManager owns Docker lifecycle; qz-up starts proxy only; /qz/backend/* endpoints; operator guide in §15. |
 | Model selection | [Proxy-owned model selection authority](proxy-model-selection-authority.md) | #65 follow-up: audit + final design for proxy-owned model selection; precedence; qz.model_state.v1; new /qz/model/* endpoints; qz-codex auto-select; no-new-scripts invariant. |
@@ -430,6 +431,17 @@ docs/qwen-reasoning-effort-policy.md
 docs/thetom-oai-responses-compat.md
 docs/subsystem-boundaries-and-gravity-wells.md
 docs/router-mode-migration-plan.md
+docs/model-ecosystem-research/README.md
+docs/model-ecosystem-research/sota-coding-models.md
+docs/model-ecosystem-research/mtp-speculative-models.md
+docs/model-ecosystem-research/community-reports.md
+docs/model-ecosystem-research/adversarial-review.md
+docs/model-ecosystem-research/reasoning-distilled-models.md
+docs/model-ecosystem-research/alternative-models-landscape.md
+docs/model-ecosystem-research/community-buzz-may2026.md
+docs/model-ecosystem-research/extreme-quant-tradeoffs.md
+docs/model-ecosystem-research/verdict.md
+docs/model-ecosystem-research/download-list.md
 ```
 
 ## Maintenance rule

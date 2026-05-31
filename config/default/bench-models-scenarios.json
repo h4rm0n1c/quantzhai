@@ -1,0 +1,134 @@
+{
+  "version": 1,
+  "description": "Cross-model comparison scenarios. Each scenario stages a repo and runs a task against it.",
+  "scenarios": [
+    {
+      "id": "click-readme",
+      "repo": "click",
+      "category": "snap",
+      "expected_tools": ["shell"],
+      "prompt": "Read the README of this Python project and explain what it does in two sentences.",
+      "goal": "Reads README.md (any format) and summarises accurately. Snap-level but requires tool use."
+    },
+    {
+      "id": "click-structure",
+      "repo": "click",
+      "category": "local",
+      "expected_tools": ["shell"],
+      "prompt": "List the main source files under src/click/ and describe what each one does in one line.",
+      "goal": "Enumerate source files and identify their purpose from names or internal comments."
+    },
+    {
+      "id": "click-decorator",
+      "repo": "click",
+      "category": "tool",
+      "expected_tools": ["shell"],
+      "prompt": "Read src/click/decorators.py and explain how the @click.command() decorator works. What does it return and how does it register the function?",
+      "goal": "Read and understand a core piece of Click's decorator API."
+    },
+    {
+      "id": "click-bug-hunt",
+      "repo": "click",
+      "category": "reasoning",
+      "expected_tools": ["shell"],
+      "prompt": "Look through the tests in tests/ and find one test that seems fragile or incomplete. Explain why.",
+      "goal": "Read test code and evaluate test quality — requires judgment."
+    },
+    {
+      "id": "fd-readme",
+      "repo": "fd",
+      "category": "snap",
+      "expected_tools": ["shell"],
+      "prompt": "Read the README and explain what fd does in two sentences.",
+      "goal": "Reads README.md and summarises accurately."
+    },
+    {
+      "id": "fd-structure",
+      "repo": "fd",
+      "category": "local",
+      "expected_tools": ["shell"],
+      "prompt": "List the files under src/ and describe the purpose of each module based on its filename.",
+      "goal": "Enumerate Rust source modules and infer structure from file names."
+    },
+    {
+      "id": "fd-main",
+      "repo": "fd",
+      "category": "tool",
+      "expected_tools": ["shell"],
+      "prompt": "Read src/main.rs and explain how the CLI entry point works. What arguments does it accept and how are they parsed?",
+      "goal": "Read Rust main.rs and understand CLI argument parsing."
+    },
+    {
+      "id": "fd-bug-hunt",
+      "repo": "fd",
+      "category": "reasoning",
+      "expected_tools": ["shell"],
+      "prompt": "Look at the file filtering logic in src/. Find one potential edge case or bug in how patterns are applied. Explain your reasoning.",
+      "goal": "Read Rust filter/walk logic and identify edge cases — requires systems-level reasoning."
+    },
+    {
+      "id": "bubbletea-readme",
+      "repo": "bubbletea",
+      "category": "snap",
+      "expected_tools": ["shell"],
+      "prompt": "Read the README and explain what Bubble Tea is in two sentences.",
+      "goal": "Reads README.md and summarises the TUI framework."
+    },
+    {
+      "id": "bubbletea-structure",
+      "repo": "bubbletea",
+      "category": "local",
+      "expected_tools": ["shell"],
+      "prompt": "List the key Go source files and describe what each one implements.",
+      "goal": "Enumerate Go source files and identify framework components."
+    },
+    {
+      "id": "bubbletea-model",
+      "repo": "bubbletea",
+      "category": "tool",
+      "expected_tools": ["shell"],
+      "prompt": "Read tea.go and explain the Model interface. What methods must a model implement and what does each one do?",
+      "goal": "Read the core TUI abstraction and explain the Model interface contract."
+    },
+    {
+      "id": "bubbletea-bug-hunt",
+      "repo": "bubbletea",
+      "category": "reasoning",
+      "expected_tools": ["shell"],
+      "prompt": "Look at the tea.go source and identify one area where concurrent access could cause a race condition. Explain the risk.",
+      "goal": "Read Go concurrency patterns and identify race conditions — requires reasoning about goroutine safety."
+    },
+    {
+      "id": "stb-readme",
+      "repo": "stb",
+      "category": "snap",
+      "expected_tools": ["shell"],
+      "prompt": "Read the README and explain what the stb library collection is in two sentences.",
+      "goal": "Reads README.md and summarises the single-header library collection."
+    },
+    {
+      "id": "stb-structure",
+      "repo": "stb",
+      "category": "local",
+      "expected_tools": ["shell"],
+      "prompt": "List all the stb_*.h header files and describe what each one does based on its name and a brief look at its top comment.",
+      "goal": "Enumerate headers and infer library purpose from comments."
+    },
+    {
+      "id": "stb-image-api",
+      "repo": "stb",
+      "category": "tool",
+      "expected_tools": ["shell"],
+      "prompt": "Read stb_image.h and list the main public functions. Explain what stbi_load and stbi_image_free do.",
+      "goal": "Read a large C header and extract the public API surface."
+    },
+    {
+      "id": "stb-bug-hunt",
+      "repo": "stb",
+      "category": "reasoning",
+      "expected_tools": ["shell"],
+      "prompt": "Look at the error handling in stb_image.h. Find one place where a failure could silently return garbage instead of signalling an error. Explain.",
+      "goal": "Read C error-handling patterns and identify silent-failure paths — requires low-level reasoning."
+    }
+  ]
+}
