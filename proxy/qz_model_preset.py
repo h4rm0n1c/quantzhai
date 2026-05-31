@@ -36,6 +36,8 @@ _ARCH_OVERRIDES: Dict[str, Dict[str, str]] = {
 }
 
 # Models whose filename contains these substrings get MTP spec override.
+# Note: unsloth's MTP repo names GGUF files without 'MTP' in the filename,
+# so tensor-count heuristics are used as a fallback (see _detect_overrides).
 _MTP_MARKERS = ("MTP", "APEX", "Native-MTP")
 
 _MTP_OVERRIDES: Dict[str, str] = {
@@ -71,6 +73,17 @@ def _detect_overrides(entry: Dict[str, Any]) -> Dict[str, str]:
     # MTP heads: enable speculative decoding
     if any(marker in fn for marker in _MTP_MARKERS):
         overrides.update(_MTP_OVERRIDES)
+    else:
+        # Tensor-count heuristic: models with MTP heads have more tensors than
+        # their base architecture's standard count.  qwen35 27B base has 851
+        # tensors; the MTP variant has 866.  qwen35moe 35B has ~950-1000;
+        # APEX/MTP variants have 15-20 more.
+        tc = entry.get("tensor_count", 0)
+        arch = (entry.get("architecture") or "").lower()
+        _base_counts = {"qwen35": 851, "qwen2": 771, "qwen35moe": 950}
+        base = _base_counts.get(arch)
+        if base and tc > base + 10:
+            overrides.update(_MTP_OVERRIDES)
 
     return overrides
 
