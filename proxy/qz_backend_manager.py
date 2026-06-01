@@ -535,8 +535,10 @@ class BackendManager:
         # always waits longer than the router.
         args += ["--model-load-timeout", str(_os.environ.get("QZ_ROUTER_LOAD_TIMEOUT", _os.environ.get("QZ_MODEL_LOAD_TIMEOUT", "300")))]
         _preset_host = _os.path.join(self._model_dir, "models-preset.ini")
+        print(f"[preset] checking {_preset_host}: exists={_os.path.isfile(_preset_host)}", flush=True)
         if _os.path.isfile(_preset_host):
             args += ["--models-preset", "/models/models-preset.ini"]
+            print(f"[preset] added --models-preset", flush=True)
         return args
 
     def build_docker_run_args(self) -> list[str]:
