@@ -68,7 +68,23 @@ Promising search terms that have yielded working models:
 Rank  Model                          Disk   VRAM   Free   TPS   Why
 1.    24B Opus+Gemini Q5_K_M         18G    21.0G  4.4G   93    Q5 precision, dual reasoning
 2.    Opus I-Compact (APEX MTP)      17G    20.9G  4.5G   100   MTP, reasoning, fast
-3.    24B Opus+Gemini Q6_K           20G    23.4G  2.0G   87    Highest precision that fits
-4.    DuoNeural Code IQ4_XS          19G    22.2G  3.2G   103   Fastest, coding
-5.    Gemma 4 Q5_K_M                 19G    23.2G  2.2G   82    First working Q5
+3.    TeichAI Opus Distill Gemma 4   17G    20.8G  4.6G   76    Opus reasoning on Gemma 4
+4.    24B Opus+Gemini Q6_K           20G    23.4G  2.0G   87    Highest precision that fits
+5.    mudler APEX Gemma 4 I-Compact  15G    19.0G  6.4G   84    Cheapest Gemma 4
+6.    DuoNeural Code IQ4_XS          19G    22.2G  3.2G   103   Fastest, coding
+7.    Gemma 4 Q5_K_M                 19G    23.2G  2.2G   82    Highest Q that fits
 ```
+
+## Gemma 4: The Unexplored Frontier
+
+Gemma 4 is relatively underexplored on this setup. We've confirmed two quantizer sources work:
+
+- **bartowski** — standard quants (Q3_K_M through Q5_K_M). All work.
+- **mudler** — APEX quants. I-Compact and I-Mini confirmed working.
+- **TeichAI** — Opus reasoning distill on Gemma 4. Q4_K_M confirmed working.
+
+Untested but likely work:
+- llmfan46 gemma4 heretic variants (Q3_K_M through Q4_K_M, ~13-17G)
+- mradermacher's i1 quants
+
+The main limitation is that Gemma 4 is an instruct model, not a reasoning model. The TeichAI Opus distill is the only reasoning-distilled Gemma 4 found so far.
