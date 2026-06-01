@@ -431,6 +431,7 @@ docs/qwen-reasoning-effort-policy.md
 docs/thetom-oai-responses-compat.md
 docs/subsystem-boundaries-and-gravity-wells.md
 docs/router-mode-migration-plan.md
+| Benchmark | [Model comparison benchmark](benchmark-model-comparison.md) | 2026-06-01: VRAM, TPS, and model fit testing at 256K context in 26G VRAM. |
 docs/model-ecosystem-research/README.md
 docs/model-ecosystem-research/sota-coding-models.md
 docs/model-ecosystem-research/mtp-speculative-models.md
