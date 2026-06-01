@@ -1729,7 +1729,12 @@ def _assemble_snapshot(
 
     notes: list = []
     if host_observed:
-        notes.append("GPU totals observed via nvidia-smi on host.")
+        # Check if GPU data came from v1/models (preferred) or nvidia-smi fallback
+        _gpu_src = (gpus[0].get("source") or "") if gpus else ""
+        if "backend" in _gpu_src or "models" in _gpu_src:
+            notes.append("GPU totals from llama.cpp /v1/models (allocator-backed).")
+        else:
+            notes.append("GPU totals observed via nvidia-smi on host.")
     else:
         notes.append("nvidia-smi not available; GPU totals unknown.")
     if not backend_metrics_avail:
@@ -1811,9 +1816,15 @@ def build_vram_snapshot(handler=None, *, now: float | None = None) -> dict:
         model_id, model_src = _selected_backend_model_id(handler)
         base_url  = _backend_base_url()
 
-        gpus                      = _parse_nvidia_smi_gpus(timeout=2.0)
-        backend_proc              = _probe_backend_process(container, timeout=1.5)
         backend_memory, _bm_note  = _probe_backend_memory(handler, base_url, timeout=1.5)
+        # Prefer router-provided VRAM breakdown over nvidia-smi. The router
+        # gives per-GPU model/kv/compute breakdown directly from the allocator,
+        # which is more accurate and avoids nvidia-smi overhead.
+        if backend_memory and backend_memory.get("gpus"):
+            gpus = _gpus_from_backend_memory(backend_memory)
+        else:
+            gpus = _parse_nvidia_smi_gpus(timeout=2.0)
+        backend_proc              = _probe_backend_process(container, timeout=1.5)
         metrics, metrics_note     = _probe_backend_metrics(model_id, timeout=1.0)
         props, props_note         = _probe_props(model_id, base_url, timeout=1.0)
         slots, slots_note         = _probe_slots(model_id, base_url, timeout=1.0)
