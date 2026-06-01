@@ -738,6 +738,39 @@ class BackendManager:
                         active[model_id.strip()] = state
         return active
 
+    def get_model_error_info(self, model_id: str) -> dict:
+        """Return error details from the router for *model_id*.
+
+        Reads exit_code, exit_signal, last_error, and failed from the
+        router's /v1/models response for the given model.  Returns an
+        empty dict if the model is not found or has no error info.
+
+        exit_code < 0 means signal death (our subprocess.h encodes
+        killing signals as negative exit codes: -6 = SIGABRT from OOM,
+        -15 = SIGTERM from force-kill).  last_error contains the human-
+        readable error message from CMD_CHILD_TO_ROUTER_ERROR or the
+        GGML_ABORT callback.
+        """
+        status = self.get_models_status()
+        if not status:
+            return {}
+        mid = model_id.strip()
+        for entry in (status.get("data") or []):
+            if not isinstance(entry, dict):
+                continue
+            eid = (entry.get("id") or "").strip()
+            if eid != mid:
+                continue
+            s = entry.get("status") or {}
+            if not isinstance(s, dict):
+                return {}
+            result = {}
+            for key in ("exit_code", "exit_signal", "last_error", "failed"):
+                if key in s:
+                    result[key] = s[key]
+            return result
+        return {}
+
     def is_load_in_flight(self, timeout: float = 120.0) -> bool:
         """Return True if load_model_http was called within *timeout* seconds.
 

@@ -21,7 +21,12 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-# ≤0 = disabled. Must be explicitly enabled by operator.
+# ≤0 = disabled.  Must be explicitly enabled by operator.
+# Warning: the router sends SSE events only after the first decoded token.
+# For 256K context on slow models, prompt processing can take 60-180s —
+# setting this too low triggers false-positive timeouts on legitimate requests.
+# The zombie-slot fix (C++ log-thread EOF handler + proxy dead-child recovery)
+# handles silent child deaths without a timeout, so the default is disabled.
 STREAM_NO_OUTPUT_TIMEOUT_S: float = float(
     os.environ.get("QZ_STREAM_NO_OUTPUT_TIMEOUT_S", "0")
 )

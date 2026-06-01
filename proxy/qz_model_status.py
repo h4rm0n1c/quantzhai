@@ -447,6 +447,9 @@ def build_model_status(handler: Any) -> dict[str, Any]:
 
     # Fetch router status directly
     router_status = "unloaded"
+    _router_last_error = ""
+    _router_exit_code = None
+    _router_failed = None
     if backend_phase == "healthy" and launch_model_path_basename:
         if mgr and callable(getattr(mgr, "get_models_status", None)):
             try:
@@ -461,15 +464,26 @@ def build_model_status(handler: Any) -> dict[str, Any]:
                         } if isinstance(m, dict) else set()
                         if ids & target_ids:
                             router_status = _model_inventory_load_state(m)
+                            # Capture error details from router when available
+                            _router_exit = m.get("status", {})
+                            if isinstance(_router_exit, dict):
+                                _last_error = _router_exit.get("last_error", "")
+                                if _last_error:
+                                    _router_last_error = str(_last_error).strip()
+                                _router_exit_code = _router_exit.get("exit_code")
+                                _router_failed = _router_exit.get("failed")
                             break
             except Exception:
                 pass
 
-    # Runtime crash detection: if the model is now unloaded but the proxy
-    # confirmed it was loaded (and did not call unload_model_http()), the
-    # child process crashed at runtime (SIGABRT, SIGSEGV, OOM abort).
-    # The router does not set failed=True for signal-killed processes because
-    # WEXITSTATUS returns 0 for them — this is the only host-visible signal.
+    # Crash detection: the router now provides direct exit_code/failed/last_error
+    # signals (our C++ fixes).  Use these as the primary detection mechanism.
+    # If the router shows exit_code != 0 or failed == true, the child exited
+    # abnormally.  exit_code < 0 encodes the killing signal (-6 = SIGABRT from
+    # OOM, -15 = SIGTERM from force-kill).  last_error carries the human-readable
+    # error message from CMD_CHILD_TO_ROUTER_ERROR or the GGML_ABORT callback.
+    # Fall back to the old disappearance heuristic (was loaded → now unloaded
+    # without explicit unload) only when the router provides no signals.
     if router_status == "unloaded" and launch_model_path_basename:
         model_stem = launch_model_path_basename
         if model_stem.endswith(".gguf"):
@@ -478,7 +492,18 @@ def build_model_status(handler: Any) -> dict[str, Any]:
                             mgr.was_proxy_confirmed_loaded(model_stem)
         _proxy_unloaded = callable(getattr(mgr, "was_proxy_unloaded_explicitly", None)) and \
                           mgr.was_proxy_unloaded_explicitly(model_stem)
-        if _confirmed_loaded and not _proxy_unloaded:
+        _signal_crash = bool(_router_failed) or (_router_exit_code not in (None, 0))
+        if _signal_crash:
+            if not _proxy_unloaded:
+                router_status = "crashed"
+                if callable(getattr(mgr, "record_runtime_crash", None)):
+                    mgr.record_runtime_crash(model_stem)
+            elif _router_exit_code is not None and _router_exit_code < 0:
+                # Explicit unload with signal death (SIGTERM force-kill).
+                # The proxy unloaded this model intentionally, but the
+                # router confirms it was killed — not a crash.
+                router_status = "unloaded"
+        elif _confirmed_loaded and not _proxy_unloaded:
             router_status = "crashed"
             if callable(getattr(mgr, "record_runtime_crash", None)):
                 mgr.record_runtime_crash(model_stem)
@@ -598,6 +623,7 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         "runtime_failure_error": mgr_snap.get("runtime_failure_error", ""),
         "runtime_failure_error_type": mgr_snap.get("runtime_failure_error_type", ""),
         "runtime_failure_at": mgr_snap.get("runtime_failure_at"),
+        "router_last_error": _router_last_error,
         "backend_died_after_healthy": bool(mgr_snap.get("backend_died_after_healthy", False)),
     }
 

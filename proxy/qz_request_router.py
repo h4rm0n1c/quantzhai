@@ -4086,13 +4086,30 @@ class RequestRouter:
 
                         # --- Transparent dead-child recovery ---
                         # When the inference child crashes the router keeps showing the
-                        # model as "loaded" but returns HTTP 500 on every forwarded request.
-                        # Detect this pattern (5xx + model still appears loaded) and trigger
-                        # a silent reload, holding the SSE channel open with keepalive comments
-                        # so Codex just experiences a pause rather than an error.
+                        # model as "loaded" but returns HTTP 500 on every forwarded request
+                        # (or the TCP connection drops mid-stream).  Detect this pattern
+                        # (5xx / connection error + model still appears loaded) and trigger
+                        # a silent reload, holding the SSE channel open with keepalive
+                        # comments so Codex just experiences a pause rather than an error.
                         _recovered = False
                         import urllib.error as _ue
+                        _should_attempt_recovery = False
                         if isinstance(e, _ue.HTTPError) and e.code >= 500:
+                            _should_attempt_recovery = True
+                        elif not isinstance(e, (BrokenPipeError, ConnectionResetError)):
+                            _mgr_temp = getattr(self.handler, "backend_manager", None)
+                            if _mgr_temp is not None:
+                                try:
+                                    _active_temp = (
+                                        _mgr_temp.get_active_model_ids()
+                                        if callable(getattr(_mgr_temp, "get_active_model_ids", None))
+                                        else None
+                                    )
+                                    if _active_temp:
+                                        _should_attempt_recovery = True
+                                except Exception:
+                                    pass
+                        if _should_attempt_recovery:
                             _mgr = getattr(self.handler, "backend_manager", None)
                             if _mgr is not None:
                                 try:
@@ -4114,6 +4131,58 @@ class RequestRouter:
                                             try: _mgr.load_model_http(_fname)
                                             except Exception: pass
                                         _thr.Thread(target=_dead_child_reload, daemon=True).start()
+
+                                        # Inject the crash reason as an SSE reasoning event so Codex
+                                        # sees why the stream paused (e.g. "CUDA OOM, recovering...").
+                                        try:
+                                            _err_info = _mgr.get_model_error_info(_ids[0]) if _ids else {}
+                                            _err_text = _err_info.get("last_error", "")
+                                            if _err_text:
+                                                from .qz_sse import make_sse_block as _make_block
+                                                # Prepend model status
+                                                _err_text = f"Backend error: {_err_text} — recovering..."
+                                                _self = self
+                                                _seq = 0
+                                                def _write_err_sse(event, data):
+                                                    nonlocal _seq
+                                                    _seq += 1
+                                                    data["sequence"] = _seq
+                                                    _self._write_sse_chunk(
+                                                        _make_block(event, data)
+                                                    )
+                                                _write_err_sse("response.output_item.added", {
+                                                    "output_index": 0,
+                                                    "item": {
+                                                        "id": f"err_{request_id[:8]}",
+                                                        "type": "reasoning",
+                                                        "summary": [],
+                                                        "encrypted_content": None,
+                                                        "status": "in_progress",
+                                                    },
+                                                })
+                                                _write_err_sse("response.reasoning_summary_part.added", {
+                                                    "item_id": f"err_{request_id[:8]}",
+                                                    "output_index": 0,
+                                                    "summary_index": 0,
+                                                    "part": {"type": "summary_text", "text": ""},
+                                                })
+                                                _write_err_sse("response.reasoning_summary_text.delta", {
+                                                    "item_id": f"err_{request_id[:8]}",
+                                                    "delta": _err_text,
+                                                    "summary_index": 0,
+                                                })
+                                                _write_err_sse("response.output_item.done", {
+                                                    "output_index": 0,
+                                                    "item": {
+                                                        "id": f"err_{request_id[:8]}",
+                                                        "type": "reasoning",
+                                                        "summary": [{"type": "summary_text", "text": _err_text}],
+                                                        "encrypted_content": None,
+                                                        "status": "completed",
+                                                    },
+                                                })
+                                        except Exception:
+                                            pass
 
                                         # Wait for the fresh child to be ready (≤90s).
                                         # Send SSE keepalive comments so Codex does not time out.
