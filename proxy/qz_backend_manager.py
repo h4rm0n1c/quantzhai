@@ -522,6 +522,14 @@ class BackendManager:
             "-ctv", self._kv_value,
             "--metrics",
             "--reasoning-format", "deepseek",
+            # HTTP read timeout: how long the router's proxy handler waits for a
+            # child to respond.  Default is 3600s (1 hour) in llama.cpp — far too
+            # long for our setup.  When a child crashes mid-request, the handler
+            # thread blocks in the proxy constructor until this timeout fires,
+            # starving the thread pool and making /v1/models unresponsive.
+            # 300s (5 min) allows long 256K inference while bounding damage from
+            # orphaned proxy connections.
+            "--timeout", "300",
         ]
         if self._spec_default:
             args.append("--spec-default")
