@@ -45,10 +45,14 @@ else
   # B / C: no explicit model — resolve from QuantZhai's selected model (or
   # bootstrap the first catalog entry on a fresh install).
   _preflight_model="$(qz_resolve_effective_model)" || exit $?
-  # For exec mode: inject the resolved model so Codex does not use a stale
-  # config.toml selection from a previous interactive session.
-  if [[ "${QZ_CODEX_ARGS[0]:-}" == "exec" && -n "$_preflight_model" ]]; then
-    QZ_CODEX_ARGS=(exec -m "$_preflight_model" "${QZ_CODEX_ARGS[@]:1}")
+  # Inject the resolved model so Codex always uses whatever the proxy has
+  # loaded, regardless of any stale config.toml selection.
+  if [[ -n "$_preflight_model" ]]; then
+    if [[ "${QZ_CODEX_ARGS[0]:-}" == "exec" ]]; then
+      QZ_CODEX_ARGS=(exec -m "$_preflight_model" "${QZ_CODEX_ARGS[@]:1}")
+    else
+      QZ_CODEX_ARGS=(-m "$_preflight_model" "${QZ_CODEX_ARGS[@]}")
+    fi
   fi
 fi
 
