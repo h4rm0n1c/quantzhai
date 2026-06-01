@@ -1936,27 +1936,53 @@ class ResponsesStreamRuntime:
                                 # skip injection to avoid redundant "Using web_search..." + "Searching..."
                                 _is_proxy_local = self.proxy_tool_registry.is_proxy_local_name(_tool)
                                 if not _is_proxy_local:
-                                    _STATUS_MAP = {
-                                        "apply_patch":       "Applying changes...",
-                                        "exec_command":      "Running command...",
-                                        "update_plan":       "Updating plan...",
-                                        "request_user_input":"Waiting for input...",
-                                        "view_image":        "Loading image...",
-                                        "spawn_agent":       "Spawning agent...",
-                                        "send_input":        "Sending to agent...",
-                                        "resume_agent":      "Resuming agent...",
-                                        "wait_agent":        "Waiting for agent...",
-                                    }
-                                    if _tool in _STATUS_MAP:
-                                        _status = _STATUS_MAP[_tool]
+                                    # Use the actual tool arguments to build a descriptive status
+                                    _status = "Working..."
+                                    _args_raw = _item.get("arguments") or _item.get("input") or ""
+                                    _args_str = str(_args_raw) if not isinstance(_args_raw, str) else _args_raw
+                                    if _tool == "exec_command":
+                                        # Extract command from JSON arguments: {"cmd": "...", "description": "..."}
+                                        _cmd = _args_str
+                                        try:
+                                            import json as _j
+                                            _parsed = _j.loads(_args_str)
+                                            _cmd = _parsed.get("cmd") or _parsed.get("command") or _args_str
+                                        except Exception:
+                                            pass
+                                        _short = _cmd.strip()[:80]
+                                        _status = f"Running: {_short}"
+                                    elif _tool == "apply_patch":
+                                        # Extract operation info: {"operation":{"type":"update_file","path":"..."}}
+                                        _op_type = "patch"
+                                        _op_path = ""
+                                        try:
+                                            import json as _j
+                                            _parsed = _j.loads(_args_str)
+                                            _op = _parsed.get("operation") or _parsed
+                                            if isinstance(_op, dict):
+                                                _op_type = _op.get("type", _op.get("operation", "patch"))
+                                                _op_path = _op.get("path", "")
+                                        except Exception:
+                                            pass
+                                        if _op_path:
+                                            _status = f"Patching: {_op_path}"
+                                        else:
+                                            _status = f"Applying {_op_type}..."
+                                    elif _tool == "update_plan":
+                                        _status = "Updating plan..."
+                                    elif _tool in ("request_user_input", "request_permissions"):
+                                        _status = "Waiting for input..."
+                                    elif _tool == "view_image":
+                                        _status = "Loading image..."
+                                    elif _tool in ("spawn_agent", "send_input", "resume_agent", "wait_agent"):
+                                        _status = f"{_tool.replace('_', ' ').title()}..."
                                     elif any(k in _tool for k in ("shell", "bash", "exec", "run", "cmd")):
-                                        _status = "Running command..."
+                                        _short = _args_str.strip()[:80] if _args_str.strip() else _tool
+                                        _status = f"Running: {_short}"
                                     elif any(k in _tool for k in ("patch", "write", "edit", "file")):
-                                        _status = "Applying changes..."
+                                        _status = f"Applying {_tool}..."
                                     elif _tool:
                                         _status = f"Using {_tool}..."
-                                    else:
-                                        _status = "Working..."
                                     try:
                                         _inject_idx = max(0, hs.max_output_index + 1)
                                         sequence = self._inject_working_status(
