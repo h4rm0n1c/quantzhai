@@ -1,5 +1,23 @@
 # Upstream Merge Process
 
+## Agent Autonomy Scope
+
+The agent is authorised to perform the following without confirmation:
+
+- `git fetch upstream master` and `git fetch origin` (read-only operations)
+- Cherry-pick upstream commits into `main` and resolve conflicts per the rules below
+- Merge TheTom's `origin/feature/turboquant-kv-cache` into `main` and resolve conflicts
+- Push `main` to `fork/main` after any of the above
+- Notify the user of what was done and any notable conflict resolutions
+
+The agent must NOT do without explicit user confirmation:
+
+- Open PRs or issues on any upstream repository (ggml-org/llama.cpp, TheTom/llama-cpp-turboquant, etc.)
+- Create new branches on the fork
+- Change the build target (`QZ_TQ_BRANCH` in `scripts/qz-env`)
+- Add new model downloads or modify `var/models/`
+- Any action that affects production uptime without prior notice
+
 ## Branch Architecture
 
 ```
