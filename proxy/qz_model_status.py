@@ -278,6 +278,10 @@ def _request_admission_state(
     # serving.  Terminal — the model must be explicitly re-selected to retry.
     if router_status == "crashed":
         return "failed_runtime_crash"
+    # Router is self-healing: the child crashed but the router will reload
+    # automatically.  Treat like loading — hold the SSE channel open.
+    if router_status == "recovering":
+        return "loading"
     if not selected_identity:
         return "unavailable"
     if last_load_result == "failed" or launch_model_error:
@@ -450,6 +454,7 @@ def build_model_status(handler: Any) -> dict[str, Any]:
     _router_last_error = ""
     _router_exit_code = None
     _router_failed = None
+    _router_recovering = False
     if backend_phase == "healthy" and launch_model_path_basename:
         if mgr and callable(getattr(mgr, "get_models_status", None)):
             try:
@@ -476,37 +481,30 @@ def build_model_status(handler: Any) -> dict[str, Any]:
             except Exception:
                 pass
 
-    # Crash detection: the router now provides direct exit_code/failed/last_error
-    # signals (our C++ fixes).  Use these as the primary detection mechanism.
-    # If the router shows exit_code != 0 or failed == true, the child exited
-    # abnormally.  exit_code < 0 encodes the killing signal (-6 = SIGABRT from
-    # OOM, -15 = SIGTERM from force-kill).  last_error carries the human-readable
-    # error message from CMD_CHILD_TO_ROUTER_ERROR or the GGML_ABORT callback.
-    # Fall back to the old disappearance heuristic (was loaded → now unloaded
-    # without explicit unload) only when the router provides no signals.
-    if router_status == "unloaded" and launch_model_path_basename:
-        model_stem = launch_model_path_basename
-        if model_stem.endswith(".gguf"):
-            model_stem = model_stem[:-5]
-        _confirmed_loaded = callable(getattr(mgr, "was_proxy_confirmed_loaded", None)) and \
-                            mgr.was_proxy_confirmed_loaded(model_stem)
-        _proxy_unloaded = callable(getattr(mgr, "was_proxy_unloaded_explicitly", None)) and \
-                          mgr.was_proxy_unloaded_explicitly(model_stem)
-        _signal_crash = bool(_router_failed) or (_router_exit_code not in (None, 0))
-        if _signal_crash:
-            if not _proxy_unloaded:
-                router_status = "crashed"
-                if callable(getattr(mgr, "record_runtime_crash", None)):
-                    mgr.record_runtime_crash(model_stem)
-            elif _router_exit_code is not None and _router_exit_code < 0:
-                # Explicit unload with signal death (SIGTERM force-kill).
-                # The proxy unloaded this model intentionally, but the
-                # router confirms it was killed — not a crash.
-                router_status = "unloaded"
-        elif _confirmed_loaded and not _proxy_unloaded:
+    # Crash detection and self-heal: the router now owns crash recovery.
+    # When a child crashes, the router sets recovering=true (transient,
+    # will retry) or failed=true (permanent).  The proxy just reads these
+    # signals and reacts — no more disappearance heuristic or background
+    # unload+reload threads.
+    if router_status == "unloaded":
+        # Read recovering signal from router status
+        _router_recovering = False
+        if backend_phase == "healthy" and mgr and callable(getattr(mgr, "get_models_status", None)):
+            try:
+                _sd = mgr.get_models_status()
+                if isinstance(_sd, dict):
+                    for _m in (_sd.get("data") or []):
+                        if isinstance(_m, dict):
+                            _s = _m.get("status") or {}
+                            if isinstance(_s, dict) and _s.get("recovering"):
+                                _router_recovering = True
+                                break
+            except Exception:
+                pass
+        if _router_recovering:
+            router_status = "recovering"
+        elif bool(_router_failed) or (_router_exit_code not in (None, 0)):
             router_status = "crashed"
-            if callable(getattr(mgr, "record_runtime_crash", None)):
-                mgr.record_runtime_crash(model_stem)
 
     # GPU gate: if require_gpu=True and GPU is not confirmed, model is not ready.
     # Blocking GPU states: cpu_fallback, failed, unknown_after_retries.
@@ -624,6 +622,7 @@ def build_model_status(handler: Any) -> dict[str, Any]:
         "runtime_failure_error_type": mgr_snap.get("runtime_failure_error_type", ""),
         "runtime_failure_at": mgr_snap.get("runtime_failure_at"),
         "router_last_error": _router_last_error,
+        "router_recovering": _router_recovering,
         "backend_died_after_healthy": bool(mgr_snap.get("backend_died_after_healthy", False)),
     }
 
