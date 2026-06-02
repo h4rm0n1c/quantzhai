@@ -11,7 +11,6 @@ Measured: backend_process_used_mib from llama.cpp allocator (`/v1/models` → `m
 |-------|-----------|------|------|-----|------|-----------|---------|-----|-----------|
 | **24B Opus+Gemini Q5_K_M** | [mradermacher/...-GGUF](https://huggingface.co/mradermacher/Qwen3.5-24B-A3B-Claude-Opus-Gemini-3.1-Pro-Reasoning-Distilled-heretic-GGUF) | 18G | 21.0G | 1.9G | 4.4G | **105** | **91** | ❌ | Claude Opus + Gemini 3.1 Pro |
 | **Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled-APEX-MTP-I-Compact** | [mudler/...-APEX-MTP-GGUF](https://huggingface.co/mudler/Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled-APEX-MTP-GGUF) | 17G | 20.9G | 1.9G | 4.5G | **24** | **72** | ✅ | Claude Opus 4.7 distilled |
-| **Qwen3-8B DeepSeek v3.2 distill IQ4_XS** | [TeichAI/...-GGUF](https://huggingface.co/TeichAI/Qwen3-8B-DeepSeek-v3.2-Speciale-Distill-GGUF) | 5G | 20.1G | 13.1G | 5.3G | **544** | **106** | ❌ | DeepSeek v3.2 reasoning |
 | **DuoNeural Code imatrix IQ4_XS** | [DuoNeural/...-GGUF](https://huggingface.co/DuoNeural/Qwen3.6-35B-A3B-Code-imatrix-GGUF) | 19G | 22.2G | 1.9G | 3.2G | **110** | **99** | ❌ | coding imatrix |
 | **24B Opus+Gemini Q6_K** | [mradermacher/...-GGUF](https://huggingface.co/mradermacher/Qwen3.5-24B-A3B-Claude-Opus-Gemini-3.1-Pro-Reasoning-Distilled-heretic-GGUF) | 20G | 23.4G | 1.9G | 2.0G | — | 87 | ❌ | Claude Opus + Gemini 3.1 Pro |
 | **Gemma 4 Opus Distill Q4_K_M** | [TeichAI/...-GGUF](https://huggingface.co/TeichAI/gemma-4-26B-A4B-it-Claude-Opus-Distill-v2-GGUF) | 17G | 20.8G | 1.9G | 4.6G | **96** | **83** | ❌ | Opus on Gemma 4 |
