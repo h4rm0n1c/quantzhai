@@ -15,6 +15,8 @@ Read these first for current implementation authority:
 
 The authority map tells agents which documents are current, which documents are historical inputs, and which stale assumptions must not be used for new work. The task hierarchy turns that authority map into the current execution order. The stocktake gives a quick "where are we now" for agents starting fresh.
 
+7. [Upstream merge process](maintenance-upstream-merge-process.md) — how to handle ggml-org/llama.cpp and TheTom updates without breaking our patches
+
 Current hard rules:
 
 ```text
