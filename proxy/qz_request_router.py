@@ -744,12 +744,10 @@ class RequestRouter:
                 if requested and requested in (current_launch, current_stem):
                     return False
 
-            # Dedup 2: skip if this model crashed recently (runtime OOM/abort).
-            if callable(getattr(mgr, "is_runtime_crash_recent", None)):
-                if mgr.is_runtime_crash_recent(requested):
-                    return False
+        # Dedup 2: crash throttle removed — router owns recovery via
+        # the recovering flag and reload_attempts in /v1/models.
 
-            # Same-underlying-model optimisation: if the requested profile/alias
+        # Same-underlying-model optimisation: if the requested profile/alias
             # resolves to the same backend_target as a currently loaded model,
             # skip the unload→load cycle entirely — just update the selection.
             # Same-underlying-GGUF check: prevent dual-loading when a profile

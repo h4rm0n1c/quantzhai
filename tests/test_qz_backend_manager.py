@@ -1273,60 +1273,9 @@ class RuntimeCrashTrackingTests(unittest.TestCase):
     def _mgr(self):
         return _make_mgr(autostart=False, server_port=29999)
 
-    def test_load_marks_model_confirmed(self):
-        import json
-        from unittest.mock import patch, MagicMock
-        mgr = self._mgr()
-        resp = MagicMock()
-        resp.__enter__ = lambda s: s
-        resp.__exit__ = MagicMock(return_value=False)
-        resp.status = 200
-        resp.read.return_value = b"{}"
-        with patch("urllib.request.urlopen", return_value=resp):
-            mgr.load_model_http("kuato.gguf")
-        self.assertTrue(mgr.was_proxy_confirmed_loaded("kuato"))
-        self.assertFalse(mgr.was_proxy_unloaded_explicitly("kuato"))
-
-    def test_unload_marks_model_unloaded(self):
-        import json
-        from unittest.mock import patch, MagicMock
-        mgr = self._mgr()
-        resp = MagicMock()
-        resp.__enter__ = lambda s: s
-        resp.__exit__ = MagicMock(return_value=False)
-        resp.status = 200
-        resp.read.return_value = b"{}"
-        with patch("urllib.request.urlopen", return_value=resp):
-            mgr.load_model_http("kuato.gguf")
-            mgr.unload_model_http("kuato")
-        self.assertFalse(mgr.was_proxy_confirmed_loaded("kuato"))
-        self.assertTrue(mgr.was_proxy_unloaded_explicitly("kuato"))
-
-    def test_record_crash_and_recent_check(self):
-        mgr = self._mgr()
-        self.assertFalse(mgr.is_runtime_crash_recent("kuato"))
-        mgr.record_runtime_crash("kuato")
-        self.assertTrue(mgr.is_runtime_crash_recent("kuato", window=60.0))
-        self.assertFalse(mgr.is_runtime_crash_recent("other-model"))
-
-    def test_crash_not_recent_after_window(self):
-        mgr = self._mgr()
-        mgr.record_runtime_crash("kuato")
-        self.assertFalse(mgr.is_runtime_crash_recent("kuato", window=0.0))
-
-    def test_reload_clears_crash_from_confirmed_set(self):
-        from unittest.mock import patch, MagicMock
-        mgr = self._mgr()
-        resp = MagicMock()
-        resp.__enter__ = lambda s: s
-        resp.__exit__ = MagicMock(return_value=False)
-        resp.status = 200
-        resp.read.return_value = b"{}"
-        mgr.record_runtime_crash("kuato")
-        # A subsequent successful load should re-confirm the model
-        with patch("urllib.request.urlopen", return_value=resp):
-            mgr.load_model_http("kuato.gguf")
-        self.assertTrue(mgr.was_proxy_confirmed_loaded("kuato"))
+    # Crash tracking tests removed — the C++ router now owns crash recovery
+    # via the recovering flag, exit_code, last_error, and reload_attempts.
+    # The proxy reads these signals directly from /v1/models.
 
 
 # ---------------------------------------------------------------------------

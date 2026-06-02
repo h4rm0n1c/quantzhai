@@ -330,16 +330,9 @@ class BackendManager:
         # model inventory (/v1/models) confirms the new model.
         self._last_load_attempted_at: float | None = None
 
-        # Runtime crash tracking — detects when a model the proxy confirmed
-        # as loaded disappears from the router inventory without the proxy
-        # having called unload_model_http().  This is the only host-visible
-        # signal for a child process crash (SIGABRT/SIGSEGV) since the child's
-        # port is container-internal and the router does not set failed=True
-        # for signal-killed processes (exit_code reads as 0 via WEXITSTATUS).
-        self._proxy_loaded_models: set[str] = set()   # confirmed loaded by proxy
-        self._proxy_unloaded_models: set[str] = set() # intentionally unloaded by proxy
-        self._last_runtime_crash_model: str = ""
-        self._last_runtime_crash_at: float | None = None
+        # (Crash tracking was here — now owned by the C++ router via the
+        # recovering flag, exit_code, last_error, and reload_attempts in
+        # /v1/models.  The proxy reads these signals directly.)
 
         # State
         initial_phase = PHASE_IDLE if autostart else PHASE_DISABLED
@@ -643,11 +636,8 @@ class BackendManager:
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 if 200 <= int(resp.status) < 300:
-                    stem = model_name  # already stripped of .gguf
                     with self._lock:
                         self._last_load_attempted_at = time.time()
-                        self._proxy_loaded_models.add(stem)
-                        self._proxy_unloaded_models.discard(stem)
                     return {"ok": True}
                 return {"ok": False, "error": f"HTTP {resp.status}"}
         except Exception as exc:
@@ -668,46 +658,14 @@ class BackendManager:
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 if 200 <= int(resp.status) < 300:
-                    # Track intentional unloads so crash detection can
-                    # distinguish them from unexpected disappearances.
-                    with self._lock:
-                        self._proxy_unloaded_models.add(model_id)
-                        self._proxy_loaded_models.discard(model_id)
                     return {"ok": True}
                 return {"ok": False, "error": f"HTTP {resp.status}"}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-    def record_runtime_crash(self, model_id: str) -> None:
-        """Record that a model crashed at runtime (unexpected unload).
-
-        Called when the router inventory shows a model as unloaded that the
-        proxy confirmed was loaded, without the proxy having called
-        unload_model_http() for it.  Prevents auto-trigger from reloading
-        the crashed model in a tight OOM loop.
-        """
-        with self._lock:
-            self._last_runtime_crash_model = model_id
-            self._last_runtime_crash_at = time.time()
-            self._proxy_loaded_models.discard(model_id)
-
-    def is_runtime_crash_recent(self, model_id: str, window: float = 120.0) -> bool:
-        """Return True if model_id crashed within the last ``window`` seconds."""
-        with self._lock:
-            if self._last_runtime_crash_model != model_id:
-                return False
-            t = self._last_runtime_crash_at
-        return t is not None and (time.time() - t) < window
-
-    def was_proxy_confirmed_loaded(self, model_id: str) -> bool:
-        """Return True if load_model_http() confirmed this model as loaded."""
-        with self._lock:
-            return model_id in self._proxy_loaded_models
-
-    def was_proxy_unloaded_explicitly(self, model_id: str) -> bool:
-        """Return True if unload_model_http() was called for this model."""
-        with self._lock:
-            return model_id in self._proxy_unloaded_models
+    # Crash tracking methods removed — the C++ router now owns crash recovery
+    # via the recovering flag, exit_code, last_error, and reload_attempts.
+    # The proxy reads these signals directly from /v1/models.
 
     def get_loaded_model_ids(self) -> list[str]:
         """Return ids of all currently loaded models from GET /v1/models."""
