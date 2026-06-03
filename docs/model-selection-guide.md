@@ -8,9 +8,9 @@ A model that works on this setup has these characteristics:
 
 | Property | Required | Why |
 |----------|----------|-----|
-| **Architecture** | `qwen35moe`, `qwen3moe`, `gemma4`, or `mistral3` | All four work with turbo3 KV at 256K on dual-GPU 10,16. `qwen3` dense is the only proven failure (14G KV kills budget). |
-| **Disk size** | 13-20G | Under 13G is wasted VRAM headroom. Over 20G doesn't leave room for KV cache (~2G MoE, ~14G dense). |
-| **VRAM budget** | 26G total | Model + KV cache + compute buffers + MTP heads must fit. MoE: model + 2G KV. Dense: model + 14G KV. |
+| **Architecture** | `qwen35moe`, `qwen3moe`, `gemma4`, `mistral3`, or `qwen35` dense | All five work with turbo3 KV at 256K on dual-GPU 10,16. Dense confirmed: Qwen3.6-27B-NEO-CODE loads at 256K with turbo3. |
+| **Disk size** | 13-20G | Under 13G is wasted VRAM headroom. Over 20G doesn't leave room for KV cache (~2G with turbo3). |
+| **VRAM budget** | 26G total | Model + KV cache (~2G with turbo3) + compute buffers must fit. |
 | **Context** | 262144 native | Server is pinned at 256K. Models with smaller native context either fail or waste VRAM. |
 | **Source** | mudler, bartowski, mradermacher, llmfan46 | These quantizers consistently produce loadable GGUFs. unsloth and byteshape are unreliable. |
 
@@ -18,12 +18,12 @@ A model that works on this setup has these characteristics:
 
 At 256K, KV cache is the dominant VRAM cost:
 
-| Type | KV cache | Model budget | Headroom |
-|------|----------|-------------|----------|
+| Type | KV cache (turbo3) | Model budget | Headroom |
+|------|-------------------|-------------|----------|
 | **MoE** (`qwen35moe`, `gemma4`) | **~2G** | Up to **22G** on disk | Generous |
-| **Dense** (`qwen3`, `qwen35`) | **~14G** | Up to **10G** on disk | Tight |
+| **Dense** (`qwen3`, `qwen35`) | **~2G** | Up to **22G** on disk | Generous |
 
-This is why MoE dominates: dense models spend 60% of VRAM on cache alone.
+With turbo3, dense models no longer spend 60% of VRAM on cache — both MoE and dense use ~2G for KV at 256K.
 
 ## Working Sources (by reliability)
 
@@ -54,7 +54,7 @@ Promising search terms that have yielded working models:
 
 ## What to Avoid
 
-- `qwen3` (dense) at 256K — 14G KV cache kills budget
+- `qwen3` (dense) at 256K *without* turbo3 — 14G KV cache kills budget. With turbo3 (~2G), dense models fit fine.
 - Models with native context under 256K — can't use server context
 - unsloth/byteshape quants — inconsistent quality
 - Disk size > 20G — no room for cache

@@ -22,6 +22,7 @@ Measured: backend_process_used_mib from llama.cpp allocator (`/v1/models` → `m
 | google_gemma-4-26B-A4B-it-Q3_K_M | [bartowski/...-GGUF](https://huggingface.co/bartowski/google_gemma-4-26B-A4B-it-GGUF) | 13G | 17.3G | 1.9G | 8.1G | — | 78 | ❌ | Google Gemma 4 |
 | **Qwen3-Coder-30B-A3B APEX-Mini** | [mudler/...-APEX-GGUF](https://huggingface.co/mudler/Qwen3-Coder-30B-APEX-GGUF) | 12G | — | — | — | — | — | ✅ | `qwen3moe` arch, MTP capable |
 | **Devstral-Small-2-24B IQ4_XS** | [bartowski/...-GGUF](https://huggingface.co/bartowski/mistralai_Devstral-Small-2-24B-Instruct-2512-GGUF) | 12G | — | — | — | — | — | ❌ | `mistral3` arch |
+| **Qwen3.6-27B-NEO-CODE IQ4_XS** | — | 16G | — | — | — | — | — | ❌ | `qwen35` dense arch, testing needed |
 
 ## Failed to load
 
@@ -48,7 +49,7 @@ The endpoint returns both `prompt_per_second` (input processing including reason
 - **bartowski's quants** are reliable across architectures (both Gemma 4 variants work)
 - **turbo2 KV** tested on Gemma 4 Q5_K_M: no VRAM savings on MoE (KV cache too small), TPS improved 82 vs 76
 - **mradermacher's imatrix quants** for the 24B Opus+Gemini model are solid — IQ4_XS through Q6_K all work
-- **Dense models at 256K** (Qwen3-8B/14B) spend ~60% of VRAM on KV cache alone — only makes sense for small models or short-context use
+- **Dense models at 256K with turbo3** bring KV cache from ~14G to ~2G, making them viable on 26G dual-GPU. Qwen3.6-27B-NEO-CODE (16G on disk) loads at 256K on split 10,16 with turbo3. Benchmarks pending.
 - **`qwen3moe` architecture** (Qwen3-Coder-30B-A3B) works with turbo3 KV cache at 256K on dual-GPU split 10,16. The APEX-Mini variant (12G) fits comfortably. Benchmarks pending.
 - **`mistral3` architecture** (Devstral-Small-2-24B) works with turbo3 KV cache at 256K on dual-GPU split 10,16. The IQ4_XS variant (12G) fits comfortably. Benchmarks pending.
 
