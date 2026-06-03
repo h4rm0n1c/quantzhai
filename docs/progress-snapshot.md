@@ -1,6 +1,6 @@
 # QuantZhai Progress Snapshot
 
-Last updated: 2026-05-31 (BrainCase memory manager, deterministic intercept layer, system prompt v2).
+Last updated: 2026-06-03 (CUDA peer access fix, qwen3moe/mistral3 validation, benchmark corrections).
 
 See `docs/current-stocktake.md` for the full point-in-time state summary.
 
@@ -184,7 +184,9 @@ BrainCaseDB is NOT the target for operational state.
 23. ~~MTP draft speculation~~ — done (2026-05-29); models-preset.ini, confirmed on IQ4_XS at 10,16 split.
 24. ~~BrainCase Limbicore session stack (#82)~~ — done (2026-05-31); impaction/percolate, orchestrator, management pressure, powernap.
 25. ~~Deterministic intercept layer (#83)~~ — done (2026-05-31); sandbox/network escalation, AP-1/AP-1b/AP-4, E-1, CorrectionTracker.
-26. Streaming reliability — structurally improved; side-effect residual bounded in place by design.
+26. ~~CUDA peer access fallback~~ — done (2026-06-03); host-staged cross-GPU copy for non-NVLink RTX 3080 + V100. Fixes `cudaMemcpyPeerAsync`→abort during MUL_MAT with tensor split.
+27. ~~qwen3moe + mistral3 architecture validation~~ — done (2026-06-03); both load at 256K with turbo3 on dual-GPU 10,16. Previous "KV cache allocation fails" was testing without turbo3.
+28. Streaming reliability — structurally improved; side-effect residual bounded in place by design.
 27. LLM signal system — repeated-read v1 done; repeated-read v2 blocked on SQLite.
 28. Phase 1 SQLite substrate — parked (#2); BrainCaseDB proven but operational store TBD.
 29. qz-write-runtime-state replacement (#46) — OperationalStore Slice B+C (next concrete work).

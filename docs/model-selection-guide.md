@@ -8,7 +8,7 @@ A model that works on this setup has these characteristics:
 
 | Property | Required | Why |
 |----------|----------|-----|
-| **Architecture** | `qwen35moe` or `gemma4` | Only proven arches. `mistral3`, `qwen3moe`, `qwen3` all fail KV cache at 256K on dual-GPU tensor split. |
+| **Architecture** | `qwen35moe`, `qwen3moe`, `gemma4`, or `mistral3` | All four work with turbo3 KV at 256K on dual-GPU 10,16. `qwen3` dense is the only proven failure (14G KV kills budget). |
 | **Disk size** | 13-20G | Under 13G is wasted VRAM headroom. Over 20G doesn't leave room for KV cache (~2G MoE, ~14G dense). |
 | **VRAM budget** | 26G total | Model + KV cache + compute buffers + MTP heads must fit. MoE: model + 2G KV. Dense: model + 14G KV. |
 | **Context** | 262144 native | Server is pinned at 256K. Models with smaller native context either fail or waste VRAM. |
@@ -28,7 +28,7 @@ This is why MoE dominates: dense models spend 60% of VRAM on cache alone.
 ## Working Sources (by reliability)
 
 1. **mudler** — APEX (MTP) quants for qwen35moe. Consistently 60-100 TPS. MTP speculative decoding. Best overall.
-2. **bartowski** — Gemma 4 quants only (qwen35moe also available but untested). Reliable.
+2. **bartowski** — Gemma 4 and mistral3 quants. Reliable.
 3. **mradermacher** — imatrix quants for 24B MoE reasoning distills. Q5_K_M through Q6_K all work.
 4. **llmfan46** — Heretic quants, qwen35moe base. The originals. Still work.
 
@@ -54,8 +54,6 @@ Promising search terms that have yielded working models:
 
 ## What to Avoid
 
-- `mistral3` architecture — fails KV cache on tensor split
-- `qwen3moe` architecture — same failure mode
 - `qwen3` (dense) at 256K — 14G KV cache kills budget
 - Models with native context under 256K — can't use server context
 - unsloth/byteshape quants — inconsistent quality

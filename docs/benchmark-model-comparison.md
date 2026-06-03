@@ -20,17 +20,15 @@ Measured: backend_process_used_mib from llama.cpp allocator (`/v1/models` → `m
 | Qwen3.6-35B-A3B-APEX-I-Mini | [mudler/...-APEX-GGUF](https://huggingface.co/mudler/Qwen3.6-35B-A3B-APEX-GGUF) | 14G | 24.9G | 1.9G | 1.1G | — | 101 | ✅ | Base model |
 | Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved.IQ4_XS | [llmfan46/...-Native-MTP-Preserved-GGUF](https://huggingface.co/llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF) | 19G | 25.0G | 1.9G | 0.0G | — | 91 | ✅ | Base model |
 | google_gemma-4-26B-A4B-it-Q3_K_M | [bartowski/...-GGUF](https://huggingface.co/bartowski/google_gemma-4-26B-A4B-it-GGUF) | 13G | 17.3G | 1.9G | 8.1G | — | 78 | ❌ | Google Gemma 4 |
+| **Qwen3-Coder-30B-A3B APEX-Mini** | [mudler/...-APEX-GGUF](https://huggingface.co/mudler/Qwen3-Coder-30B-APEX-GGUF) | 12G | — | — | — | — | — | ✅ | `qwen3moe` arch, MTP capable |
+| **Devstral-Small-2-24B IQ4_XS** | [bartowski/...-GGUF](https://huggingface.co/bartowski/mistralai_Devstral-Small-2-24B-Instruct-2512-GGUF) | 12G | — | — | — | — | — | ❌ | `mistral3` arch |
 
 ## Failed to load
 
 | Model | HF Source | Reason |
 |-------|-----------|--------|
-| unsloth/Devstral-Small-2-24B (various quants) | — | `mistral3` arch: KV cache allocation fails on dual-GPU tensor split |
-| byteshape/Devstral-Small-2-24B | — | same root cause |
 | mudler/Qwen3.6-35B-A3B-APEX-I-Compact | — | VRAM exceeded (17G + 3G KV + MTP ≈ OOM) |
 | DeepSeek-R1-Distill-Qwen-32B | — | 131K native context model doesn't support 262K server ctx |
-| Qwen3-Coder-30B-A3B | — | `qwen3moe` arch: KV cache allocation fails (different from qwen35moe) |
-| Qwen3.5-24B-A3B (Devstral base) | — | `mistral3` arch: same issue as Devstral |
 
 ## Speed: Prompt TPS vs Generation TPS
 
@@ -51,7 +49,8 @@ The endpoint returns both `prompt_per_second` (input processing including reason
 - **turbo2 KV** tested on Gemma 4 Q5_K_M: no VRAM savings on MoE (KV cache too small), TPS improved 82 vs 76
 - **mradermacher's imatrix quants** for the 24B Opus+Gemini model are solid — IQ4_XS through Q6_K all work
 - **Dense models at 256K** (Qwen3-8B/14B) spend ~60% of VRAM on KV cache alone — only makes sense for small models or short-context use
-- **The `qwen3moe` architecture** (Qwen3-Coder-30B-A3B) does NOT work — KV cache allocation fails, different from `qwen35moe`
+- **`qwen3moe` architecture** (Qwen3-Coder-30B-A3B) works with turbo3 KV cache at 256K on dual-GPU split 10,16. The APEX-Mini variant (12G) fits comfortably. Benchmarks pending.
+- **`mistral3` architecture** (Devstral-Small-2-24B) works with turbo3 KV cache at 256K on dual-GPU split 10,16. The IQ4_XS variant (12G) fits comfortably. Benchmarks pending.
 
 ## Recommended model
 
