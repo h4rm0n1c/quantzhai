@@ -505,16 +505,19 @@ class BackendManager:
             "--tensor-split", self._tensor_split,
             "--main-gpu", str(self._main_gpu),
             "--kv-unified",
-            "--reasoning", "on",
-            "--reasoning-budget", self._reasoning_budget,
-            "--reasoning-budget-message", self._reasoning_budget_msg,
+            # Reasoning config is set via models-preset.ini [*] global section.
+            # DO NOT hardcode --reasoning here — CLI args take highest precedence
+            # in the router's preset cascade (server-models.cpp:304-306) and
+            # would override per-model overrides from the INI file.
+            #--reasoning "on" (moved to models-preset.ini [*])
             "--cache-ram", str(self._cache_ram),
             "--cache-reuse", str(self._cache_reuse),
             "--mlock",
             "-ctk", self._kv_key,
             "-ctv", self._kv_value,
             "--metrics",
-            "--reasoning-format", "deepseek",
+            # --reasoning-format was moved to models-preset.ini [*] for
+            # the same CLI-precedence reason as --reasoning above.
             # HTTP read timeout: how long the router's proxy handler waits for a
             # child to respond.  Default is 3600s (1 hour) in llama.cpp — far too
             # long for our setup.  When a child crashes mid-request, the handler
