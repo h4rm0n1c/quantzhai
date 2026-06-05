@@ -1,6 +1,6 @@
 # QuantZhai Full Model Benchmark Report
 
-*Generated: 2026-06-05 17:53:00 UTC*
+*Generated: 2026-06-05 18:13:19 UTC*
 *15 models benchmarked*
 
 ## Hardware
@@ -50,7 +50,7 @@
 ## Warm Gen TPS by Model (descending)
 
 | # | Model | 🔥 G t/s | Params | Architecture |
-|---|---:|---:|---:|
+|---|---:|---:|---:|---:|
 | 1 | `DeepSeek R1 8B` | 82 | 8.2B | MoE |
 | 2 | `Qwen3-Coder-30B` | 72 | 30.5B | MoE |
 | 3 | `Gemma-4-26B-APEX` | 70 | 25.2B | MoE |
@@ -70,7 +70,7 @@
 ## Cold vs Warm TTFT Speedup
 
 | # | Model | ❄️ TTFT | 🔥 TTFT | Speedup |
-|---|---:|---:|---:|
+|---|---:|---:|---:|---:|
 | 1 | `Qwen3.6-35B-Native-MTP (Q4_K_S)` | 16693ms | 333ms | 50x |
 | 2 | `Qwen3.6-35B-Claude-Compact` | 16651ms | 272ms | 61x |
 | 3 | `Qwen3.6-35B-Claude-Mini` | 14874ms | 356ms | 42x |
