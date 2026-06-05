@@ -4,9 +4,11 @@
 **Backend:** llama.cpp turboquant fork, CUDA 12.8, `--tensor-split 10,16 --split-mode layer`
 **KV:** `-ctk q8_0 -ctv turbo3 --kv-unified --cache-ram 4096` at 131072 ctx
 **Benchmark:** 5-token prompt, 50-token generation, temp=0
+**Benchmark script:** `scripts/qz-bench-telemetry`
 
 > All models compiled against `main` @ [`0a77eb7f`](https://github.com/h4rm0n1c/llama-cpp-turboquant-zhai/tree/0a77eb7f0cfec7db98ea5756eeb5def6b5e0225a)
-> with the pinned staging pool for non-NVLink cross-GPU copies.
+> with the pinned staging pool for non-NVLink cross-GPU copies.  
+> Use `qz-bench-telemetry --prompt "..." --max-tokens 200 --output result.json` to run your own.
 
 ## GGUF Files (all unique, no symlinks)
 
