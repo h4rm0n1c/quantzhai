@@ -1,6 +1,6 @@
 # QuantZhai Full Model Benchmark Report
 
-*Generated: 2026-06-05 17:50:37 UTC*
+*Generated: 2026-06-05 17:53:00 UTC*
 *15 models benchmarked*
 
 ## Hardware
@@ -111,21 +111,21 @@
 
 | # | Model | Before Temp | Before Power | After Temp | After Power | Delta Temp | Delta Power |
 |---|---:|---:|---:|---:|---:|---:|
-| 1 | `Qwen3-Coder-30B` | 51°C | 77W | 56°C | 85W | +5°C | +7.79W |
-| 2 | `Qwen3.5-24B (IQ4_XS)` | 58°C | 82W | 61°C | 86W | +3°C | +4.2W |
-| 3 | `Qwen3.5-24B (Q5_K_M)` | 48°C | 80W | 48°C | 94W | +0°C | +14.24W |
-| 4 | `Qwen3.5-24B (Q6_K)` | 45°C | 81W | 51°C | 84W | +6°C | +2.81W |
-| 5 | `Qwen3.6-27B-NEO-CODE` | 53°C | 76W | 58°C | 91W | +5°C | +15.54W |
-| 6 | `Qwen3.6-35B-Claude-Compact` | 48°C | 79W | 54°C | 80W | +6°C | +1.22W |
-| 7 | `Qwen3.6-35B-Claude-Mini` | 56°C | 72W | 60°C | 83W | +4°C | +11.22W |
-| 8 | `Qwen3.6-35B-Native-MTP (IQ4_XS)` | 49°C | 77W | 48°C | 71W | -1°C | -5.73W |
-| 9 | `Qwen3.6-35B-Native-MTP (Q4_K_S)` | 46°C | 69W | 52°C | 73W | +6°C | +4.17W |
-| 10 | `DeepSeek R1 8B` | 53°C | 75W | 58°C | 115W | +5°C | +40.55W |
-| 11 | `Gemma-4-26B-APEX` | 58°C | 81W | 61°C | 76W | +3°C | -5.45W |
-| 12 | `Gemma-4-26B (Q3_K_M)` | 49°C | 81W | 52°C | 72W | +3°C | -9.14W |
-| 13 | `Gemma-4-26B (Q5_K_M)` | 54°C | 81W | 57°C | 75W | +3°C | -6.06W |
-| 14 | `Qwen3.6-35B (IQ4_XS)` | 56°C | 83W | 60°C | 83W | +4°C | -0.55W |
-| 15 | `Qwen3.6-35B (Q4_K_M)` | 61°C | 87W | 62°C | 90W | +1°C | +2.86W |
+| 1 | `Qwen3-Coder-30B` | 51°C | 77W | 56°C | 85W | +5°C | +8W |
+| 2 | `Qwen3.5-24B (IQ4_XS)` | 58°C | 82W | 61°C | 86W | +3°C | +4W |
+| 3 | `Qwen3.5-24B (Q5_K_M)` | 48°C | 80W | 48°C | 94W | +0°C | +14W |
+| 4 | `Qwen3.5-24B (Q6_K)` | 45°C | 81W | 51°C | 84W | +6°C | +3W |
+| 5 | `Qwen3.6-27B-NEO-CODE` | 53°C | 76W | 58°C | 91W | +5°C | +16W |
+| 6 | `Qwen3.6-35B-Claude-Compact` | 48°C | 79W | 54°C | 80W | +6°C | +1W |
+| 7 | `Qwen3.6-35B-Claude-Mini` | 56°C | 72W | 60°C | 83W | +4°C | +11W |
+| 8 | `Qwen3.6-35B-Native-MTP (IQ4_XS)` | 49°C | 77W | 48°C | 71W | -1°C | -6W |
+| 9 | `Qwen3.6-35B-Native-MTP (Q4_K_S)` | 46°C | 69W | 52°C | 73W | +6°C | +4W |
+| 10 | `DeepSeek R1 8B` | 53°C | 75W | 58°C | 115W | +5°C | +41W |
+| 11 | `Gemma-4-26B-APEX` | 58°C | 81W | 61°C | 76W | +3°C | -5W |
+| 12 | `Gemma-4-26B (Q3_K_M)` | 49°C | 81W | 52°C | 72W | +3°C | -9W |
+| 13 | `Gemma-4-26B (Q5_K_M)` | 54°C | 81W | 57°C | 75W | +3°C | -6W |
+| 14 | `Qwen3.6-35B (IQ4_XS)` | 56°C | 83W | 60°C | 83W | +4°C | -1W |
+| 15 | `Qwen3.6-35B (Q4_K_M)` | 61°C | 87W | 62°C | 90W | +1°C | +3W |
 
 ## Key Observations
 
