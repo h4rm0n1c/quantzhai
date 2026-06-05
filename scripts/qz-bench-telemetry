@@ -46,6 +46,30 @@ def _get_model_name():
         pass
     return ""
 
+def get_gpu_telemetry():
+    """Returns GPU temperature and power draw from nvidia-smi."""
+    try:
+        r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index,name,temperature.gpu,power.draw,utilization.gpu,memory.used,memory.total",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10)
+        gpus = []
+        for line in r.stdout.strip().split("\n"):
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) >= 7:
+                gpus.append({
+                    "index": int(parts[0]),
+                    "name": parts[1],
+                    "temp_c": float(parts[2]),
+                    "power_w": float(parts[3]),
+                    "util_pct": float(parts[4]),
+                    "mem_used_mib": float(parts[5]),
+                    "mem_total_mib": float(parts[6]),
+                })
+        return gpus
+    except Exception as e:
+        return {"error": str(e)}
+
 def get_gpu_snapshot():
     """Returns GPU memory state from the backend child process."""
     try:
@@ -200,6 +224,12 @@ def main():
     if baseline and "gpus" in baseline:
         kv_before = sum(g.get("kv_bytes", 0) for g in baseline["gpus"])
 
+    # GPU telemetry (pre-bench)
+    gpu_telemetry = get_gpu_telemetry()
+    if isinstance(gpu_telemetry, list) and gpu_telemetry:
+        for g in gpu_telemetry:
+            print(f"  GPU{g['index']}: {g['name']}  {g['temp_c']}C  {g['power_w']}W  util={g['util_pct']}%")
+
     # Run benchmark
     print(f"Benchmarking: {prompt[:60]}...")
     start_ts = datetime.now(timezone.utc).isoformat()
@@ -266,10 +296,12 @@ def main():
             "cache_hit_tokens": direct.get("cache_hit_tokens", 0),
             "prefill_ms": direct.get("prompt_ms"),
             "gen_ms": direct.get("gen_ms"),
+            "latency_between_tokens_ms": round(direct.get("gen_ms", 0) / max(direct.get("gen_tokens", 1), 1), 4) if direct.get("gen_ms") else None,
             "think_tokens": 0,
             "think_tps": 0,
             "time_thinking_ms": 0,
         },
+        "gpu_telemetry": gpu_telemetry if isinstance(gpu_telemetry, list) else [],
         "memory": {
             "baseline_gpu": baseline.get("gpus", []) if baseline else [],
             "after_gpu": after.get("gpus", []) if after else [],
@@ -277,6 +309,11 @@ def main():
             "kv_cache_bytes_before": kv_before,
             "kv_cache_bytes_after": kv_after,
             "kv_cache_delta": (kv_after - kv_before) if (kv_after is not None and kv_before is not None) else None,
+            "requested_memory_allocation": {
+                "cache_ram_gb": 8,
+                "n_gpu_layers": 999,
+                "tensor_split": "10,16",
+            },
         },
         "quality": {
             "ppl": ppl.get("ppl_estimate"),
