@@ -126,13 +126,25 @@ def extract_chat_template():
     return ""
 
 def get_git_hash():
-    tq_repo = os.environ.get("QZ_BUILD_DIR", str(ROOT.parent / "llama-cpp-turboquant"))
-    for d in [tq_repo, str(ROOT.parent / "llama-cpp-turboquant")]:
+    candidates = [
+        os.environ.get("QZ_BUILD_DIR", ""),
+        str(ROOT.parent / "llama-cpp-turboquant"),
+        "/home/harri/turboquant-work/llama-cpp-turboquant",
+    ]
+    for d in candidates:
+        if not d: continue
         try:
             g = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5, cwd=d)
             if g.returncode == 0: return g.stdout.strip()[:12]
         except: pass
     return ""
+
+def get_model_source():
+    try:
+        r = urllib.request.urlopen(f"{PROXY}/qz/model/status", timeout=5)
+        d = json.loads(r.read())
+        return d.get("backend_loaded_model_source", "unknown")
+    except: return "unknown"
 
 def load_prompts():
     path = ROOT / "config" / "default" / "benchmark-prompts.json"
@@ -173,173 +185,181 @@ def main():
 
     git_hash = get_git_hash()
     chat_template = extract_chat_template()
+    model_source = get_model_source()
 
     # Model config and VRAM before
     model_info = router_models()
     child_args = extract_child_args(model_info)
     meta = model_info.get("meta", {})
     mem = model_info.get("memory", {})
-
     kv_before = sum(g.get("kv_bytes", 0) for g in mem.get("gpus", []))
-
-    # GPU telemetry before
     gpu_before = nvidia_smi()
 
-    # Run
-    print(f"Running: {prompt[:60]}...")
-    start_ts = datetime.now(timezone.utc).isoformat()
-    codex_result = run_codex(prompt)
-    end_ts = datetime.now(timezone.utc).isoformat()
+    def run_one(pass_name, prompt_text, timeout_s=300):
+        """Run a single benchmark pass (cold or warm)."""
+        print(f"  [{pass_name}] Running...")
+        codex_result = run_codex(prompt_text, timeout_s)
+        timing = telemetry_recent()
+        if "error" in timing:
+            print(f"  Telemetry error: {timing['error']}")
+        return codex_result, timing
 
-    # GPU telemetry after
+    # Cold pass
+    cold_result, cold_timing = run_one("cold", prompt)
+
+    # Warm pass — same prompt again (prompt cache should hit)
+    warm_result, warm_timing = run_one("warm", prompt)
+
+    # GPU telemetry after both passes
     gpu_after = nvidia_smi()
-
-    # Timing from proxy telemetry
-    timing = telemetry_recent()
-    if "error" in timing:
-        print(f"  Telemetry error: {timing['error']}")
 
     # KV cache after
     model_info_after = router_models()
     mem_after = model_info_after.get("memory", {})
     kv_after = sum(g.get("kv_bytes", 0) for g in mem_after.get("gpus", []))
-
     peak_mem = max(g.get("mem_used_mib", 0) for g in gpu_before + gpu_after)
 
-    # Parse think tokens from output (everything between  and )
-    output_text = codex_result.stdout or ""
-    think_tokens = 0
-    think_text = ""
-    m = re.search(r"<thought>(.*?)</thought>", output_text, re.DOTALL)
-    if m:
-        think_text = m.group(1)
-        think_tokens = len(think_text.split())
-    gen_text = re.sub(r"<thought>.*?</thought>", "", output_text, flags=re.DOTALL).strip()
-    gen_tokens_out = len(gen_text.split())
+    def parse_think(output_text):
+        think_tokens = 0
+        m = re.search(r"<thought>(.*?)</thought>", output_text, re.DOTALL)
+        if m: think_tokens = len(m.group(1).split())
+        gen_text = re.sub(r"<thought>.*?</thought>", "", output_text, flags=re.DOTALL).strip()
+        return think_tokens, len(gen_text.split())
 
-    # Build result
-    result = {
-        "timestamp": start_ts,
-        "engine": {
-            "name": "llama.cpp (turboquant fork)",
-            "git_commit": git_hash,
-            "hardware": "RTX 3080 10GB + V100-SXM2 16GB (no NVLink)",
-            "tensor_split": child_args.get("tensor-split", "10,16"),
-            "split_mode": child_args.get("split-mode", "layer"),
-            "kv_cache_k": child_args.get("cache-type-k", "q8_0"),
-            "kv_cache_v": child_args.get("cache-type-v", "turbo3"),
-            "flash_attn": child_args.get("flash-attn", "on"),
-            "context_size": int(child_args.get("ctx-size", 0) or meta.get("n_ctx", 0)),
-            "batch_size": int(child_args.get("batch-size", 0)),
-            "ubatch_size": int(child_args.get("ubatch-size", 0)),
-            "threads": int(child_args.get("threads", 0)),
-            "threads_batch": int(child_args.get("threads-batch", 0)),
-            "n_gpu_layers": int(child_args.get("n-gpu-layers", 0)),
-            "main_gpu": int(child_args.get("main-gpu", 0)),
-            "cache_ram_mib": int(child_args.get("cache-ram", 0)),
-            "cache_reuse": int(child_args.get("cache-reuse", 0)),
-            "mlock": "--mlock" in str(child_args),
-            "kv_unified": "--kv-unified" in str(child_args),
-            "parallel": int(child_args.get("parallel", 1)),
-            "tensor_split_raw": child_args.get("tensor-split", ""),
-        },
-        "model": {
-            "name": model_info.get("id", ""),
-            "n_params": meta.get("n_params", 0),
-            "size_bytes": meta.get("size", 0),
-            "n_ctx": meta.get("n_ctx", 0),
-            "n_ctx_train": meta.get("n_ctx_train", 0),
-            "n_embd": meta.get("n_embd", 0),
-            "chat_template": chat_template,
-            "reasoning": child_args.get("reasoning", "off"),
-            "reasoning_budget": child_args.get("reasoning-budget", ""),
-            "reasoning_format": child_args.get("reasoning-format", "raw"),
-            "spec_decode": "draft-mtp" if child_args.get("spec-type") == "draft-mtp" else ("default" if "--spec-default" in str(child_args) else "none"),
-        },
-        "config": {
-            "prompt": prompt,
-            "prompt_id": args.prompt_id or fixture.get("id", ""),
-            "prompt_category": fixture.get("category", ""),
-            "expected_tools": fixture.get("expected_tools", []),
-            "via": "qz-codex exec",
-        },
-        "timing": {
-            "prefill_tps": timing.get("prefill_tps"),
-            "gen_tps": timing.get("gen_tps"),
-            "ttft_ms": timing.get("ttft_ms"),
-            "prefill_tokens": timing.get("prefill_tokens"),
-            "gen_tokens": timing.get("gen_tokens"),
-            "prefill_ms": timing.get("prefill_ms"),
-            "gen_ms": timing.get("gen_ms"),
-            "latency_between_tokens_ms": timing.get("latency_between_tokens_ms"),
-            "think_tokens": think_tokens,
-            "think_tps": round(think_tokens / (timing.get("gen_ms", 1) / 1000), 1) if timing.get("gen_ms") and think_tokens > 0 else 0,
+    def build_timing(t, output_text):
+        think_tok, gen_est = parse_think(output_text)
+        return {
+            "prefill_tps": t.get("prefill_tps"),
+            "gen_tps": t.get("gen_tps"),
+            "ttft_ms": t.get("ttft_ms"),
+            "prefill_tokens": t.get("prefill_tokens"),
+            "gen_tokens": t.get("gen_tokens"),
+            "prefill_ms": t.get("prefill_ms"),
+            "gen_ms": t.get("gen_ms"),
+            "latency_between_tokens_ms": t.get("latency_between_tokens_ms"),
+            "think_tokens": think_tok,
+            "think_tps": round(think_tok / (t.get("gen_ms", 1) / 1000), 1) if t.get("gen_ms") and think_tok > 0 else 0,
             "time_thinking_ms": None,
-            "output_tokens_est": gen_tokens_out,
-            "cached_tokens": timing.get("cached_tokens"),
-            "reasoning_tokens": timing.get("reasoning_tokens"),
-            "elapsed_ms": timing.get("elapsed_ms"),
-        },
-        "memory": {
-            "gpu_before": [{
-                "name": g.get("name"),
-                "total_bytes": g.get("total_bytes"),
-                "free_bytes": g.get("free_bytes"),
-                "model_bytes": g.get("model_bytes"),
-                "kv_bytes": g.get("kv_bytes"),
-            } for g in mem.get("gpus", [])],
-            "gpu_after": [{
-                "name": g.get("name"),
-                "total_bytes": g.get("total_bytes"),
-                "free_bytes": g.get("free_bytes"),
-                "model_bytes": g.get("model_bytes"),
-                "kv_bytes": g.get("kv_bytes"),
-            } for g in mem_after.get("gpus", [])],
-            "kv_cache_bytes_before": kv_before,
-            "kv_cache_bytes_after": kv_after,
-            "kv_cache_delta": kv_after - kv_before if kv_after and kv_before else None,
-            "peak_gpu_mib": peak_mem,
-            "requested_memory": {
-                "cache_ram_mib": child_args.get("cache-ram", "8192"),
-                "n_gpu_layers": child_args.get("n-gpu-layers", "999"),
+            "output_tokens_est": gen_est,
+            "cached_tokens": t.get("cached_tokens"),
+            "reasoning_tokens": t.get("reasoning_tokens"),
+            "elapsed_ms": t.get("elapsed_ms"),
+        }
+
+    # Common engine/model/config sections
+    engine = {
+        "name": "llama.cpp (turboquant fork)",
+        "git_commit": git_hash,
+        "hardware": "RTX 3080 10GB + V100-SXM2 16GB (no NVLink)",
+        "tensor_split": child_args.get("tensor-split", "10,16"),
+        "split_mode": child_args.get("split-mode", "layer"),
+        "kv_cache_k": child_args.get("cache-type-k", "q8_0"),
+        "kv_cache_v": child_args.get("cache-type-v", "turbo3"),
+        "flash_attn": child_args.get("flash-attn", "on"),
+        "context_size": int(child_args.get("ctx-size", 0) or meta.get("n_ctx", 0)),
+        "batch_size": int(child_args.get("batch-size", 0)),
+        "ubatch_size": int(child_args.get("ubatch-size", 0)),
+        "threads": int(child_args.get("threads", 0)),
+        "threads_batch": int(child_args.get("threads-batch", 0)),
+        "n_gpu_layers": int(child_args.get("n-gpu-layers", 0)),
+        "main_gpu": int(child_args.get("main-gpu", 0)),
+        "cache_ram_mib": int(child_args.get("cache-ram", 0)),
+        "cache_reuse": int(child_args.get("cache-reuse", 0)),
+        "mlock": "--mlock" in str(child_args),
+        "kv_unified": "--kv-unified" in str(child_args),
+        "parallel": int(child_args.get("parallel", 1)),
+        "tensor_split_raw": child_args.get("tensor-split", ""),
+    }
+    model_info_section = {
+        "name": model_info.get("id", ""),
+        "source": model_source,
+        "n_params": meta.get("n_params", 0),
+        "size_bytes": meta.get("size", 0),
+        "n_ctx": meta.get("n_ctx", 0),
+        "n_ctx_train": meta.get("n_ctx_train", 0),
+        "n_embd": meta.get("n_embd", 0),
+        "chat_template": chat_template,
+        "reasoning": child_args.get("reasoning", "off"),
+        "reasoning_budget": child_args.get("reasoning-budget", ""),
+        "reasoning_format": child_args.get("reasoning-format", "raw"),
+        "spec_decode": "draft-mtp" if child_args.get("spec-type") == "draft-mtp" else ("default" if "--spec-default" in str(child_args) else "none"),
+    }
+    config_section = {
+        "prompt": prompt,
+        "prompt_id": args.prompt_id or fixture.get("id", ""),
+        "prompt_category": fixture.get("category", ""),
+        "expected_tools": fixture.get("expected_tools", []),
+        "via": "qz-codex exec",
+    }
+    memory_section = {
+        "gpu_before": [{"name": g.get("name"), "total_bytes": g.get("total_bytes"),
+                         "free_bytes": g.get("free_bytes"), "model_bytes": g.get("model_bytes"),
+                         "kv_bytes": g.get("kv_bytes")} for g in mem.get("gpus", [])],
+        "gpu_after": [{"name": g.get("name"), "total_bytes": g.get("total_bytes"),
+                        "free_bytes": g.get("free_bytes"), "model_bytes": g.get("model_bytes"),
+                        "kv_bytes": g.get("kv_bytes")} for g in mem_after.get("gpus", [])],
+        "kv_cache_bytes_before": kv_before,
+        "kv_cache_bytes_after": kv_after,
+        "kv_cache_delta": kv_after - kv_before if kv_after and kv_before else None,
+        "peak_gpu_mib": peak_mem,
+        "requested_memory": {"cache_ram_mib": child_args.get("cache-ram", "8192"),
+                             "n_gpu_layers": child_args.get("n-gpu-layers", "999")},
+    }
+    gpu_telemetry_section = {
+        "before": [{"index": g["index"], "name": g["name"], "temp_c": g["temp_c"], "power_w": g["power_w"],
+                    "util_pct": g["util_pct"], "mem_used_mib": g["mem_used_mib"], "mem_total_mib": g.get("mem_total_mib", 0)}
+                   for g in gpu_before if "error" not in g],
+        "after": [{"index": g["index"], "name": g["name"], "temp_c": g["temp_c"], "power_w": g["power_w"],
+                   "util_pct": g["util_pct"], "mem_used_mib": g["mem_used_mib"], "mem_total_mib": g.get("mem_total_mib", 0)}
+                  for g in gpu_after if "error" not in g],
+    }
+
+    ts = datetime.now(timezone.utc).isoformat()
+    cold_out = cold_result.stdout or ""
+    warm_out = warm_result.stdout or ""
+
+    result = {
+        "timestamp": ts,
+        "engine": engine,
+        "model": model_info_section,
+        "config": config_section,
+        "cold": {
+            "timing": build_timing(cold_timing, cold_out),
+            "codex": {
+                "exit_code": cold_result.returncode,
+                "stdout_len": len(cold_out),
+                "stderr_len": len(cold_result.stderr or ""),
+                "output": cold_out[-2000:] if cold_out else "",
             },
         },
-        "gpu_telemetry": {
-            "before": [{"index": g["index"], "name": g["name"], "temp_c": g["temp_c"], "power_w": g["power_w"],
-                        "util_pct": g["util_pct"], "mem_used_mib": g["mem_used_mib"], "mem_total_mib": g.get("mem_total_mib", 0)} for g in gpu_before if "error" not in g],
-            "after": [{"index": g["index"], "name": g["name"], "temp_c": g["temp_c"], "power_w": g["power_w"],
-                       "util_pct": g["util_pct"], "mem_used_mib": g["mem_used_mib"], "mem_total_mib": g.get("mem_total_mib", 0)} for g in gpu_after if "error" not in g],
+        "warm": {
+            "timing": build_timing(warm_timing, warm_out),
+            "codex": {
+                "exit_code": warm_result.returncode,
+                "stdout_len": len(warm_out),
+                "stderr_len": len(warm_result.stderr or ""),
+                "output": warm_out[-2000:] if warm_out else "",
+            },
         },
-        "codex": {
-            "exit_code": codex_result.returncode,
-            "stdout_len": len(codex_result.stdout),
-            "stderr_len": len(codex_result.stderr),
-            "output": output_text[-3000:] if output_text else "",
-        },
+        "timing": build_timing(warm_timing, warm_out),  # canonical = warm
+        "memory": memory_section,
+        "gpu_telemetry": gpu_telemetry_section,
     }
 
     (out_dir / "result.json").write_text(json.dumps(result, indent=2, default=str))
     (out_dir / "prompt.txt").write_text(prompt)
-    (out_dir / "codex_stdout.txt").write_text(codex_result.stdout or "")
-    (out_dir / "codex_stderr.txt").write_text(codex_result.stderr or "")
 
     print(f"\n{'='*60}")
-    t = result["timing"]
-    if t.get("gen_tps"):
-        print(f"  Prefill: {t['prefill_tokens']} tok @ {t['prefill_tps']} t/s")
-        print(f"  Gen:     {t['gen_tokens']} tok @ {t['gen_tps']} t/s")
-        print(f"  TTFT:    {t['ttft_ms']} ms")
-        print(f"  Latency: {t['latency_between_tokens_ms']} ms/tok")
-        if t.get("think_tokens"):
-            print(f"  Think:   {t['think_tokens']} tok @ {t['think_tps']} t/s")
-        if t.get("draft_acceptance_rate") is not None:
-            print(f"  Draft:   {t['draft_acceptance_rate']*100:.0f}% accepted")
-    print(f"  Codex exit: {codex_result.returncode}")
-    print(f"  KV cache: {result['memory']['kv_cache_bytes_before']/1e9:.1f} GB (delta: {result['memory']['kv_cache_delta']/1e9:.2f} GB)" if result['memory']['kv_cache_delta'] else "")
-    for g in result["gpu_telemetry"]["before"]:
-        print(f"  GPU{g['index']}: {g['temp_c']}C {g['power_w']}W {g['mem_used_mib']:.0f}/{g['mem_total_mib']:.0f} MiB")
-    if result["memory"]["peak_gpu_mib"]:
-        print(f"  Peak GPU: {result['memory']['peak_gpu_mib']:.0f} MiB")
+    for label, t_key in [("Cold", cold_timing), ("Warm", warm_timing)]:
+        ct = build_timing(t_key, cold_out if label == "Cold" else warm_out)
+        if ct.get("gen_tps"):
+            print(f"  [{label}] P:{ct['prefill_tokens']}t@{ct['prefill_tps']:.0f}t/s  "
+                  f"G:{ct['gen_tokens']}t@{ct['gen_tps']:.0f}t/s  "
+                  f"TTFT:{ct['ttft_ms']:.0f}ms  Cached:{ct['cached_tokens']}tok")
+    if gpu_before and gpu_after and len(gpu_before) > 0 and len(gpu_after) > 0:
+        dt = gpu_after[0]['temp_c'] - gpu_before[0]['temp_c']
+        dw = gpu_after[0]['power_w'] - gpu_before[0]['power_w']
+        print(f"  GPU gain: +{dt:.0f}C, +{dw:.0f}W")
     print(f"  Saved: {out_dir / 'result.json'}")
 
 if __name__ == "__main__":
