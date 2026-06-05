@@ -98,8 +98,9 @@ def run_direct_bench(prompt, max_tokens=200, temperature=0):
         "draft_n": t.get("draft_n", 0),
         "draft_n_accepted": t.get("draft_n_accepted", 0),
         "raw_output": data.get("choices", [{}])[0].get("text", "") if "choices" in data else "",
-        "timings_raw": t,
-        "usage_raw": usage,
+    "cache_hit_tokens": usage.get("prompt_tokens_details", {}).get("cached_tokens", 0) if usage else 0,
+    "timings_raw": t,
+    "usage_raw": usage,
     }
 
 def run_codex_bench(prompt, timeout_sec=300):
@@ -262,6 +263,7 @@ def main():
             "wall_seconds": direct.get("wall_seconds"),
             "prefill_tokens": direct.get("prompt_tokens"),
             "gen_tokens": direct.get("gen_tokens"),
+            "cache_hit_tokens": direct.get("cache_hit_tokens", 0),
             "prefill_ms": direct.get("prompt_ms"),
             "gen_ms": direct.get("gen_ms"),
             "think_tokens": 0,
