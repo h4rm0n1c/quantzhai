@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """
-Benchmark via qz-codex exec.  No direct llama.cpp API calls — all
-metrics come from host tools (nvidia-smi) and the proxy's captures.
+Benchmark via qz-codex exec.  All metrics from user-facing sources:
+  - nvidia-smi for GPU telemetry
+  - docker logs for server slot timing  
+  - router /v1/models for model config, VRAM, KV cache
+  - qz-codex exec for prompt execution
+  - git for engine version
 
 Usage:
   scripts/qz-bench-telemetry --prompt "text" [--output dir]
   scripts/qz-bench-telemetry --list-prompts
   scripts/qz-bench-telemetry --prompt-id readme-summary
 """
-import json, time, os, sys, subprocess, argparse, re
+import json, time, os, sys, subprocess, argparse, re, urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-PROXY = "http://127.0.0.1:18180"
-CAPTURES = ROOT / "var" / "captures"
+ROUTER = "http://127.0.0.1:18084"
 DOCKER_CONTAINER = "qwen36turbo"
 
 def nvidia_smi():
@@ -32,16 +35,32 @@ def nvidia_smi():
     except Exception as e:
         return [{"error": str(e)}]
 
-def docker_log_timing():
-    """Parse the last slot timing line from the server container logs."""
+def router_models():
+    """Get loaded model info from the router."""
     try:
-        r = subprocess.run(["sudo", "docker", "logs", DOCKER_CONTAINER, "--tail", "100"],
+        r = urllib.request.urlopen(f"{ROUTER}/v1/models", timeout=10)
+        data = json.loads(r.read())
+        for m in data.get("data", []):
+            s = m.get("status", {})
+            if isinstance(s, dict) and s.get("value") == "loaded":
+                return m
+    except: pass
+    return {}
+
+def router_all_models():
+    """Get all model entries (for unloaded model metadata)."""
+    try:
+        r = urllib.request.urlopen(f"{ROUTER}/v1/models", timeout=10)
+        return json.loads(r.read()).get("data", [])
+    except: return []
+
+def docker_log_timing():
+    """Parse slot timing from the server container logs."""
+    try:
+        r = subprocess.run(["sudo", "docker", "logs", DOCKER_CONTAINER, "--tail", "200"],
             capture_output=True, text=True, timeout=10)
-        # Match: slot print_timing: id 0 | ... prompt eval time = X ms / Y tokens (Z ms per token, W tokens per second)
-        #         ... eval time = A ms / B tokens (C ms per token, D tokens per second)
         lines = r.stdout.split("\n")
-        prompt_match = None
-        eval_match = None
+        prompt_match = eval_match = draft_acc = graphs = None
         for line in reversed(lines):
             if "slot print_timing" not in line:
                 continue
@@ -51,9 +70,10 @@ def docker_log_timing():
             elif "eval time" in line:
                 m = re.search(r"eval time =\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens", line)
                 if m: eval_match = (float(m.group(1)), int(m.group(2)))
-            # Draft acceptance
             m = re.search(r"draft acceptance =\s*([\d.]+)", line)
-            draft_acc = float(m.group(1)) if m else None
+            if m: draft_acc = float(m.group(1))
+            m = re.search(r"graphs reused =\s*(\d+)", line)
+            if m: graphs = int(m.group(1))
             if prompt_match and eval_match:
                 pt, pn = prompt_match
                 et, en = eval_match
@@ -63,12 +83,36 @@ def docker_log_timing():
                     "gen_ms": et, "gen_tokens": en,
                     "gen_tps": round(en / (et / 1000), 1) if et > 0 else 0,
                     "ttft_ms": round(pt, 1),
-                    "latency_ms": round(et / en, 2) if en > 0 else 0,
-                    "draft_acceptance": draft_acc,
+                    "latency_between_tokens_ms": round(et / en, 2) if en > 0 else 0,
+                    "draft_acceptance_rate": draft_acc,
+                    "graphs_reused": graphs,
                 }
-    except:
-        pass
+    except: pass
     return {}
+
+def extract_child_args(model_info):
+    """Extract key=value pairs from child process args."""
+    args = {}
+    if not model_info: return args
+    status = model_info.get("status", {})
+    if not isinstance(status, dict): return args
+    raw = status.get("args", [])
+    for i in range(len(raw) - 1):
+        if raw[i].startswith("--"):
+            args[raw[i].lstrip("-")] = raw[i + 1]
+    return args
+
+def extract_chat_template():
+    """Extract chat template from container startup logs (one-time)."""
+    try:
+        r = subprocess.run(["sudo", "docker", "logs", DOCKER_CONTAINER, "--tail", "500"],
+            capture_output=True, text=True, timeout=10)
+        for line in r.stdout.split("\n"):
+            if "chat template" in line:
+                m = re.search(r"chat template, example_format: '(.*)'", line)
+                if m: return m.group(1)[:200]
+    except: pass
+    return ""
 
 def get_git_hash():
     tq_repo = os.environ.get("QZ_BUILD_DIR", str(ROOT.parent / "llama-cpp-turboquant"))
@@ -79,22 +123,12 @@ def get_git_hash():
         except: pass
     return ""
 
-def get_backend_model():
-    try:
-        import urllib.request
-        r = urllib.request.urlopen(f"{PROXY}/qz/backend/status", timeout=5)
-        d = json.loads(r.read())
-        bm = d.get("backend_manager", {})
-        return bm.get("launch_model_key", "") or bm.get("launch_model_backend_id", "")
-    except: return ""
-
 def load_prompts():
     path = ROOT / "config" / "default" / "benchmark-prompts.json"
     if path.exists(): return json.loads(path.read_text()).get("prompts", [])
     return []
 
 def run_codex(prompt, timeout_sec=300):
-    """Run via qz-codex exec, return output."""
     result = subprocess.run(
         [str(ROOT / "scripts" / "qz-codex"), "exec", "--", prompt],
         capture_output=True, text=True, timeout=timeout_sec)
@@ -104,7 +138,7 @@ def main():
     parser = argparse.ArgumentParser(description="QuantZhai benchmark via qz-codex")
     parser.add_argument("--prompt", help="Prompt text")
     parser.add_argument("--prompt-id", help="Benchmark fixture id")
-    parser.add_argument("--output", help="Output directory (default: var/benchmarks/<ts>)")
+    parser.add_argument("--output", help="Output directory")
     parser.add_argument("--list-prompts", action="store_true")
     args = parser.parse_args()
 
@@ -114,10 +148,11 @@ def main():
         return
 
     prompt = args.prompt
+    fixture = {}
     if args.prompt_id:
         for p in load_prompts():
             if p["id"] == args.prompt_id:
-                prompt = p["prompt"]; break
+                prompt = p["prompt"]; fixture = p; break
         if not prompt: print(f"Prompt '{args.prompt_id}' not found"); sys.exit(1)
     if not prompt: prompt = "The meaning of life is"
 
@@ -126,43 +161,93 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     git_hash = get_git_hash()
-    model_name = get_backend_model()
+    chat_template = extract_chat_template()
 
-    # GPU before
+    # Model config and VRAM before
+    model_info = router_models()
+    child_args = extract_child_args(model_info)
+    meta = model_info.get("meta", {})
+    mem = model_info.get("memory", {})
+
+    kv_before = sum(g.get("kv_bytes", 0) for g in mem.get("gpus", []))
+
+    # GPU telemetry before
     gpu_before = nvidia_smi()
 
-    # Run benchmark
+    # Run
     print(f"Running: {prompt[:60]}...")
     start_ts = datetime.now(timezone.utc).isoformat()
     codex_result = run_codex(prompt)
     end_ts = datetime.now(timezone.utc).isoformat()
 
-    # GPU after
+    # GPU telemetry after
     gpu_after = nvidia_smi()
 
     # Timing from docker logs
     timing = docker_log_timing()
 
-    # Peak GPU
-    peak_mem = 0
-    for g in gpu_before + gpu_after:
-        peak_mem = max(peak_mem, g.get("mem_used_mib", 0))
+    # KV cache after
+    model_info_after = router_models()
+    mem_after = model_info_after.get("memory", {})
+    kv_after = sum(g.get("kv_bytes", 0) for g in mem_after.get("gpus", []))
 
+    peak_mem = max(g.get("mem_used_mib", 0) for g in gpu_before + gpu_after)
+
+    # Parse think tokens from output (everything between  and )
+    output_text = codex_result.stdout or ""
+    think_tokens = 0
+    think_text = ""
+    m = re.search(r"<thought>(.*?)</thought>", output_text, re.DOTALL)
+    if m:
+        think_text = m.group(1)
+        think_tokens = len(think_text.split())
+    gen_text = re.sub(r"<thought>.*?</thought>", "", output_text, flags=re.DOTALL).strip()
+    gen_tokens_out = len(gen_text.split())
+
+    # Build result
     result = {
         "timestamp": start_ts,
         "engine": {
             "name": "llama.cpp (turboquant fork)",
             "git_commit": git_hash,
             "hardware": "RTX 3080 10GB + V100-SXM2 16GB (no NVLink)",
-            "tensor_split": "10,16",
-            "split_mode": "layer",
-            "kv_quant": "q8_0 (K) / turbo3 (V)",
-            "context_size": 262144,
+            "tensor_split": child_args.get("tensor-split", "10,16"),
+            "split_mode": child_args.get("split-mode", "layer"),
+            "kv_cache_k": child_args.get("cache-type-k", "q8_0"),
+            "kv_cache_v": child_args.get("cache-type-v", "turbo3"),
+            "flash_attn": child_args.get("flash-attn", "on"),
+            "context_size": int(child_args.get("ctx-size", 0) or meta.get("n_ctx", 0)),
+            "batch_size": int(child_args.get("batch-size", 0)),
+            "ubatch_size": int(child_args.get("ubatch-size", 0)),
+            "threads": int(child_args.get("threads", 0)),
+            "threads_batch": int(child_args.get("threads-batch", 0)),
+            "n_gpu_layers": int(child_args.get("n-gpu-layers", 0)),
+            "main_gpu": int(child_args.get("main-gpu", 0)),
+            "cache_ram_mib": int(child_args.get("cache-ram", 0)),
+            "cache_reuse": int(child_args.get("cache-reuse", 0)),
+            "mlock": "--mlock" in str(child_args),
+            "kv_unified": "--kv-unified" in str(child_args),
+            "parallel": int(child_args.get("parallel", 1)),
+            "tensor_split_raw": child_args.get("tensor-split", ""),
         },
-        "model": {"name": model_name},
+        "model": {
+            "name": model_info.get("id", ""),
+            "n_params": meta.get("n_params", 0),
+            "size_bytes": meta.get("size", 0),
+            "n_ctx": meta.get("n_ctx", 0),
+            "n_ctx_train": meta.get("n_ctx_train", 0),
+            "n_embd": meta.get("n_embd", 0),
+            "chat_template": chat_template,
+            "reasoning": child_args.get("reasoning", "off"),
+            "reasoning_budget": child_args.get("reasoning-budget", ""),
+            "reasoning_format": child_args.get("reasoning-format", "raw"),
+            "spec_decode": "draft-mtp" if child_args.get("spec-type") == "draft-mtp" else ("default" if "--spec-default" in str(child_args) else "none"),
+        },
         "config": {
             "prompt": prompt,
-            "max_tokens": 200,
+            "prompt_id": args.prompt_id or fixture.get("id", ""),
+            "prompt_category": fixture.get("category", ""),
+            "expected_tools": fixture.get("expected_tools", []),
             "via": "qz-codex exec",
         },
         "timing": {
@@ -173,37 +258,76 @@ def main():
             "gen_tokens": timing.get("gen_tokens"),
             "prefill_ms": timing.get("prefill_ms"),
             "gen_ms": timing.get("gen_ms"),
-            "latency_between_tokens_ms": timing.get("latency_ms"),
-            "draft_acceptance": timing.get("draft_acceptance"),
+            "latency_between_tokens_ms": timing.get("latency_between_tokens_ms"),
+            "think_tokens": think_tokens,
+            "think_tps": round(think_tokens / (timing.get("gen_ms", 1) / 1000), 1) if timing.get("gen_ms") and think_tokens > 0 else 0,
+            "time_thinking_ms": None,  # not separable from gen time in server timing
+            "output_tokens_est": gen_tokens_out,
+            "draft_acceptance_rate": timing.get("draft_acceptance_rate"),
+            "graphs_reused": timing.get("graphs_reused"),
         },
-        "gpu": {
-            "before": gpu_before,
-            "after": gpu_after,
-            "peak_mem_mib": peak_mem,
+        "memory": {
+            "gpu_before": [{
+                "name": g.get("name"),
+                "total_bytes": g.get("total_bytes"),
+                "free_bytes": g.get("free_bytes"),
+                "model_bytes": g.get("model_bytes"),
+                "kv_bytes": g.get("kv_bytes"),
+            } for g in mem.get("gpus", [])],
+            "gpu_after": [{
+                "name": g.get("name"),
+                "total_bytes": g.get("total_bytes"),
+                "free_bytes": g.get("free_bytes"),
+                "model_bytes": g.get("model_bytes"),
+                "kv_bytes": g.get("kv_bytes"),
+            } for g in mem_after.get("gpus", [])],
+            "kv_cache_bytes_before": kv_before,
+            "kv_cache_bytes_after": kv_after,
+            "kv_cache_delta": kv_after - kv_before if kv_after and kv_before else None,
+            "peak_gpu_mib": peak_mem,
+            "requested_memory": {
+                "cache_ram_mib": child_args.get("cache-ram", "8192"),
+                "n_gpu_layers": child_args.get("n-gpu-layers", "999"),
+            },
+        },
+        "gpu_telemetry": {
+            "before": [{"name": g["name"], "temp_c": g["temp_c"], "power_w": g["power_w"],
+                        "util_pct": g["util_pct"], "mem_used_mib": g["mem_used_mib"]} for g in gpu_before if "error" not in g],
+            "after": [{"name": g["name"], "temp_c": g["temp_c"], "power_w": g["power_w"],
+                       "util_pct": g["util_pct"], "mem_used_mib": g["mem_used_mib"]} for g in gpu_after if "error" not in g],
         },
         "codex": {
             "exit_code": codex_result.returncode,
             "stdout_len": len(codex_result.stdout),
             "stderr_len": len(codex_result.stderr),
-            "output": codex_result.stdout[-2000:] if codex_result.stdout else "",
+            "output": output_text[-3000:] if output_text else "",
         },
     }
 
-    (out_dir / "result.json").write_text(json.dumps(result, indent=2))
+    (out_dir / "result.json").write_text(json.dumps(result, indent=2, default=str))
     (out_dir / "prompt.txt").write_text(prompt)
     (out_dir / "codex_stdout.txt").write_text(codex_result.stdout or "")
     (out_dir / "codex_stderr.txt").write_text(codex_result.stderr or "")
 
     print(f"\n{'='*60}")
-    t = timing
+    t = result["timing"]
     if t.get("gen_tps"):
         print(f"  Prefill: {t['prefill_tokens']} tok @ {t['prefill_tps']} t/s")
         print(f"  Gen:     {t['gen_tokens']} tok @ {t['gen_tps']} t/s")
         print(f"  TTFT:    {t['ttft_ms']} ms")
+        print(f"  Latency: {t['latency_between_tokens_ms']} ms/tok")
+        if t.get("think_tokens"):
+            print(f"  Think:   {t['think_tokens']} tok @ {t['think_tps']} t/s")
+        if t.get("draft_acceptance_rate") is not None:
+            print(f"  Draft:   {t['draft_acceptance_rate']*100:.0f}% accepted")
     print(f"  Codex exit: {codex_result.returncode}")
-    if gpu_before:
-        for g in gpu_before:
-            print(f"  GPU{g['index']}: {g['temp_c']}C  {g['power_w']}W  {g['mem_used_mib']:.0f}/{g['mem_total_mib']:.0f} MiB")
+    print(f"  KV cache: {result['memory']['kv_cache_bytes_before']/1e9:.1f} GB (delta: {result['memory']['kv_cache_delta']/1e9:.2f} GB)" if result['memory']['kv_cache_delta'] else "")
+    for g in result["gpu_telemetry"]["before"]:
+        idx = g.get('index', '?')
+        total = g.get('mem_total_mib', 0)
+        print(f"  GPU{idx}: {g['temp_c']}C {g['power_w']}W {g['mem_used_mib']:.0f}/{total:.0f} MiB")
+    if result["memory"]["peak_gpu_mib"]:
+        print(f"  Peak GPU: {result['memory']['peak_gpu_mib']:.0f} MiB")
     print(f"  Saved: {out_dir / 'result.json'}")
 
 if __name__ == "__main__":
