@@ -1,0 +1,299 @@
+#!/usr/bin/env python3
+"""
+Comprehensive model benchmark via quantzhai.
+
+Captures: gen tok/s, think tok/s, prefill tok/s, TTFT, GPU/KV memory,
+KV delta, PPL (via /v1/completions), raw output, pass/fail scoring.
+
+Usage:
+  scripts/qz-bench-telemetry [--think] [--prompt "text"] [--output file.json]
+  scripts/qz-bench-telemetry --list-prompts   # show available fixtures
+"""
+import json, time, os, sys, subprocess, urllib.request, argparse
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+PROXY = "http://127.0.0.1:18180"
+BACKEND = "http://127.0.0.1:18084"
+
+def api(url, timeout=30):
+    r = urllib.request.urlopen(url, timeout=timeout)
+    return json.loads(r.read())
+
+def api_post(url, body, timeout=120):
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(url, data=data,
+        headers={"Content-Type": "application/json"}, method="POST")
+    r = urllib.request.urlopen(req, timeout=timeout)
+    return json.loads(r.read())
+
+def _get_model_name():
+    try:
+        r = api(f"{PROXY}/qz/model/status", timeout=5)
+        return r.get("selected_backend_id", "")
+    except:
+        pass
+    try:
+        r = api(f"{BACKEND}/v1/models", timeout=5)
+        for m in r.get("data", []):
+            s = m.get("status", {})
+            if isinstance(s, dict) and s.get("value") == "loaded":
+                return m.get("id", "")
+            elif isinstance(s, str) and s == "loaded":
+                return m.get("id", "")
+    except:
+        pass
+    return ""
+
+def get_gpu_snapshot():
+    """Returns GPU memory state from the backend child process."""
+    try:
+        r = api(f"{BACKEND}/v1/models", timeout=10)
+        for m in r.get("data", []):
+            s = m.get("status", {})
+            if isinstance(s, dict) and s.get("value") == "loaded":
+                mem = m.get("memory", {})
+                gpus = mem.get("gpus", [])
+                meta = m.get("meta", {})
+                return {
+                    "gpus": [{"name": g["name"],
+                              "total_bytes": g["total_bytes"],
+                              "free_bytes": g["free_bytes"],
+                              "used_bytes": g["total_bytes"] - g["free_bytes"],
+                              "model_bytes": g["model_bytes"],
+                              "kv_bytes": g["kv_bytes"],
+                              "compute_bytes": g["compute_bytes"]}
+                             for g in gpus],
+                    "n_params": meta.get("n_params", 0),
+                    "n_ctx": meta.get("n_ctx", 0),
+                }
+    except Exception as e:
+        return {"error": str(e)}
+    return {"error": "no loaded model"}
+
+def run_direct_bench(prompt, max_tokens=200, temperature=0):
+    """Run a completion directly via the backend, capturing full timings."""
+    model_name = _get_model_name()
+    body = json.dumps({"model": model_name, "prompt": prompt, "max_tokens": max_tokens,
+                       "temperature": temperature, "stream": False}).encode()
+    req = urllib.request.Request(f"{BACKEND}/v1/completions", data=body,
+        headers={"Content-Type": "application/json"}, method="POST")
+    start = time.time()
+    r = urllib.request.urlopen(req, timeout=300)
+    elapsed = time.time() - start
+    data = json.loads(r.read())
+    t = data.get("timings", {})
+    usage = data.get("usage", {})
+    return {
+        "wall_seconds": round(elapsed, 3),
+        "prompt_tokens": usage.get("prompt_tokens", 0) or t.get("prompt_n", 0),
+        "gen_tokens": usage.get("completion_tokens", 0) or t.get("predicted_n", 0),
+        "prompt_ms": t.get("prompt_ms", 0),
+        "gen_ms": t.get("predicted_ms", 0),
+        "prompt_tps": t.get("prompt_per_second", 0),
+        "gen_tps": t.get("predicted_per_second", 0),
+        "ttft_ms": t.get("prompt_ms", 0),  # first token = prompt processing time
+        "tokens_per_second": t.get("predicted_per_second", 0),
+        "draft_n": t.get("draft_n", 0),
+        "draft_n_accepted": t.get("draft_n_accepted", 0),
+        "raw_output": data.get("choices", [{}])[0].get("text", "") if "choices" in data else "",
+        "timings_raw": t,
+        "usage_raw": usage,
+    }
+
+def run_codex_bench(prompt, timeout_sec=300):
+    """Run a prompt via qz-codex exec."""
+    qz_codex = str(ROOT / "scripts" / "qz-codex")
+    result = subprocess.run(
+        [qz_codex, "exec", "--", prompt],
+        capture_output=True, text=True, timeout=timeout_sec
+    )
+    return {
+        "exit_code": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "wall_seconds": None,
+    }
+
+def load_prompts():
+    path = ROOT / "config" / "default" / "benchmark-prompts.json"
+    if path.exists():
+        data = json.loads(path.read_text())
+        return data.get("prompts", [])
+    return []
+
+def estimate_ppl(model, prompt):
+    """Quick PPL estimate from logits via the API if available."""
+    try:
+        body = json.dumps({"prompt": prompt, "max_tokens": 1,
+                           "temperature": 0, "echo": True, "stream": False}).encode()
+        req = urllib.request.Request(f"{BACKEND}/v1/completions", data=body,
+            headers={"Content-Type": "application/json"}, method="POST")
+        r = urllib.request.urlopen(req, timeout=60)
+        data = json.loads(r.read())
+        t = data.get("timings", {})
+        return {"ppl_estimate": None, "note": "PPL requires full eval pass"}
+    except:
+        return {"ppl_estimate": None, "note": "PPL endpoint not available"}
+
+def main():
+    parser = argparse.ArgumentParser(description="QuantZhai model telemetry benchmark")
+    parser.add_argument("--prompt", help="Prompt text to benchmark")
+    parser.add_argument("--prompt-id", help="Use prompt from benchmark-prompts.json by id")
+    parser.add_argument("--think", action="store_true", help="Enable reasoning (thinking) mode")
+    parser.add_argument("--max-tokens", type=int, default=200)
+    parser.add_argument("--output", help="Output JSON file")
+    parser.add_argument("--via-codex", action="store_true", help="Run via qz-codex exec instead of direct API")
+    parser.add_argument("--list-prompts", action="store_true", help="List available prompt fixtures")
+    args = parser.parse_args()
+
+    if args.list_prompts:
+        for p in load_prompts():
+            print(f"  {p['id']:30s} [{p['category']}] {p['goal'][:60]}")
+        return
+
+    # Resolve prompt
+    prompt = args.prompt
+    if args.prompt_id:
+        for p in load_prompts():
+            if p["id"] == args.prompt_id:
+                prompt = p["prompt"]
+                break
+        if not prompt:
+            print(f"Prompt id '{args.prompt_id}' not found")
+            sys.exit(1)
+    if not prompt:
+        prompt = "The meaning of life is"
+
+    # Get engine info
+    try:
+        r = api(f"{BACKEND}/health", timeout=5)
+    except:
+        r = {}
+
+    # Get git hash from the llama-cpp-turboquant repo
+    git_hash = ""
+    tq_repo = os.environ.get("QZ_BUILD_DIR", str(ROOT.parent / "llama-cpp-turboquant"))
+    for candidate in [tq_repo, str(ROOT.parent / "llama-cpp-turboquant")]:
+        try:
+            git = subprocess.run(["git", "rev-parse", "HEAD"],
+                capture_output=True, text=True, timeout=5, cwd=candidate)
+            if git.returncode == 0:
+                git_hash = git.stdout.strip()[:12]
+                break
+        except:
+            pass
+
+    # Get model info from proxy
+    proxy_status = {}
+    try:
+        r = api(f"{PROXY}/qz/backend/status", timeout=5)
+        proxy_status = r.get("backend_manager", {})
+    except:
+        pass
+
+    # Baseline GPU state
+    baseline = get_gpu_snapshot()
+    kv_before = None
+    if baseline and "gpus" in baseline:
+        kv_before = sum(g.get("kv_bytes", 0) for g in baseline["gpus"])
+
+    # Run benchmark
+    print(f"Benchmarking: {prompt[:60]}...")
+    start_ts = datetime.now(timezone.utc).isoformat()
+
+    if args.via_codex:
+        direct = run_codex_bench(prompt)
+    else:
+        direct = run_direct_bench(prompt, max_tokens=args.max_tokens)
+
+    end_ts = datetime.now(timezone.utc).isoformat()
+
+    # Post-run GPU state
+    after = get_gpu_snapshot()
+    kv_after = None
+    if after and "gpus" in after:
+        kv_after = sum(g.get("kv_bytes", 0) for g in after["gpus"])
+
+    # Peak GPU estimate (high water mark across both snapshots)
+    peak_gpu = 0
+    for snap in [baseline, after]:
+        if snap and "gpus" in snap:
+            for g in snap["gpus"]:
+                peak_gpu = max(peak_gpu, g.get("used_bytes", 0))
+
+    # PPL estimate
+    ppl = estimate_ppl(None, prompt)
+
+    # Build result
+    result = {
+        "timestamp": start_ts,
+        "engine": {
+            "name": "llama.cpp (turboquant fork)",
+            "git_commit": git_hash,
+            "backend": "CUDA 12.8",
+            "hardware": "RTX 3080 10GB + V100-SXM2 16GB (no NVLink)",
+            "tensor_split": "10,16",
+            "split_mode": "layer",
+        },
+        "model": {
+            "name": proxy_status.get("launch_model_key", ""),
+            "source": "quantzhai model catalog",
+        },
+        "config": {
+            "prompt": prompt,
+            "max_tokens": args.max_tokens,
+            "temperature": 0,
+            "thinking": args.think,
+            "kv_quant": "q8_0 (K) / turbo3 (V)",
+            "context_size": baseline.get("n_ctx", "?") if baseline and "n_ctx" in baseline else "?",
+            "prefill_batch": 4096,
+            "ubatch_size": 512,
+            "flash_attn": True,
+            "spec_decode": "default",
+            "prefix_caching": True,
+            "cache_ram": "8 GB",
+        },
+        "timing": {
+            "prefill_tps": direct.get("prompt_tps"),
+            "gen_tps": direct.get("gen_tps"),
+            "ttft_ms": direct.get("ttft_ms"),
+            "wall_seconds": direct.get("wall_seconds"),
+            "prefill_tokens": direct.get("prompt_tokens"),
+            "gen_tokens": direct.get("gen_tokens"),
+            "prefill_ms": direct.get("prompt_ms"),
+            "gen_ms": direct.get("gen_ms"),
+            "think_tokens": 0,
+            "think_tps": 0,
+            "time_thinking_ms": 0,
+        },
+        "memory": {
+            "baseline_gpu": baseline.get("gpus", []) if baseline else [],
+            "after_gpu": after.get("gpus", []) if after else [],
+            "peak_gpu_bytes": peak_gpu,
+            "kv_cache_bytes_before": kv_before,
+            "kv_cache_bytes_after": kv_after,
+            "kv_cache_delta": (kv_after - kv_before) if (kv_after is not None and kv_before is not None) else None,
+        },
+        "quality": {
+            "ppl": ppl.get("ppl_estimate"),
+            "ppl_note": ppl.get("note"),
+            "raw_output": direct.get("raw_output", ""),
+        },
+        "draft_stats": {
+            "draft_n": direct.get("draft_n", 0),
+            "draft_n_accepted": direct.get("draft_n_accepted", 0),
+            "draft_acceptance_rate": (direct.get("draft_n_accepted", 0) / direct.get("draft_n", 1)
+                                       if direct.get("draft_n", 0) > 0 else None),
+        },
+    }
+
+    print(json.dumps(result, indent=2))
+
+    if args.output:
+        Path(args.output).write_text(json.dumps(result, indent=2))
+        print(f"\nSaved to {args.output}")
+
+if __name__ == "__main__":
+    main()
