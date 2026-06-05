@@ -86,11 +86,9 @@ def get_gpu_telemetry():
         return {"error": str(e)}
 
 def get_gpu_snapshot():
-    """Returns GPU memory state from the backend child process."""
-    child_port = _find_child_port()
-    base = f"http://127.0.0.1:{child_port}" if child_port else BACKEND
+    """Returns GPU memory state from the router's model listing."""
     try:
-        r = api(f"{base}/v1/models", timeout=10)
+        r = api(f"{BACKEND}/v1/models", timeout=10)
         for m in r.get("data", []):
             s = m.get("status", {})
             if isinstance(s, dict) and s.get("value") == "loaded":
@@ -114,15 +112,13 @@ def get_gpu_snapshot():
     return {"error": "no loaded model"}
 
 def run_direct_bench(prompt, max_tokens=200, temperature=0):
-    """Run a completion via the child server, capturing full timings."""
-    child_port = _find_child_port()
-    if not child_port:
-        return {"error": "no child port found (model not loaded)"}
+    """Run a completion via the parent router (forwards to child)."""
     model_name = _get_model_name()
-    base = f"http://127.0.0.1:{child_port}"
+    if not model_name:
+        return {"error": "no model name found"}
     body = json.dumps({"model": model_name, "prompt": prompt, "max_tokens": max_tokens,
                        "temperature": temperature, "stream": False}).encode()
-    req = urllib.request.Request(f"{base}/v1/completions", data=body,
+    req = urllib.request.Request(f"{BACKEND}/v1/completions", data=body,
         headers={"Content-Type": "application/json"}, method="POST")
     start = time.time()
     r = urllib.request.urlopen(req, timeout=300)
