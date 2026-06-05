@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+PROXY = "http://127.0.0.1:18180"
 ROUTER = "http://127.0.0.1:18084"
 DOCKER_CONTAINER = "qwen36turbo"
 
@@ -54,40 +55,50 @@ def router_all_models():
         return json.loads(r.read()).get("data", [])
     except: return []
 
-def docker_log_timing():
-    """Parse slot timing from the server container logs."""
+def telemetry_recent():
+    """Get latest completed request timing from the proxy's telemetry."""
     try:
-        r = subprocess.run(["sudo", "docker", "logs", DOCKER_CONTAINER, "--tail", "200"],
-            capture_output=True, text=True, timeout=10)
-        lines = r.stdout.split("\n")
-        prompt_match = eval_match = draft_acc = graphs = None
-        for line in reversed(lines):
-            if "slot print_timing" not in line:
+        r = urllib.request.urlopen(f"{PROXY}/qz/telemetry/recent", timeout=10)
+        data = json.loads(r.read())
+        events = data.get("events", [])
+        # Find the newest request_completed event
+        for ev in reversed(events):
+            if ev.get("type") != "request_completed":
                 continue
-            if "prompt eval time" in line:
-                m = re.search(r"prompt eval time =\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens", line)
-                if m: prompt_match = (float(m.group(1)), int(m.group(2)))
-            elif "eval time" in line:
-                m = re.search(r"eval time =\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens", line)
-                if m: eval_match = (float(m.group(1)), int(m.group(2)))
-            m = re.search(r"draft acceptance =\s*([\d.]+)", line)
-            if m: draft_acc = float(m.group(1))
-            m = re.search(r"graphs reused =\s*(\d+)", line)
-            if m: graphs = int(m.group(1))
-            if prompt_match and eval_match:
-                pt, pn = prompt_match
-                et, en = eval_match
-                return {
-                    "prefill_ms": pt, "prefill_tokens": pn,
-                    "prefill_tps": round(pn / (pt / 1000), 1) if pt > 0 else 0,
-                    "gen_ms": et, "gen_tokens": en,
-                    "gen_tps": round(en / (et / 1000), 1) if et > 0 else 0,
-                    "ttft_ms": round(pt, 1),
-                    "latency_between_tokens_ms": round(et / en, 2) if en > 0 else 0,
-                    "draft_acceptance_rate": draft_acc,
-                    "graphs_reused": graphs,
-                }
-    except: pass
+            p = ev.get("payload", {})
+            usage = p.get("usage", {})
+            input_details = usage.get("input_tokens_details", {})
+            output_details = usage.get("output_tokens_details", {})
+            pt_ms = p.get("prompt_ms", 0) or 0
+            ge_ms = p.get("gen_ms", 0) or 0
+            ptok = usage.get("input_tokens", 0) or 0
+            gtok = usage.get("output_tokens", 0) or 0
+            runtime = p.get("runtime_metrics", {}) or {}
+            sampling = runtime.get("active_sampling", {}) or {}
+
+            result = {
+                "prefill_ms": round(pt_ms, 1),
+                "prefill_tokens": ptok,
+                "prefill_tps": round(ptok / (pt_ms / 1000), 1) if pt_ms > 0 else 0,
+                "gen_ms": round(ge_ms, 1),
+                "gen_tokens": gtok,
+                "gen_tps": round(gtok / (ge_ms / 1000), 1) if ge_ms > 0 else 0,
+                "ttft_ms": round(pt_ms, 1),
+                "latency_between_tokens_ms": round(ge_ms / gtok, 2) if ge_ms > 0 and gtok > 0 else 0,
+                "total_tokens": usage.get("total_tokens", 0),
+                "elapsed_ms": round(p.get("elapsed_ms", 0), 1),
+                "cached_tokens": input_details.get("cached_tokens", 0),
+                "reasoning_tokens": output_details.get("reasoning_tokens", 0),
+                "sampling": sampling,
+                "reasoning_level": runtime.get("active_reasoning_level", ""),
+                "reasoning_policy": runtime.get("active_reasoning_policy", ""),
+                "thinking_budget": runtime.get("active_thinking_budget_tokens"),
+                "context_length": runtime.get("selected_context_length"),
+                "backend_context_length": runtime.get("backend_context_length"),
+            }
+            return result
+    except Exception as e:
+        return {"error": str(e)}
     return {}
 
 def extract_child_args(model_info):
@@ -183,8 +194,10 @@ def main():
     # GPU telemetry after
     gpu_after = nvidia_smi()
 
-    # Timing from docker logs
-    timing = docker_log_timing()
+    # Timing from proxy telemetry
+    timing = telemetry_recent()
+    if "error" in timing:
+        print(f"  Telemetry error: {timing['error']}")
 
     # KV cache after
     model_info_after = router_models()
@@ -261,10 +274,11 @@ def main():
             "latency_between_tokens_ms": timing.get("latency_between_tokens_ms"),
             "think_tokens": think_tokens,
             "think_tps": round(think_tokens / (timing.get("gen_ms", 1) / 1000), 1) if timing.get("gen_ms") and think_tokens > 0 else 0,
-            "time_thinking_ms": None,  # not separable from gen time in server timing
+            "time_thinking_ms": None,
             "output_tokens_est": gen_tokens_out,
-            "draft_acceptance_rate": timing.get("draft_acceptance_rate"),
-            "graphs_reused": timing.get("graphs_reused"),
+            "cached_tokens": timing.get("cached_tokens"),
+            "reasoning_tokens": timing.get("reasoning_tokens"),
+            "elapsed_ms": timing.get("elapsed_ms"),
         },
         "memory": {
             "gpu_before": [{
@@ -291,10 +305,10 @@ def main():
             },
         },
         "gpu_telemetry": {
-            "before": [{"name": g["name"], "temp_c": g["temp_c"], "power_w": g["power_w"],
-                        "util_pct": g["util_pct"], "mem_used_mib": g["mem_used_mib"]} for g in gpu_before if "error" not in g],
-            "after": [{"name": g["name"], "temp_c": g["temp_c"], "power_w": g["power_w"],
-                       "util_pct": g["util_pct"], "mem_used_mib": g["mem_used_mib"]} for g in gpu_after if "error" not in g],
+            "before": [{"index": g["index"], "name": g["name"], "temp_c": g["temp_c"], "power_w": g["power_w"],
+                        "util_pct": g["util_pct"], "mem_used_mib": g["mem_used_mib"], "mem_total_mib": g.get("mem_total_mib", 0)} for g in gpu_before if "error" not in g],
+            "after": [{"index": g["index"], "name": g["name"], "temp_c": g["temp_c"], "power_w": g["power_w"],
+                       "util_pct": g["util_pct"], "mem_used_mib": g["mem_used_mib"], "mem_total_mib": g.get("mem_total_mib", 0)} for g in gpu_after if "error" not in g],
         },
         "codex": {
             "exit_code": codex_result.returncode,
@@ -323,9 +337,7 @@ def main():
     print(f"  Codex exit: {codex_result.returncode}")
     print(f"  KV cache: {result['memory']['kv_cache_bytes_before']/1e9:.1f} GB (delta: {result['memory']['kv_cache_delta']/1e9:.2f} GB)" if result['memory']['kv_cache_delta'] else "")
     for g in result["gpu_telemetry"]["before"]:
-        idx = g.get('index', '?')
-        total = g.get('mem_total_mib', 0)
-        print(f"  GPU{idx}: {g['temp_c']}C {g['power_w']}W {g['mem_used_mib']:.0f}/{total:.0f} MiB")
+        print(f"  GPU{g['index']}: {g['temp_c']}C {g['power_w']}W {g['mem_used_mib']:.0f}/{g['mem_total_mib']:.0f} MiB")
     if result["memory"]["peak_gpu_mib"]:
         print(f"  Peak GPU: {result['memory']['peak_gpu_mib']:.0f} MiB")
     print(f"  Saved: {out_dir / 'result.json'}")
