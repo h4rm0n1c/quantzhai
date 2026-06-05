@@ -10,26 +10,26 @@
 
 ## Full Benchmark
 
-| # | Model (GGUF file) | Params | Prompt | Gen | Notes |
-|---|---|---|---|---|---|---|
-| 1 | `deepseek-ai_DeepSeek-R1-0528-Qwen3-8B-IQ4_XS.gguf` | 8.2B | **102.0** t/s | **103.9** t/s | Single-GPU capable, fastest |
-| 2 | `mistralai_Devstral-Small-2-24B-Instruct-2512-IQ4_XS.gguf` | 24.2B | 83.4 t/s | 45.6 t/s | Fast prompt, slow gen (dense arch) |
-| 3 | `Qwen3-Coder-30B-APEX-Mini.gguf` | ~30B | 27.8 t/s | 88.9 t/s | |
-| 4 | `Qwen3.5-24B-A3B-Claude-Opus-Gemini-3.1-Pro-Reasoning-Distilled-heretic.IQ4_XS.gguf` | ~24B | 16.0 t/s | 83.0 t/s | |
-| 5 | `Qwen3.5-24B-A3B-Claude-Opus-Gemini-3.1-Pro-Reasoning-Distilled-heretic.Q5_K_M.gguf` | ~24B | 15.8 t/s | 83.8 t/s | |
-| 6 | `Qwen3.5-24B-A3B-Claude-Opus-Gemini-3.1-Pro-Reasoning-Distilled-heretic.Q6_K.gguf` | ~24B | 10.7 t/s | 76.2 t/s | |
-| 7 | `Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf` | ~27B | 17.2 t/s | 36.1 t/s | Slow gen — dense arch |
-| 8 | `Qwen3.6-35B-A3B-APEX-I-Mini.gguf` | ~35B | 14.5 t/s | 82.0 t/s | |
-| 9 | `Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled-APEX-MTP-I-Mini.gguf` | ~35B | 15.3 t/s | 83.9 t/s | |
-| 10 | `Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled-APEX-MTP-I-Compact.gguf` | ~35B | 10.0 t/s | 81.5 t/s | |
-| 11 | `Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved.IQ4_XS.gguf` | ~35B | 17.0 t/s | 87.7 t/s | |
-| 12 | `Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved.Q4_K_S.gguf` | ~35B | 10.7 t/s | 90.3 t/s | |
-| 13 | `qwen36_35b_IQ4_XS.gguf` | ~35B | 8.4 t/s | 85.9 t/s | |
-| 14 | `qwen36_35b_Q4_K_M.gguf` | ~35B | 18.8 t/s | 81.6 t/s | |
-| 15 | `gemma-4-26B-A4B-APEX-I-Compact.gguf` | ~26B | 29.5 t/s | 76.7 t/s | |
-| 16 | `gemma-4-26B-A4B-Claude-Distill-APEX-I-Compact.gguf` | ~26B | 58.6 t/s | 81.1 t/s | |
-| 17 | `google_gemma-4-26B-A4B-it-Q3_K_M.gguf` | ~26B | 56.0 t/s | 73.9 t/s | |
-| 18 | `google_gemma-4-26B-A4B-it-Q5_K_M.gguf` | ~26B | 52.0 t/s | 75.8 t/s | |
+| # | Model | GGUF file | Params | Prompt | Gen | Notes |
+|---|---|---|---|---|---|---|---|
+| 1 | DeepSeek R1 0528 Qwen3 8B | `deepseek-ai_DeepSeek-R1-0528-Qwen3-8B-IQ4_XS.gguf` | 8.2B | 102.0 | 103.9 | Single-GPU capable, fastest |
+| 2 | Devstral-Small-2-24B | `mistralai_Devstral-Small-2-24B-Instruct-2512-IQ4_XS.gguf` | 24.2B | 83.4 | 45.6 | Fast prompt, slow gen (dense) |
+| 3 | Qwen3-Coder-30B-APEX-Mini | `Qwen3-Coder-30B-APEX-Mini.gguf` | ~30B | 27.8 | 88.9 | |
+| 4 | Qwen3.5-24B Claude Distill IQ4_XS | `Qwen3.5-24B-A3B-Claude-Opus-Gemini-3.1-Pro-Reasoning-Distilled-heretic.IQ4_XS.gguf` | ~24B | 16.0 | 83.0 | |
+| 5 | Qwen3.5-24B Claude Distill Q5_K_M | `Qwen3.5-24B-A3B-Claude-Opus-Gemini-3.1-Pro-Reasoning-Distilled-heretic.Q5_K_M.gguf` | ~24B | 15.8 | 83.8 | |
+| 6 | Qwen3.5-24B Claude Distill Q6_K | `Qwen3.5-24B-A3B-Claude-Opus-Gemini-3.1-Pro-Reasoning-Distilled-heretic.Q6_K.gguf` | ~24B | 10.7 | 76.2 | |
+| 7 | Qwen3.6-27B-NEO-CODE | `Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS.gguf` | ~27B | 17.2 | 36.1 | Slow gen — dense arch |
+| 8 | Qwen3.6-35B-A3B-APEX-I-Mini | `Qwen3.6-35B-A3B-APEX-I-Mini.gguf` | ~35B | 14.5 | 82.0 | |
+| 9 | Qwen3.6-35B Claude 4.7 MTP-I-Mini | `Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled-APEX-MTP-I-Mini.gguf` | ~35B | 15.3 | 83.9 | |
+| 10 | Qwen3.6-35B Claude 4.7 MTP-I-Compact | `Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled-APEX-MTP-I-Compact.gguf` | ~35B | 10.0 | 81.5 | |
+| 11 | Qwen3.6-35B uncensored Native-MTP IQ4_XS | `Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved.IQ4_XS.gguf` | ~35B | 17.0 | 87.7 | |
+| 12 | Qwen3.6-35B uncensored Native-MTP Q4_K_S | `Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved.Q4_K_S.gguf` | ~35B | 10.7 | 90.3 | |
+| 13 | qwen36_35b IQ4_XS | `qwen36_35b_IQ4_XS.gguf` | ~35B | 8.4 | 85.9 | |
+| 14 | qwen36_35b Q4_K_M | `qwen36_35b_Q4_K_M.gguf` | ~35B | 18.8 | 81.6 | |
+| 15 | gemma-4-26B-A4B APEX-I-Compact | `gemma-4-26B-A4B-APEX-I-Compact.gguf` | ~26B | 29.5 | 76.7 | |
+| 16 | gemma-4-26B-A4B Claude Distill | `gemma-4-26B-A4B-Claude-Distill-APEX-I-Compact.gguf` | ~26B | 58.6 | 81.1 | |
+| 17 | google_gemma-4-26B-A4B Q3_K_M | `google_gemma-4-26B-A4B-it-Q3_K_M.gguf` | ~26B | 56.0 | 73.9 | |
+| 18 | google_gemma-4-26B-A4B Q5_K_M | `google_gemma-4-26B-A4B-it-Q5_K_M.gguf` | ~26B | 52.0 | 75.8 | |
 
 ## VRAM Snapshot (Reference: 8B DeepSeek @ 131072 ctx)
 
