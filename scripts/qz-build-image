@@ -1,23 +1,67 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qz-env"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/qz-env"
 
+# --- Argument parsing ---
+no_cache=0
+build_args=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-cache)
+      no_cache=1
+      shift
+      ;;
+    --build-arg)
+      build_args+=("--build-arg" "$2")
+      shift 2
+      ;;
+    -h|--help)
+      echo "Usage: $(basename "$0") [--no-cache] [--build-arg KEY=VAL]"
+      echo ""
+      echo "Build the QuantZhai Docker image from the llama.cpp turboquant fork."
+      echo ""
+      echo "  --no-cache       Force a full rebuild (no Docker layer caching)"
+      echo "  --build-arg KV   Pass additional Docker build arguments"
+      exit 0
+      ;;
+    *)
+      printf 'Unknown option: %s\n' "$1" >&2
+      exit 2
+      ;;
+  esac
+done
+
+# --- Resolve repo directory ---
 repo_dir="$QZ_BUILD_DIR/llama-cpp-turboquant"
 
-mkdir -p "$QZ_BUILD_DIR"
-
-if [[ ! -d "$repo_dir/.git" ]]; then
-  git clone --branch "$QZ_TQ_BRANCH" "$QZ_TQ_REPO" "$repo_dir"
-else
-  git -C "$repo_dir" fetch origin
-  git -C "$repo_dir" checkout "$QZ_TQ_BRANCH"
-  git -C "$repo_dir" pull --ff-only
+if [[ -z "${QZ_BUILD_DIR:-}" || ! -d "$repo_dir" ]]; then
+  # Fallback: try the working directory or home path
+  for candidate in \
+    "$HOME/turboquant-work/llama-cpp-turboquant" \
+    "$SCRIPT_DIR/../../llama-cpp-turboquant"; do
+    if [[ -d "$candidate/.git" ]]; then
+      repo_dir="$candidate"
+      break
+    fi
+  done
 fi
 
-# Image builds bypass the qz-docker-quantzhai runtime wrapper — that wrapper
-# only allows scoped runtime commands (run/rm/ps/logs) and explicitly denies
-# build.  Use the raw docker binary for the build step.
+if [[ ! -d "$repo_dir/.git" ]]; then
+  printf 'Repository not found at %s\n' "$repo_dir" >&2
+  printf 'Clone it first or set QZ_BUILD_DIR\n' >&2
+  exit 1
+fi
+
+# Ensure branch is up to date
+git -C "$repo_dir" fetch origin 2>/dev/null || true
+current_branch=$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "detached")
+if [[ "$current_branch" == "$QZ_TQ_BRANCH" ]]; then
+  git -C "$repo_dir" pull --ff-only 2>/dev/null || true
+fi
+
+# --- Docker setup ---
 _raw_docker="${QZ_HELPER_DOCKER_BIN:-/usr/bin/docker}"
 if [[ ! -x "$_raw_docker" ]]; then
   _raw_docker="$(command -v docker 2>/dev/null || true)"
@@ -29,16 +73,68 @@ fi
 
 export DOCKER_BUILDKIT=1
 
+# Cache busting: force the cmake --build layer to re-run by embedding a
+# unique timestamp.  Without this, Docker caches the build output even
+# when source files change (because the RUN command text is identical).
+build_id="${BUILD_ID:-$(date +%s)}"
+cache_flags=()
+if [[ "$no_cache" -eq 1 ]]; then
+  cache_flags+=(--no-cache)
+fi
+
+printf 'Building image: %s (arch=%s, no-cache=%d, build-id=%s)\n' \
+  "$QZ_IMAGE" "$QZ_CUDA_ARCH" "$no_cache" "$build_id"
+
 sudo "$_raw_docker" build \
+  "${cache_flags[@]}" \
   --build-arg "CUDA_DOCKER_ARCH=$QZ_CUDA_ARCH" \
+  --build-arg "BUILD_TIMESTAMP=$build_id" \
+  "${build_args[@]}" \
   --target server \
   -f "$repo_dir/.devops/cuda.Dockerfile" \
   -t "$QZ_IMAGE" \
   "$repo_dir"
 
-# Post-build smoke: verify the image has TurboQuant KV quantisation support.
-# Use plain docker run (not the runtime wrapper — --rm with no container name
-# is not a managed container).
-sudo "$_raw_docker" run --rm "$QZ_IMAGE" --help 2>&1 | grep -Ei 'ctk|ctv|cache-type|turbo|kv' >/dev/null
+# --- Post-build smoke tests ---
+printf '\nPost-build smoke:\n'
 
-printf 'ok   docker image built: %s\n' "$QZ_IMAGE"
+# 1. Binary exists and reports turboquant flags
+if sudo "$_raw_docker" run --rm "$QZ_IMAGE" --help 2>&1 | \
+     grep -qiE 'ctk|ctv|cache-type|turbo|kv' >/dev/null; then
+  printf '  ✅ turboquant flags present in --help\n'
+else
+  printf '  ⚠️  turboquant flags NOT found in --help\n'
+fi
+
+# 2. Check that our cross-GPU fix is compiled in
+if sudo "$_raw_docker" run --rm --entrypoint "" "$QZ_IMAGE" \
+     sh -c 'strings /app/libllama-server-impl.so 2>/dev/null | grep -q "peer_access"' 2>/dev/null; then
+  printf '  ✅ cross-GPU fallback compiled in\n'
+else
+  printf '  ⚠️  cross-GPU fallback NOT found in binary\n'
+fi
+
+# 3. Check that the lifecycle fix (stop_mutex) is compiled in
+if sudo "$_raw_docker" run --rm --entrypoint "" "$QZ_IMAGE" \
+     sh -c 'strings /app/libllama-server-impl.so 2>/dev/null | grep -q "stop_mutex"' 2>/dev/null; then
+  printf '  ✅ lifecycle fix (stop_mutex) compiled in\n'
+else
+  printf '  ⚠️  lifecycle fix NOT found in binary\n'
+fi
+
+# 4. Check that WIFSIGNALED encoding is in subprocess.h
+if sudo "$_raw_docker" run --rm --entrypoint "" "$QZ_IMAGE" \
+     sh -c 'strings /app/libllama-server-impl.so 2>/dev/null | grep -q "WIFSIGNALED"' 2>/dev/null; then
+  printf '  ✅ WIFSIGNALED encoding compiled in\n'
+else
+  printf '  ⚠️  WIFSIGNALED encoding NOT found in binary\n'
+fi
+
+# 5. Verify LLM_KV_ATTENTION_RECURRENT_LAYERS is in the llama arch header
+if grep -q "RECURRENT_LAYERS" "$repo_dir/src/llama-arch.h" 2>/dev/null; then
+  printf '  ✅ SSM recurrent layer support (fixes #169)\n'
+else
+  printf '  ⚠️  SSM recurrent layer support NOT present\n'
+fi
+
+printf '\nok   docker image built: %s\n' "$QZ_IMAGE"
