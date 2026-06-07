@@ -175,7 +175,7 @@ def ensure_ppl_corpus():
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
-def run_ppl(model_gguf, cache_v="turbo3", ctx_size=2048):
+def run_ppl(model_gguf, cache_k="q8_0", cache_v="turbo3", ctx_size=2048):
     """Run llama-perplexity with settings matching the model's inference config.
     K cache type is auto-selected by --cache-type-k-auto (same as inference).
     Container is always cleaned up after completion."""
@@ -369,7 +369,7 @@ def main():
         stop_backend_for_ppl()
         model_file = model + ".gguf" if not model.endswith(".gguf") else model
         # Use 4096 ctx for PPL (corpus is 35K tokens; 262144 would be overkill and slow)
-        ppl_cold, ppl_warm = run_ppl(model_file, cache_v=cache_v, ctx_size=4096)
+        ppl_cold, ppl_warm = run_ppl(model_file, cache_k=cache_k, cache_v=cache_v, ctx_size=4096)
         ppl_cold_str = f"{ppl_cold:.4f}" if ppl_cold else "?"
         ppl_warm_str = f"{ppl_warm:.4f}" if ppl_warm else "?"
         print(f"  PPL: cold={ppl_cold_str} warm={ppl_warm_str}")
