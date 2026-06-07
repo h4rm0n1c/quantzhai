@@ -195,7 +195,7 @@ def run_ppl(model_gguf, cache_v="turbo3", ctx_size=2048):
              "--ppl-stride", "512",
              "-c", str(ctx_size),
              "--cache-type-v", cache_v,
-             "--cache-type-k-auto",
+             "--cache-type-k", cache_k,
              "-ngl", "99",
              "-b", "512",
              "-t", "12"],
