@@ -504,10 +504,11 @@ class BackendManager:
                                          "config", "default", "models-preset.ini")
             var_path = _os.path.join(self._model_dir, "models-preset.ini")
 
-            # Read default [*]
+            # Read default [*] — preserve key case
             defaults: dict[str, str] = {}
             if _os.path.isfile(default_path):
                 cp = _cp.ConfigParser()
+                cp.optionxform = str  # type: ignore[assignment]
                 cp.read(default_path)
                 if cp.has_section("*"):
                     defaults = dict(cp.items("*"))
@@ -517,6 +518,7 @@ class BackendManager:
             var_per_model: dict[str, dict[str, str]] = {}
             if _os.path.isfile(var_path):
                 cp = _cp.ConfigParser()
+                cp.optionxform = str  # type: ignore[assignment]
                 cp.read(var_path)
                 for sec in cp.sections():
                     items = dict(cp.items(sec))
@@ -531,8 +533,9 @@ class BackendManager:
                 if k not in merged_star:
                     merged_star[k] = v
 
-            # Write merged file
+            # Write merged file — preserve key case (ConfigParser lowercases by default)
             cp = _cp.ConfigParser()
+            cp.optionxform = str  # type: ignore[assignment]
             cp["*"] = merged_star
             for sec, items in var_per_model.items():
                 cp[sec] = items
