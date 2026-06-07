@@ -1,0 +1,389 @@
+#!/usr/bin/env python3
+"""
+Benchmark all models via quantzhai router API + qz-bench-telemetry.
+"""
+import json, time, os, sys, subprocess, urllib.request, argparse, re
+from datetime import datetime, timezone
+from pathlib import Path
+
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
+ROUTER = "http://127.0.0.1:18084"
+PROXY = "http://127.0.0.1:18180"
+ROOT = Path(__file__).resolve().parent if __file__ else Path.cwd()
+BENCH_SCRIPT = str(ROOT / "scripts" / "qz-bench-telemetry") if (ROOT / "scripts" / "qz-bench-telemetry").exists() else str(Path.home() / "turboquant/quantzhai/scripts/qz-bench-telemetry")
+MODEL_DIR = os.environ.get("QZ_MODEL_DIR", str(Path.home() / "turboquant/quantzhai/var/models"))
+VAR_DIR = os.environ.get("QZ_VAR_DIR", str(Path.home() / "turboquant/quantzhai/var"))
+DOCKER_IMAGE = os.environ.get("QZ_IMAGE", "thetom-llama-cpp-turboquant:cuda-server") + "-build"
+PPL_CORPUS = os.environ.get("QZ_PPL_CORPUS", str(Path(__file__).resolve().parent.parent / "toolbox-ppl" / "macvox68.txt"))
+RESULTS = []
+
+SKIP_MODELS = ("amber", "caveman", "kuato", "prompt-compiler", "qwen-blank")
+
+def is_symlink_model(model_id):
+    """Check if the model's GGUF file is a symlink (profile alias)."""
+    for ext in ("", ".gguf"):
+        path = Path(MODEL_DIR) / f"{model_id}{ext}"
+        if path.is_symlink():
+            return True
+    return False
+
+def api(method, path, body=None, timeout=60, base=None):
+    base = base or ROUTER
+    url = f"{base}{path}"
+    data = json.dumps(body).encode() if body else None
+    req = urllib.request.Request(url, data=data,
+        headers={"Content-Type": "application/json"} if body else {},
+        method=method)
+    try:
+        r = urllib.request.urlopen(req, timeout=timeout)
+        return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return {"error": f"HTTP {e.code}: {e.read().decode()[:200]}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+def proxy_api(method, path, body=None, timeout=120):
+    return api(method, path, body, timeout, base=PROXY)
+
+def get_models():
+    # Read from proxy's model inventory (no backend needed)
+    try:
+        import json
+        inv_path = os.environ.get("QZ_MODEL_INVENTORY_CACHE",
+            str(Path(os.environ.get("QZ_VAR_DIR", "")) / "generated" / "model-inventory.json"))
+        with open(inv_path) as f:
+            data = json.load(f)
+        models = []
+        for m in data.get("models", []):
+            mid = m.get("key", m.get("filename", ""))
+            stem = m.get("stem", mid.replace(".gguf", ""))
+            if any(mid.startswith(s) or stem.startswith(s) for s in SKIP_MODELS):
+                continue
+            if is_symlink_model(mid) or is_symlink_model(stem):
+                continue
+            size = m.get("size_bytes", 0)
+            if size > 0:
+                models.append((stem, size))
+        models.sort(key=lambda x: x[1])  # smallest first
+        return [m[0] for m in models]
+    except Exception as e:
+        print(f"  Error reading model inventory: {e}", flush=True)
+        return []
+
+def get_loaded():
+    r = api("GET", "/v1/models", timeout=30)
+    if "error" in r: return None
+    for m in r.get("data", []):
+        s = m.get("status", {})
+        if isinstance(s, dict) and s.get("value") == "loaded":
+            return m.get("id", "")
+    return None
+
+def wait_for_loaded(model, timeout=300):
+    for i in range(timeout // 3):
+        r = api("GET", "/v1/models", timeout=30)
+        if "error" in r: continue
+        for m in r.get("data", []):
+            if m.get("id") != model: continue
+            s = m.get("status", {})
+            v = s.get("value", "") if isinstance(s, dict) else ""
+            if v == "loaded": return True
+            if v == "unloaded": return False
+        time.sleep(3)
+    return False
+
+def wait_for_unloaded(model, timeout=60):
+    for i in range(timeout // 3):
+        r = api("GET", "/v1/models", timeout=30)
+        if "error" in r: continue
+        for m in r.get("data", []):
+            if m.get("id") != model: continue
+            s = m.get("status", {})
+            v = s.get("value", "") if isinstance(s, dict) else ""
+            if v == "unloaded": return True
+        time.sleep(3)
+    return False
+
+def get_vram():
+    r = api("GET", "/v1/models", timeout=30)
+    if "error" in r: return []
+    for m in r.get("data", []):
+        s = m.get("status", {})
+        if isinstance(s, dict) and s.get("value") == "loaded":
+            mem = m.get("memory", {})
+            return mem.get("gpus", [])
+    return []
+
+def run_bench(prompt="The meaning of life is", model_id=""):
+    """Benchmark via direct proxy API calls (no qz-codex overhead)."""
+    timing = {"cold": {}, "warm": {}}
+    body = json.dumps({"model": model_id, "input": prompt,
+        "max_output_tokens": 50, "temperature": 0, "stream": False})
+    for phase, label in [("cold", "❄️"), ("warm", "🔥")]:
+        start = time.time()
+        try:
+            req = urllib.request.Request(f"{PROXY}/v1/responses",
+                data=body.encode(), headers={"Content-Type": "application/json"},
+                method="POST")
+            resp = json.loads(urllib.request.urlopen(req, timeout=120).read())
+            elapsed = (time.time() - start) * 1000
+            usage = resp.get("usage", {})
+            ptok = usage.get("input_tokens", 0) or 0
+            gtok = usage.get("output_tokens", 0) or 0
+            timing[phase] = {
+                "prefill_tokens": str(ptok),
+                "prefill_tps": str(round(ptok / (elapsed / 1000), 1)) if elapsed > 0 else "0",
+                "gen_tokens": str(gtok),
+                "gen_tps": str(round(gtok / (elapsed / 1000), 1)) if elapsed > 0 else "0",
+                "ttft_ms": str(round(elapsed, 0)),
+                "cached_tokens": str(usage.get("input_tokens_details", {}).get("cached_tokens", 0)),
+            }
+        except Exception as e:
+            timing[phase] = {"prefill_tps": "?", "gen_tps": "?", "ttft_ms": f"error:{e}"}
+        if label == "🔥":
+            time.sleep(2)  # brief gap between cold/warm
+    c = timing["cold"].get("gen_tps")
+    w = timing["warm"].get("gen_tps")
+    if c and w and c != "?" and w != "?" and float(c) > 0:
+        timing["speedup"] = round(float(w) / float(c), 1)
+    return timing, "", ""
+
+def ensure_ppl_corpus():
+    """Clone macvox68 and build a C source corpus for PPL testing."""
+    path = Path(PPL_CORPUS)
+    if path.exists() and path.stat().st_size > 50000:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    import tempfile, subprocess, shutil
+    tmp = tempfile.mkdtemp()
+    try:
+        subprocess.run(["git", "clone", "--depth", "1",
+            "https://github.com/h4rm0n1c/macvox68", f"{tmp}/macvox68"],
+            capture_output=True, timeout=30, check=True)
+        sources = []
+        for root, dirs, files in os.walk(f"{tmp}/macvox68"):
+            for f in files:
+                if f.endswith((".c", ".h")):
+                    fp = os.path.join(root, f)
+                    try:
+                        sources.append(open(fp).read())
+                    except: pass
+        path.write_text("\n\n".join(sources), encoding="utf-8")
+        print(f"  ToolboxPPL corpus: {path} ({path.stat().st_size} bytes, {len(sources)} files)")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+def run_ppl(model_gguf, cache_v="turbo3", ctx_size=2048):
+    """Run llama-perplexity with settings matching the model's inference config.
+    K cache type is auto-selected by --cache-type-k-auto (same as inference)."""
+    ensure_ppl_corpus()
+    try:
+        r = subprocess.run(
+            ["sudo", "-n", "docker", "run", "--rm", "--gpus", "all",
+             "-v", f"{MODEL_DIR}:/models",
+             "-v", f"{PPL_CORPUS}:/corpus.txt",
+             "--entrypoint", "",
+             DOCKER_IMAGE,
+             "/app/build/bin/llama-perplexity",
+             "--model", f"/models/{model_gguf}",
+             "-f", "/corpus.txt",
+             "--ppl-stride", "512",
+             "-c", str(ctx_size),
+             "--cache-type-v", cache_v,
+             "--cache-type-k-auto",
+             "-ngl", "99",
+             "-b", "512",
+             "-t", "12"],
+            capture_output=True, text=True, timeout=900)
+        output = r.stdout + "\n" + (r.stderr or "")
+        for line in output.split("\n"):
+            line = line.strip()
+            if re.match(r"^\[[0-9]+\]", line):
+                chunks = [float(x.split("]")[1]) for x in line.split(",") if "]" in x]
+                if chunks:
+                    cold = chunks[0]
+                    warm = sum(chunks[1:]) / len(chunks[1:]) if len(chunks) > 1 else cold
+                    return (round(cold, 4), round(warm, 4))
+        return (None, None)
+    except subprocess.TimeoutExpired:
+        return (None, None)
+    except Exception as e:
+        print(f"  PPL error: {e}")
+        return (None, None)
+
+def select_model_via_proxy(model):
+    """Use proxy's select-and-restart to load a model. Returns True on success."""
+    print(f"  Selecting via proxy...")
+    r = proxy_api("POST", "/qz/model/select-and-restart",
+                   {"model": model}, timeout=300)
+    # Immediate failure detection
+    if r.get("failed_candidate_key") == model or r.get("last_load_error"):
+        print(f"  Model load failed immediately: {r.get('last_load_error','')[:80]}")
+        return False
+    if r.get("selected_model_ready"):
+        return True
+    # Poll briefly (30s) for late success or rollback
+    for _ in range(10):
+        time.sleep(3)
+        r = proxy_api("GET", "/qz/model/status", timeout=10)
+        if r.get("selected_model_ready") and r.get("selected_key") == model:
+            return True
+        if r.get("failed_candidate_key") == model:
+            print(f"  Model load failed (rollback): {r.get('last_load_error','')[:80]}")
+            return False
+    print(f"  Model load timed out after 30s poll")
+    return False
+
+def stop_backend_for_ppl():
+    """Force-stop the backend container to free GPU for PPL."""
+    print(f"  Stopping backend for PPL...", flush=True)
+    # Use proxy's api to trigger stop (non-blocking, spawns bg thread)
+    proxy_api("POST", "/qz/backend/stop", timeout=15)
+    # Also brute-force in case proxy is busy
+    subprocess.run(["sudo", "-n", "docker", "rm", "-f", "qwen36turbo"],
+        capture_output=True, timeout=15)
+    subprocess.run(["sudo", "-n", "docker", "kill", "qwen36turbo"],
+        capture_output=True, timeout=5)
+
+def start_backend_after_ppl():
+    """Restart proxy."""
+    print(f"  Restarting backend...", flush=True)
+    # Proxy stays up; next select_model will trigger backend start
+
+def wait_for_proxy_ready(timeout=60):
+    for _ in range(timeout // 3):
+        try:
+            r = proxy_api("GET", "/qz/model/status", timeout=5)
+            if "configured_env_model" in r:
+                return True
+        except: pass
+        time.sleep(3)
+    return False
+
+def main():
+    models = get_models()
+    print(f"Found {len(models)} models to benchmark\n")
+
+    for idx, model in enumerate(models):
+        print(f"\n{'='*60}")
+        print(f"[{idx+1}/{len(models)}] {model}")
+
+        # Select model via proxy
+        if not select_model_via_proxy(model):
+            print(f"  FAILED to select model, skipping")
+            RESULTS.append({"model": str(model), "size": "?", "vram": "?",
+                "cold_gen_tps": "?", "warm_gen_tps": "?",
+                "cold_ttft": "?", "warm_ttft": "?", "speedup": "?",
+                "cached": "?", "cache_k": "?", "cache_v": "?",
+                "ppl_cold": "?", "ppl_warm": "?"})
+            continue
+        time.sleep(5)
+
+        # Get cache types — check server logs for auto-K override
+        cache_k, cache_v = "auto", "turbo3"
+        try:
+            r = subprocess.run(
+                "sudo docker logs qwen36turbo 2>&1 | grep 'auto-selected K cache type' | tail -1",
+                capture_output=True, shell=True, text=True, timeout=15)
+            line = r.stdout.strip()
+            if "auto-selected K cache type" in line:
+                cache_k = line.split("auto-selected K cache type ")[1].split()[0]
+        except: pass
+        print(f"  K cache: {cache_k}  V cache: {cache_v}")
+
+        # Get VRAM from router
+        gpus = get_vram()
+        vram_str = ""
+        for g in gpus:
+            u = (g["total_bytes"] - g["free_bytes"]) / 1e9
+            k = g["kv_bytes"] / 1e9
+            m = g["model_bytes"] / 1e9
+            f = g["free_bytes"] / 1e9
+            vram_str += f" {g['name'].split()[-1]}:{u:.1f}G(m={m:.1f},kv={k:.1f},f={f:.1f})"
+            print(f"  GPU: {g['name']}  used={u:.1f}G  model={m:.1f}G  kv={k:.1f}G  free={f:.1f}G")
+
+        # Benchmark via direct proxy /v1/responses API
+        print(f"  Benchmarking...")
+        timing, stdout, stderr = run_bench(model_id=model)
+        cold = timing.get("cold", {})
+        warm = timing.get("warm", {})
+        print(f"  Cold: P:{cold.get('prefill_tps','?')} G:{cold.get('gen_tps','?')} TTFT:{cold.get('ttft_ms','?')}ms")
+        print(f"  Warm: P:{warm.get('prefill_tps','?')} G:{warm.get('gen_tps','?')} TTFT:{warm.get('ttft_ms','?')}ms")
+
+        # PPL: stop backend, run perplexity with same settings, restart proxy
+        stop_backend_for_ppl()
+        model_file = model + ".gguf" if not model.endswith(".gguf") else model
+        # Use 4096 ctx for PPL (corpus is 35K tokens; 262144 would be overkill and slow)
+        ppl_cold, ppl_warm = run_ppl(model_file, cache_v=cache_v, ctx_size=4096)
+        ppl_cold_str = f"{ppl_cold:.4f}" if ppl_cold else "?"
+        ppl_warm_str = f"{ppl_warm:.4f}" if ppl_warm else "?"
+        print(f"  PPL: cold={ppl_cold_str} warm={ppl_warm_str}")
+        start_backend_after_ppl()
+        wait_for_proxy_ready()
+
+        cold_t = timing.get("cold", {})
+        warm_t = timing.get("warm", {})
+        size_g = ""
+        size_bytes = 0
+        try:
+            r2 = urllib.request.urlopen("http://127.0.0.1:18084/v1/models", timeout=10)
+            for m2 in json.loads(r2.read()).get("data", []):
+                if m2.get("id") == model:
+                    meta = m2.get("meta", {})
+                    size_bytes = meta.get("size", 0)
+                    size_g = f"{size_bytes/1e9:.1f}G" if size_bytes else ""
+                    break
+        except: pass
+        RESULTS.append({
+            "model": model,
+            "size": size_g if size_g else vram_str.split()[0] if vram_str else "",
+            "cold_gen_tps": str(cold_t.get("gen_tps", "?")),
+            "warm_gen_tps": str(warm_t.get("gen_tps", "?")),
+            "cold_ttft": str(cold_t.get("ttft_ms", "?")),
+            "warm_ttft": str(warm_t.get("ttft_ms", "?")),
+            "speedup": str(timing.get("speedup", "")),
+            "cached": str(warm_t.get("cached_tokens", "?")),
+            "cache_k": str(cache_k),
+            "cache_v": str(cache_v),
+            "ppl_cold": str(ppl_cold_str),
+            "ppl_warm": str(ppl_warm_str),
+            "vram": str(vram_str),
+        })
+        # Save incrementally after each model
+        json.dump(RESULTS, open("/tmp/bench_all.json", "w"), indent=2)
+
+    # Summary table — markdown
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    print(f"\n\n## Benchmark Results — {ts}\n")
+    print(f"| # | Model | Size | 🔥Gen | ❄️Gen | 🔥TTFT | ❄️TTFT | Speedup | Cached | K cache | V cache | ToolboxPPL❄️ | ToolboxPPL🔥 | VRAM |")
+    print(f"|---:|------|---:|---:|---:|---:|---:|---:|---:|:---:|:---:|------:|------:|------|")
+    for idx, r in enumerate(RESULTS, 1):
+        def sf(v, fmt): # safe format — convert to string first
+            try: return format(str(v), fmt)
+            except: return format("?", fmt)
+        print(f"| {idx} | `{sf(r.get('model',''),''):55s}` | {sf(r.get('size','?'),'>4s')} | {sf(r.get('warm_gen_tps','?'),'>6s')} | {sf(r.get('cold_gen_tps','?'),'>6s')} | {sf(r.get('warm_ttft','?'),'>6s')} | {sf(r.get('cold_ttft','?'),'>6s')} | {sf(r.get('speedup','?'),'>5s')}x | {sf(r.get('cached','?'),'>6s')} | {sf(r.get('cache_k','?'),'>6s')} | {sf(r.get('cache_v','?'),'>6s')} | {sf(r.get('ppl_cold','?'),'>6s')} | {sf(r.get('ppl_warm','?'),'>6s')} | {sf(r.get('vram',''),'')} |")
+
+    # Corpus note
+    ppl_path = Path(PPL_CORPUS)
+    print(f"\n### ToolboxPPL — Code Perplexity on Retro Mac OS C")
+    print(f"\n**What:** Perplexity measured against [`macvox68`](https://github.com/h4rm0n1c/macvox68), a TTS app for Mac OS 7.")
+    print(f"  Mac OS 7 code uses **cooperative multitasking**, pre-NaCl **68k/PowerPC Toolbox APIs**,")
+    print(f"  and Macintosh-specific paradigms that are poorly represented in most LLM training data.")
+    print(f"  A model's ability to predict this code tests genuine coding generality — not just")
+    print(f"  memorised GitHub-top-1000 idioms.")
+    print(f"**Corpus:** [`{ppl_path}`]({ppl_path}) — {ppl_path.stat().st_size // 1000}KB, 32 `.c`/`.h` files concatenated." if ppl_path.exists() else "")
+    print(f"**Engine:** {DOCKER_IMAGE.replace('-build','')} @ {get_git_hash()}")
+    print(f"**Method:** Strided PPL, ctx=4096, stride=512, via `llama-perplexity`.")
+    print(f"**Settings match inference:** K cache, V cache, and GPU layers are passed same as the")
+    print(f"  model was loaded with (auto-K matched to weight quant). Context capped at 4096 since")
+    print(f"  the corpus is ~35K tokens — full 262K would add no signal.")
+    print(f"**Columns:** `ToolboxPPL❄️` = first chunk (cold, zero domain context),")
+    print(f"  `ToolboxPPL🔥` = avg of remaining chunks (warm, adapted to domain).")
+
+    json.dump(RESULTS, open("/tmp/bench_all.json", "w"), indent=2)
+    print(f"\nSaved /tmp/bench_all.json")
+
+if __name__ == "__main__":
+    main()

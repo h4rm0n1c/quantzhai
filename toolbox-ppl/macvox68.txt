@@ -1,0 +1,4881 @@
+#ifndef NETWORK_H
+#define NETWORK_H
+
+#include <Types.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Size of the temporary buffer used to move TCP data into the UI. */
+#define NETWORK_READ_BUFFER 256
+
+typedef void (*NetworkDataHandler)(const char *data, Size length);
+typedef void (*NetworkLogHandler)(const char *line);
+
+void network_init(void);
+void network_shutdown(void);
+
+Boolean network_start_server(const char *hostString, UInt16 port);
+void network_stop_server(void);
+Boolean network_is_running(void);
+
+void network_poll(void);
+void network_set_handlers(NetworkDataHandler onData, NetworkLogHandler onLog);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* NETWORK_H */
+
+
+#include <Quickdraw.h>
+#include <Controls.h>
+#include <ControlDefinitions.h>
+#include <TextEdit.h>
+#include <ToolUtils.h>
+#include <Memory.h>
+#include <string.h>
+
+#include "ui_text_fields.h"
+#include "ui_theme.h"
+
+#ifndef kControlSliderProc
+    #define kControlSliderProc 48
+#endif
+#ifndef inUpButton
+    #define inUpButton 20
+#endif
+#ifndef inDownButton
+    #define inDownButton 21
+#endif
+#ifndef inPageUp
+    #define inPageUp 22
+#endif
+#ifndef inPageDown
+    #define inPageDown 23
+#endif
+#ifndef inThumb
+    #define inThumb 129
+#endif
+
+static const short kMaxTextDestGrowth = 30000;
+
+GrafPtr ui_text_set_active_port(TEHandle handle, WindowPtr fallback)
+{
+    GrafPtr savePort = NULL;
+    GrafPtr target   = fallback;
+
+    if (handle)
+    {
+        TEPtr te = *handle;
+
+        if (te && te->inPort)
+            target = te->inPort;
+    }
+
+    if (target)
+    {
+        GetPort(&savePort);
+        SetPort(target);
+    }
+
+    return savePort;
+}
+
+void ui_text_restore_port(GrafPtr savePort)
+{
+    if (savePort)
+        SetPort(savePort);
+}
+static void ui_text_set_colors(void)
+{
+    ui_theme_apply_field_colors();
+}
+
+void ui_text_fields_set_colors(void)
+{
+    ui_theme_apply_field_colors();
+}
+
+void ui_text_field_scroll_rect(const Rect *frame, Rect *outScrollRect)
+{
+    const UITheme *theme = ui_theme_get();
+
+    if (!frame || !outScrollRect)
+        return;
+
+    *outScrollRect = *frame;
+    InsetRect(outScrollRect, theme->metrics.textInsetH, theme->metrics.textInsetV);
+    outScrollRect->left = (short)(outScrollRect->right - theme->metrics.textScrollbarW);
+}
+
+void ui_text_field_init(UITextField *field, WindowPtr window, const Rect *frame, const char *text, Boolean singleLine, Boolean reserveScrollbar)
+{
+    Rect viewRect;
+    Rect destRect;
+    const UITheme *theme = ui_theme_get();
+
+    if (!field || !window || !frame)
+        return;
+
+    viewRect = *frame;
+    InsetRect(&viewRect, theme->metrics.textInsetH, theme->metrics.textInsetV);
+    if (reserveScrollbar)
+        viewRect.right = (short)(viewRect.right - theme->metrics.textScrollbarW);
+
+    destRect = viewRect;
+    destRect.bottom = (short)(destRect.top + kMaxTextDestGrowth);
+    if (destRect.bottom < destRect.top)
+        destRect.bottom = 32767;
+
+    SetPort(window);
+    ui_theme_apply_field_colors();
+
+    field->handle = TENew(&destRect, &viewRect);
+    field->singleLine = singleLine;
+
+    if (field->handle)
+    {
+        (**field->handle).viewRect = viewRect;
+
+        if (singleLine)
+        {
+            Rect singleRect = viewRect;
+            short lineH    = (**field->handle).lineHeight;
+            short slack    = (short)((singleRect.bottom - singleRect.top) - lineH);
+
+            if (slack > 0)
+            {
+                singleRect.top += slack / 2;
+                singleRect.bottom = (short)(singleRect.top + lineH);
+            }
+            else
+            {
+                singleRect.bottom = (short)(singleRect.top + lineH);
+            }
+
+            (**field->handle).destRect = singleRect;
+            (**field->handle).viewRect = singleRect;
+            (**field->handle).crOnly   = true;
+        }
+        else
+        {
+            (**field->handle).destRect = destRect;
+            (**field->handle).viewRect = viewRect;
+        }
+
+        if (text)
+            TEInsert(text, strlen(text), field->handle);
+    }
+}
+
+static short ui_text_view_height(TEHandle handle)
+{
+    TEPtr te;
+
+    if (!handle)
+        return 0;
+
+    te = *handle;
+    if (!te)
+        return 0;
+
+    return (short)(te->viewRect.bottom - te->viewRect.top);
+}
+
+static short ui_text_height(TEHandle handle)
+{
+    TEPtr te;
+
+    if (!handle)
+        return 0;
+
+    te = *handle;
+    if (!te)
+        return 0;
+
+    return (short)(te->nLines * te->lineHeight);
+}
+
+static short ui_text_scroll_max(const UIScrollingText *area)
+{
+    short viewH;
+    short textH;
+    short max;
+
+    if (!area || !area->field.handle)
+        return 0;
+
+    viewH = ui_text_view_height(area->field.handle);
+    textH = ui_text_height(area->field.handle);
+    max   = (short)(textH - viewH);
+
+    return (max > 0) ? max : 0;
+}
+
+void ui_text_scrolling_apply_scroll(UIScrollingText *area, short offset)
+{
+    short max;
+    GrafPtr savePort;
+
+    if (!area || !area->field.handle)
+        return;
+
+    savePort = ui_text_set_active_port(area->field.handle, area->window);
+
+    TECalText(area->field.handle);
+
+    max = ui_text_scroll_max(area);
+    if (offset < 0)
+        offset = 0;
+    if (offset > max)
+        offset = max;
+
+    if (offset != area->scrollOffset)
+    {
+        TEPinScroll(0, (short)(area->scrollOffset - offset), area->field.handle);
+        area->scrollOffset = offset;
+    }
+
+    if (area->scroll)
+        SetControlValue(area->scroll, area->scrollOffset);
+
+    ui_text_restore_port(savePort);
+}
+
+void ui_text_scrolling_update_scrollbar(UIScrollingText *area)
+{
+    short max;
+    GrafPtr savePort;
+
+    if (!area || !area->field.handle || !area->scroll)
+        return;
+
+    savePort = ui_text_set_active_port(area->field.handle, area->window);
+
+    TECalText(area->field.handle);
+
+    max = ui_text_scroll_max(area);
+    SetControlMaximum(area->scroll, max);
+
+    if (area->scrollOffset > max)
+        ui_text_scrolling_apply_scroll(area, max);
+    else
+        SetControlValue(area->scroll, area->scrollOffset);
+
+    ui_text_restore_port(savePort);
+}
+
+void ui_text_scrolling_scroll_selection_into_view(UIScrollingText *area)
+{
+    TEPtr te;
+    short viewH;
+    Point caret;
+    short caretTop;
+    short caretBottom;
+    short contentTop;
+    short contentBottom;
+    GrafPtr savePort;
+
+    if (!area || !area->field.handle)
+        return;
+
+    savePort = ui_text_set_active_port(area->field.handle, area->window);
+
+    te = *area->field.handle;
+    if (!te)
+    {
+        ui_text_restore_port(savePort);
+        return;
+    }
+
+    TECalText(area->field.handle);
+    caret = TEGetPoint(te->selEnd, area->field.handle);
+    viewH = ui_text_view_height(area->field.handle);
+
+    caretTop = (short)(caret.v + area->scrollOffset - te->lineHeight);
+    caretBottom = (short)(caret.v + area->scrollOffset + te->lineHeight);
+
+    contentTop = area->scrollOffset;
+    contentBottom = (short)(contentTop + viewH);
+
+    if (caretTop < contentTop)
+    {
+        ui_text_scrolling_apply_scroll(area, caretTop);
+    }
+    else if (caretBottom > contentBottom)
+    {
+        ui_text_scrolling_apply_scroll(area, (short)(caretBottom - viewH));
+    }
+
+    ui_text_restore_port(savePort);
+}
+
+pascal void ui_text_scrolling_track(ControlHandle control, short part)
+{
+    UIScrollingText *area = (UIScrollingText *)(control ? (Ptr) GetControlReference(control) : NULL);
+    short value = (short)(control ? GetControlValue(control) : 0);
+    short newValue = value;
+    short lineStep = 0;
+    short pageStep = 0;
+    short max = control ? GetControlMaximum(control) : 0;
+
+    if (area && area->field.handle)
+    {
+        TEPtr te = *area->field.handle;
+        if (te)
+        {
+            lineStep = te->lineHeight;
+            pageStep = (short)(ui_text_view_height(area->field.handle) - te->lineHeight);
+        }
+    }
+
+    if (lineStep <= 0)
+        lineStep = 1;
+    if (pageStep <= 0)
+        pageStep = lineStep;
+
+    switch (part)
+    {
+        case inUpButton:
+            newValue = (short)(value - lineStep);
+            break;
+        case inDownButton:
+            newValue = (short)(value + lineStep);
+            break;
+        case inPageUp:
+            newValue = (short)(value - pageStep);
+            break;
+        case inPageDown:
+            newValue = (short)(value + pageStep);
+            break;
+        case inThumb:
+            newValue = GetControlValue(control);
+            break;
+        default:
+            return;
+    }
+
+    if (newValue < 0)
+        newValue = 0;
+    if (newValue > max)
+        newValue = max;
+
+    if (newValue != value)
+        SetControlValue(control, newValue);
+
+    ui_text_scrolling_apply_scroll(area, newValue);
+}
+
+void ui_text_field_update(const UITextField *field, WindowPtr window)
+{
+    Rect view;
+    GrafPtr savePort;
+
+    if (!field || !field->handle || !window)
+        return;
+
+    savePort = ui_text_set_active_port(field->handle, window);
+
+    ui_text_set_colors();
+    view = (**field->handle).viewRect;
+    TEUpdate(&view, field->handle);
+
+    ui_text_restore_port(savePort);
+}
+
+Boolean ui_text_field_get_text(const UITextField *field, char *buffer, short maxLen)
+{
+    TEPtr te;
+    long len;
+    Ptr text;
+
+    if (!field || !field->handle || !buffer || maxLen <= 0)
+        return false;
+
+    te = *field->handle;
+    if (!te)
+        return false;
+
+    len = te->teLength;
+    if (len >= maxLen)
+        len = maxLen - 1;
+
+    text = *(te->hText);
+    if (!text)
+        return false;
+
+    HLock(te->hText);
+    BlockMove(text, buffer, len);
+    HUnlock(te->hText);
+
+    buffer[len] = '\0';
+    return true;
+}
+
+static Boolean ui_text_is_navigation_character(char c)
+{
+    unsigned char uc = (unsigned char)c;
+
+    return (Boolean)((uc >= 0x1C && uc <= 0x1F));
+}
+
+static Boolean ui_text_should_accept_character(TEHandle handle, WindowPtr window, char c)
+{
+    TEPtr te;
+    Boolean isBackspace;
+    Boolean isReturn;
+    Boolean isTab;
+    Boolean isPrintable;
+    Boolean isNavigation;
+    unsigned char uc;
+
+    if (!handle)
+        return false;
+
+    te = *handle;
+    if (!te)
+        return false;
+
+    uc         = (unsigned char)c;
+    isBackspace  = (Boolean)(c == 0x08 || c == 0x7F);
+    isReturn     = (Boolean)(c == '\r' || c == '\n');
+    isTab        = (Boolean)(c == '\t');
+    isPrintable  = (Boolean)(uc >= 0x20);
+    isNavigation = ui_text_is_navigation_character(c);
+
+    if (!isBackspace && !isReturn && !isTab && !isPrintable && !isNavigation)
+        return false;
+
+    if (isNavigation)
+        return true;
+
+    if (te->crOnly)
+    {
+        if (isReturn)
+            return false;
+
+        if (!isBackspace)
+        {
+            short available = (short)(te->viewRect.right - te->viewRect.left - 2);
+            short prefix    = te->selStart;
+            short suffixLen = (short)(te->teLength - te->selEnd);
+            short newLen    = (short)(prefix + 1 + suffixLen);
+
+            if (newLen > 0 && newLen < 512)
+            {
+                char buffer[512];
+                GrafPtr savePort = NULL;
+                GrafPtr targetPort = te->inPort ? te->inPort : window;
+                Ptr text = *(te->hText);
+
+                BlockMoveData(text, buffer, prefix);
+                buffer[prefix] = c;
+                if (suffixLen > 0)
+                    BlockMoveData(text + te->selEnd, buffer + prefix + 1, suffixLen);
+
+                GetPort(&savePort);
+                if (targetPort)
+                    SetPort(targetPort);
+
+                if (TextWidth(buffer, 0, newLen) > available)
+                {
+                    if (savePort)
+                        SetPort(savePort);
+                    return false;
+                }
+
+                if (savePort)
+                    SetPort(savePort);
+            }
+        }
+    }
+
+    return true;
+}
+
+Boolean ui_text_field_key(UITextField *field, WindowPtr window, char c)
+{
+    GrafPtr savePort;
+
+    if (!field || !field->handle || !window)
+        return false;
+
+    if (!ui_text_should_accept_character(field->handle, window, c))
+        return true;
+
+    GetPort(&savePort);
+    SetPort(window);
+    ui_text_set_colors();
+    TEKey(c, field->handle);
+    if (savePort)
+        SetPort(savePort);
+
+    return true;
+}
+
+void ui_text_field_idle(const UITextField *field, WindowPtr window)
+{
+    GrafPtr savePort;
+
+    if (!field || !field->handle || !window)
+        return;
+
+    GetPort(&savePort);
+    SetPort(window);
+    ui_text_set_colors();
+    TEIdle(field->handle);
+    if (savePort)
+        SetPort(savePort);
+}
+
+Boolean ui_text_scrolling_handle_key(UIScrollingText *area, WindowPtr window, char c)
+{
+    Boolean handled = ui_text_field_key(&area->field, window, c);
+
+    if (handled)
+    {
+        ui_text_scrolling_update_scrollbar(area);
+        ui_text_scrolling_scroll_selection_into_view(area);
+    }
+
+    return handled;
+}
+
+void ui_text_scrolling_init(UIScrollingText *area, WindowPtr window, const Rect *frame, const Rect *scrollRect, const char *text)
+{
+    if (!area)
+        return;
+
+    area->field.handle = NULL;
+    area->field.singleLine = false;
+    area->scroll = NULL;
+    area->scrollOffset = 0;
+    area->window = window;
+
+    ui_text_field_init(&area->field, window, frame, text, false, true);
+
+    if (window && scrollRect)
+    {
+        area->scroll = NewControl(window, scrollRect, "\p", true, 0, 0, 0, scrollBarProc, 0);
+        if (area->scroll)
+            SetControlReference(area->scroll, (long)area);
+    }
+
+    if (area->field.handle)
+        ui_text_scrolling_update_scrollbar(area);
+}
+
+
+#include <Types.h>
+#include <Quickdraw.h>
+#include <Windows.h>
+#include <Fonts.h>
+#include <Events.h>
+#include <Menus.h>
+#include <Controls.h>
+#include <ControlDefinitions.h>
+#include <Icons.h>
+
+#include "about_box.h"
+
+enum
+{
+    kAboutIconID = 128
+};
+
+#ifndef kClassicPushButtonProc
+    #define kClassicPushButtonProc 0
+#endif
+#ifndef kControlPushButtonDefaultTag
+    #define kControlPushButtonDefaultTag 'dflt'
+#endif
+
+static WindowPtr gAboutWin = NULL;
+static ControlHandle gOkButton = NULL;
+
+static void about_box_draw_contents(WindowPtr w)
+{
+    Rect bounds;
+    Rect iconRect;
+    short textLeft;
+    short textTop;
+
+    if (!w)
+        return;
+
+    SetPort(w);
+    bounds = w->portRect;
+
+    BackPat(&qd.white);
+    EraseRect(&bounds);
+
+    SetRect(&iconRect, bounds.left + 16, bounds.top + 16,
+            bounds.left + 48, bounds.top + 48);
+
+    PlotIconID(&iconRect, atNone, ttNone, kAboutIconID);
+
+    textLeft = iconRect.right + 12;
+    textTop = iconRect.top + 14;
+
+    TextFont(0);
+    TextSize(14);
+    TextFace(bold);
+    MoveTo(textLeft, textTop);
+    DrawString("\pMacVox68");
+
+    TextSize(9);
+    TextFace(0);
+    MoveTo(textLeft, textTop + 18);
+    DrawString("\pClassic Mac OS 7.x TTS app");
+
+    MoveTo(textLeft, textTop + 32);
+    DrawString("\pBuilt for Retro68 + BasiliskII");
+
+    MoveTo(textLeft, textTop + 46);
+    DrawString("\pCreated by h4rm0n1c");
+
+    MoveTo(textLeft, textTop + 60);
+    DrawString("\phttp://github.com/h4rm0n1c./");
+
+    MoveTo(textLeft, textTop + 74);
+    DrawString("\pWTFD license (Do whatever the fk you want)");
+
+    DrawControls(w);
+}
+
+void about_box_show(void)
+{
+    Rect bounds;
+    Rect r;
+    Rect buttonRect;
+    short width = 320;
+    short height = 210;
+
+    if (gAboutWin)
+    {
+        SelectWindow(gAboutWin);
+        ShowWindow(gAboutWin);
+        return;
+    }
+
+    bounds = qd.screenBits.bounds;
+    SetRect(&r,
+            (short)((bounds.left + bounds.right - width) / 2),
+            (short)((bounds.top + bounds.bottom - height) / 2),
+            (short)((bounds.left + bounds.right + width) / 2),
+            (short)((bounds.top + bounds.bottom + height) / 2));
+
+    gAboutWin = (WindowPtr)NewCWindow(NULL, &r, "\pAbout MacVox68", true,
+                                      dBoxProc, (WindowPtr)-1L, true, 0);
+    if (!gAboutWin)
+        return;
+
+    SetRect(&buttonRect,
+            gAboutWin->portRect.right - 96,
+            gAboutWin->portRect.bottom - 36,
+            gAboutWin->portRect.right - 16,
+            gAboutWin->portRect.bottom - 16);
+
+    gOkButton = NewControl(gAboutWin, &buttonRect, "\pOK", true,
+                           0, 0, 0, kClassicPushButtonProc, 0);
+    if (gOkButton)
+    {
+        Boolean isDefault = true;
+        SetControlData(gOkButton, kControlEntireControl,
+                       kControlPushButtonDefaultTag,
+                       sizeof(isDefault), &isDefault);
+    }
+
+    ShowWindow(gAboutWin);
+    about_box_draw_contents(gAboutWin);
+}
+
+void about_box_close(void)
+{
+    GrafPtr aboutPort = NULL;
+
+    if (!gAboutWin)
+        return;
+
+    aboutPort = (GrafPtr)gAboutWin;
+
+    DisposeWindow(gAboutWin);
+    gAboutWin = NULL;
+    gOkButton = NULL;
+
+    /* If the About box was the current port, move QuickDraw to a valid window so
+       later draws (e.g., network logging) aren't handed a freed GrafPort. */
+    if (aboutPort == qd.thePort)
+    {
+        WindowPtr front = FrontWindow();
+        if (front)
+            SetPort(front);
+    }
+}
+
+void about_box_handle_update(WindowPtr w)
+{
+    GrafPtr savePort = NULL;
+
+    if (!w)
+        return;
+
+    GetPort(&savePort);
+    SetPort(w);
+
+    BeginUpdate(w);
+    about_box_draw_contents(w);
+    EndUpdate(w);
+
+    if (savePort)
+        SetPort(savePort);
+}
+
+Boolean about_box_is_window(WindowPtr w)
+{
+    return (gAboutWin != NULL && w == gAboutWin);
+}
+
+Boolean about_box_handle_mouse_down(EventRecord *ev)
+{
+    WindowPtr w = NULL;
+    short part;
+
+    if (!gAboutWin)
+        return false;
+
+    part = FindWindow(ev->where, &w);
+    if (w != gAboutWin)
+        return false;
+
+    switch (part)
+    {
+        case inMenuBar:
+            return false;
+
+        case inDrag:
+            DragWindow(w, ev->where, &qd.screenBits.bounds);
+            return true;
+
+        case inGoAway:
+            if (TrackGoAway(w, ev->where))
+                about_box_close();
+            return true;
+
+        case inContent:
+            if (w != FrontWindow())
+            {
+                SelectWindow(w);
+                return true;
+            }
+            else
+            {
+                ControlHandle c = NULL;
+                short cpart;
+                Point local = ev->where;
+
+                SetPort(w);
+                GlobalToLocal(&local);
+
+                cpart = FindControl(local, w, &c);
+                if (cpart)
+                {
+                    if (TrackControl(c, local, NULL))
+                    {
+                        if (c == gOkButton)
+                            about_box_close();
+                    }
+                    return true;
+                }
+            }
+            return true;
+
+        default:
+            return false;
+    }
+}
+
+
+#include <Types.h>
+#include <Quickdraw.h>
+#include <Windows.h>
+#include <Dialogs.h>
+#include <Events.h>
+#include <Menus.h>
+#include <TextEdit.h>
+#include <ToolUtils.h>
+
+#include "about_box.h"
+#include "main_window.h"
+#include "ui_input.h"
+#include "ui_app.h"
+#include "network.h"
+
+static InputDispatcher gInputDispatcher;
+
+static void ui_init_toolbox(void)
+{
+    InitGraf(&qd.thePort);
+    InitFonts();
+    InitWindows();
+    InitMenus();
+    TEInit();
+    InitDialogs(NULL);
+    InitCursor();
+}
+
+static void ui_init_menus_codeonly(void)
+{
+    /* Code-only menu bar (no Rez). This keeps the app feeling “real” without resources.
+       Minimal Apple menu + File menu with Quit (Cmd-Q). */
+
+    MenuHandle apple = NewMenu(128, "\p\024");
+    if (apple)
+    {
+        AppendMenu(apple, "\pAbout MacVox68...");
+        InsertMenu(apple, 0);
+    }
+
+    MenuHandle file = NewMenu(129, "\pFile");
+    if (file)
+    {
+        AppendMenu(file, "\pQuit/Q");
+        InsertMenu(file, 0);
+    }
+
+    DrawMenuBar();
+}
+
+static Boolean window_ui_about_mouse(const InputEvent *ev, Boolean *outQuit)
+{
+    EventRecord raw;
+
+    (void)outQuit;
+
+    if (!ev)
+        return false;
+
+    raw = ev->raw;
+    return about_box_handle_mouse_down(&raw);
+}
+
+static void window_ui_about_update(const InputEvent *ev)
+{
+    if (ev && ev->window)
+        about_box_handle_update(ev->window);
+}
+
+void ui_app_init(void)
+{
+    InputWindowHandlers mainHandlers;
+    InputWindowHandlers aboutHandlers;
+
+    ui_init_toolbox();
+    ui_init_menus_codeonly();
+
+    mainHandlers.onMouseDown = main_window_handle_mouse_down;
+    mainHandlers.onKeyDown   = main_window_handle_key;
+    mainHandlers.onUpdate    = main_window_handle_update;
+
+    aboutHandlers.onMouseDown = window_ui_about_mouse;
+    aboutHandlers.onKeyDown   = NULL;
+    aboutHandlers.onUpdate    = window_ui_about_update;
+
+    ui_input_dispatcher_init(&gInputDispatcher, &mainHandlers);
+    ui_input_dispatcher_set_overlay(&gInputDispatcher, about_box_is_window, &aboutHandlers);
+
+    main_window_create();
+}
+
+Boolean ui_app_pump_events(void)
+{
+    EventRecord ev;
+    Boolean quit = false;
+
+    if (WaitNextEvent(everyEvent, &ev, 30, NULL))
+    {
+        (void)ui_input_dispatcher_handle_event(&gInputDispatcher, &ev, &quit);
+    }
+
+    main_window_idle();
+
+    network_poll();
+
+    /* Integration point:
+       Later, call tcp_poll() and speech_pump() here (nonblocking), while the loop stays responsive. */
+
+    return !quit;
+}
+
+
+#include "network.h"
+
+#include "network_backend.h"
+
+#include <Gestalt.h>
+
+static NetworkCallbacks        gCallbacks;
+static const NetworkBackend   *gBackend = NULL;
+
+static Boolean network_supports_open_transport(void)
+{
+    OSErr err;
+    long  response = 0;
+
+#ifdef gestaltOpenTpt
+    err = Gestalt(gestaltOpenTpt, &response);
+    if (err == noErr && response != 0)
+        return true;
+#endif
+
+    err = Gestalt(FOUR_CHAR_CODE('otan'), &response);
+    if (err == noErr && response != 0)
+        return true;
+
+    err = Gestalt(FOUR_CHAR_CODE('otvr'), &response);
+    if (err == noErr && response != 0)
+        return true;
+
+    return false;
+}
+
+static void network_select_backend(void)
+{
+    if (!gBackend)
+    {
+        if (network_supports_open_transport())
+            gBackend = network_backend_ot();
+        else
+            gBackend = network_backend_classic();
+    }
+}
+
+void network_init(void)
+{
+    network_select_backend();
+
+    if (gBackend && gBackend->init)
+        (void)gBackend->init();
+}
+
+void network_shutdown(void)
+{
+    if (gBackend && gBackend->shutdown)
+        gBackend->shutdown();
+}
+
+Boolean network_start_server(const char *hostString, UInt16 port)
+{
+    network_select_backend();
+
+    if (gBackend && gBackend->start)
+        return gBackend->start(hostString, port, &gCallbacks);
+
+    return false;
+}
+
+void network_stop_server(void)
+{
+    if (gBackend && gBackend->stop)
+        gBackend->stop();
+}
+
+Boolean network_is_running(void)
+{
+    if (gBackend && gBackend->is_running)
+        return gBackend->is_running();
+
+    return false;
+}
+
+void network_poll(void)
+{
+    if (gBackend && gBackend->poll)
+        gBackend->poll();
+}
+
+void network_set_handlers(NetworkDataHandler onData, NetworkLogHandler onLog)
+{
+    gCallbacks.onData = onData;
+    gCallbacks.onLog = onLog;
+}
+
+
+#ifndef MAIN_WINDOW_H
+#define MAIN_WINDOW_H
+
+#include <Types.h>
+#include <Windows.h>
+
+#include "ui_input.h"
+
+void main_window_create(void);
+void main_window_handle_update(const InputEvent *ev);
+Boolean main_window_handle_mouse_down(const InputEvent *ev, Boolean *outQuit);
+Boolean main_window_handle_key(const InputEvent *ev, Boolean *outQuit);
+void main_window_idle(void);
+WindowPtr main_window_get(void);
+
+#endif /* MAIN_WINDOW_H */
+
+
+#ifndef ABOUT_BOX_H
+#define ABOUT_BOX_H
+
+#include <Types.h>
+#include <Events.h>
+#include <Windows.h>
+
+void about_box_show(void);
+void about_box_close(void);
+void about_box_handle_update(WindowPtr w);
+Boolean about_box_is_window(WindowPtr w);
+Boolean about_box_handle_mouse_down(EventRecord *ev);
+
+#endif /* ABOUT_BOX_H */
+
+
+#include "ui_theme.h"
+
+static const UITheme kUITheme = {
+    /* colors */
+    {
+        { 0xD8D8, 0xD8D8, 0xD8D8 }, /* windowFill */
+        { 0x7A7A, 0x7A7A, 0x7A7A }, /* separatorDark */
+        { 0xEEEE, 0xEEEE, 0xEEEE }, /* separatorLight */
+        { 0xF2F2, 0xF2F2, 0xF2F2 }, /* groupFill */
+        { 0x4444, 0x4444, 0x4444 }, /* groupBorder */
+        { 0xB5B5, 0xB5B5, 0xB5B5 }, /* groupInner */
+        { 0x0000, 0x0000, 0x0000 }, /* text */
+        { 0xFFFF, 0xFFFF, 0xFFFF }, /* textFieldFill */
+        { 0x4444, 0x4444, 0x4444 }, /* textFieldBorder */
+        { 0x9C9C, 0x9C9C, 0x9C9C }, /* textFieldInner */
+    },
+    /* metrics */
+    {
+        6,  /* textInsetH */
+        4,  /* textInsetV */
+        15, /* textScrollbarW */
+        10, /* groupLabelInsetH */
+        14  /* groupLabelBaseline */
+    },
+    /* fonts */
+    {
+        0, /* system font */
+        12 /* system size */
+    }
+};
+
+const UITheme *ui_theme_get(void)
+{
+    return &kUITheme;
+}
+
+void ui_theme_apply_text_colors(void)
+{
+    const UITheme *theme = ui_theme_get();
+
+    RGBForeColor(&theme->colors.text);
+    RGBBackColor(&theme->colors.windowFill);
+}
+
+void ui_theme_apply_field_colors(void)
+{
+    const UITheme *theme = ui_theme_get();
+
+    RGBForeColor(&theme->colors.text);
+    RGBBackColor(&theme->colors.textFieldFill);
+}
+
+
+#include "ui_radio.h"
+
+#include <ControlDefinitions.h>
+
+ControlHandle ui_radio_create(WindowPtr window, const Rect *frame,
+                              ConstStr255Param title, short initialValue)
+{
+    return NewControl(window, frame, title, true, initialValue, 0, 1, radioButProc, 0);
+}
+
+void ui_radio_group_init(UIRadioGroup *group, ControlHandle *buttons, short count)
+{
+    if (!group)
+        return;
+
+    group->buttons = buttons;
+    group->count   = count;
+}
+
+Boolean ui_radio_set_selected(UIRadioGroup *group, ControlHandle selected)
+{
+    Boolean changed = false;
+    short i;
+
+    if (!group || !group->buttons || group->count <= 0 || !selected)
+        return false;
+
+    for (i = 0; i < group->count; ++i)
+    {
+        ControlHandle h = group->buttons[i];
+        short value = (h == selected) ? 1 : 0;
+
+        if (h && GetControlValue(h) != value)
+        {
+            SetControlValue(h, value);
+            changed = true;
+        }
+    }
+
+    return changed;
+}
+
+short ui_radio_selected_index(const UIRadioGroup *group)
+{
+    short i;
+
+    if (!group || !group->buttons || group->count <= 0)
+        return -1;
+
+    for (i = 0; i < group->count; ++i)
+    {
+        ControlHandle h = group->buttons[i];
+
+        if (h && GetControlValue(h) != 0)
+            return i;
+    }
+
+    return -1;
+}
+
+Boolean ui_radio_handle_hit(UIRadioGroup *group, ControlHandle hit, short part)
+{
+    if (!group || !hit || part == 0)
+        return false;
+
+    return ui_radio_set_selected(group, hit);
+}
+
+
+#include <Types.h>
+
+#include "ui_app.h"
+#include "network.h"
+
+int main(void)
+{
+    ui_app_init();
+
+    while (ui_app_pump_events())
+    {
+        /* Future: tcp_poll(); speech_pump(); */
+    }
+
+    network_shutdown();
+
+    return 0;
+}
+
+
+#ifndef UI_APP_H
+#define UI_APP_H
+
+#include <Types.h>
+
+void ui_app_init(void);
+Boolean ui_app_pump_events(void);
+
+#endif /* UI_APP_H */
+
+
+#ifndef UI_THEME_H
+#define UI_THEME_H
+
+#include <Quickdraw.h>
+
+typedef struct UIThemeColors
+{
+    RGBColor windowFill;
+    RGBColor separatorDark;
+    RGBColor separatorLight;
+    RGBColor groupFill;
+    RGBColor groupBorder;
+    RGBColor groupInner;
+    RGBColor text;
+    RGBColor textFieldFill;
+    RGBColor textFieldBorder;
+    RGBColor textFieldInner;
+} UIThemeColors;
+
+typedef struct UIThemeMetrics
+{
+    short textInsetH;
+    short textInsetV;
+    short textScrollbarW;
+    short groupLabelInsetH;
+    short groupLabelBaseline;
+} UIThemeMetrics;
+
+typedef struct UIThemeFonts
+{
+    short textFont;
+    short textSize;
+} UIThemeFonts;
+
+typedef struct UITheme
+{
+    UIThemeColors colors;
+    UIThemeMetrics metrics;
+    UIThemeFonts fonts;
+} UITheme;
+
+const UITheme *ui_theme_get(void);
+
+void ui_theme_apply_text_colors(void);
+void ui_theme_apply_field_colors(void);
+
+#endif /* UI_THEME_H */
+
+
+#ifndef UI_LAYOUT_H
+#define UI_LAYOUT_H
+
+#include <Types.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct UILayoutMetrics
+{
+    short margin;
+    short gutter;
+    short buttonW;
+    short buttonH;
+    short sectionGutter;
+    short textAreaH;
+    short prosodyH;
+    short settingsH;
+    short tcpH;
+    short sliderH;
+    short sliderW;
+    short fieldH;
+    short fieldW;
+    short portFieldW;
+} UILayoutMetrics;
+
+extern const UILayoutMetrics kUILayoutMetrics;
+extern const short kUILayoutStartButtonW;
+extern const short kUILayoutButtonInset;
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* UI_LAYOUT_H */
+
+
+#ifndef UI_INPUT_H
+#define UI_INPUT_H
+
+#include <Events.h>
+#include <Types.h>
+#include <Windows.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef enum InputEventType
+{
+    kInputEventNone = 0,
+    kInputEventMouseDown,
+    kInputEventKeyDown,
+    kInputEventUpdate
+} InputEventType;
+
+typedef struct InputEvent
+{
+    InputEventType type;
+    WindowPtr      window;
+    Point          global;
+    Point          local;
+    char           keyChar;
+    Boolean        commandDown;
+    Boolean        shiftDown;
+    Boolean        optionDown;
+    Boolean        controlDown;
+    EventRecord    raw;
+} InputEvent;
+
+typedef Boolean (*InputMouseHandler)(const InputEvent *ev, Boolean *outQuit);
+typedef Boolean (*InputKeyHandler)(const InputEvent *ev, Boolean *outQuit);
+typedef void (*InputUpdateHandler)(const InputEvent *ev);
+
+typedef struct InputWindowHandlers
+{
+    InputMouseHandler  onMouseDown;
+    InputKeyHandler    onKeyDown;
+    InputUpdateHandler onUpdate;
+} InputWindowHandlers;
+
+typedef struct InputDispatcher
+{
+    InputWindowHandlers mainHandlers;
+    InputWindowHandlers overlayHandlers;
+    Boolean (*overlayIsWindow)(WindowPtr w);
+} InputDispatcher;
+
+void ui_input_dispatcher_init(InputDispatcher *dispatcher, const InputWindowHandlers *mainHandlers);
+void ui_input_dispatcher_set_overlay(InputDispatcher *dispatcher,
+                                     Boolean (*isWindow)(WindowPtr w),
+                                     const InputWindowHandlers *handlers);
+Boolean ui_input_dispatcher_handle_event(InputDispatcher *dispatcher, const EventRecord *ev, Boolean *outQuit);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* UI_INPUT_H */
+
+
+#include <Types.h>
+#include <Quickdraw.h>
+#include <Windows.h>
+#include <Dialogs.h>
+#include <Controls.h>
+#include <ControlDefinitions.h>
+#include <Events.h>
+#include <Menus.h>
+#include <TextEdit.h>
+#include <ToolUtils.h>
+#include <Memory.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+#include "about_box.h"
+#include "main_window.h"
+#include "network.h"
+#include "ui_input.h"
+#include "ui_layout.h"
+#include "speech.h"
+#include "ui_text_fields.h"
+#include "ui_theme.h"
+#include "ui_radio.h"
+#include "ui_slider.h"
+#include "ui_windows.h"
+
+#ifndef kClassicPushButtonProc
+    #define kClassicPushButtonProc 0
+#endif
+#ifndef kControlPushButtonDefaultTag
+    #define kControlPushButtonDefaultTag 'dflt'
+#endif
+#ifndef kControlSliderProc
+    #define kControlSliderProc 48
+#endif
+#ifndef kControlButtonPart
+    #define kControlButtonPart 10
+#endif
+enum
+{
+    kSpeakStopBtnID   = 3
+};
+
+typedef struct UILayout
+{
+    Rect editText;
+    Rect editScroll;
+    Rect speakStopButton;
+    Rect startButton;
+    Rect quitButton;
+    Rect prosodyGroup;
+    Rect prosodyClean;
+    Rect prosodyLQ;
+    Rect settingsGroup;
+    Rect volumeSlider;
+    Rect rateSlider;
+    Rect pitchSlider;
+    Rect tcpGroup;
+    Rect hostField;
+    Rect portField;
+} UILayout;
+
+typedef enum
+{
+    kSpeechIdleState,
+    kSpeechSpeakingState
+} SpeechUIState;
+
+static WindowPtr      gMainWin  = NULL;
+static ControlHandle  gSpeakBtn = NULL;
+static ControlHandle  gProsodyClean = NULL;
+static ControlHandle  gProsodyLQ    = NULL;
+static ControlHandle  gProsodyButtons[2];
+static UIRadioGroup   gProsodyGroup;
+static UISlider       gVolumeSlider;
+static UISlider       gRateSlider;
+static UISlider       gPitchSlider;
+static ControlHandle  gStartBtn     = NULL;
+static ControlHandle  gQuitBtn      = NULL;
+static UIScrollingText gTextArea;
+static UITextField     gHostField;
+static UITextField     gPortField;
+static TEHandle       gActiveEdit   = NULL;
+static UILayout       gLayout;
+static const UITheme *sTheme = NULL;
+static Boolean        gServerSuggested = false;
+static SpeechUIState  gSpeechState = kSpeechIdleState;
+
+static void main_window_set_speech_state(SpeechUIState state);
+
+static void main_window_append_line(const char *text)
+{
+    TEHandle te;
+    GrafPtr savePort = NULL;
+
+    if (!text || !gMainWin)
+        return;
+
+    te = gTextArea.field.handle;
+    if (!te)
+        return;
+
+    GetPort(&savePort);
+    SetPort(gMainWin);
+    ui_text_fields_set_colors();
+    TESetSelect((**te).teLength, (**te).teLength, te);
+    TEInsert(text, strlen(text), te);
+    TEInsert("\r", 1, te);
+    ui_text_scrolling_update_scrollbar(&gTextArea);
+    ui_text_scrolling_scroll_selection_into_view(&gTextArea);
+
+    if (savePort)
+        SetPort(savePort);
+}
+
+static UInt16 main_window_read_port_field(Boolean *ok)
+{
+    char buffer[16];
+    long portValue;
+
+    if (ok)
+        *ok = false;
+
+    if (!ui_text_field_get_text(&gPortField, buffer, sizeof(buffer)))
+        return 0;
+
+    portValue = strtol(buffer, NULL, 10);
+    if (portValue > 0 && portValue <= 65535)
+    {
+        if (ok)
+            *ok = true;
+        return (UInt16)portValue;
+    }
+
+    return 0;
+}
+
+static void main_window_update_start_button(void)
+{
+    if (gStartBtn)
+    {
+        if (network_is_running())
+            SetControlTitle(gStartBtn, "\pStop Server");
+        else
+            SetControlTitle(gStartBtn, "\pStart Server");
+    }
+}
+
+static void main_window_handle_network_data(const char *data, Size len)
+{
+    char buffer[NETWORK_READ_BUFFER];
+    Size copyLen;
+
+    if (!data || len <= 0)
+        return;
+
+    copyLen = len;
+    if (copyLen >= (Size)sizeof(buffer))
+        copyLen = (Size)(sizeof(buffer) - 1);
+
+    BlockMove(data, buffer, copyLen);
+    buffer[copyLen] = '\0';
+
+    main_window_append_line(buffer);
+}
+
+static void main_window_handle_network_log(const char *line)
+{
+    if (line)
+        main_window_append_line(line);
+}
+
+static void main_window_toggle_server(void)
+{
+    Boolean portOK = false;
+
+    if (network_is_running())
+    {
+        network_stop_server();
+        main_window_update_start_button();
+        main_window_append_line("TCP server stopped.");
+        return;
+    }
+    else
+    {
+        UInt16 port = main_window_read_port_field(&portOK);
+        char host[64];
+
+        if (!portOK)
+        {
+            main_window_append_line("Port must be between 1 and 65535.");
+            return;
+        }
+
+        if (!ui_text_field_get_text(&gHostField, host, sizeof(host)))
+            strcpy(host, "127.0.0.1");
+
+        if (network_start_server(host, port))
+        {
+            main_window_update_start_button();
+            if (!gServerSuggested)
+            {
+                char message[64];
+                snprintf(message, sizeof(message), "Status port reserved at %u.", (unsigned int)(port + 1));
+                main_window_append_line(message);
+                gServerSuggested = true;
+            }
+            main_window_append_line("TCP server listening for NetCat input.");
+        }
+        else
+        {
+            main_window_append_line("Could not start Open Transport server.");
+        }
+    }
+}
+
+static void main_window_demo_log_event(const InputEvent *ev, const char *context)
+{
+    char buffer[96];
+
+    if (!ev || !context)
+        return;
+
+    if (!ev->optionDown || !gTextArea.field.handle || !gMainWin)
+        return;
+
+    buffer[0] = '\0';
+
+    if (ev->type == kInputEventMouseDown)
+    {
+        snprintf(buffer, sizeof(buffer), "[demo] %s mouse (%d,%d)", context,
+                 ev->local.h, ev->local.v);
+    }
+    else if (ev->type == kInputEventKeyDown)
+    {
+        snprintf(buffer, sizeof(buffer), "[demo] %s key '%c'%s", context,
+                 ev->keyChar, ev->commandDown ? " +Cmd" : "");
+    }
+
+    if (buffer[0])
+    {
+        TEHandle te = gTextArea.field.handle;
+        long end = (**te).teLength;
+
+        SetPort(gMainWin);
+        TESetSelect(end, end, te);
+        TEInsert(buffer, strlen(buffer), te);
+        TEInsert("\r", 1, te);
+        ui_text_scrolling_scroll_selection_into_view(&gTextArea);
+    }
+}
+
+static short main_window_layout_height(const UILayoutMetrics *m)
+{
+    return (short)(m->margin * 2 +
+                   m->textAreaH + m->gutter + m->prosodyH +
+                   (m->sectionGutter - 2) + m->settingsH +
+                   (m->sectionGutter - 2) + m->tcpH);
+}
+
+static void main_window_switch_active_edit(TEHandle h)
+{
+    if (gActiveEdit == h)
+        return;
+
+    if (gActiveEdit)
+        TEDeactivate(gActiveEdit);
+
+    gActiveEdit = h;
+
+    if (gActiveEdit)
+        TEActivate(gActiveEdit);
+}
+
+static void main_window_plan_layout(void)
+{
+    Rect content;
+    short startY;
+    short buttonColumnLeft;
+    short buttonColumnWidth;
+    short sectionLeft;
+    short buttonLeft;
+    short buttonCenter;
+    short buttonStackGap;
+    short y;
+    const UILayoutMetrics *m = &kUILayoutMetrics;
+
+    if (!gMainWin)
+        return;
+
+    content = gMainWin->portRect;
+    startY = content.top + m->margin;
+    buttonColumnLeft  = (short)(content.left + m->margin);
+    buttonColumnWidth = kUILayoutStartButtonW;
+    buttonLeft        = (short)(buttonColumnLeft + kUILayoutButtonInset);
+    buttonCenter      = (short)(buttonLeft + (buttonColumnWidth / 2));
+    buttonStackGap    = (short)(m->gutter + 4);
+    sectionLeft       = (short)(buttonLeft + buttonColumnWidth + m->gutter + 5);
+
+    /* Text area sits beneath the top margin. */
+    SetRect(&gLayout.editText,
+            content.left + m->margin,
+            startY,
+            content.right - m->margin,
+            startY + m->textAreaH);
+    ui_text_field_scroll_rect(&gLayout.editText, &gLayout.editScroll);
+
+    /* Section sequencing mirrors the Windows UI rows. */
+    y = gLayout.editText.bottom + m->gutter;
+
+    SetRect(&gLayout.prosodyGroup,
+            sectionLeft,
+            y,
+            content.right - m->margin,
+            y + m->prosodyH);
+
+    /* Speak/Stop button sits in the reserved prosody margin. */
+    {
+        short verticalCenter = (short)(gLayout.prosodyGroup.top + ((m->prosodyH - m->buttonH) / 2));
+        short halfButtonW    = (short)(m->buttonW / 2);
+
+        SetRect(&gLayout.speakStopButton,
+                (short)(buttonCenter - halfButtonW),
+                verticalCenter,
+                (short)(buttonCenter + halfButtonW),
+                (short)(verticalCenter + m->buttonH));
+    }
+
+    {
+        short labelBaseline   = (short)(gLayout.prosodyGroup.top + 14);
+        short radioHeight     = 18;
+        short radioTop        = (short)(labelBaseline +
+                                 ((gLayout.prosodyGroup.bottom - labelBaseline - radioHeight) / 2));
+        short radioLeft       = gLayout.prosodyGroup.left + 54;
+        short radioGap        = 24;
+        short radioWidth      = 140;
+        short radioCleanWidth = 70;
+
+        SetRect(&gLayout.prosodyClean,
+                radioLeft,
+                radioTop,
+                radioLeft + radioCleanWidth,
+                radioTop + radioHeight);
+
+        radioLeft = gLayout.prosodyClean.right + radioGap - 15;
+        SetRect(&gLayout.prosodyLQ,
+                radioLeft,
+                radioTop,
+                radioLeft + radioWidth,
+                radioTop + radioHeight);
+    }
+
+    y = gLayout.prosodyGroup.bottom + m->sectionGutter - 2;
+
+    SetRect(&gLayout.settingsGroup,
+            sectionLeft,
+            y,
+            content.right - m->margin,
+            y + m->settingsH);
+
+    SetRect(&gLayout.volumeSlider,
+            gLayout.settingsGroup.left + 88,
+            gLayout.settingsGroup.top + 14,
+            gLayout.settingsGroup.left + 88 + m->sliderW,
+            gLayout.settingsGroup.top + 14 + m->sliderH);
+
+    SetRect(&gLayout.rateSlider,
+            gLayout.volumeSlider.left,
+            gLayout.volumeSlider.bottom + 14,
+            gLayout.volumeSlider.right,
+            gLayout.volumeSlider.bottom + 14 + m->sliderH);
+
+    SetRect(&gLayout.pitchSlider,
+            gLayout.rateSlider.left,
+            gLayout.rateSlider.bottom + 14,
+            gLayout.rateSlider.right,
+            gLayout.rateSlider.bottom + 14 + m->sliderH);
+
+    y = gLayout.settingsGroup.bottom + m->sectionGutter - 2;
+
+    SetRect(&gLayout.tcpGroup,
+            sectionLeft,
+            y,
+            content.right - m->margin,
+            y + m->tcpH);
+
+    SetRect(&gLayout.hostField,
+            gLayout.tcpGroup.left + 80,
+            gLayout.tcpGroup.top + 19,
+            gLayout.tcpGroup.left + 80 + m->fieldW,
+            gLayout.tcpGroup.top + 19 + m->fieldH);
+
+    SetRect(&gLayout.portField,
+            gLayout.hostField.right + 56,
+            gLayout.tcpGroup.top + 19,
+            gLayout.hostField.right + 56 + m->portFieldW,
+            gLayout.tcpGroup.top + 19 + m->fieldH);
+
+    {
+        short halfButtonW = (short)(m->buttonW / 2);
+        short startTop    = (short)(gLayout.speakStopButton.bottom + buttonStackGap);
+        short tcpCenter   = (short)(gLayout.tcpGroup.top + (m->tcpH / 2));
+        short quitTop     = (short)(tcpCenter - (m->buttonH / 2));
+
+        SetRect(&gLayout.startButton,
+                (short)(buttonCenter - halfButtonW),
+                startTop,
+                (short)(buttonCenter + halfButtonW),
+                (short)(startTop + m->buttonH));
+
+        SetRect(&gLayout.quitButton,
+                (short)(buttonCenter - halfButtonW),
+                quitTop,
+                (short)(buttonCenter + halfButtonW),
+                (short)(quitTop + m->buttonH));
+    }
+}
+
+static void main_window_update_control_enabling(SpeechUIState state)
+{
+    gSpeechState = state;
+
+    /* Controls respond to speech activity. Menu-based Quit remains available. */
+    if (gSpeakBtn)
+    {
+        if (state == kSpeechSpeakingState)
+        {
+            SetControlTitle(gSpeakBtn, "\pStop");
+            HiliteControl(gSpeakBtn, 0);
+        }
+        else
+        {
+            SetControlTitle(gSpeakBtn, "\pSpeak");
+            HiliteControl(gSpeakBtn, 0);
+        }
+    }
+}
+
+static void main_window_handle_speak_toggle(void)
+{
+    if (!speech_available())
+    {
+        main_window_append_line("Speech Manager is unavailable.");
+        main_window_set_speech_state(kSpeechIdleState);
+        return;
+    }
+
+    if (speech_is_busy())
+    {
+        speech_stop();
+        main_window_set_speech_state(kSpeechIdleState);
+        return;
+    }
+
+    if (speech_speak_test_phrase())
+    {
+        main_window_set_speech_state(kSpeechSpeakingState);
+    }
+    else
+    {
+        main_window_append_line("SpeakString trap failed.");
+        main_window_set_speech_state(kSpeechIdleState);
+    }
+}
+
+static void main_window_set_speech_state(SpeechUIState state)
+{
+    main_window_update_control_enabling(state);
+}
+
+static void main_window_create_text_edit(void)
+{
+    static const char kInitialText[] =
+        "MacVox68 is live.\r"
+        "TCP + TTS will be pumped from the event loop.\r"
+        "Voice requests will appear here.";
+
+    if (!gMainWin)
+        return;
+
+    ui_text_scrolling_init(&gTextArea, gMainWin, &gLayout.editText, &gLayout.editScroll, kInitialText);
+    ui_text_field_init(&gHostField, gMainWin, &gLayout.hostField, "127.0.0.1", true, false);
+    ui_text_field_init(&gPortField, gMainWin, &gLayout.portField, "5555", true, false);
+
+    if (gTextArea.field.handle)
+        main_window_switch_active_edit(gTextArea.field.handle);
+}
+
+static void main_window_create_controls(void)
+{
+    if (!gMainWin)
+        return;
+
+    gSpeakBtn = ui_windows_new_button(gMainWin, &gLayout.speakStopButton, "\pSpeak", true, kSpeakStopBtnID);
+
+    gProsodyClean = ui_radio_create(gMainWin, &gLayout.prosodyClean, "\pClean", 1);
+    gProsodyLQ = ui_radio_create(gMainWin, &gLayout.prosodyLQ, "\pHL VOX Prosody", 0);
+
+    gProsodyButtons[0] = gProsodyClean;
+    gProsodyButtons[1] = gProsodyLQ;
+    ui_radio_group_init(&gProsodyGroup, gProsodyButtons, 2);
+    ui_radio_set_selected(&gProsodyGroup, gProsodyClean);
+
+    ui_slider_init(&gVolumeSlider, gMainWin, &gLayout.volumeSlider, "\pVolume", 100, 0, 100,
+                   kUISliderValuePercent, 100);
+    ui_slider_init(&gRateSlider, gMainWin, &gLayout.rateSlider, "\pRate", 100, 0, 200,
+                   kUISliderValueFixed2, 100);
+    ui_slider_init(&gPitchSlider, gMainWin, &gLayout.pitchSlider, "\pPitch", 100, 0, 200,
+                   kUISliderValueFixed2, 100);
+
+    gStartBtn = ui_windows_new_button(gMainWin, &gLayout.startButton, "\pStart Server", true, 0);
+
+    gQuitBtn = ui_windows_new_button(gMainWin, &gLayout.quitButton, "\pQuit", false, 0);
+}
+
+static void main_window_draw_text_field(const Rect *frame)
+{
+    Rect inner = *frame;
+    const UITheme *theme = sTheme ? sTheme : ui_theme_get();
+
+    RGBForeColor(&theme->colors.textFieldFill);
+    RGBBackColor(&theme->colors.textFieldFill);
+    FillRect(frame, &qd.white);
+
+    RGBForeColor(&theme->colors.textFieldBorder);
+    RGBBackColor(&theme->colors.textFieldFill);
+    PenNormal();
+    FrameRect(frame);
+
+    InsetRect(&inner, 1, 1);
+    RGBForeColor(&theme->colors.textFieldInner);
+    RGBBackColor(&theme->colors.textFieldFill);
+    PenNormal();
+    FrameRect(&inner);
+}
+
+static void main_window_draw_group(const Rect *r, ConstStr255Param title)
+{
+    Rect shade = *r;
+    Rect inner = *r;
+    const UITheme *theme = sTheme ? sTheme : ui_theme_get();
+
+    RGBForeColor(&theme->colors.groupFill);
+    RGBBackColor(&theme->colors.groupFill);
+    FillRect(&shade, &qd.white);
+
+    RGBForeColor(&theme->colors.groupBorder);
+    RGBBackColor(&theme->colors.groupFill);
+    PenNormal();
+    FrameRect(&shade);
+
+    InsetRect(&inner, 1, 1);
+    RGBForeColor(&theme->colors.groupInner);
+    RGBBackColor(&theme->colors.groupFill);
+    PenNormal();
+    FrameRect(&inner);
+
+    if (title)
+    {
+        RGBForeColor(&theme->colors.text);
+        RGBBackColor(&theme->colors.groupFill);
+        MoveTo(r->left + theme->metrics.groupLabelInsetH, r->top + theme->metrics.groupLabelBaseline);
+        DrawString(title);
+    }
+}
+
+static void main_window_draw_contents(WindowPtr w)
+{
+    Rect content;
+    Rect textFrame;
+    Rect hostFrame;
+    Rect portFrame;
+    const UITheme *theme = sTheme ? sTheme : ui_theme_get();
+
+    SetPort(w);
+    content = w->portRect;
+
+    RGBForeColor(&theme->colors.windowFill);
+    RGBBackColor(&theme->colors.windowFill);
+    FillRect(&content, &qd.gray);
+
+    RGBForeColor(&theme->colors.separatorDark);
+    RGBBackColor(&theme->colors.windowFill);
+    PenNormal();
+    MoveTo(gLayout.prosodyGroup.left, gLayout.editText.bottom + kUILayoutMetrics.gutter);
+    LineTo(content.right - 8, gLayout.editText.bottom + kUILayoutMetrics.gutter);
+    RGBForeColor(&theme->colors.separatorLight);
+    MoveTo(gLayout.prosodyGroup.left, gLayout.editText.bottom + kUILayoutMetrics.gutter + 1);
+    LineTo(content.right - 8, gLayout.editText.bottom + kUILayoutMetrics.gutter + 1);
+
+    /* Text entry area with a soft border. */
+    textFrame = gLayout.editText;
+    main_window_draw_text_field(&textFrame);
+
+    RGBForeColor(&theme->colors.text);
+    RGBBackColor(&theme->colors.windowFill);
+    if (gTextArea.field.handle)
+        ui_text_scrolling_update_scrollbar(&gTextArea);
+    ui_text_field_update(&gTextArea.field, gMainWin);
+
+    /* Prosody group */
+    main_window_draw_group(&gLayout.prosodyGroup, "\pProsody/Enunciation");
+    RGBForeColor(&theme->colors.text);
+    RGBBackColor(&theme->colors.windowFill);
+
+    /* Settings group */
+    main_window_draw_group(&gLayout.settingsGroup, "\pSettings");
+    RGBForeColor(&theme->colors.text);
+    RGBBackColor(&theme->colors.windowFill);
+    ui_slider_draw(&gVolumeSlider, theme);
+    ui_slider_draw(&gRateSlider, theme);
+    ui_slider_draw(&gPitchSlider, theme);
+
+    /* TCP group */
+    main_window_draw_group(&gLayout.tcpGroup, "\pNetCat Receiver/TCP Server");
+    RGBForeColor(&theme->colors.text);
+    RGBBackColor(&theme->colors.windowFill);
+    MoveTo(gLayout.tcpGroup.left + 36, gLayout.tcpGroup.top + 32);
+    DrawString("\pHost:");
+    MoveTo(gLayout.portField.left - 36, gLayout.tcpGroup.top + 32);
+    DrawString("\pPort:");
+
+    hostFrame = gLayout.hostField;
+    portFrame = gLayout.portField;
+
+    main_window_draw_text_field(&hostFrame);
+    main_window_draw_text_field(&portFrame);
+
+    ui_text_field_update(&gHostField, gMainWin);
+    ui_text_field_update(&gPortField, gMainWin);
+
+    /* Draw controls after the background/text so chrome paints over the framing. */
+    DrawControls(w);
+
+    if (gTextArea.scroll)
+        Draw1Control(gTextArea.scroll);
+
+    RGBBackColor(&theme->colors.groupFill);
+    if (ui_slider_get_handle(&gVolumeSlider))
+        Draw1Control(ui_slider_get_handle(&gVolumeSlider));
+    if (ui_slider_get_handle(&gRateSlider))
+        Draw1Control(ui_slider_get_handle(&gRateSlider));
+    if (ui_slider_get_handle(&gPitchSlider))
+        Draw1Control(ui_slider_get_handle(&gPitchSlider));
+    if (gProsodyClean)
+        Draw1Control(gProsodyClean);
+    if (gProsodyLQ)
+        Draw1Control(gProsodyLQ);
+}
+
+static void main_window_draw_proc(WindowPtr w, void *refCon)
+{
+    (void)refCon;
+    main_window_draw_contents(w);
+}
+
+static Boolean main_window_handle_menu(long menuChoice, Boolean *outQuit)
+{
+    short menuID = HiWord(menuChoice);
+    short item   = LoWord(menuChoice);
+
+    if (menuID == 128) /* Apple */
+    {
+        if (item == 1)
+            about_box_show();
+    }
+
+    if (menuID == 129) /* File */
+    {
+        if (item == 1) /* Quit */
+            *outQuit = true;
+    }
+
+    HiliteMenu(0);
+    return true;
+}
+
+void main_window_create(void)
+{
+    UIWindowSpec spec;
+
+    spec.title  = "\pMacVox68";
+    spec.width  = 508;
+    spec.height = main_window_layout_height(&kUILayoutMetrics);
+    spec.margin = kUILayoutMetrics.margin;
+
+    sTheme = ui_theme_get();
+
+    gMainWin = ui_windows_create_standard(&spec);
+
+    if (!gMainWin)
+        return;
+
+    SetPort(gMainWin);
+
+    main_window_plan_layout();
+    main_window_create_text_edit();
+    main_window_create_controls();
+    speech_init();
+    network_set_handlers(main_window_handle_network_data, main_window_handle_network_log);
+
+    /* Speech-related controls will be updated once the engine is present. */
+    main_window_set_speech_state(kSpeechIdleState);
+    main_window_update_start_button();
+
+    ShowWindow(gMainWin);
+
+    /* Force the menu bar to paint immediately on launch so it is visible
+       before the user interacts with it. */
+    DrawMenuBar();
+}
+
+void main_window_handle_update(const InputEvent *ev)
+{
+    WindowPtr w = ev ? ev->window : NULL;
+
+    if (!w)
+        return;
+
+    ui_windows_draw(w, main_window_draw_proc, NULL);
+}
+
+Boolean main_window_handle_mouse_down(const InputEvent *ev, Boolean *outQuit)
+{
+    WindowPtr w;
+    short part;
+    Point local;
+
+    if (!ev)
+        return false;
+
+    part = FindWindow(ev->global, &w);
+    local = ev->local;
+
+    main_window_demo_log_event(ev, "main");
+
+    switch (part)
+    {
+        case inMenuBar:
+        {
+            long choice = MenuSelect(ev->global);
+            if (choice)
+                main_window_handle_menu(choice, outQuit);
+            return true;
+        }
+
+        case inSysWindow:
+            SystemClick(&ev->raw, w);
+            return true;
+
+        case inDrag:
+            DragWindow(w, ev->global, &qd.screenBits.bounds);
+            return true;
+
+        case inGoAway:
+            if (TrackGoAway(w, ev->global))
+                *outQuit = true;
+            return true;
+
+        case inContent:
+            if (w != FrontWindow())
+            {
+                SelectWindow(w);
+                return true;
+            }
+            else
+            {
+                SetPort(w);
+
+                {
+                    const RGBColor *sliderBg = sTheme ? &sTheme->colors.groupFill : &ui_theme_get()->colors.groupFill;
+                    UIControlTrackingSpec specs[] = {
+                        { gTextArea.scroll, (ControlActionUPP)ui_text_scrolling_track, NULL },
+                        { gSpeakBtn, NULL, NULL },
+                        { ui_slider_get_handle(&gVolumeSlider), NULL, sliderBg },
+                        { ui_slider_get_handle(&gRateSlider), NULL, sliderBg },
+                        { ui_slider_get_handle(&gPitchSlider), NULL, sliderBg },
+                        { gStartBtn, NULL, NULL },
+                        { gQuitBtn, NULL, NULL },
+                        { gProsodyClean, NULL, NULL },
+                        { gProsodyLQ, NULL, NULL }
+                    };
+                    ControlHandle hitControl = NULL;
+                    short hitPart = 0;
+
+                    if (ui_windows_track_hit_control(w, local, specs, (short)(sizeof(specs) / sizeof(specs[0])), &hitControl, &hitPart))
+                    {
+                        if (hitControl == gSpeakBtn && hitPart != 0)
+                            main_window_handle_speak_toggle();
+                        else if (hitControl == gStartBtn && hitPart != 0)
+                            main_window_toggle_server();
+                        else if (hitControl == gQuitBtn && hitPart != 0 && outQuit)
+                            *outQuit = true;
+                        else if (hitControl == ui_slider_get_handle(&gVolumeSlider))
+                        {
+                            if (hitPart != 0)
+                                ui_slider_invalidate_value(&gVolumeSlider);
+                        }
+                        else if (hitControl == ui_slider_get_handle(&gRateSlider))
+                        {
+                            if (hitPart != 0)
+                                ui_slider_invalidate_value(&gRateSlider);
+                        }
+                        else if (hitControl == ui_slider_get_handle(&gPitchSlider))
+                        {
+                            if (hitPart != 0)
+                                ui_slider_invalidate_value(&gPitchSlider);
+                        }
+                        else if (hitControl == gProsodyClean || hitControl == gProsodyLQ)
+                        {
+                            if (hitPart != 0)
+                                ui_radio_handle_hit(&gProsodyGroup, hitControl, hitPart);
+                        }
+                        return true;
+                    }
+                }
+
+                if (gTextArea.field.handle)
+                {
+                    Rect textRect = gLayout.editText;
+
+                    if (PtInRect(local, &textRect))
+                    {
+                        main_window_switch_active_edit(gTextArea.field.handle);
+                        ui_text_fields_set_colors();
+                        TEClick(local, ev->shiftDown, gTextArea.field.handle);
+                        return true;
+                    }
+                }
+
+                if (gHostField.handle)
+                {
+                    Rect hostRect = gLayout.hostField;
+
+                    if (PtInRect(local, &hostRect))
+                    {
+                        main_window_switch_active_edit(gHostField.handle);
+                        ui_text_fields_set_colors();
+                        TEClick(local, ev->shiftDown, gHostField.handle);
+                        return true;
+                    }
+                }
+
+                if (gPortField.handle)
+                {
+                    Rect portRect = gLayout.portField;
+
+                    if (PtInRect(local, &portRect))
+                    {
+                        main_window_switch_active_edit(gPortField.handle);
+                        ui_text_fields_set_colors();
+                        TEClick(local, ev->shiftDown, gPortField.handle);
+                        return true;
+                    }
+                }
+            }
+            return false;
+
+        default:
+            return false;
+    }
+}
+
+Boolean main_window_handle_key(const InputEvent *ev, Boolean *outQuit)
+{
+    char c;
+
+    (void)outQuit;
+
+    if (!ev)
+        return false;
+
+    main_window_demo_log_event(ev, "main");
+
+    if (ev->commandDown)
+        return false;
+
+    c = ev->keyChar;
+
+    if (gActiveEdit)
+    {
+        if (gActiveEdit == gTextArea.field.handle)
+            return ui_text_scrolling_handle_key(&gTextArea, gMainWin, c);
+        if (gActiveEdit == gHostField.handle)
+            return ui_text_field_key(&gHostField, gMainWin, c);
+        if (gActiveEdit == gPortField.handle)
+            return ui_text_field_key(&gPortField, gMainWin, c);
+    }
+
+    if (gTextArea.field.handle)
+    {
+        main_window_switch_active_edit(gTextArea.field.handle);
+        return ui_text_scrolling_handle_key(&gTextArea, gMainWin, c);
+    }
+
+    return false;
+}
+
+void main_window_idle(void)
+{
+    TEHandle target = gActiveEdit ? gActiveEdit : gTextArea.field.handle;
+
+    if (gSpeechState == kSpeechSpeakingState && !speech_is_busy())
+        main_window_set_speech_state(kSpeechIdleState);
+
+    if (target == gTextArea.field.handle)
+        ui_text_field_idle(&gTextArea.field, gMainWin);
+    else if (target == gHostField.handle)
+        ui_text_field_idle(&gHostField, gMainWin);
+    else if (target == gPortField.handle)
+        ui_text_field_idle(&gPortField, gMainWin);
+}
+
+WindowPtr main_window_get(void)
+{
+    return gMainWin;
+}
+
+
+#ifndef UI_SLIDER_H
+#define UI_SLIDER_H
+
+#include <Controls.h>
+#include <Types.h>
+
+#include "ui_theme.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef enum UISliderValueFormat
+{
+    kUISliderValueNone = 0,
+    kUISliderValuePercent,
+    kUISliderValueFixed2
+} UISliderValueFormat;
+
+typedef struct UISlider
+{
+    ControlHandle       control;
+    Rect                frame;
+    Rect                valueRect;
+    Str255              label;
+    UISliderValueFormat valueFormat;
+    short               fixedScale;
+} UISlider;
+
+void ui_slider_init(UISlider *slider, WindowPtr window, const Rect *frame,
+                    ConstStr255Param label, short initial, short min, short max,
+                    UISliderValueFormat format, short fixedScale);
+
+void ui_slider_draw(const UISlider *slider, const UITheme *theme);
+
+ControlHandle ui_slider_get_handle(const UISlider *slider);
+
+short ui_slider_get_value(const UISlider *slider);
+void ui_slider_set_value(UISlider *slider, short value);
+void ui_slider_invalidate_value(const UISlider *slider);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* UI_SLIDER_H */
+
+
+#include "speech.h"
+
+#include <Gestalt.h>
+#include <Memory.h>
+#include <Speech.h>
+#include <string.h>
+
+#ifndef gestaltSpeechAttr
+#define gestaltSpeechAttr 'ttsc'
+#endif
+#ifndef gestaltSpeechMgrPresent
+#define gestaltSpeechMgrPresent 0
+#endif
+
+static Boolean gSpeechPresent = false;
+
+void speech_init(void)
+{
+    long response = 0;
+    OSErr err = Gestalt(gestaltSpeechAttr, &response);
+
+    if (err == noErr && (response & (1 << gestaltSpeechMgrPresent)))
+        gSpeechPresent = true;
+    else
+        gSpeechPresent = false;
+}
+
+Boolean speech_available(void)
+{
+    return gSpeechPresent;
+}
+
+Boolean speech_is_busy(void)
+{
+    if (!gSpeechPresent)
+        return false;
+
+    return SpeechBusy() != 0;
+}
+
+static Boolean speech_speak_pascal(const char *text)
+{
+    unsigned char pascalText[256];
+    size_t len;
+
+    if (!gSpeechPresent || !text)
+        return false;
+
+    len = strlen(text);
+    if (len > 255)
+        len = 255;
+
+    pascalText[0] = (unsigned char)len;
+    BlockMoveData(text, &pascalText[1], len);
+
+    return SpeakString(pascalText) == noErr;
+}
+
+Boolean speech_speak_test_phrase(void)
+{
+    return speech_speak_pascal("I've got balls of steel");
+}
+
+void speech_stop(void)
+{
+    if (!gSpeechPresent)
+        return;
+
+    (void)StopSpeech(NULL);
+}
+
+
+#include "ui_slider.h"
+
+#include <Quickdraw.h>
+#include <Controls.h>
+#include <ControlDefinitions.h>
+#include <Strings.h>
+#include <string.h>
+#include <stdio.h>
+
+#ifndef kControlSliderProc
+    #define kControlSliderProc 48
+#endif
+
+enum
+{
+    kUISliderLabelInset    = 52,
+    kUISliderValueGap      = 10,
+    kUISliderBaselineInset = 16,
+    kUISliderValueWidth    = 52
+};
+
+static void ui_slider_copy_label(Str255 dest, ConstStr255Param src)
+{
+    short len = 0;
+
+    if (src)
+        len = src[0];
+
+    dest[0] = (unsigned char)len;
+    if (len > 0)
+        BlockMoveData(&src[1], &dest[1], len);
+}
+
+static void ui_slider_cstr_to_pascal(Str255 dest, const char *src)
+{
+    size_t len = strlen(src);
+    if (len > 255)
+        len = 255;
+
+    dest[0] = (unsigned char)len;
+    if (len > 0)
+        BlockMoveData(src, &dest[1], len);
+}
+
+static short ui_slider_baseline(const UISlider *slider)
+{
+    return (short)(slider->frame.top + kUISliderBaselineInset);
+}
+
+static void ui_slider_format_value(const UISlider *slider, Str255 out)
+{
+    out[0] = 0;
+
+    if (!slider || !slider->control)
+        return;
+
+    switch (slider->valueFormat)
+    {
+        case kUISliderValuePercent:
+        {
+            short value = GetControlValue(slider->control);
+            char buffer[32];
+            snprintf(buffer, sizeof(buffer), "%d%%", (int)value);
+            ui_slider_cstr_to_pascal(out, buffer);
+            break;
+        }
+        case kUISliderValueFixed2:
+        {
+            short value = GetControlValue(slider->control);
+            short scale = slider->fixedScale > 0 ? slider->fixedScale : 100;
+            char buffer[32];
+            double scaled = (double)value / (double)scale;
+            snprintf(buffer, sizeof(buffer), "%.2f", scaled);
+            ui_slider_cstr_to_pascal(out, buffer);
+            break;
+        }
+        case kUISliderValueNone:
+        default:
+            break;
+    }
+}
+
+void ui_slider_init(UISlider *slider, WindowPtr window, const Rect *frame,
+                    ConstStr255Param label, short initial, short min, short max,
+                    UISliderValueFormat format, short fixedScale)
+{
+    ControlHandle h = NULL;
+
+    if (!slider || !window || !frame)
+        return;
+
+    slider->frame      = *frame;
+    slider->valueFormat = format;
+    slider->fixedScale = fixedScale > 0 ? fixedScale : 100;
+    ui_slider_copy_label(slider->label, label);
+
+    h = NewControl(window, frame, "\p", true, initial, min, max, kControlSliderProc, 0);
+    slider->control = h;
+
+    if (slider->control)
+        SetControlReference(slider->control, (long)slider);
+
+    slider->valueRect.left   = (short)(frame->right + kUISliderValueGap - 2);
+    slider->valueRect.right  = (short)(slider->valueRect.left + kUISliderValueWidth);
+    slider->valueRect.top    = frame->top;
+    slider->valueRect.bottom = frame->bottom;
+}
+
+void ui_slider_draw(const UISlider *slider, const UITheme *theme)
+{
+    Str255 value;
+    const UITheme *useTheme = theme ? theme : ui_theme_get();
+
+    if (!slider)
+        return;
+
+    RGBForeColor(&useTheme->colors.text);
+    RGBBackColor(&useTheme->colors.windowFill);
+
+    MoveTo((short)(slider->frame.left - kUISliderLabelInset), ui_slider_baseline(slider));
+    DrawString(slider->label);
+
+    if (!slider->control || slider->valueFormat == kUISliderValueNone)
+        return;
+
+    ui_slider_format_value(slider, value);
+    RGBForeColor(&useTheme->colors.groupFill);
+    RGBBackColor(&useTheme->colors.groupFill);
+    EraseRect(&slider->valueRect);
+    RGBForeColor(&useTheme->colors.text);
+    RGBBackColor(&useTheme->colors.groupFill);
+    MoveTo((short)(slider->frame.right + kUISliderValueGap), ui_slider_baseline(slider));
+    DrawString(value);
+}
+
+ControlHandle ui_slider_get_handle(const UISlider *slider)
+{
+    return slider ? slider->control : NULL;
+}
+
+short ui_slider_get_value(const UISlider *slider)
+{
+    return slider && slider->control ? GetControlValue(slider->control) : 0;
+}
+
+void ui_slider_set_value(UISlider *slider, short value)
+{
+    if (!slider || !slider->control)
+        return;
+
+    SetControlValue(slider->control, value);
+    ui_slider_invalidate_value(slider);
+}
+
+void ui_slider_invalidate_value(const UISlider *slider)
+{
+    if (!slider)
+        return;
+
+    InvalRect(&slider->valueRect);
+}
+
+
+#ifndef UI_TEXT_FIELDS_H
+#define UI_TEXT_FIELDS_H
+
+#include <Types.h>
+#include <Windows.h>
+#include <Controls.h>
+#include <TextEdit.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct UITextField
+{
+    TEHandle handle;
+    Boolean  singleLine;
+} UITextField;
+
+typedef struct UIScrollingText
+{
+    UITextField   field;
+    ControlHandle scroll;
+    short         scrollOffset;
+    WindowPtr     window;
+} UIScrollingText;
+
+void ui_text_field_scroll_rect(const Rect *frame, Rect *outScrollRect);
+void ui_text_field_init(UITextField *field, WindowPtr window, const Rect *frame, const char *text, Boolean singleLine, Boolean reserveScrollbar);
+void ui_text_field_update(const UITextField *field, WindowPtr window);
+Boolean ui_text_field_key(UITextField *field, WindowPtr window, char c);
+void ui_text_field_idle(const UITextField *field, WindowPtr window);
+void ui_text_fields_set_colors(void);
+GrafPtr ui_text_set_active_port(TEHandle handle, WindowPtr fallback);
+void ui_text_restore_port(GrafPtr savePort);
+
+void ui_text_scrolling_init(UIScrollingText *area, WindowPtr window, const Rect *frame, const Rect *scrollRect, const char *text);
+void ui_text_scrolling_apply_scroll(UIScrollingText *area, short offset);
+void ui_text_scrolling_update_scrollbar(UIScrollingText *area);
+void ui_text_scrolling_scroll_selection_into_view(UIScrollingText *area);
+pascal void ui_text_scrolling_track(ControlHandle control, short part);
+Boolean ui_text_scrolling_handle_key(UIScrollingText *area, WindowPtr window, char c);
+Boolean ui_text_field_get_text(const UITextField *field, char *buffer, short maxLen);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* UI_TEXT_FIELDS_H */
+
+
+#include "ui_windows.h"
+
+#include <Quickdraw.h>
+#include <Menus.h>
+#include <ControlDefinitions.h>
+
+WindowPtr ui_windows_create_standard(const UIWindowSpec *spec)
+{
+    Rect screenBounds;
+    Rect r;
+    short topInset;
+    short bottomInset;
+    short width;
+    short height;
+
+    if (!spec)
+        return NULL;
+
+    screenBounds = qd.screenBits.bounds;
+    width = spec->width;
+    height = spec->height;
+    topInset = (short)(GetMBarHeight() + spec->margin + 16);
+    bottomInset = spec->margin;
+
+    {
+        short availableTop    = screenBounds.top + topInset;
+        short availableBottom = screenBounds.bottom - bottomInset;
+        short availableHeight = availableBottom - availableTop;
+        short startY;
+
+        if (availableHeight > height)
+            startY = (short)(availableTop + (availableHeight - height) / 2);
+        else
+            startY = availableTop;
+
+        SetRect(&r,
+                (short)((screenBounds.left + screenBounds.right - width) / 2),
+                startY,
+                (short)((screenBounds.left + screenBounds.right + width) / 2),
+                (short)(startY + height));
+
+        if (r.bottom > availableBottom)
+            OffsetRect(&r, 0, (short)(availableBottom - r.bottom));
+    }
+
+    return (WindowPtr)NewCWindow(
+        NULL,
+        &r,
+        spec->title,
+        true,
+        documentProc,
+        (WindowPtr)-1L,
+        true,
+        0
+    );
+}
+
+void ui_windows_draw(WindowPtr window, UIWindowDrawProc drawProc, void *refCon)
+{
+    GrafPtr savePort;
+
+    if (!window || !drawProc)
+        return;
+
+    GetPort(&savePort);
+    SetPort(window);
+
+    BeginUpdate(window);
+    drawProc(window, refCon);
+    EndUpdate(window);
+
+    SetPort(savePort);
+}
+
+ControlHandle ui_windows_new_button(WindowPtr window, const Rect *frame,
+                                    ConstStr255Param title, Boolean isDefault, short controlID)
+{
+    ControlHandle h;
+
+    h = NewControl(window, frame, title, true, 0, 0, 0, pushButProc, controlID);
+    if (h && isDefault)
+    {
+        Boolean flag = true;
+        SetControlData(h, kControlEntireControl, kControlPushButtonDefaultTag, sizeof(flag), &flag);
+    }
+
+    return h;
+}
+
+ControlHandle ui_windows_new_slider(WindowPtr window, const Rect *frame,
+                                    short initial, short min, short max)
+{
+    return NewControl(window, frame, "\p", true, initial, min, max, kControlSliderProc, 0);
+}
+
+Boolean ui_windows_track_hit_control(WindowPtr window, Point local,
+                                     const UIControlTrackingSpec *specs, short count,
+                                     ControlHandle *outHit, short *outPart)
+{
+    ControlHandle c;
+    short part;
+
+    if (!window || !specs || count <= 0)
+        return false;
+
+    if (outHit)
+        *outHit = NULL;
+    if (outPart)
+        *outPart = 0;
+
+    part = FindControl(local, window, &c);
+    if (!part || !c)
+        return false;
+
+    while (count-- > 0)
+    {
+        RGBColor prevBack;
+        Boolean restoreColor = false;
+
+        if (specs->control == c)
+        {
+            if (specs->background)
+            {
+                GetBackColor(&prevBack);
+                RGBBackColor(specs->background);
+                restoreColor = true;
+            }
+
+            part = TrackControl(c, local, specs->action);
+
+            if (restoreColor)
+                RGBBackColor(&prevBack);
+
+            if (outHit)
+                *outHit = c;
+            if (outPart)
+                *outPart = part;
+
+            return true;
+        }
+
+        ++specs;
+    }
+
+    return false;
+}
+
+
+#include "network_backend.h"
+
+#include <Dialogs.h>
+
+static const NetworkCallbacks *gCallbacks = NULL;
+
+static void network_classic_log(const char *line)
+{
+    if (gCallbacks && gCallbacks->onLog && line)
+        gCallbacks->onLog(line);
+}
+
+static Boolean network_classic_init(void)
+{
+    return true;
+}
+
+static void network_classic_shutdown(void)
+{
+}
+
+static Boolean network_classic_start(const char *hostString, UInt16 port, const NetworkCallbacks *callbacks)
+{
+    short    itemHit = 0;
+    OSStatus status;
+
+    (void)hostString;
+    (void)port;
+
+    gCallbacks = callbacks;
+
+    status = StandardAlert(
+        kAlertStopAlert,
+        "\pThis Application does not support Classic Networking, please install or activate Open Transport in the Network Software Selector Application.",
+        NULL,
+        NULL,
+        &itemHit);
+
+    (void)itemHit;
+    (void)status;
+
+    network_classic_log("Classic Networking detected; TCP server disabled.");
+
+    return false;
+}
+
+static void network_classic_stop(void)
+{
+}
+
+static Boolean network_classic_is_running(void)
+{
+    return false;
+}
+
+static void network_classic_poll(void)
+{
+}
+
+static const NetworkBackend kClassicBackend = {
+    network_classic_init,
+    network_classic_shutdown,
+    network_classic_start,
+    network_classic_stop,
+    network_classic_is_running,
+    network_classic_poll,
+    "ClassicNetworking",
+};
+
+const NetworkBackend *network_backend_classic(void)
+{
+    return &kClassicBackend;
+}
+
+
+#define _POSIX_C_SOURCE 200809L
+
+#include "vox_parser.h"
+
+#include <ctype.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+
+#ifdef VOX_PARSER_STANDALONE
+#include <stdint.h>
+#define BlockMoveData(src, dst, len) memmove((dst), (src), (len))
+static Handle NewHandle(size_t size)
+{
+    unsigned char **h = (unsigned char **)malloc(sizeof(unsigned char *));
+    if (!h)
+        return NULL;
+    *h = (unsigned char *)calloc(1, size);
+    if (!*h) {
+        free(h);
+        return NULL;
+    }
+    return (Handle)h;
+}
+#else
+#include <Memory.h>
+#endif
+
+#define ARRAY_GROWTH 8
+
+typedef struct {
+    char *data;
+    size_t len;
+    size_t cap;
+} StringBuilder;
+
+static void sb_init(StringBuilder *sb)
+{
+    sb->data = NULL;
+    sb->len = 0;
+    sb->cap = 0;
+}
+
+static Boolean sb_reserve(StringBuilder *sb, size_t add)
+{
+    if (sb->len + add + 1 <= sb->cap)
+        return true;
+    size_t new_cap = sb->cap ? sb->cap : 128;
+    while (new_cap < sb->len + add + 1)
+        new_cap *= 2;
+    char *p = (char *)realloc(sb->data, new_cap);
+    if (!p)
+        return false;
+    sb->data = p;
+    sb->cap = new_cap;
+    return true;
+}
+
+static Boolean sb_append_str(StringBuilder *sb, const char *text)
+{
+    if (!text)
+        return true;
+    size_t n = strlen(text);
+    if (!sb_reserve(sb, n))
+        return false;
+    BlockMoveData(text, sb->data + sb->len, n);
+    sb->len += n;
+    sb->data[sb->len] = '\0';
+    return true;
+}
+
+static Boolean sb_append_char(StringBuilder *sb, char c)
+{
+    if (!sb_reserve(sb, 1))
+        return false;
+    sb->data[sb->len++] = c;
+    sb->data[sb->len] = '\0';
+    return true;
+}
+
+static char *sb_steal(StringBuilder *sb)
+{
+    char *out = sb->data;
+    sb->data = NULL;
+    sb->len = sb->cap = 0;
+    return out;
+}
+
+static char *dup_slice(const char *start, size_t len)
+{
+    char *out = (char *)malloc(len + 1);
+    if (!out)
+        return NULL;
+    BlockMoveData(start, out, len);
+    out[len] = '\0';
+    return out;
+}
+
+static char *str_trim(const char *s)
+{
+    if (!s)
+        return NULL;
+    const char *a = s;
+    while (*a && isspace((unsigned char)*a))
+        ++a;
+    const char *b = s + strlen(s);
+    while (b > a && isspace((unsigned char)b[-1]))
+        --b;
+    return dup_slice(a, (size_t)(b - a));
+}
+
+static void str_to_lower(char *s)
+{
+    if (!s)
+        return;
+    for (; *s; ++s)
+        *s = (char)tolower((unsigned char)*s);
+}
+
+static Boolean is_all_digits(const char *t)
+{
+    if (!t || !*t)
+        return false;
+    for (; *t; ++t) {
+        if (!isdigit((unsigned char)*t))
+            return false;
+    }
+    return true;
+}
+
+static Boolean is_titlecase_word(const char *t)
+{
+    if (!t || !*t)
+        return false;
+    if (!isalpha((unsigned char)t[0]) || !isupper((unsigned char)t[0]))
+        return false;
+    return true;
+}
+
+static char *strip_trailing_punct(const char *t)
+{
+    size_t n = strlen(t);
+    while (n > 0) {
+        char c = t[n - 1];
+        if (c == ',' || c == '.' || c == ';' || c == ':' || c == '!' || c == '?' || c == '"' || c == '\'')
+            --n;
+        else
+            break;
+    }
+    return dup_slice(t, n);
+}
+
+static Boolean ends_with_br(const char *s)
+{
+    size_t n = strlen(s);
+    if (n < 4)
+        return false;
+    return strstr(s + (n > 5 ? n - 5 : 0), "\\!br") != NULL && strcmp(s + n - 4, "\\!br") == 0;
+}
+
+typedef struct {
+    char **items;
+    size_t count;
+    size_t cap;
+} StringVec;
+
+static void vec_init(StringVec *v)
+{
+    v->items = NULL;
+    v->count = 0;
+    v->cap = 0;
+}
+
+static Boolean vec_push(StringVec *v, char *item)
+{
+    if (v->count + 1 > v->cap) {
+        size_t new_cap = v->cap ? v->cap * 2 : ARRAY_GROWTH;
+        char **n = (char **)realloc(v->items, new_cap * sizeof(char *));
+        if (!n)
+            return false;
+        v->items = n;
+        v->cap = new_cap;
+    }
+    v->items[v->count++] = item;
+    return true;
+}
+
+static void vec_free(StringVec *v)
+{
+    if (!v)
+        return;
+    for (size_t i = 0; i < v->count; ++i)
+        free(v->items[i]);
+    free(v->items);
+    v->items = NULL;
+    v->count = v->cap = 0;
+}
+
+static StringVec tokenize_ws(const char *s)
+{
+    StringVec out;
+    vec_init(&out);
+    if (!s)
+        return out;
+
+    const char *p = s;
+    while (*p) {
+        while (*p && isspace((unsigned char)*p))
+            ++p;
+        if (!*p)
+            break;
+        const char *start = p;
+        while (*p && !isspace((unsigned char)*p))
+            ++p;
+        (void)vec_push(&out, dup_slice(start, (size_t)(p - start)));
+    }
+    return out;
+}
+
+static StringVec split_sentences(const char *in)
+{
+    StringVec out;
+    vec_init(&out);
+    if (!in)
+        return out;
+
+    StringBuilder cur;
+    sb_init(&cur);
+    const char *p = in;
+    while (*p) {
+        char c = *p;
+        sb_append_char(&cur, c);
+        if (c == '.' || c == '!' || c == '?') {
+            const char *q = p + 1;
+            while (*q == '"' || *q == '\'') {
+                sb_append_char(&cur, *q);
+                ++q;
+            }
+            char *trimmed = str_trim(cur.data);
+            if (trimmed && *trimmed)
+                vec_push(&out, trimmed);
+            else
+                free(trimmed);
+            cur.len = 0;
+            if (cur.data)
+                cur.data[0] = '\0';
+            p = q - 1;
+        }
+        ++p;
+    }
+    char *tail = str_trim(cur.data ? cur.data : "");
+    if (tail && *tail)
+        vec_push(&out, tail);
+    else
+        free(tail);
+    free(cur.data);
+    return out;
+}
+
+static Boolean prefix_matches(const char *s, const char *prefix)
+{
+    size_t n = strlen(prefix);
+    return strncasecmp(s, prefix, n) == 0;
+}
+
+static char *apply_leadin_break(char *s)
+{
+    static const char *phrases[] = {
+        "Now ",
+        "Please ",
+        "A reminder ",
+        "On behalf of ",
+        "Good morning",
+        "Good evening",
+        "This automated train",
+        "This automated tram",
+        NULL
+    };
+
+    if (!s)
+        return NULL;
+    for (int i = 0; phrases[i]; ++i) {
+        const char *p = phrases[i];
+        if (prefix_matches(s, p)) {
+            size_t n = strlen(p);
+            StringBuilder sb;
+            sb_init(&sb);
+            sb_append_str(&sb, phrases[i]);
+            sb_append_str(&sb, " \\!br ");
+            sb_append_str(&sb, s + n);
+            free(s);
+            return sb_steal(&sb);
+        }
+    }
+    return s;
+}
+
+static Boolean is_tag(const char *w)
+{
+    return strcmp(w, "\\!br") == 0 || strcmp(w, "\\!wH1") == 0 || strcmp(w, "\\!wH0") == 0;
+}
+
+static char *strip_tail_core(const char *x, char **tail_out)
+{
+    size_t n = strlen(x);
+    size_t end = n;
+    while (end > 0) {
+        char c = x[end - 1];
+        if (c == ',' || c == '.' || c == ';' || c == ':' || c == '!' || c == '?' || c == '"' || c == '\'')
+            --end;
+        else
+            break;
+    }
+    char *core = dup_slice(x, end);
+    if (tail_out)
+        *tail_out = dup_slice(x + end, n - end);
+    return core;
+}
+
+static Boolean is_single_letter(const char *w)
+{
+    char *core = strip_tail_core(w, NULL);
+    Boolean res = false;
+    if (core) {
+        size_t n = strlen(core);
+        if (n == 1 && isalpha((unsigned char)core[0]) && isupper((unsigned char)core[0]))
+            res = true;
+        else if (n == 2 && isalpha((unsigned char)core[0]) && isupper((unsigned char)core[0]) && core[1] == ':')
+            res = true;
+    }
+    free(core);
+    return res;
+}
+
+static Boolean is_number_token(const char *w)
+{
+    char *core = strip_tail_core(w, NULL);
+    Boolean res = core && is_all_digits(core);
+    free(core);
+    return res;
+}
+
+static char *apply_thee_rule(char *s)
+{
+    StringVec tok = tokenize_ws(s);
+    if (tok.count == 0) {
+        vec_free(&tok);
+        return s;
+    }
+
+    StringBuilder out;
+    sb_init(&out);
+
+    for (size_t i = 0; i < tok.count; ++i) {
+        const char *word = tok.items[i];
+        char *core_tail = NULL;
+        char *core = strip_tail_core(word, &core_tail);
+        char *lower = core ? strdup(core) : NULL;
+        if (lower)
+            str_to_lower(lower);
+
+        Boolean make_thee = false;
+        if (core && lower && strcmp(lower, "the") == 0) {
+            /* backward */
+            for (int back = (int)i - 1; back >= 0; --back) {
+                if (is_tag(tok.items[back]))
+                    continue;
+                char *prev_lower = strdup(tok.items[back]);
+                if (prev_lower) {
+                    char *tmp = strip_trailing_punct(prev_lower);
+                    free(prev_lower);
+                    prev_lower = tmp;
+                }
+                if (prev_lower) {
+                    str_to_lower(prev_lower);
+                    if (strcmp(prev_lower, "to") == 0 || strcmp(prev_lower, "for") == 0 ||
+                        strcmp(prev_lower, "of") == 0 || strcmp(prev_lower, "in") == 0 ||
+                        strcmp(prev_lower, "on") == 0 || strcmp(prev_lower, "at") == 0) {
+                        make_thee = true;
+                    }
+                    if (!make_thee && strcmp(prev_lower, "of") == 0) {
+                        char *p2 = NULL;
+                        char *p3 = NULL;
+                        if (back - 1 >= 0) p2 = strdup(tok.items[back - 1]);
+                        if (back - 2 >= 0) p3 = strdup(tok.items[back - 2]);
+                        if (p2 && p3) {
+                            str_to_lower(p2);
+                            str_to_lower(p3);
+                            if (strcmp(p2, "behalf") == 0 && strcmp(p3, "on") == 0)
+                                make_thee = true;
+                        }
+                        free(p2);
+                        free(p3);
+                    }
+                }
+                free(prev_lower);
+                break;
+            }
+            /* forward */
+            if (!make_thee) {
+                for (size_t f = i + 1; f < tok.count; ++f) {
+                    if (is_tag(tok.items[f]))
+                        continue;
+                    if (is_titlecase_word(tok.items[f]) || is_single_letter(tok.items[f]) || is_number_token(tok.items[f]))
+                        make_thee = true;
+                    break;
+                }
+            }
+        }
+
+        if (out.len > 0)
+            sb_append_char(&out, ' ');
+        if (core) {
+            sb_append_str(&out, make_thee ? "thee" : core);
+            if (core_tail)
+                sb_append_str(&out, core_tail);
+        } else {
+            sb_append_str(&out, word);
+        }
+
+        free(core_tail);
+        free(core);
+        free(lower);
+    }
+
+    vec_free(&tok);
+    free(s);
+    return sb_steal(&out);
+}
+
+static Boolean meridiem_token(const char *p, size_t *consumed, Boolean *is_pm)
+{
+    if (strncasecmp(p, "AM", 2) == 0) {
+        *consumed = 2;
+        *is_pm = false;
+        return true;
+    }
+    if (strncasecmp(p, "A.M.", 4) == 0) {
+        *consumed = 4;
+        *is_pm = false;
+        return true;
+    }
+    if (strncasecmp(p, "PM", 2) == 0) {
+        *consumed = 2;
+        *is_pm = true;
+        return true;
+    }
+    if (strncasecmp(p, "P.M.", 4) == 0) {
+        *consumed = 4;
+        *is_pm = true;
+        return true;
+    }
+    return false;
+}
+
+static char *apply_time_numbers_degrees(char *s)
+{
+    if (!s)
+        return NULL;
+
+    StringBuilder sb;
+    sb_init(&sb);
+
+    const char *p = s;
+    while (*p) {
+        /* 12h time like 8:47 AM */
+        if (isdigit((unsigned char)*p)) {
+            size_t hh_digits = 0;
+            int hh = 0;
+            while (hh_digits < 2 && isdigit((unsigned char)p[hh_digits])) {
+                hh = (hh * 10) + (p[hh_digits] - '0');
+                ++hh_digits;
+            }
+            if (hh_digits > 0 && (p[hh_digits] == ':' || p[hh_digits] == '.') &&
+                isdigit((unsigned char)p[hh_digits + 1]) && isdigit((unsigned char)p[hh_digits + 2])) {
+                int mm = (p[hh_digits + 1] - '0') * 10 + (p[hh_digits + 2] - '0');
+                const char *after = p + hh_digits + 3;
+                while (*after == ' ')
+                    ++after;
+                size_t mdig = 0;
+                Boolean is_pm = false;
+                if (meridiem_token(after, &mdig, &is_pm)) {
+                    const char *ap1 = is_pm ? "P:" : "Ay:";
+                    char tmp[64];
+                    snprintf(tmp, sizeof(tmp), "%d \\!br %d \\!br %s \\!br M:", hh, mm, ap1);
+                    sb_append_str(&sb, tmp);
+                    p = after + mdig;
+                    while (*p == '.')
+                        ++p;
+                    continue;
+                }
+            }
+        }
+
+        if (p[0] == 'T' || p[0] == 't') {
+            if (strncasecmp(p, "The time is ", 12) == 0) {
+                sb_append_str(&sb, "The time is \\!br ");
+                p += 12;
+                continue;
+            }
+        }
+
+        if (isdigit((unsigned char)p[0]) && isdigit((unsigned char)p[1]) &&
+            isdigit((unsigned char)p[2]) && p[3] == '0' && p[4] == '0' &&
+            strncasecmp(p + 5, " hours", 6) == 0) {
+            char tmp[64];
+            snprintf(tmp, sizeof(tmp), "%c%c \\!br hundred \\!br hours", p[0], p[1]);
+            sb_append_str(&sb, tmp);
+            p += 11; /* 5 digits + space + hours */
+            continue;
+        }
+
+        if (isdigit((unsigned char)p[0]) && isdigit((unsigned char)p[1]) && isdigit((unsigned char)p[2])) {
+            if (!(p[3] && isdigit((unsigned char)p[3]))) {
+                int b = p[1] - '0';
+                int c = p[2] - '0';
+                if (!(b == 0 && c == 0)) {
+                    sb_append_char(&sb, (char)p[0]);
+                    sb_append_char(&sb, '0');
+                    sb_append_char(&sb, '0');
+                    sb_append_str(&sb, " \\!br and \\!br ");
+                    if (b == 0)
+                        sb_append_char(&sb, (char)('0' + c));
+                    else {
+                        sb_append_char(&sb, (char)('0' + b));
+                        sb_append_char(&sb, (char)('0' + c));
+                    }
+                    p += 3;
+                    continue;
+                }
+            }
+        }
+
+        if (isdigit((unsigned char)*p)) {
+            const char *deg = p;
+            while (isdigit((unsigned char)*deg))
+                ++deg;
+            const char *after_deg = deg;
+            while (*after_deg == ' ')
+                ++after_deg;
+            if (strncasecmp(after_deg, "degrees", 7) == 0) {
+                char *num = dup_slice(p, (size_t)(deg - p));
+                if (num) {
+                    sb_append_str(&sb, num);
+                    free(num);
+                }
+                sb_append_str(&sb, " \\!br degrees \\!br");
+                p = after_deg + 7;
+                continue;
+            }
+        }
+
+        if (p[0] == 'M' && p[1] == ':' && p[2] == '.') {
+            sb_append_str(&sb, "M:");
+            p += 3;
+            continue;
+        }
+
+        sb_append_char(&sb, *p);
+        ++p;
+    }
+
+    free(s);
+    return sb_steal(&sb);
+}
+
+typedef enum { WT_LIGHT, WT_MEDIUM, WT_HEAVY } Weight;
+
+static Boolean is_stop(const char *tl)
+{
+    static const char *words[] = {
+        "the", "thee", "a", "an", "to", "for", "of", "in", "on", "at", "by", "with", "from",
+        "as", "is", "are", "was", "were", "this", "that", NULL};
+    for (int i = 0; words[i]; ++i) {
+        if (strcmp(tl, words[i]) == 0)
+            return true;
+    }
+    return false;
+}
+
+static Boolean is_lightverb(const char *tl)
+{
+    static const char *words[] = {
+        "welcome", "wait", "stand", "provide", "provided", "return", "remain", "maintain", "maintained",
+        "verify", "contact", "board", "arriving", "inbound", "bound", "commence", "commences", NULL};
+    for (int i = 0; words[i]; ++i) {
+        if (strcmp(tl, words[i]) == 0)
+            return true;
+    }
+    return false;
+}
+
+static Boolean is_unit(const char *tl)
+{
+    static const char *words[] = {"degrees", "hours", "percent", "%", NULL};
+    for (int i = 0; words[i]; ++i) {
+        if (strcmp(tl, words[i]) == 0)
+            return true;
+    }
+    return false;
+}
+
+static int syllables(const char *w)
+{
+    if (!w || !*w)
+        return 0;
+    size_t n = strlen(w);
+    char *s = dup_slice(w, n);
+    if (!s)
+        return 0;
+    str_to_lower(s);
+    int count = 0;
+    Boolean in = false;
+    for (size_t i = 0; s[i]; ++i) {
+        char c = s[i];
+        Boolean isv = (c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u' || c == 'y');
+        if (isv) {
+            if (!in) {
+                ++count;
+                in = true;
+            }
+        } else {
+            in = false;
+        }
+    }
+    if (count > 1 && n > 1 && s[n - 1] == 'e' && !(n > 2 && s[n - 2] == 'l'))
+        --count;
+    if (n > 2 && s[n - 1] == 'e' && s[n - 2] == 'l')
+        ++count;
+    free(s);
+    if (count < 1)
+        count = 1;
+    return count;
+}
+
+static Weight weight_token(const char *tok)
+{
+    if (!tok || !*tok)
+        return WT_LIGHT;
+    char *pfree = strip_trailing_punct(tok);
+    if (!pfree)
+        return WT_LIGHT;
+    char *lower = strdup(pfree);
+    if (lower)
+        str_to_lower(lower);
+    if (is_stop(lower) || is_lightverb(lower)) {
+        free(pfree);
+        free(lower);
+        return WT_LIGHT;
+    }
+    if (is_all_digits(pfree) || strchr(pfree, '-') || is_titlecase_word(pfree) || is_unit(lower)) {
+        free(pfree);
+        free(lower);
+        return WT_HEAVY;
+    }
+    int syl = syllables(pfree);
+    Weight w = (syl >= 3 || strlen(pfree) >= 8) ? WT_HEAVY : WT_MEDIUM;
+    free(pfree);
+    free(lower);
+    return w;
+}
+
+static Boolean is_and_tok(const char *t)
+{
+    char *b = strip_trailing_punct(t);
+    if (!b)
+        return false;
+    str_to_lower(b);
+    Boolean res = strcmp(b, "and") == 0;
+    free(b);
+    return res;
+}
+
+static Boolean starts_with_punct(const char *t)
+{
+    if (!t || !*t)
+        return false;
+    char c = t[0];
+    return (c == '.' || c == ',' || c == ';' || c == ':' || c == '!' || c == '?' || c == ')');
+}
+
+static Boolean is_open_punct(const char *t)
+{
+    if (!t || !*t)
+        return false;
+    char c = t[0];
+    return (c == '(' || c == '"' || c == '\'');
+}
+
+static void emit_titlecase_run(const StringVec *v, size_t i, size_t j, StringBuilder *out)
+{
+    if (out->len > 0 && !ends_with_br(out->data))
+        sb_append_str(out, " \\!br");
+    for (size_t k = i; k < j; ++k) {
+        sb_append_char(out, ' ');
+        sb_append_str(out, v->items[k]);
+        sb_append_str(out, " \\!br");
+    }
+}
+
+static char *build_beats(const char *sentence)
+{
+    StringVec v = tokenize_ws(sentence);
+    if (v.count == 0)
+        return strdup(sentence);
+
+    StringBuilder out;
+    sb_init(&out);
+    Boolean since_break_all_light = true;
+    Weight prev_w = WT_LIGHT;
+    int content_run = 0;
+
+    #define RESET_AFTER_BREAK() \
+        do { since_break_all_light = true; content_run = 0; prev_w = WT_LIGHT; } while (0)
+
+    for (size_t i = 0; i < v.count;) {
+        char *bare = strip_trailing_punct(v.items[i]);
+
+        /* Proper noun / Area/Level/Sector */
+        if (strcmp(v.items[i], "Area") == 0 || strcmp(v.items[i], "Level") == 0 || strcmp(v.items[i], "Sector") == 0) {
+            size_t j = i + 1;
+            while (j < v.count) {
+                char *bj = strip_trailing_punct(v.items[j]);
+                Boolean ok = (bj && (is_all_digits(bj) || is_titlecase_word(bj)));
+                free(bj);
+                if (ok)
+                    ++j;
+                else
+                    break;
+            }
+            if (j > i + 1) {
+                emit_titlecase_run(&v, i, j, &out);
+                i = j;
+                RESET_AFTER_BREAK();
+                free(bare);
+                continue;
+            }
+        }
+        if (is_titlecase_word(bare)) {
+            size_t j = i;
+            while (j < v.count) {
+                char *bj = strip_trailing_punct(v.items[j]);
+                Boolean ok = is_titlecase_word(bj);
+                free(bj);
+                if (ok)
+                    ++j;
+                else
+                    break;
+            }
+            if (j >= i + 2) {
+                emit_titlecase_run(&v, i, j, &out);
+                i = j;
+                RESET_AFTER_BREAK();
+                free(bare);
+                continue;
+            }
+        }
+
+        /* and between heavier items */
+        if (is_and_tok(v.items[i]) && i > 0 && i + 1 < v.count) {
+            Weight lw = weight_token(v.items[i - 1]);
+            Weight rw = weight_token(v.items[i + 1]);
+            if (lw >= WT_MEDIUM && rw >= WT_MEDIUM) {
+                if (!ends_with_br(out.data))
+                    sb_append_str(&out, " \\!br");
+                sb_append_str(&out, " and \\!br");
+                ++i;
+                RESET_AFTER_BREAK();
+                free(bare);
+                continue;
+            }
+        }
+
+        /* standalone dash */
+        if (strcmp(v.items[i], "-") == 0 || strcmp(v.items[i], "–") == 0 || strcmp(v.items[i], "—") == 0) {
+            if (!ends_with_br(out.data))
+                sb_append_str(&out, " \\!br");
+            RESET_AFTER_BREAK();
+            ++i;
+            free(bare);
+            continue;
+        }
+
+        /* linker isolation */
+        {
+            char *lower = strdup(bare ? bare : "");
+            if (lower)
+                str_to_lower(lower);
+            Boolean in_head = (i < 2);
+            if (!in_head && (strcmp(lower, "at") == 0 || strcmp(lower, "in") == 0 || strcmp(lower, "on") == 0 ||
+                             strcmp(lower, "to") == 0 || strcmp(lower, "of") == 0 || strcmp(lower, "for") == 0 ||
+                             strcmp(lower, "from") == 0 || strcmp(lower, "by") == 0)) {
+                if (!ends_with_br(out.data))
+                    sb_append_str(&out, " \\!br");
+                RESET_AFTER_BREAK();
+                if (out.len > 0 && !starts_with_punct(v.items[i]) && !is_open_punct(v.items[i]))
+                    sb_append_char(&out, ' ');
+                sb_append_str(&out, v.items[i]);
+                if (!ends_with_br(out.data))
+                    sb_append_str(&out, " \\!br");
+                RESET_AFTER_BREAK();
+                ++i;
+                free(lower);
+                free(bare);
+                continue;
+            }
+            free(lower);
+        }
+
+        /* pre-copula break before "is" */
+        {
+            char *lower = strdup(bare ? bare : "");
+            if (lower)
+                str_to_lower(lower);
+            Boolean in_head = (i < 2);
+            if (!in_head && lower && strcmp(lower, "is") == 0) {
+                size_t k = i + 1;
+                while (k < v.count && is_tag(v.items[k]))
+                    ++k;
+                Boolean trigger = false;
+                if (k < v.count) {
+                    if (is_titlecase_word(v.items[k]) || is_number_token(v.items[k]) || is_single_letter(v.items[k]) || weight_token(v.items[k]) == WT_HEAVY) {
+                        trigger = true;
+                    }
+                    char *b2 = strip_trailing_punct(v.items[k]);
+                    if (b2) {
+                        str_to_lower(b2);
+                        if (strcmp(b2, "the") == 0 || strcmp(b2, "thee") == 0 || strcmp(b2, "a") == 0 || strcmp(b2, "an") == 0)
+                            trigger = true;
+                    }
+                    free(b2);
+                }
+                if (trigger && !ends_with_br(out.data)) {
+                    sb_append_str(&out, " \\!br");
+                    RESET_AFTER_BREAK();
+                }
+            }
+            free(lower);
+        }
+
+        /* append token */
+        if (out.len > 0 && !starts_with_punct(v.items[i]) && !is_open_punct(v.items[i]))
+            sb_append_char(&out, ' ');
+        sb_append_str(&out, v.items[i]);
+
+        /* punctuation boundary */
+        size_t len_tok = strlen(v.items[i]);
+        if (len_tok > 0) {
+            char last = v.items[i][len_tok - 1];
+            if ((last == ',' || last == ';') && !ends_with_br(out.data)) {
+                sb_append_str(&out, " \\!br");
+                RESET_AFTER_BREAK();
+                ++i;
+                free(bare);
+                continue;
+            }
+        }
+
+        Weight w_eff = weight_token(v.items[i]);
+        Boolean in_head = (i < 2);
+        if (i == 0 && is_titlecase_word(v.items[i])) {
+            if (i + 1 < v.count && !is_titlecase_word(v.items[i + 1]) && w_eff == WT_HEAVY)
+                w_eff = WT_MEDIUM;
+        }
+
+        if (w_eff == WT_HEAVY && content_run >= 1) {
+            int k = (int)i - 1;
+            while (k >= 0 && is_tag(v.items[k]))
+                --k;
+            Boolean exempt = false;
+            if (k >= 0) {
+                if (is_titlecase_word(v.items[k]) || is_number_token(v.items[k]) || is_single_letter(v.items[k]))
+                    exempt = true;
+            }
+            if (!exempt) {
+                if (!ends_with_br(out.data))
+                    sb_append_str(&out, " \\!br");
+                RESET_AFTER_BREAK();
+            }
+        }
+
+        if (w_eff == WT_HEAVY && content_run >= 2) {
+            if (!ends_with_br(out.data))
+                sb_append_str(&out, " \\!br");
+            RESET_AFTER_BREAK();
+        }
+
+        if (w_eff == WT_HEAVY && since_break_all_light && !in_head) {
+            if (out.len > 0 && !ends_with_br(out.data))
+                sb_append_str(&out, " \\!br");
+            RESET_AFTER_BREAK();
+        }
+
+        if (i > 0 && prev_w == WT_HEAVY && w_eff == WT_HEAVY && !in_head) {
+            if (!ends_with_br(out.data))
+                sb_append_str(&out, " \\!br");
+            RESET_AFTER_BREAK();
+        }
+
+        if (w_eff == WT_LIGHT) {
+            /* stay */
+        } else {
+            ++content_run;
+            since_break_all_light = false;
+        }
+        prev_w = w_eff;
+        ++i;
+        free(bare);
+    }
+
+#undef RESET_AFTER_BREAK
+
+    vec_free(&v);
+    return str_trim(sb_steal(&out));
+}
+
+static char *tidy(char *s)
+{
+    if (!s)
+        return NULL;
+    StringBuilder sb;
+    sb_init(&sb);
+
+    const char *p = s;
+    Boolean last_space = false;
+    while (*p) {
+        if (isspace((unsigned char)*p)) {
+            if (!last_space)
+                sb_append_char(&sb, ' ');
+            last_space = true;
+        } else {
+            sb_append_char(&sb, *p);
+            last_space = false;
+        }
+        ++p;
+    }
+
+    char *mid = sb_steal(&sb);
+    free(s);
+
+    /* normalize tag spacing */
+    StringVec tok = tokenize_ws(mid);
+    sb_init(&sb);
+    for (size_t i = 0; i < tok.count; ++i) {
+        if (i > 0)
+            sb_append_char(&sb, ' ');
+        sb_append_str(&sb, tok.items[i]);
+    }
+    vec_free(&tok);
+    free(mid);
+    return str_trim(sb_steal(&sb));
+}
+
+static char *normalize_letter_tokens(char *s)
+{
+    StringVec tok = tokenize_ws(s);
+    if (tok.count == 0) {
+        vec_free(&tok);
+        return s;
+    }
+
+    StringBuilder out;
+    sb_init(&out);
+
+    for (size_t i = 0; i < tok.count; ++i) {
+        if (is_tag(tok.items[i]))
+            goto append_original;
+
+        char *core = NULL;
+        char *tail = NULL;
+        Boolean had_colon = false;
+        {
+            size_t n = strlen(tok.items[i]);
+            size_t end = n;
+            while (end > 0) {
+                char c = tok.items[i][end - 1];
+                if (c == ':' && !had_colon) {
+                    had_colon = true;
+                    --end;
+                    continue;
+                }
+                if (c == ',' || c == '.' || c == ';' || c == '!' || c == '?' || c == '"' || c == '\'') {
+                    --end;
+                    continue;
+                }
+                break;
+            }
+            core = dup_slice(tok.items[i], end);
+            tail = dup_slice(tok.items[i] + end, n - end);
+        }
+
+        Boolean near_left = (i == 0) || is_tag(tok.items[i - 1]);
+        Boolean near_right = (i + 1 >= tok.count) || is_tag(tok.items[i + 1]);
+        Boolean near_bound = near_left || near_right;
+
+        size_t core_len = core ? strlen(core) : 0;
+        if ((tok.items[i] && strchr(tok.items[i], ':')) ||
+            (core_len > 1 && !(core_len == 2 && core[1] == ':'))) {
+            if (out.len > 0)
+                sb_append_char(&out, ' ');
+            sb_append_str(&out, tok.items[i]);
+            free(core);
+            free(tail);
+            continue;
+        }
+
+        if (core && (strcmp(core, "A") == 0 || strcmp(core, "a") == 0) && (near_bound || had_colon)) {
+            free(core);
+            core = strdup("Ay");
+            had_colon = true;
+        } else if (core && strlen(core) == 1 && isalpha((unsigned char)core[0]) && isupper((unsigned char)core[0]) && near_bound) {
+            had_colon = true;
+        }
+
+        if (out.len > 0)
+            sb_append_char(&out, ' ');
+        sb_append_str(&out, core ? core : tok.items[i]);
+        if (had_colon)
+            sb_append_char(&out, ':');
+        if (tail)
+            sb_append_str(&out, tail);
+
+        free(core);
+        free(tail);
+        continue;
+
+    append_original:
+        if (out.len > 0)
+            sb_append_char(&out, ' ');
+        sb_append_str(&out, tok.items[i]);
+    }
+
+    vec_free(&tok);
+    free(s);
+    return sb_steal(&out);
+}
+
+static char *apply_leadin_and_thee_and_numbers(char *sent)
+{
+    sent = apply_thee_rule(sent);
+    sent = apply_leadin_break(sent);
+    sent = apply_time_numbers_degrees(sent);
+    return sent;
+}
+
+char *vox_process_buffer(const char *text, Boolean wrap_vox_tags)
+{
+    StringVec sents = split_sentences(text);
+    StringBuilder out;
+    sb_init(&out);
+
+    for (size_t i = 0; i < sents.count; ++i) {
+        char *sent = sents.items[i];
+        sents.items[i] = NULL; /* ownership transferred */
+        if (!sent || !*sent)
+            continue;
+        sent = apply_leadin_and_thee_and_numbers(sent);
+        char *beats = build_beats(sent);
+        free(sent);
+        beats = normalize_letter_tokens(beats);
+        beats = tidy(beats);
+        size_t len = strlen(beats);
+        if (len > 0 && beats[len - 1] != ' ')
+            sb_append_char(&out, ' ');
+        sb_append_str(&out, beats);
+        sb_append_str(&out, "\\!sf500 \\!br");
+        free(beats);
+        if (i + 1 < sents.count)
+            sb_append_char(&out, ' ');
+    }
+
+    vec_free(&sents);
+
+    char *result = str_trim(sb_steal(&out));
+    if (result && *result) {
+        if (wrap_vox_tags) {
+            StringBuilder wrapped;
+            sb_init(&wrapped);
+            sb_append_str(&wrapped, "\\!wH1 ");
+            sb_append_str(&wrapped, result);
+            sb_append_str(&wrapped, " \\!wH0 ");
+            free(result);
+            result = sb_steal(&wrapped);
+        } else {
+            StringBuilder spaced;
+            sb_init(&spaced);
+            sb_append_str(&spaced, result);
+            sb_append_char(&spaced, ' ');
+            free(result);
+            result = sb_steal(&spaced);
+        }
+    }
+
+    return result;
+}
+
+static Boolean emit_break(StringBuilder *sb)
+{
+    return sb_append_str(sb, "[[slnc 250]] ");
+}
+
+static Boolean emit_version_prefix(StringBuilder *sb)
+{
+    return sb_append_str(sb, "[[vers 1]] ");
+}
+
+static Boolean emit_comment(StringBuilder *sb, const char *tag)
+{
+    if (!tag)
+        return true;
+    return sb_append_str(sb, "[[cmnt ") && sb_append_str(sb, tag) && sb_append_str(sb, "]] ");
+}
+
+static Boolean translate_token(const char *tok, size_t tok_len, StringBuilder *sb)
+{
+    if (tok_len == 0)
+        return true;
+
+    if (tok_len == 4 && strncmp(tok, "\\!br", 4) == 0)
+        return emit_break(sb);
+
+    if (tok_len >= 4 && strncmp(tok, "\\!sf", 4) == 0) {
+        long millis = 0;
+        const char *p = tok + 4;
+        while (*p >= '0' && *p <= '9') {
+            millis = (millis * 10) + (*p - '0');
+            ++p;
+        }
+        millis *= 10;
+        char tmp[32];
+        snprintf(tmp, sizeof(tmp), "[[slnc %ld]] ", millis);
+        return sb_append_str(sb, tmp);
+    }
+
+    if (tok_len == 4 && strncmp(tok, "\\!wH1", 4) == 0)
+        return emit_comment(sb, "vox-start");
+    if (tok_len == 4 && strncmp(tok, "\\!wH0", 4) == 0)
+        return emit_comment(sb, "vox-end");
+
+    /* Unknown FlexTalk escape: drop it so only Speech Manager metadata remains. */
+    return true;
+}
+
+static Handle emit_speech_manager_text(const char *text, Boolean wrap_with_version)
+{
+    Handle h = NULL;
+    StringBuilder sb;
+    sb_init(&sb);
+
+    if (wrap_with_version) {
+        if (!emit_version_prefix(&sb))
+            goto done;
+    }
+
+    const char *p = text;
+    while (*p) {
+        if (p[0] == '\\' && p[1] == '!') {
+            const char *start = p;
+            p += 2;
+            while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r')
+                ++p;
+            if (!translate_token(start, (size_t)(p - start), &sb))
+                goto done;
+            continue;
+        }
+        sb_append_char(&sb, *p);
+        ++p;
+    }
+    emit_break(&sb);
+
+    h = NewHandle(sb.len + 1);
+    if (h && *h)
+        BlockMoveData(sb.data, *h, sb.len + 1);
+
+done:
+    free(sb.data);
+    return h;
+}
+
+Handle vox_format_text(const char *text, Boolean wrap_with_version)
+{
+    if (!text)
+        return NULL;
+    char *vox = vox_process_buffer(text, true);
+    if (!vox)
+        return NULL;
+    Handle h = emit_speech_manager_text(vox, wrap_with_version);
+    free(vox);
+    return h;
+}
+
+
+
+#include "ui_layout.h"
+
+const UILayoutMetrics kUILayoutMetrics = {
+    8,   /* margin */
+    6,   /* gutter */
+    86,  /* buttonW */
+    20,  /* buttonH */
+    6,   /* sectionGutter */
+    120, /* textAreaH */
+    57,  /* prosodyH */
+    100, /* settingsH */
+    52,  /* tcpH */
+    16,  /* sliderH */
+    210, /* sliderW */
+    24,  /* fieldH */
+    152, /* fieldW */
+    64   /* portFieldW */
+};
+
+const short kUILayoutStartButtonW = 104;
+const short kUILayoutButtonInset  = 5;
+
+
+#ifndef NETWORK_BACKEND_H
+#define NETWORK_BACKEND_H
+
+#include "network.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct NetworkCallbacks
+{
+    NetworkDataHandler onData;
+    NetworkLogHandler  onLog;
+} NetworkCallbacks;
+
+typedef struct NetworkBackend
+{
+    Boolean (*init)(void);
+    void (*shutdown)(void);
+    Boolean (*start)(const char *hostString, UInt16 port, const NetworkCallbacks *callbacks);
+    void (*stop)(void);
+    Boolean (*is_running)(void);
+    void (*poll)(void);
+    const char *name;
+} NetworkBackend;
+
+const NetworkBackend *network_backend_ot(void);
+const NetworkBackend *network_backend_classic(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* NETWORK_BACKEND_H */
+
+
+#include "network_backend.h"
+
+#include <OpenTransport.h>
+#include <OpenTptInternet.h>
+#include <string.h>
+#include <stdio.h>
+
+#ifndef kOTAnyInetAddress
+#define kOTAnyInetAddress 0
+#endif
+
+#define NETWORK_CLIENT_SLOTS 4
+
+typedef struct NetworkClient
+{
+    EndpointRef endpoint;
+    Boolean     active;
+} NetworkClient;
+
+static Boolean                    gInitialized = false;
+static Boolean                    gRunning     = false;
+static EndpointRef                gListener    = NULL;
+static NetworkClient              gClients[NETWORK_CLIENT_SLOTS];
+static const NetworkCallbacks    *gCallbacks   = NULL;
+
+static TCall       gListenCall;
+static InetAddress gRemoteAddress;
+
+static void network_log(const char *line)
+{
+    if (gCallbacks && gCallbacks->onLog && line)
+        gCallbacks->onLog(line);
+}
+
+static UInt32 network_parse_ipv4(const char *text, Boolean *outValid)
+{
+    UInt32 octets[4] = {0, 0, 0, 0};
+    UInt32 host = kOTAnyInetAddress;
+
+    if (outValid)
+        *outValid = false;
+
+    if (text && sscanf(text, "%lu.%lu.%lu.%lu", &octets[0], &octets[1], &octets[2], &octets[3]) == 4)
+    {
+        Boolean ok = (Boolean)(octets[0] <= 255 && octets[1] <= 255 && octets[2] <= 255 && octets[3] <= 255);
+        if (ok)
+        {
+            host = (UInt32)((octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3]);
+            if (outValid)
+                *outValid = true;
+        }
+    }
+
+    return host;
+}
+
+static void network_clear_client(NetworkClient *c)
+{
+    if (!c)
+        return;
+
+    if (c->endpoint)
+    {
+        OTCloseProvider(c->endpoint);
+        c->endpoint = NULL;
+    }
+    c->active = false;
+}
+
+static void network_close_all_clients(void)
+{
+    short i;
+    for (i = 0; i < NETWORK_CLIENT_SLOTS; ++i)
+        network_clear_client(&gClients[i]);
+}
+
+static NetworkClient *network_allocate_client(void)
+{
+    short i;
+    for (i = 0; i < NETWORK_CLIENT_SLOTS; ++i)
+    {
+        if (!gClients[i].active)
+            return &gClients[i];
+    }
+    return NULL;
+}
+
+static void network_prepare_call_buffers(void)
+{
+    memset(&gListenCall, 0, sizeof(gListenCall));
+    memset(&gRemoteAddress, 0, sizeof(gRemoteAddress));
+
+    gListenCall.addr.maxlen = sizeof(gRemoteAddress);
+    gListenCall.addr.len = 0;
+    gListenCall.addr.buf = (UInt8 *)&gRemoteAddress;
+}
+
+static Boolean network_ot_init(void)
+{
+    if (!gInitialized)
+    {
+        InitOpenTransport();
+        gInitialized = true;
+    }
+    return gInitialized;
+}
+
+static void network_ot_shutdown(void)
+{
+    network_close_all_clients();
+    if (gListener)
+    {
+        OTCloseProvider(gListener);
+        gListener = NULL;
+    }
+
+    gRunning = false;
+    gInitialized = false;
+}
+
+static Boolean network_ot_start(const char *hostString, UInt16 port, const NetworkCallbacks *callbacks)
+{
+    OTConfigurationRef config;
+    OSStatus status;
+    InetAddress address;
+    TBind bindReq;
+    Boolean parsedHost = false;
+    UInt32 host = network_parse_ipv4(hostString, &parsedHost);
+
+    gCallbacks = callbacks;
+
+    network_close_all_clients();
+
+    if (!network_ot_init())
+        return false;
+
+    if (gListener)
+    {
+        OTCloseProvider(gListener);
+        gListener = NULL;
+    }
+
+    network_prepare_call_buffers();
+
+    config = OTCreateConfiguration("tcp");
+    gListener = OTOpenEndpoint(config, 0, NULL, &status);
+    if (!gListener || (status != kOTNoError))
+    {
+        network_log("Failed to open TCP listener endpoint.");
+        return false;
+    }
+
+    (void)OTSetNonBlocking(gListener);
+
+    OTInitInetAddress(&address, port, parsedHost ? host : kOTAnyInetAddress);
+
+    bindReq.addr.maxlen = sizeof(InetAddress);
+    bindReq.addr.len = sizeof(InetAddress);
+    bindReq.addr.buf = (UInt8 *)&address;
+    bindReq.qlen = NETWORK_CLIENT_SLOTS;
+
+    status = OTBind(gListener, &bindReq, NULL);
+    if (status != kOTNoError)
+    {
+        network_log("Open Transport bind failed.");
+        network_ot_shutdown();
+        return false;
+    }
+
+    network_log("Open Transport TCP listener ready.");
+    gRunning = true;
+    return true;
+}
+
+static void network_ot_stop(void)
+{
+    network_close_all_clients();
+
+    if (gListener)
+    {
+        OTCloseProvider(gListener);
+        gListener = NULL;
+    }
+
+    gRunning = false;
+}
+
+static Boolean network_ot_is_running(void)
+{
+    return gRunning;
+}
+
+static void network_log_disconnect(NetworkClient *client)
+{
+    if (!client)
+        return;
+
+    if (gCallbacks && gCallbacks->onLog)
+        gCallbacks->onLog("Client disconnected.");
+}
+
+static Boolean network_handle_disconnect(NetworkClient *client)
+{
+    TDiscon discon;
+    OSStatus status;
+
+    if (!client || !client->endpoint)
+        return false;
+
+    memset(&discon, 0, sizeof(discon));
+    status = OTRcvDisconnect(client->endpoint, &discon);
+    (void)status;
+
+    network_log_disconnect(client);
+    network_clear_client(client);
+    return true;
+}
+
+static void network_accept_pending(void)
+{
+    OSStatus status;
+
+    if (!gListener)
+        return;
+
+    while (true)
+    {
+        status = OTListen(gListener, &gListenCall);
+        if (status == kOTNoError)
+        {
+            NetworkClient *slot = network_allocate_client();
+            if (slot)
+            {
+                OSStatus acceptStatus;
+                slot->endpoint = OTOpenEndpoint(OTCreateConfiguration("tcp"), 0, NULL, &acceptStatus);
+                if (slot->endpoint && acceptStatus == kOTNoError)
+                {
+                    (void)OTSetNonBlocking(slot->endpoint);
+                    acceptStatus = OTAccept(gListener, slot->endpoint, &gListenCall);
+                    if (acceptStatus == kOTNoError)
+                    {
+                        slot->active = true;
+                        network_log("Accepted TCP connection.");
+                    }
+                    else
+                    {
+                        network_clear_client(slot);
+                    }
+                }
+                else
+                {
+                    network_clear_client(slot);
+                }
+            }
+            else
+            {
+                network_log("Connection backlog full; rejecting new client.");
+            }
+        }
+        else if (status == kOTNoDataErr)
+        {
+            break;
+        }
+        else
+        {
+            break;
+        }
+    }
+}
+
+static void network_poll_client(NetworkClient *client)
+{
+    char buffer[NETWORK_READ_BUFFER];
+    OSStatus err = kOTNoError;
+    long readCount;
+
+    if (!client || !client->active || !client->endpoint)
+        return;
+
+    readCount = OTRcv(client->endpoint, buffer, (long)(NETWORK_READ_BUFFER - 1), &err);
+    if (readCount > 0)
+    {
+        buffer[readCount] = '\0';
+        if (gCallbacks && gCallbacks->onData)
+            gCallbacks->onData(buffer, readCount);
+    }
+
+    if (err == kOTLookErr)
+    {
+        OTResult look = OTLook(client->endpoint);
+        if (look == T_DISCONNECT)
+            (void)network_handle_disconnect(client);
+    }
+    else if (err != kOTNoError && err != kOTNoDataErr)
+    {
+        network_clear_client(client);
+    }
+}
+
+static void network_ot_poll(void)
+{
+    short i;
+
+    if (!gRunning)
+        return;
+
+    network_accept_pending();
+
+    for (i = 0; i < NETWORK_CLIENT_SLOTS; ++i)
+        network_poll_client(&gClients[i]);
+}
+
+static const NetworkBackend kOpenTransportBackend = {
+    network_ot_init,
+    network_ot_shutdown,
+    network_ot_start,
+    network_ot_stop,
+    network_ot_is_running,
+    network_ot_poll,
+    "OpenTransport"
+};
+
+const NetworkBackend *network_backend_ot(void)
+{
+    return &kOpenTransportBackend;
+}
+
+
+#ifndef VOX_PARSER_H
+#define VOX_PARSER_H
+
+#ifdef VOX_PARSER_STANDALONE
+#include <stddef.h>
+typedef unsigned char **Handle;
+typedef int Boolean;
+#ifndef true
+#define true 1
+#define false 0
+#endif
+#else
+#include <Types.h>
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/*
+ * Format a UTF-8/ASCII text buffer into a Speech Manager-ready Handle.
+ * The VOX prosody pipeline (sentence split, “thee” heuristic, lead-in
+ * breaks, time/number expansion, beat construction, letter normalization,
+ * tidy/wrap) runs first, then FlexTalk markers are translated into
+ * Speech Manager embedded commands. FlexTalk escape emission is no longer
+ * exposed; only Speech Manager metadata is returned.
+ */
+Handle vox_format_text(const char *text, Boolean wrap_with_version);
+
+#ifdef VOX_PARSER_STANDALONE
+/* Convenience for host-side checks: returns a heap string that must be freed. */
+char *vox_process_buffer(const char *text, Boolean wrap_vox_tags);
+#endif
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* VOX_PARSER_H */
+
+
+#ifndef UI_WINDOWS_H
+#define UI_WINDOWS_H
+
+#include <Types.h>
+#include <Windows.h>
+#include <Controls.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct UIWindowSpec
+{
+    ConstStr255Param title;
+    short width;
+    short height;
+    short margin;
+} UIWindowSpec;
+
+typedef struct UIControlTrackingSpec
+{
+    ControlHandle control;
+    ControlActionUPP action;
+    const RGBColor *background;
+} UIControlTrackingSpec;
+
+typedef void (*UIWindowDrawProc)(WindowPtr window, void *refCon);
+
+WindowPtr ui_windows_create_standard(const UIWindowSpec *spec);
+void ui_windows_draw(WindowPtr window, UIWindowDrawProc drawProc, void *refCon);
+
+ControlHandle ui_windows_new_button(WindowPtr window, const Rect *frame,
+                                    ConstStr255Param title, Boolean isDefault, short controlID);
+ControlHandle ui_windows_new_slider(WindowPtr window, const Rect *frame,
+                                    short initial, short min, short max);
+
+Boolean ui_windows_track_hit_control(WindowPtr window, Point local,
+                                     const UIControlTrackingSpec *specs, short count,
+                                     ControlHandle *outHit, short *outPart);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* UI_WINDOWS_H */
+
+
+#ifndef SPEECH_H
+#define SPEECH_H
+
+#include <Types.h>
+
+void speech_init(void);
+Boolean speech_available(void);
+Boolean speech_is_busy(void);
+Boolean speech_speak_test_phrase(void);
+void speech_stop(void);
+
+#endif /* SPEECH_H */
+
+
+#ifndef UI_RADIO_H
+#define UI_RADIO_H
+
+#include <Controls.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct UIRadioGroup
+{
+    ControlHandle *buttons;
+    short          count;
+} UIRadioGroup;
+
+ControlHandle ui_radio_create(WindowPtr window, const Rect *frame,
+                              ConstStr255Param title, short initialValue);
+
+void ui_radio_group_init(UIRadioGroup *group, ControlHandle *buttons, short count);
+
+Boolean ui_radio_set_selected(UIRadioGroup *group, ControlHandle selected);
+
+short ui_radio_selected_index(const UIRadioGroup *group);
+
+Boolean ui_radio_handle_hit(UIRadioGroup *group, ControlHandle hit, short part);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* UI_RADIO_H */
+
+
+#include "ui_input.h"
+
+#include <Menus.h>
+#include <Quickdraw.h>
+
+static void ui_input_fill_modifiers(InputEvent *outEvent, const EventRecord *ev)
+{
+    if (!outEvent || !ev)
+        return;
+
+    outEvent->commandDown = (Boolean)((ev->modifiers & cmdKey) != 0);
+    outEvent->shiftDown = (Boolean)((ev->modifiers & shiftKey) != 0);
+    outEvent->optionDown = (Boolean)((ev->modifiers & optionKey) != 0);
+    outEvent->controlDown = (Boolean)((ev->modifiers & controlKey) != 0);
+}
+
+static void ui_input_prepare_points(InputEvent *outEvent)
+{
+    if (!outEvent)
+        return;
+
+    outEvent->global.h = outEvent->raw.where.h;
+    outEvent->global.v = outEvent->raw.where.v;
+    outEvent->local = outEvent->global;
+
+    if (outEvent->window)
+    {
+        GrafPtr oldPort = NULL;
+        GetPort(&oldPort);
+        SetPort(outEvent->window);
+        GlobalToLocal(&outEvent->local);
+        if (oldPort)
+            SetPort(oldPort);
+    }
+}
+
+static Boolean ui_input_dispatch_mouse(InputDispatcher *dispatcher, InputEvent *ev, Boolean *outQuit)
+{
+    WindowPtr w = NULL;
+    short part;
+
+    if (!dispatcher || !ev)
+        return false;
+
+    part = FindWindow(ev->raw.where, &w);
+    ev->window = w;
+    ev->type = kInputEventMouseDown;
+    ui_input_prepare_points(ev);
+
+    if (dispatcher->overlayIsWindow && dispatcher->overlayIsWindow(ev->window) &&
+        dispatcher->overlayHandlers.onMouseDown)
+    {
+        if (dispatcher->overlayHandlers.onMouseDown(ev, outQuit))
+            return true;
+    }
+
+    if (dispatcher->mainHandlers.onMouseDown)
+        return dispatcher->mainHandlers.onMouseDown(ev, outQuit);
+
+    (void)part;
+    return false;
+}
+
+static Boolean ui_input_dispatch_key(InputDispatcher *dispatcher, InputEvent *ev, Boolean *outQuit)
+{
+    if (!dispatcher || !ev)
+        return false;
+
+    ev->window = FrontWindow();
+    ev->type = kInputEventKeyDown;
+    ev->keyChar = (char)(ev->raw.message & charCodeMask);
+
+    if (ev->commandDown && (ev->keyChar == 'q' || ev->keyChar == 'Q'))
+    {
+        if (outQuit)
+            *outQuit = true;
+    }
+
+    if (dispatcher->overlayIsWindow && dispatcher->overlayIsWindow(ev->window) &&
+        dispatcher->overlayHandlers.onKeyDown)
+    {
+        if (dispatcher->overlayHandlers.onKeyDown(ev, outQuit))
+            return true;
+    }
+
+    if (dispatcher->mainHandlers.onKeyDown)
+        return dispatcher->mainHandlers.onKeyDown(ev, outQuit);
+
+    return false;
+}
+
+static Boolean ui_input_dispatch_update(InputDispatcher *dispatcher, InputEvent *ev)
+{
+    if (!dispatcher || !ev)
+        return false;
+
+    ev->window = (WindowPtr)ev->raw.message;
+    ev->type = kInputEventUpdate;
+    ui_input_prepare_points(ev);
+
+    if (dispatcher->overlayIsWindow && dispatcher->overlayIsWindow(ev->window) &&
+        dispatcher->overlayHandlers.onUpdate)
+    {
+        dispatcher->overlayHandlers.onUpdate(ev);
+        return true;
+    }
+
+    if (dispatcher->mainHandlers.onUpdate)
+    {
+        dispatcher->mainHandlers.onUpdate(ev);
+        return true;
+    }
+
+    return false;
+}
+
+void ui_input_dispatcher_init(InputDispatcher *dispatcher, const InputWindowHandlers *mainHandlers)
+{
+    if (!dispatcher)
+        return;
+
+    dispatcher->mainHandlers = *mainHandlers;
+    dispatcher->overlayHandlers.onMouseDown = NULL;
+    dispatcher->overlayHandlers.onKeyDown = NULL;
+    dispatcher->overlayHandlers.onUpdate = NULL;
+    dispatcher->overlayIsWindow = NULL;
+}
+
+void ui_input_dispatcher_set_overlay(InputDispatcher *dispatcher,
+                                     Boolean (*isWindow)(WindowPtr w),
+                                     const InputWindowHandlers *handlers)
+{
+    if (!dispatcher || !handlers)
+        return;
+
+    dispatcher->overlayIsWindow = isWindow;
+    dispatcher->overlayHandlers = *handlers;
+}
+
+Boolean ui_input_dispatcher_handle_event(InputDispatcher *dispatcher, const EventRecord *ev, Boolean *outQuit)
+{
+    InputEvent input;
+
+    if (!dispatcher || !ev)
+        return false;
+
+    input.type = kInputEventNone;
+    input.window = NULL;
+    input.global.h = input.global.v = 0;
+    input.local = input.global;
+    input.keyChar = 0;
+    input.commandDown = false;
+    input.shiftDown = false;
+    input.optionDown = false;
+    input.controlDown = false;
+    input.raw = *ev;
+
+    ui_input_fill_modifiers(&input, ev);
+
+    switch (ev->what)
+    {
+        case mouseDown:
+            return ui_input_dispatch_mouse(dispatcher, &input, outQuit);
+
+        case keyDown:
+        case autoKey:
+            return ui_input_dispatch_key(dispatcher, &input, outQuit);
+
+        case updateEvt:
+            return ui_input_dispatch_update(dispatcher, &input);
+
+        default:
+            break;
+    }
+
+    return false;
+}
+
+
+/*
+    Copyright 2015 Wolfgang Thaller.
+
+    This file is part of Retro68.
+
+    Retro68 is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    Retro68 is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with Retro68.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+#include <Quickdraw.h>
+#include <Dialogs.h>
+#include <Fonts.h>
+
+#ifndef TARGET_API_MAC_CARBON
+    /* NOTE: this is checking whether the Dialogs.h we use *knows* about Carbon,
+             not whether we are actually compiling for Cabon.
+             If Dialogs.h is older, we add a define to be able to use the new name
+             for NewUserItemUPP, which used to be NewUserItemProc. */
+
+#define NewUserItemUPP NewUserItemProc
+#endif
+
+pascal void ButtonFrameProc(DialogRef dlg, DialogItemIndex itemNo)
+{
+    DialogItemType type;
+    Handle itemH;
+    Rect box;
+
+    GetDialogItem(dlg, 1, &type, &itemH, &box);
+    InsetRect(&box, -4, -4);
+    PenSize(3,3);
+    FrameRoundRect(&box,16,16);
+}
+
+int main(void)
+{
+#if !TARGET_API_MAC_CARBON
+    InitGraf(&qd.thePort);
+    InitFonts();
+    InitWindows();
+    InitMenus();
+    TEInit();
+    InitDialogs(NULL);
+#endif
+    DialogPtr dlg = GetNewDialog(128,0,(WindowPtr)-1);
+    InitCursor();
+    SelectDialogItemText(dlg,4,0,32767);
+
+    DialogItemType type;
+    Handle itemH;
+    Rect box;
+
+    GetDialogItem(dlg, 2, &type, &itemH, &box);
+    SetDialogItem(dlg, 2, type, (Handle) NewUserItemUPP(&ButtonFrameProc), &box);
+
+    ControlHandle cb, radio1, radio2;
+    GetDialogItem(dlg, 5, &type, &itemH, &box);
+    cb = (ControlHandle)itemH;
+    GetDialogItem(dlg, 6, &type, &itemH, &box);
+    radio1 = (ControlHandle)itemH;
+    GetDialogItem(dlg, 7, &type, &itemH, &box);
+    radio2 = (ControlHandle)itemH;
+    SetControlValue(radio1, 1);
+
+    short item;
+    do {
+        ModalDialog(NULL, &item);
+
+        if(item >= 5 && item <= 7)
+        {
+            if(item == 5)
+                SetControlValue(cb, !GetControlValue(cb));
+            if(item == 6 || item == 7)
+            {
+                SetControlValue(radio1, item == 6);
+                SetControlValue(radio2, item == 7);
+            }
+        }
+    } while(item != 1);
+
+    FlushEvents(everyEvent, -1);
+    return 0;
+}
+
+
+#include "../vox_parser.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static int assert_contains(const char *label, const char *haystack, const char *needle)
+{
+    if (!haystack || !needle || !strstr(haystack, needle)) {
+        fprintf(stderr, "%s: expected to find '%s'\n", label, needle);
+        return 1;
+    }
+    return 0;
+}
+
+static int check_process_pipeline(void)
+{
+    int errors = 0;
+    const char *input = "The time is 8:47 AM.";
+    char *out = vox_process_buffer(input, 1);
+    if (!out)
+        return 1;
+    errors += assert_contains("pipeline", out, "The time \\!br is \\!br");
+    errors += assert_contains("pipeline", out, "\\!sf500 \\!br \\!wH0");
+    free(out);
+    return errors;
+}
+
+static int check_thee_and_breaks(void)
+{
+    int errors = 0;
+    const char *input = "On behalf of The Board, please wait.";
+    char *out = vox_process_buffer(input, 1);
+    if (!out)
+        return 1;
+    errors += assert_contains("thee", out, "thee Board");
+    errors += assert_contains("breaks", out, "\\!br of \\!br \\!br");
+    free(out);
+    return errors;
+}
+
+static int check_speech_manager_translation(void)
+{
+    int errors = 0;
+    const char *input = "Hello there.";
+    Handle h = vox_format_text(input, true);
+    if (!h || !*h)
+        return 1;
+    char *buf = (char *)(*h);
+    errors += assert_contains("speech-manager", buf, "[[vers 1]]");
+    errors += assert_contains("speech-manager", buf, "[[slnc 250]]");
+    if (strstr(buf, "\\!br"))
+        errors += assert_contains("speech-manager", buf, "(no flex escapes expected)");
+    free(*h);
+    free(h);
+    return errors;
+}
+
+int main(void)
+{
+    int errors = 0;
+    errors += check_process_pipeline();
+    errors += check_thee_and_breaks();
+    errors += check_speech_manager_translation();
+    if (errors) {
+        fprintf(stderr, "vox_parser_host_checks: %d issues\n", errors);
+        return 1;
+    }
+    printf("vox_parser_host_checks: ok\n");
+    return 0;
+}
