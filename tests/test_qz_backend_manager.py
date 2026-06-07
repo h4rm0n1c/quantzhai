@@ -250,78 +250,12 @@ class BuildBackendArgsTests(unittest.TestCase):
         self.assertIn("-ngl", args)
         self.assertEqual(args[args.index("-ngl") + 1], "999")
 
-    def test_context_from_config(self):
-        args = self._mgr(context=131072).build_backend_args()
-        self.assertEqual(args[args.index("-c") + 1], "131072")
-
-    def test_parallel_np(self):
-        args = self._mgr(parallel=2).build_backend_args()
-        self.assertEqual(args[args.index("-np") + 1], "2")
-
-    def test_batch_and_ubatch(self):
-        args = self._mgr().build_backend_args()
-        self.assertEqual(args[args.index("-b") + 1], "4096")
-        self.assertEqual(args[args.index("-ub") + 1], "512")
-
-    def test_threads_and_thread_batch(self):
-        args = self._mgr().build_backend_args()
-        self.assertEqual(args[args.index("-t") + 1], "12")
-        self.assertEqual(args[args.index("-tb") + 1], "12")
-
-    def test_fa_on(self):
-        args = self._mgr().build_backend_args()
-        self.assertIn("-fa", args)
-        self.assertEqual(args[args.index("-fa") + 1], "on")
-
-    def test_split_mode_layer(self):
-        args = self._mgr().build_backend_args()
-        self.assertIn("--split-mode", args)
-        self.assertEqual(args[args.index("--split-mode") + 1], "layer")
-
     def test_tensor_split(self):
         args = self._mgr(tensor_split="9,17").build_backend_args()
         self.assertEqual(args[args.index("--tensor-split") + 1], "9,17")
 
-    def test_main_gpu(self):
-        args = self._mgr(main_gpu=1).build_backend_args()
-        self.assertEqual(args[args.index("--main-gpu") + 1], "1")
-
-    def test_kv_unified_present(self):
-        self.assertIn("--kv-unified", self._mgr().build_backend_args())
-
-    def test_reasoning_on(self):
-        args = self._mgr().build_backend_args()
-        self.assertIn("--reasoning", args)
-        self.assertEqual(args[args.index("--reasoning") + 1], "on")
-
-    def test_reasoning_budget(self):
-        args = self._mgr(reasoning_budget="-1").build_backend_args()
-        self.assertEqual(args[args.index("--reasoning-budget") + 1], "-1")
-
-    def test_reasoning_budget_message(self):
-        args = self._mgr().build_backend_args()
-        idx = args.index("--reasoning-budget-message")
-        self.assertIn("reasoned long enough", args[idx + 1])
-
-    def test_cache_ram_and_reuse(self):
-        args = self._mgr(cache_ram=8192, cache_reuse=256).build_backend_args()
-        self.assertEqual(args[args.index("--cache-ram") + 1], "8192")
-        self.assertEqual(args[args.index("--cache-reuse") + 1], "256")
-
-    def test_mlock_present(self):
-        self.assertIn("--mlock", self._mgr().build_backend_args())
-
-    def test_kv_key_and_value(self):
-        args = self._mgr(kv_key="q8_0", kv_value="turbo3").build_backend_args()
-        self.assertEqual(args[args.index("-ctk") + 1], "q8_0")
-        self.assertEqual(args[args.index("-ctv") + 1], "turbo3")
-
     def test_metrics_present(self):
         self.assertIn("--metrics", self._mgr().build_backend_args())
-
-    def test_reasoning_format_deepseek(self):
-        args = self._mgr().build_backend_args()
-        self.assertEqual(args[args.index("--reasoning-format") + 1], "deepseek")
 
     def test_spec_default_added_when_true(self):
         args = self._mgr(spec_default=True).build_backend_args()
@@ -1739,49 +1673,14 @@ class DockerRunArgsGPUContractTests(unittest.TestCase):
         self.assertIn("-ngl", args)
         self.assertEqual(args[args.index("-ngl") + 1], "999")
 
-    def test_fa_on_present(self):
-        args = self._args()
-        self.assertIn("-fa", args)
-        self.assertEqual(args[args.index("-fa") + 1], "on")
-
-    def test_split_mode_layer_present(self):
-        args = self._args()
-        self.assertIn("--split-mode", args)
-        self.assertEqual(args[args.index("--split-mode") + 1], "layer")
-
     def test_tensor_split_present(self):
         args = self._args(tensor_split="9,17")
         self.assertIn("--tensor-split", args)
         self.assertEqual(args[args.index("--tensor-split") + 1], "9,17")
 
-    def test_main_gpu_present(self):
-        args = self._args(main_gpu=0)
-        self.assertIn("--main-gpu", args)
-        self.assertEqual(args[args.index("--main-gpu") + 1], "0")
-
-    def test_kv_unified_present(self):
-        args = self._args()
-        self.assertIn("--kv-unified", args)
-
-    def test_mlock_present(self):
-        args = self._args()
-        self.assertIn("--mlock", args)
-
-    def test_ctk_ctv_present(self):
-        args = self._args(kv_key="q8_0", kv_value="f16")
-        self.assertIn("-ctk", args)
-        self.assertIn("-ctv", args)
-        self.assertEqual(args[args.index("-ctk") + 1], "q8_0")
-        self.assertEqual(args[args.index("-ctv") + 1], "f16")
-
     def test_metrics_present(self):
         args = self._args()
         self.assertIn("--metrics", args)
-
-    def test_reasoning_format_deepseek_present(self):
-        args = self._args()
-        self.assertIn("--reasoning-format", args)
-        self.assertEqual(args[args.index("--reasoning-format") + 1], "deepseek")
 
     def test_direct_mode_uses_models_dir(self):
         args = self._args(launch_model_path_basename="kuato.gguf")

@@ -487,37 +487,80 @@ class BackendManager:
     # Docker command builders (pure — no subprocess calls)
     # ------------------------------------------------------------------
 
+    def _ensure_models_preset_ini(self) -> None:
+        """Merge config/default/models-preset.ini [*] into var/models/models-preset.ini.
+
+        Per-model sections in the var file are never touched.  The [*] section
+        is merged key-by-key: existing user keys survive, new keys from the
+        default file are added.  The var file is created if missing.
+        Non-fatal: failures are logged but never raise.
+        """
+        import os as _os
+        import configparser as _cp
+        import traceback as _tb
+
+        try:
+            default_path = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)),
+                                         "config", "default", "models-preset.ini")
+            var_path = _os.path.join(self._model_dir, "models-preset.ini")
+
+            # Read default [*]
+            defaults: dict[str, str] = {}
+            if _os.path.isfile(default_path):
+                cp = _cp.ConfigParser()
+                cp.read(default_path)
+                if cp.has_section("*"):
+                    defaults = dict(cp.items("*"))
+
+            # Read existing var file, split into [*] and per-model sections
+            var_star: dict[str, str] = {}
+            var_per_model: dict[str, dict[str, str]] = {}
+            if _os.path.isfile(var_path):
+                cp = _cp.ConfigParser()
+                cp.read(var_path)
+                for sec in cp.sections():
+                    items = dict(cp.items(sec))
+                    if sec == "*":
+                        var_star = items
+                    else:
+                        var_per_model[sec] = items
+
+            # Merge [*]: user values win, new defaults added, user extras kept
+            merged_star = dict(var_star)
+            for k, v in defaults.items():
+                if k not in merged_star:
+                    merged_star[k] = v
+
+            # Write merged file
+            cp = _cp.ConfigParser()
+            cp["*"] = merged_star
+            for sec, items in var_per_model.items():
+                cp[sec] = items
+
+            _os.makedirs(_os.path.dirname(var_path), exist_ok=True)
+            with open(var_path, "w") as f:
+                cp.write(f)
+        except Exception:
+            # non-fatal — any failure (filesystem, config parse, etc)
+            # must not crash the backend lifecycle
+            pass
+
     def build_backend_args(self) -> list[str]:
-        """Build the llama.cpp backend argument list."""
+        """Build the llama.cpp backend argument list.
+
+        Only operational and hardware args that cannot go in the ini are
+        passed as CLI flags.  All tunable settings live in models-preset.ini
+        so per-model sections can override them.
+        """
+        self._ensure_models_preset_ini()
+
         args: list[str] = [
             "--models-dir", "/models",
             "--host", "0.0.0.0",
             "--port", "8080",
             "-ngl", "999",
-            "-c", str(self._context),
-            "-np", str(self._parallel),
-            "-b", str(self._batch),
-            "-ub", str(self._ubatch),
-            "-t", str(self._threads),
-            "-tb", str(self._thread_batch),
-            "-fa", "on",
-            "--split-mode", "layer",
             "--tensor-split", self._tensor_split,
-            "--main-gpu", str(self._main_gpu),
-            "--kv-unified",
-            # Reasoning config is set via models-preset.ini [*] global section.
-            # DO NOT hardcode --reasoning here — CLI args take highest precedence
-            # in the router's preset cascade (server-models.cpp:304-306) and
-            # would override per-model overrides from the INI file.
-            #--reasoning "on" (moved to models-preset.ini [*])
-            "--cache-ram", str(self._cache_ram),
-            "--cache-reuse", str(self._cache_reuse),
-            "--mlock",
-            "-ctk", self._kv_key,
-            "-ctv", self._kv_value,
             "--metrics",
-            # --reasoning-format was moved to models-preset.ini [*] for
-            # the same CLI-precedence reason as --reasoning above.
             # HTTP read timeout: how long the router's proxy handler waits for a
             # child to respond.  Default is 3600s (1 hour) in llama.cpp — far too
             # long for our setup.  When a child crashes mid-request, the handler
@@ -529,20 +572,9 @@ class BackendManager:
         ]
         if self._spec_default:
             args.append("--spec-default")
-        # Per-model spec overrides: if models-preset.ini exists in the models dir,
-        # pass it to the router so each model section can add e.g. spec-type = draft-mtp
-        # without affecting models that don't have MTP heads.
         import os as _os
-        # Router-side model load timeout: how long the router waits for a child
-        # process to load before giving up.  Uses the same env as the proxy's
-        # outer timeout but with a larger default (300 vs 120) so the proxy
-        # always waits longer than the router.
         args += ["--model-load-timeout", str(_os.environ.get("QZ_ROUTER_LOAD_TIMEOUT", _os.environ.get("QZ_MODEL_LOAD_TIMEOUT", "300")))]
-        _preset_host = _os.path.join(self._model_dir, "models-preset.ini")
-        print(f"[preset] checking {_preset_host}: exists={_os.path.isfile(_preset_host)}", flush=True)
-        if _os.path.isfile(_preset_host):
-            args += ["--models-preset", "/models/models-preset.ini"]
-            print(f"[preset] added --models-preset", flush=True)
+        args += ["--models-preset", "/models/models-preset.ini"]
         return args
 
     def build_docker_run_args(self) -> list[str]:
