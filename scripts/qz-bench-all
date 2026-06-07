@@ -177,8 +177,11 @@ def ensure_ppl_corpus():
 
 def run_ppl(model_gguf, cache_v="turbo3", ctx_size=2048):
     """Run llama-perplexity with settings matching the model's inference config.
-    K cache type is auto-selected by --cache-type-k-auto (same as inference)."""
+    K cache type is auto-selected by --cache-type-k-auto (same as inference).
+    Container is always cleaned up after completion."""
     ensure_ppl_corpus()
+    # Kill any lingering PPL containers before starting
+    kill_stale_docker()
     try:
         r = subprocess.run(
             ["sudo", "-n", "docker", "run", "--rm", "--gpus", "all",
@@ -211,7 +214,44 @@ def run_ppl(model_gguf, cache_v="turbo3", ctx_size=2048):
         return (None, None)
     except Exception as e:
         print(f"  PPL error: {e}")
-        return (None, None)
+
+def get_git_hash():
+    """Get short git hash from the llama-cpp-turboquant repo."""
+    candidates = [
+        os.environ.get("QZ_BUILD_DIR", ""),
+        str(Path.home() / "turboquant-work/llama-cpp-turboquant"),
+    ]
+    for d in candidates:
+        if not d: continue
+        try:
+            r = subprocess.run(["git", "rev-parse", "HEAD"],
+                capture_output=True, text=True, timeout=5, cwd=d)
+            if r.returncode == 0: return r.stdout.strip()[:12]
+        except: pass
+    return ""
+
+def get_preset_cache_k(model_stem):
+    """Read K cache type from models-preset.ini for a given model."""
+    ini_path = os.environ.get("QZ_MODEL_DIR", "") + "/models-preset.ini"
+    if not os.path.isfile(ini_path):
+        return None
+    try:
+        import configparser
+        cp = configparser.ConfigParser()
+        cp.optionxform = str
+        cp.read(ini_path)
+        # Check per-model section first, then [*]
+        for sec in (model_stem, "*"):
+            if cp.has_section(sec):
+                for k, v in cp.items(sec):
+                    kl = k.lower()
+                    if kl in ("cache-type-k", "-ctk"):
+                        return v
+                    if kl == "llama_arg_cache_type_k":
+                        return v
+        return None
+    except:
+        return None
 
 def select_model_via_proxy(model):
     """Use proxy's select-and-restart to load a model. Returns True on success."""
@@ -236,21 +276,33 @@ def select_model_via_proxy(model):
     print(f"  Model load timed out after 30s poll")
     return False
 
+def kill_stale_docker(patterns=None):
+    """Kill any stale Docker containers matching patterns (e.g. llama-perplexity, llama-cli)."""
+    if patterns is None:
+        patterns = ["perplexity", "llama-cli", "llama-server"]
+    for pat in patterns:
+        r = subprocess.run(
+            ["sudo", "-n", "docker", "ps", "-q", "--filter", f"name={pat}"],
+            capture_output=True, text=True, timeout=10)
+        for cid in r.stdout.strip().split("\n"):
+            if cid:
+                subprocess.run(["sudo", "-n", "docker", "kill", cid],
+                    capture_output=True, timeout=5)
+                subprocess.run(["sudo", "-n", "docker", "rm", "-f", cid],
+                    capture_output=True, timeout=5)
+
 def stop_backend_for_ppl():
-    """Force-stop the backend container to free GPU for PPL."""
+    """Stop backend and kill stale containers to free GPU for PPL."""
     print(f"  Stopping backend for PPL...", flush=True)
-    # Use proxy's api to trigger stop (non-blocking, spawns bg thread)
     proxy_api("POST", "/qz/backend/stop", timeout=15)
-    # Also brute-force in case proxy is busy
     subprocess.run(["sudo", "-n", "docker", "rm", "-f", "qwen36turbo"],
         capture_output=True, timeout=15)
-    subprocess.run(["sudo", "-n", "docker", "kill", "qwen36turbo"],
-        capture_output=True, timeout=5)
+    kill_stale_docker()
 
 def start_backend_after_ppl():
-    """Restart proxy."""
-    print(f"  Restarting backend...", flush=True)
-    # Proxy stays up; next select_model will trigger backend start
+    """Clean up after PPL — proxy stays up, next select_model triggers backend start."""
+    print(f"  Cleaning up after PPL...", flush=True)
+    kill_stale_docker()
 
 def wait_for_proxy_ready(timeout=60):
     for _ in range(timeout // 3):
@@ -270,6 +322,9 @@ def main():
         print(f"\n{'='*60}")
         print(f"[{idx+1}/{len(models)}] {model}")
 
+        # Kill any stale containers before selecting the next model
+        kill_stale_docker()
+
         # Select model via proxy
         if not select_model_via_proxy(model):
             print(f"  FAILED to select model, skipping")
@@ -278,19 +333,17 @@ def main():
                 "cold_ttft": "?", "warm_ttft": "?", "speedup": "?",
                 "cached": "?", "cache_k": "?", "cache_v": "?",
                 "ppl_cold": "?", "ppl_warm": "?"})
+            json.dump(RESULTS, open("/tmp/bench_all.json", "w"), indent=2)
             continue
         time.sleep(5)
 
-        # Get cache types — check server logs for auto-K override
-        cache_k, cache_v = "auto", "turbo3"
-        try:
-            r = subprocess.run(
-                "sudo docker logs qwen36turbo 2>&1 | grep 'auto-selected K cache type' | tail -1",
-                capture_output=True, shell=True, text=True, timeout=15)
-            line = r.stdout.strip()
-            if "auto-selected K cache type" in line:
-                cache_k = line.split("auto-selected K cache type ")[1].split()[0]
-        except: pass
+        # Get cache types from models-preset.ini (per-model override) or defaults
+        ini_k = get_preset_cache_k(model)
+        if ini_k:
+            cache_k = ini_k
+        else:
+            cache_k = "q8_0"  # default from [*] section
+        cache_v = "turbo3"  # default V cache
         print(f"  K cache: {cache_k}  V cache: {cache_v}")
 
         # Get VRAM from router
