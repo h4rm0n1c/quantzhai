@@ -1,7 +1,7 @@
-Loaded 35 existing results from /tmp/bench_all.json
+Loaded 31 existing results from /tmp/bench_all.json
 # QuantZhai Benchmark — Combined Ranking
 
-*35 models · 2026-06-08 20:10 UTC UTC*
+*31 models · 2026-06-08 20:12 UTC UTC*
 
 | # | Model | Size | PPL❄️ | PPL🔥 | ❄️TPS | 🔥TPS | **Score** | K | V | GPU0 M/KV | GPU1 M/KV |
 |---:|------|---:|---:|---:|---:|---:|---:|:---:|:---:|---:|---:|
@@ -35,11 +35,7 @@ Loaded 35 existing results from /tmp/bench_all.json
 | 28 | `google_gemma-4-26B-A4B-it-Q3_K_M` | 13.0G | 29.0656 | 32.6819 | 32.1 | 55.4 | **0.2** | q8_0 | turbo3 | 5.0/0.8 | 8.0/1.2 |
 | 29 | `allenai_Olmo-3-7B-Instruct-Q4_K_M` | 4.5G | 4.0029 | 3.7309 | 11.6 | 14.3 | **0.2** | q8_0 | turbo3 | 1.6/3.3 | 2.6/5.4 |
 | 30 | `Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved` | 19.4G | 2.7614 | 1.7554 | 2.3 | 17.2 | **0.1** | q8_0 | turbo3 | 7.9/0.9 | 11.2/1.3 |
-| 31 | `mistralai_Devstral-Small-2-24B-Instruct-2512-IQ4_XS` | 3080:7.9G(m=4.7,kv=2.0,f=2.4) | ? | ? | 22.4 | 27.7 | - | q4_0 | turbo3 | 4.7/2.0 | 7.7/3.1 |
-| 32 | `ai21labs_AI21-Jamba2-Mini-Q3_K_M` | 3080:9.7G(m=8.8,kv=0.3,f=0.7) | ? | ? | 23.3 | 31.1 | - | q4_0 | turbo3 | 8.8/0.3 | 14.5/0.3 |
-| 33 | `gemma-4-31B_q4_0-it` | 3080:10.1G(m=6.6,kv=1.1,f=0.2) | ? | ? | 2.3 | 4.1 | - | q4_0 | turbo3 | 6.6/1.1 | 11.0/1.7 |
-| 34 | `phi-4-Q6_K` | ? | ? | ? | ? | ? | - | ? | ? | ?/? | ?/? |
-| 35 | `phi-4-Q4_K` | 9.1G | 1.9193 | 1.8943 | 1.0 | 0.9 | - | q8_0 | turbo3 | ?/? | ?/? |
+| 31 | `phi-4-Q4_K` | 9.1G | 1.9193 | 1.8943 | 1.0 | 0.9 | - | q8_0 | turbo3 | ?/? | ?/? |
 
 ### Score Formula
 `(cold_tps * warm_tps) / (warm_ppl^2 / cold_ppl)` normalized to 0–100.
