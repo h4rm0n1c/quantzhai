@@ -1,53 +1,55 @@
 Loaded 37 existing results from /tmp/bench_all.json
 # QuantZhai Benchmark — Combined Ranking
 
-*37 models · 2026-06-08 22:33 UTC UTC*
+*37 models · 2026-06-08 22:34 UTC UTC*
 
 | # | Model | Size | PPL❄️ | PPL🔥 | ❄️TPS | 🔥TPS | **Score** | K | V | GPU0 M/KV | GPU1 M/KV |
 |---:|------|---:|---:|---:|---:|---:|---:|:---:|:---:|---:|---:|
 | 1 | `LFM2.5-1.2B-Thinking-Q8_0` | 1.2G | 11.1713 | 4.3448 | 200.3 | 208.3 | **100.0** | q8_0 | q8_0 | 0.5/0.6 | 0.8/1.1 |
-| 2 | `ai21labs_AI21-Jamba2-3B-Q4_K_M` | 1.9G | 1.7951 | 3.3273 | 100.2 | 129.3 | **73.0** | q8_0 | turbo3 | 0.7/0.1 | 1.1/0.1 |
-| 3 | `ai21labs_AI21-Jamba2-3B-Q8_0` | 3.4G | 1.7711 | 3.2988 | 107.5 | 106.3 | **65.0** | q8_0 | turbo3 | 1.3/0.1 | 1.9/0.1 |
-| 4 | `granite-4.0-1b-Q8_0` | 1.7G | 3.0391 | 2.6723 | 93.3 | 103.6 | **54.9** | q8_0 | turbo3 | 0.6/3.1 | 1.1/4.7 |
-| 5 | `SmolLM3-Q8_0` | 3.3G | 3.2792 | 2.5937 | 88.3 | 98.7 | **49.0** | q8_0 | turbo3 | 1.2/2.9 | 2.0/4.1 |
-| 6 | `deepseek-ai_DeepSeek-R1-0528-Qwen3-8B-IQ4_XS` | 4.6G | 2.7802 | 2.3716 | 73.6 | 82.0 | **38.2** | q8_0 | turbo3 | 1.5/5.9 | 2.7/8.2 |
-| 7 | `LFM2.5-8B-A1B-Q8_0` | 9.0G | 9.1298 | 4.3315 | 93.5 | 136.1 | **34.0** | q8_0 | q8_0 | 3.3/0.6 | 5.7/1.1 |
-| 8 | `Qwen3-Coder-30B-APEX-Mini` | 12.1G | 2.1834 | 1.9448 | 55.4 | 76.0 | **33.0** | q8_0 | turbo3 | 4.9/3.7 | 7.1/5.7 |
-| 9 | `EXAONE-3.5-7.8B-Instruct-Q8_0` | 8.3G | 1.4170 | 1.9538 | 55.9 | 65.5 | **32.7** | q8_0 | turbo3 | 3.0/5.1 | 4.8/7.4 |
-| 10 | `nvidia_Nemotron-3-Nano-30B-A3B-IQ4_XS` | 18.1G | 2.2900 | 2.1061 | 53.7 | 78.4 | **30.8** | q8_0 | turbo3 | 6.9/0.3 | 11.1/0.3 |
-| 11 | `Phi-4-mini-instruct.Q8_0` | 4.1G | 3.8166 | 2.7733 | 63.0 | 79.3 | **25.4** | q8_0 | turbo3 | 1.4/5.1 | 2.7/7.4 |
-| 12 | `Qwen3.5-9B-DeepSeek-V4-Flash-Q4_K_M` | 5.6G | 3.3272 | 1.9722 | 58.4 | 59.6 | **22.8** | q8_0 | turbo3 | 1.7/1.2 | 3.3/2.0 |
-| 13 | `NVIDIA-Nemotron-Nano-12B-v2.Q4_K_M` | 7.5G | 2.0216 | 1.8394 | 50.9 | 49.7 | **21.1** | q8_0 | turbo3 | 2.7/0.8 | 4.4/1.6 |
-| 14 | `Qwen3.6-35B-A3B-APEX-I-Mini` | 14.3G | 2.7092 | 1.7937 | 45.8 | 56.9 | **19.7** | q8_0 | turbo3 | 5.8/0.8 | 8.3/1.2 |
-| 15 | `qwen36_35b_Q4_K_M` | 21.2G | 2.7132 | 1.7533 | 44.7 | 54.7 | **18.7** | q8_0 | turbo3 | 8.2/0.8 | 12.7/1.2 |
-| 16 | `Qwen3.5-24B-A3B-Claude-Opus-Gemini-3.1-Pro-Reasoning-Di` | 20.1G | 3.1372 | 1.8781 | 45.0 | 50.6 | **15.7** | q8_0 | turbo3 | 7.7/0.8 | 12.0/1.2 |
-| 17 | `Qwen3.5-24B-A3B-Claude-Opus-Gemini-3.1-Pro-Reasoning-Di` | 17.5G | 3.1393 | 1.8822 | 43.6 | 51.7 | **15.5** | q8_0 | turbo3 | 6.7/0.8 | 10.4/1.2 |
-| 18 | `Falcon-H1-7B-Instruct-Q4_K_M` | 4.6G | 1.7571 | 2.1837 | 44.6 | 44.7 | **15.5** | q8_0 | turbo3 | 1.7/1.8 | 2.7/2.6 |
-| 19 | `qwen36_35b_IQ4_XS` | 18.7G | 2.7032 | 1.7507 | 37.7 | 52.6 | **15.2** | q8_0 | turbo3 | 7.2/0.8 | 11.2/1.2 |
-| 20 | `Qwen3.5-24B-A3B-Claude-Opus-Gemini-3.1-Pro-Reasoning-Di` | 13.4G | 3.2241 | 1.9011 | 44.4 | 50.3 | **15.1** | q8_0 | turbo3 | 5.2/0.8 | 8.0/1.2 |
-| 21 | `Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved` | 20.4G | 2.8126 | 1.7628 | 23.9 | 51.6 | **9.3** | q8_0 | turbo3 | 8.3/0.9 | 11.8/1.3 |
-| 22 | `gemma-3n-E2B-it-Q8_0` | 4.8G | 4.5099 | 4.7717 | 45.7 | 52.2 | **8.1** | q8_0 | turbo3 | 0.8/0.4 | 1.8/0.4 |
-| 23 | `Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled-APE` | 17.3G | 2.7341 | 1.7509 | 20.5 | 48.5 | **7.6** | q8_0 | turbo3 | 6.8/0.9 | 10.2/1.3 |
-| 24 | `Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled-APE` | 14.3G | 2.7032 | 1.8036 | 20.9 | 38.5 | **6.1** | q8_0 | turbo3 | 5.6/0.9 | 8.5/1.3 |
-| 25 | `Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS` | 15.4G | 2.5831 | 1.6989 | 25.4 | 25.0 | **5.1** | q8_0 | turbo3 | 5.2/2.4 | 9.5/4.0 |
-| 26 | `gemma-4-26B-A4B-Claude-Distill-APEX-I-Compact` | 15.5G | 9.3767 | 7.2414 | 38.1 | 58.9 | **4.5** | q8_0 | turbo3 | 6.0/0.8 | 9.5/1.2 |
-| 27 | `gemma-4-26B_q4_0-it` | 14.4G | 9.4943 | 13.0802 | 48.4 | 59.3 | **3.8** | q8_0 | turbo3 | 5.5/0.8 | 8.9/1.2 |
-| 28 | `ibm-granite_granite-4.1-8b-Q4_K_M` | 5.5G | 28.3674 | 39.1524 | 64.9 | 75.2 | **2.2** | q8_0 | turbo3 | 2.0/6.2 | 3.3/9.4 |
-| 29 | `gemma-4-26B-A4B-APEX-I-Compact` | 14.8G | 19.2454 | 25.3029 | 44.3 | 58.7 | **1.8** | q8_0 | turbo3 | 5.7/0.8 | 9.1/1.2 |
-| 30 | `google_gemma-4-26B-A4B-it-Q5_K_M` | 19.3G | 18.4907 | 20.1509 | 38.5 | 56.5 | **1.8** | q8_0 | turbo3 | 7.7/0.8 | 11.6/1.2 |
-| 31 | `gemma-4-12b-it-qat-q4_0` | 7.0G | 33.3835 | 5.3650 | 36.1 | 37.4 | **1.5** | q8_0 | turbo3 | 2.4/0.7 | 4.5/1.1 |
-| 32 | `GLM-4.7-Flash-IQ4_XS` | 16.3G | 1.8523 | 3.6916 | 6.6 | 33.5 | **1.1** | q8_0 | turbo3 | 6.2/3.0 | 9.9/4.5 |
-| 33 | `google_gemma-4-26B-A4B-it-Q3_K_M` | 13.0G | 29.0656 | 32.6819 | 32.1 | 55.4 | **0.9** | q8_0 | turbo3 | 5.0/0.8 | 8.0/1.2 |
-| 34 | `allenai_Olmo-3-7B-Instruct-Q4_K_M` | 4.5G | 4.0029 | 3.7309 | 11.6 | 14.3 | **0.7** | q8_0 | turbo3 | 1.6/3.3 | 2.6/5.4 |
-| 35 | `Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved` | 19.4G | 2.7614 | 1.7554 | 2.3 | 17.2 | **0.3** | q8_0 | turbo3 | 7.9/0.9 | 11.2/1.3 |
+| 2 | `granite-4.0-1b-Q8_0` | 1.7G | 3.0391 | 2.6723 | 93.3 | 103.6 | **37.7** | q8_0 | turbo3 | 0.6/3.1 | 1.1/4.7 |
+| 3 | `SmolLM3-Q8_0` | 3.3G | 3.2792 | 2.5937 | 88.3 | 98.7 | **35.0** | q8_0 | turbo3 | 1.2/2.9 | 2.0/4.1 |
+| 4 | `LFM2.5-8B-A1B-Q8_0` | 9.0G | 9.1298 | 4.3315 | 93.5 | 136.1 | **30.6** | q8_0 | q8_0 | 3.3/0.6 | 5.7/1.1 |
+| 5 | `ai21labs_AI21-Jamba2-3B-Q4_K_M` | 1.9G | 1.7951 | 3.3273 | 100.2 | 129.3 | **27.8** | q8_0 | turbo3 | 0.7/0.1 | 1.1/0.1 |
+| 6 | `deepseek-ai_DeepSeek-R1-0528-Qwen3-8B-IQ4_XS` | 4.6G | 2.7802 | 2.3716 | 73.6 | 82.0 | **26.5** | q8_0 | turbo3 | 1.5/5.9 | 2.7/8.2 |
+| 7 | `ai21labs_AI21-Jamba2-3B-Q8_0` | 3.4G | 1.7711 | 3.2988 | 107.5 | 106.3 | **24.7** | q8_0 | turbo3 | 1.3/0.1 | 1.9/0.1 |
+| 8 | `Qwen3-Coder-30B-APEX-Mini` | 12.1G | 2.1834 | 1.9448 | 55.4 | 76.0 | **22.5** | q8_0 | turbo3 | 4.9/3.7 | 7.1/5.7 |
+| 9 | `nvidia_Nemotron-3-Nano-30B-A3B-IQ4_XS` | 18.1G | 2.2900 | 2.1061 | 53.7 | 78.4 | **20.8** | q8_0 | turbo3 | 6.9/0.3 | 11.1/0.3 |
+| 10 | `Phi-4-mini-instruct.Q8_0` | 4.1G | 3.8166 | 2.7733 | 63.0 | 79.3 | **18.8** | q8_0 | turbo3 | 1.4/5.1 | 2.7/7.4 |
+| 11 | `Qwen3.5-9B-DeepSeek-V4-Flash-Q4_K_M` | 5.6G | 3.3272 | 1.9722 | 58.4 | 59.6 | **18.4** | q8_0 | turbo3 | 1.7/1.2 | 3.3/2.0 |
+| 12 | `EXAONE-3.5-7.8B-Instruct-Q8_0` | 8.3G | 1.4170 | 1.9538 | 55.9 | 65.5 | **15.3** | q8_0 | turbo3 | 3.0/5.1 | 4.8/7.4 |
+| 13 | `Qwen3.6-35B-A3B-APEX-I-Mini` | 14.3G | 2.7092 | 1.7937 | 45.8 | 56.9 | **15.1** | q8_0 | turbo3 | 5.8/0.8 | 8.3/1.2 |
+| 14 | `qwen36_35b_Q4_K_M` | 21.2G | 2.7132 | 1.7533 | 44.7 | 54.7 | **14.5** | q8_0 | turbo3 | 8.2/0.8 | 12.7/1.2 |
+| 15 | `NVIDIA-Nemotron-Nano-12B-v2.Q4_K_M` | 7.5G | 2.0216 | 1.8394 | 50.9 | 49.7 | **14.3** | q8_0 | turbo3 | 2.7/0.8 | 4.4/1.6 |
+| 16 | `Qwen3.5-24B-A3B-Claude-Opus-Gemini-3.1-Pro-Reasoning-Di` | 20.1G | 3.1372 | 1.8781 | 45.0 | 50.6 | **12.6** | q8_0 | turbo3 | 7.7/0.8 | 12.0/1.2 |
+| 17 | `Qwen3.5-24B-A3B-Claude-Opus-Gemini-3.1-Pro-Reasoning-Di` | 17.5G | 3.1393 | 1.8822 | 43.6 | 51.7 | **12.5** | q8_0 | turbo3 | 6.7/0.8 | 10.4/1.2 |
+| 18 | `Qwen3.5-24B-A3B-Claude-Opus-Gemini-3.1-Pro-Reasoning-Di` | 13.4G | 3.2241 | 1.9011 | 44.4 | 50.3 | **12.2** | q8_0 | turbo3 | 5.2/0.8 | 8.0/1.2 |
+| 19 | `qwen36_35b_IQ4_XS` | 18.7G | 2.7032 | 1.7507 | 37.7 | 52.6 | **11.8** | q8_0 | turbo3 | 7.2/0.8 | 11.2/1.2 |
+| 20 | `Falcon-H1-7B-Instruct-Q4_K_M` | 4.6G | 1.7571 | 2.1837 | 44.6 | 44.7 | **8.0** | q8_0 | turbo3 | 1.7/1.8 | 2.7/2.6 |
+| 21 | `Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved` | 20.4G | 2.8126 | 1.7628 | 23.9 | 51.6 | **7.3** | q8_0 | turbo3 | 8.3/0.9 | 11.8/1.3 |
+| 22 | `Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled-APE` | 17.3G | 2.7341 | 1.7509 | 20.5 | 48.5 | **5.9** | q8_0 | turbo3 | 6.8/0.9 | 10.2/1.3 |
+| 23 | `gemma-3n-E2B-it-Q8_0` | 4.8G | 4.5099 | 4.7717 | 45.7 | 52.2 | **4.9** | q8_0 | turbo3 | 0.8/0.4 | 1.8/0.4 |
+| 24 | `Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled-APE` | 14.3G | 2.7032 | 1.8036 | 20.9 | 38.5 | **4.6** | q8_0 | turbo3 | 5.6/0.9 | 8.5/1.3 |
+| 25 | `Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS` | 15.4G | 2.5831 | 1.6989 | 25.4 | 25.0 | **3.9** | q8_0 | turbo3 | 5.2/2.4 | 9.5/4.0 |
+| 26 | `gemma-4-26B-A4B-Claude-Distill-APEX-I-Compact` | 15.5G | 9.3767 | 7.2414 | 38.1 | 58.9 | **3.2** | q8_0 | turbo3 | 6.0/0.8 | 9.5/1.2 |
+| 27 | `gemma-4-12b-it-qat-q4_0` | 7.0G | 33.3835 | 5.3650 | 36.1 | 37.4 | **2.6** | q8_0 | turbo3 | 2.4/0.7 | 4.5/1.1 |
+| 28 | `gemma-4-26B_q4_0-it` | 14.4G | 9.4943 | 13.0802 | 48.4 | 59.3 | **1.8** | q8_0 | turbo3 | 5.5/0.8 | 8.9/1.2 |
+| 29 | `google_gemma-4-26B-A4B-it-Q5_K_M` | 19.3G | 18.4907 | 20.1509 | 38.5 | 56.5 | **1.0** | q8_0 | turbo3 | 7.7/0.8 | 11.6/1.2 |
+| 30 | `ibm-granite_granite-4.1-8b-Q4_K_M` | 5.5G | 28.3674 | 39.1524 | 64.9 | 75.2 | **1.0** | q8_0 | turbo3 | 2.0/6.2 | 3.3/9.4 |
+| 31 | `gemma-4-26B-A4B-APEX-I-Compact` | 14.8G | 19.2454 | 25.3029 | 44.3 | 58.7 | **0.9** | q8_0 | turbo3 | 5.7/0.8 | 9.1/1.2 |
+| 32 | `google_gemma-4-26B-A4B-it-Q3_K_M` | 13.0G | 29.0656 | 32.6819 | 32.1 | 55.4 | **0.5** | q8_0 | turbo3 | 5.0/0.8 | 8.0/1.2 |
+| 33 | `allenai_Olmo-3-7B-Instruct-Q4_K_M` | 4.5G | 4.0029 | 3.7309 | 11.6 | 14.3 | **0.5** | q8_0 | turbo3 | 1.6/3.3 | 2.6/5.4 |
+| 34 | `GLM-4.7-Flash-IQ4_XS` | 16.3G | 1.8523 | 3.6916 | 6.6 | 33.5 | **0.4** | q8_0 | turbo3 | 6.2/3.0 | 9.9/4.5 |
+| 35 | `Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved` | 19.4G | 2.7614 | 1.7554 | 2.3 | 17.2 | **0.2** | q8_0 | turbo3 | 7.9/0.9 | 11.2/1.3 |
 | 36 | `phi-4-Q4_K` | 9.1G | 1.9193 | 1.8943 | 1.0 | 0.9 | - | q8_0 | turbo3 | ?/? | ?/? |
 | 37 | `gemma-3n-E4B-it-Q8_0` | 7.4G | ? | ? | ? | ? | - | ? | ? | ?/? | ?/? |
 
 ### Score Formula
-`(cold_tps * warm_tps) / ((cold_ppl + 2*warm_ppl) / 3)` normalized to 0–100.
+`(cold_tps * warm_tps) / (warm_ppl + max(0, warm_ppl - cold_ppl))`
+normalized to 0–100.
 TPS: product of cold × warm (rewards high throughput in both phases).
-PPL: weighted average with warm PPL at 2× the importance of cold PPL.
-  Both penalize: higher PPL in either phase is strictly worse.
+PPL: warm PPL PLUS any rise above cold PPL. If the model gets worse with
+  context (warm > cold), the gap is added as a straight penalty. If warm <= cold,
+  only warm PPL counts — the convergence is already reflected in the lower value.
 
 ### Hardware & Engine
 | GPU 0 | GPU 1 | Total VRAM | Engine |
@@ -62,7 +64,7 @@ Ctx=4096, stride=512, K/V cache types match inference config.
 
 **1st: LFM2.5-1.2B-Thinking-Q8_0** — Score 100.0
    PPL🔥=4.3448 TPS=208.3
-**2nd: ai21labs_AI21-Jamba2-3B-Q4_K_M** — Score 73.0
-   PPL🔥=3.3273 TPS=129.3
-**3rd: ai21labs_AI21-Jamba2-3B-Q8_0** — Score 65.0
-   PPL🔥=3.2988 TPS=106.3
+**2nd: granite-4.0-1b-Q8_0** — Score 37.7
+   PPL🔥=2.6723 TPS=103.6
+**3rd: SmolLM3-Q8_0** — Score 35.0
+   PPL🔥=2.5937 TPS=98.7

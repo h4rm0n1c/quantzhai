@@ -327,7 +327,8 @@ def generate_report(results):
 
     # Compute combined score:
     #   tps_mag   = cold_tps * warm_tps               — magnitude of both phases
-    #   ppl_eff   = (cold_ppl + 2 * warm_ppl) / 3     — weighted toward warm PPL (lower = better)
+    #   rise      = max(0, warm_ppl - cold_ppl)        — penalty when PPL worsens over context
+    #   ppl_eff   = warm_ppl + rise                   — warm PPL + rise penalty (0 if improving)
     #   raw       = tps_mag / ppl_eff                 — higher = better overall
     scores = []
     for r in results:
@@ -338,7 +339,8 @@ def generate_report(results):
             pw = float(r.get("ppl_warm", 0) or 0)
             if ct > 0 and wt > 0 and pc > 0 and pw > 0:
                 tps_mag = ct * wt
-                ppl_eff = (pc + 2 * pw) / 3
+                rise = max(0.0, pw - pc)
+                ppl_eff = pw + rise
                 scores.append(tps_mag / ppl_eff)
         except: pass
     max_score = max(scores) if scores else 1
@@ -351,7 +353,8 @@ def generate_report(results):
             pw = float(r.get("ppl_warm", 0) or 0)
             if ct > 0 and wt > 0 and pc > 0 and pw > 0:
                 tps_mag = ct * wt
-                ppl_eff = (pc + 2 * pw) / 3
+                rise = max(0.0, pw - pc)
+                ppl_eff = pw + rise
                 return round(tps_mag / ppl_eff / max_score * 100, 1)
         except: pass
         return 0.0
@@ -404,10 +407,12 @@ def generate_report(results):
         print(f"| {idx} | `{mdl}` | {fsize} | {r.get('ppl_cold','?')} | {r.get('ppl_warm','?')} | {r.get('cold_gen_tps','?')} | {r.get('warm_gen_tps','?')} | {sc_str} | {r.get('cache_k','?')} | {r.get('cache_v','?')} | {g0} | {g1} |")
 
     print(f"\n### Score Formula")
-    print(f"`(cold_tps * warm_tps) / ((cold_ppl + 2*warm_ppl) / 3)` normalized to 0–100.")
+    print(f"`(cold_tps * warm_tps) / (warm_ppl + max(0, warm_ppl - cold_ppl))`")
+    print(f"normalized to 0–100.")
     print(f"TPS: product of cold × warm (rewards high throughput in both phases).")
-    print(f"PPL: weighted average with warm PPL at 2× the importance of cold PPL.")
-    print(f"  Both penalize: higher PPL in either phase is strictly worse.\n")
+    print(f"PPL: warm PPL PLUS any rise above cold PPL. If the model gets worse with")
+    print(f"  context (warm > cold), the gap is added as a straight penalty. If warm <= cold,")
+    print(f"  only warm PPL counts — the convergence is already reflected in the lower value.\n")
 
     print("### Hardware & Engine")
     print(f"| GPU 0 | GPU 1 | Total VRAM | Engine |")
