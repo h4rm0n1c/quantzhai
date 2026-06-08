@@ -377,8 +377,8 @@ def generate_report(results):
     # Report
     print(f"# QuantZhai Benchmark — Combined Ranking\n")
     print(f"*{n} models · {ts} UTC*\n")
-    print("| # | Model | Size | PPL🔥 | 🔥TPS | **Score** | Speedup | K | V | GPU0 M/KV | GPU1 M/KV |")
-    print("|---:|------|---:|---:|---:|---:|---:|:---:|:---:|---:|---:|")
+    print("| # | Model | Size | PPL❄️ | PPL🔥 | ❄️TPS | 🔥TPS | **Score** | K | V | GPU0 M/KV | GPU1 M/KV |")
+    print("|---:|------|---:|---:|---:|---:|---:|---:|:---:|:---:|---:|---:|")
     for idx, r in enumerate(results_sorted, 1):
         model = r["model"]
         # Use file size from inventory if available, fall back to vram
@@ -395,7 +395,7 @@ def generate_report(results):
         mdl = model[:55] if len(model) > 55 else model
         sc = combined_score(r)
         sc_str = f"**{sc}**" if sc > 0 else "-"
-        print(f"| {idx} | `{mdl}` | {fsize} | {r.get('ppl_warm','?')} | {r.get('warm_gen_tps','?')} | {sc_str} | {r.get('speedup','?')}x | {r.get('cache_k','?')} | {r.get('cache_v','?')} | {g0} | {g1} |")
+        print(f"| {idx} | `{mdl}` | {fsize} | {r.get('ppl_cold','?')} | {r.get('ppl_warm','?')} | {r.get('cold_gen_tps','?')} | {r.get('warm_gen_tps','?')} | {sc_str} | {r.get('cache_k','?')} | {r.get('cache_v','?')} | {g0} | {g1} |")
 
     print(f"\n### Score Formula")
     print(f"`(TPS/max_TPS + min_PPL/PPL) / 2 * 100` — equal weight to speed and code understanding.")
