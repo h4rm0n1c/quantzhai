@@ -1,7 +1,7 @@
 Loaded 37 existing results from /tmp/bench_all.json
 # QuantZhai Benchmark — Combined Ranking
 
-*37 models · 2026-06-08 22:34 UTC UTC*
+*37 models · 2026-06-08 22:47 UTC UTC*
 
 | # | Model | Size | PPL❄️ | PPL🔥 | ❄️TPS | 🔥TPS | **Score** | K | V | GPU0 M/KV | GPU1 M/KV |
 |---:|------|---:|---:|---:|---:|---:|---:|:---:|:---:|---:|---:|
