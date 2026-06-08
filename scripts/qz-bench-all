@@ -325,12 +325,13 @@ def generate_report(results):
     gh = get_git_hash()
     n = len(results)
 
-    # Compute combined score:
-    #   tps_mag   = cold_tps * warm_tps               — magnitude of both phases
-    #   rise      = max(0, warm_ppl - cold_ppl)        — penalty when PPL worsens over context
-    #   ppl_eff   = warm_ppl + rise                   — warm PPL + rise penalty (0 if improving)
-    #   raw       = tps_mag / ppl_eff                 — higher = better overall
-    scores = []
+    # Compute combined score (normalized dimensions):
+    #   tps_score = (cold_tps * warm_tps) / max(cold_tps * warm_tps)  — 0..1, higher = better
+    #   ppl_eff   = warm_ppl + max(0, warm_ppl - cold_ppl)            — rise-penalized PPL
+    #   ppl_score = min(ppl_eff) / ppl_eff                            — 0..1, higher = better
+    #   combined  = (tps_score + ppl_score) / 2 * 100                 — equal weight to each
+    tps_mags = []
+    ppl_effs = []
     for r in results:
         try:
             ct = float(r.get("cold_gen_tps", 0) or 0)
@@ -338,12 +339,12 @@ def generate_report(results):
             pc = float(r.get("ppl_cold", 0) or 0)
             pw = float(r.get("ppl_warm", 0) or 0)
             if ct > 0 and wt > 0 and pc > 0 and pw > 0:
-                tps_mag = ct * wt
+                tps_mags.append(ct * wt)
                 rise = max(0.0, pw - pc)
-                ppl_eff = pw + rise
-                scores.append(tps_mag / ppl_eff)
+                ppl_effs.append(pw + rise)
         except: pass
-    max_score = max(scores) if scores else 1
+    max_tps = max(tps_mags) if tps_mags else 1
+    min_ppl = min(ppl_effs) if ppl_effs else 1
 
     def combined_score(r):
         try:
@@ -352,10 +353,11 @@ def generate_report(results):
             pc = float(r.get("ppl_cold", 0) or 0)
             pw = float(r.get("ppl_warm", 0) or 0)
             if ct > 0 and wt > 0 and pc > 0 and pw > 0:
-                tps_mag = ct * wt
+                tps_score = ct * wt / max_tps
                 rise = max(0.0, pw - pc)
                 ppl_eff = pw + rise
-                return round(tps_mag / ppl_eff / max_score * 100, 1)
+                ppl_score = min_ppl / ppl_eff
+                return round((tps_score + ppl_score) / 2 * 100, 1)
         except: pass
         return 0.0
 
@@ -407,12 +409,11 @@ def generate_report(results):
         print(f"| {idx} | `{mdl}` | {fsize} | {r.get('ppl_cold','?')} | {r.get('ppl_warm','?')} | {r.get('cold_gen_tps','?')} | {r.get('warm_gen_tps','?')} | {sc_str} | {r.get('cache_k','?')} | {r.get('cache_v','?')} | {g0} | {g1} |")
 
     print(f"\n### Score Formula")
-    print(f"`(cold_tps * warm_tps) / (warm_ppl + max(0, warm_ppl - cold_ppl))`")
-    print(f"normalized to 0–100.")
-    print(f"TPS: product of cold × warm (rewards high throughput in both phases).")
-    print(f"PPL: warm PPL PLUS any rise above cold PPL. If the model gets worse with")
-    print(f"  context (warm > cold), the gap is added as a straight penalty. If warm <= cold,")
-    print(f"  only warm PPL counts — the convergence is already reflected in the lower value.\n")
+    print(f"TPS and PPL each normalized 0–1, then averaged and scaled to 0–100.")
+    print(f"TPS = `(cold_tps * warm_tps) / max_tps` — higher throughput = better.")
+    print(f"PPL_eff = `warm_ppl + max(0, warm_ppl - cold_ppl)` — PPL that rises")
+    print(f"  with context gets the gap added as a penalty. PPL_score = `min_ppl / PPL_eff`.")
+    print(f"Final = `(TPS_score + PPL_score) / 2 * 100` — equal weight to each dimension.\n")
 
     print("### Hardware & Engine")
     print(f"| GPU 0 | GPU 1 | Total VRAM | Engine |")
