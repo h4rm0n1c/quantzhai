@@ -1,7 +1,7 @@
-Loaded 29 existing results from /tmp/bench_all.json
+Loaded 30 existing results from /tmp/bench_all.json
 # QuantZhai Benchmark — Combined Ranking
 
-*29 models · 2026-06-08 17:51 UTC UTC*
+*30 models · 2026-06-08 18:09 UTC UTC*
 
 | # | Model | Size | PPL❄️ | PPL🔥 | ❄️TPS | 🔥TPS | **Score** | K | V | GPU0 M/KV | GPU1 M/KV |
 |---:|------|---:|---:|---:|---:|---:|---:|:---:|:---:|---:|---:|
@@ -34,6 +34,7 @@ Loaded 29 existing results from /tmp/bench_all.json
 | 27 | `Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved` | 19.4G | 2.7614 | 1.7554 | 2.3 | 17.2 | **1.2** | q8_0 | turbo3 | 7.9/0.9 | 11.2/1.3 |
 | 28 | `mistralai_Devstral-Small-2-24B-Instruct-2512-IQ4_XS` | 12.8G | ? | ? | 22.4 | 27.7 | - | q4_0 | turbo3 | 4.7/2.0 | 7.7/3.1 |
 | 29 | `ai21labs_AI21-Jamba2-Mini-Q3_K_M` | 23.5G | ? | ? | 23.3 | 31.1 | - | q4_0 | turbo3 | 8.8/0.3 | 14.5/0.3 |
+| 30 | `gemma-4-31B_q4_0-it` | 17.7G | ? | ? | 2.3 | 4.1 | - | q4_0 | turbo3 | 6.6/1.1 | 11.0/1.7 |
 
 ### Score Formula
 `(cold_tps * warm_tps) / (warm_ppl^2 / cold_ppl)` normalized to 0–100.
