@@ -324,29 +324,35 @@ def generate_report(results):
     gh = get_git_hash()
     n = len(results)
 
-    # Compute combined score
-    warm_tps_list = []
-    ppl_warm_list = []
+    # Compute combined score:
+    #   tps_gm = sqrt(cold_tps * warm_tps)           — throughput in both phases
+    #   ppl_eff = warm_ppl^2 / cold_ppl               — trend-adjusted PPL
+    #     (penalizes models whose PPL rises over time; rewards convergence)
+    #   score = tps_gm / ppl_eff                      — higher = better overall
+    scores = []
     for r in results:
         try:
+            ct = float(r.get("cold_gen_tps", 0) or 0)
             wt = float(r.get("warm_gen_tps", 0) or 0)
+            pc = float(r.get("ppl_cold", 0) or 0)
             pw = float(r.get("ppl_warm", 0) or 0)
-            if wt > 0 and pw > 0:
-                warm_tps_list.append(wt)
-                ppl_warm_list.append(pw)
+            if ct > 0 and wt > 0 and pc > 0 and pw > 0:
+                tps_gm = (ct * wt) ** 0.5
+                ppl_eff = pw * pw / pc
+                scores.append(tps_gm / ppl_eff)
         except: pass
-
-    max_tps = max(warm_tps_list) if warm_tps_list else 1
-    min_ppl = min(ppl_warm_list) if ppl_warm_list else 1
+    max_score = max(scores) if scores else 1
 
     def combined_score(r):
         try:
+            ct = float(r.get("cold_gen_tps", 0) or 0)
             wt = float(r.get("warm_gen_tps", 0) or 0)
+            pc = float(r.get("ppl_cold", 0) or 0)
             pw = float(r.get("ppl_warm", 0) or 0)
-            if wt > 0 and pw > 0:
-                tps_pt = wt / max_tps
-                ppl_pt = min_ppl / pw
-                return round((tps_pt + ppl_pt) / 2 * 100, 1)
+            if ct > 0 and wt > 0 and pc > 0 and pw > 0:
+                tps_gm = (ct * wt) ** 0.5
+                ppl_eff = pw * pw / pc
+                return round(tps_gm / ppl_eff / max_score * 100, 1)
         except: pass
         return 0.0
 
@@ -398,8 +404,10 @@ def generate_report(results):
         print(f"| {idx} | `{mdl}` | {fsize} | {r.get('ppl_cold','?')} | {r.get('ppl_warm','?')} | {r.get('cold_gen_tps','?')} | {r.get('warm_gen_tps','?')} | {sc_str} | {r.get('cache_k','?')} | {r.get('cache_v','?')} | {g0} | {g1} |")
 
     print(f"\n### Score Formula")
-    print(f"`(TPS/max_TPS + min_PPL/PPL) / 2 * 100` — equal weight to speed and code understanding.")
-    print(f"Scale: 0–100. Higher = better overall.\n")
+    print(f"`sqrt(cold_tps * warm_tps) / (warm_ppl^2 / cold_ppl)` normalized to 0–100.")
+    print(f"Rewards: high throughput in both cold and warm phases, low PPL, and PPL that")
+    print(f"**decreases** from cold to warm (the model learns the domain over context).")
+    print(f"Penalizes: PPL that rises over time (model gets *worse* with more context).\n")
 
     print("### Hardware & Engine")
     print(f"| GPU 0 | GPU 1 | Total VRAM | Engine |")
