@@ -1,7 +1,7 @@
-Loaded 31 existing results from /tmp/bench_all.json
+Loaded 34 existing results from /tmp/bench_all.json
 # QuantZhai Benchmark — Combined Ranking
 
-*31 models · 2026-06-08 19:25 UTC UTC*
+*34 models · 2026-06-08 19:56 UTC UTC*
 
 | # | Model | Size | PPL❄️ | PPL🔥 | ❄️TPS | 🔥TPS | **Score** | K | V | GPU0 M/KV | GPU1 M/KV |
 |---:|------|---:|---:|---:|---:|---:|---:|:---:|:---:|---:|---:|
@@ -20,22 +20,25 @@ Loaded 31 existing results from /tmp/bench_all.json
 | 13 | `qwen36_35b_IQ4_XS` | 18.7G | 2.7032 | 1.7507 | 37.7 | 52.6 | **28.2** | q8_0 | turbo3 | 7.2/0.8 | 11.2/1.2 |
 | 14 | `gemma-4-12b-it-qat-q4_0` | 7.0G | 33.3835 | 5.3650 | 36.1 | 37.4 | **25.3** | q8_0 | turbo3 | 2.4/0.7 | 4.5/1.1 |
 | 15 | `NVIDIA-Nemotron-Nano-12B-v2.Q4_K_M` | 7.5G | 2.0216 | 1.8394 | 50.9 | 49.7 | **24.4** | q8_0 | turbo3 | 2.7/0.8 | 4.4/1.6 |
-| 16 | `Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved` | 20.4G | 2.8126 | 1.7628 | 23.9 | 51.6 | **18.0** | q8_0 | turbo3 | 8.3/0.9 | 11.8/1.3 |
-| 17 | `Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled-APE` | 17.3G | 2.7341 | 1.7509 | 20.5 | 48.5 | **14.3** | q8_0 | turbo3 | 6.8/0.9 | 10.2/1.3 |
-| 18 | `Falcon-H1-7B-Instruct-Q4_K_M` | 4.6G | 1.7571 | 2.1837 | 44.6 | 44.7 | **11.9** | q8_0 | turbo3 | 1.7/1.8 | 2.7/2.6 |
-| 19 | `Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled-APE` | 14.3G | 2.7032 | 1.8036 | 20.9 | 38.5 | **10.8** | q8_0 | turbo3 | 5.6/0.9 | 8.5/1.3 |
-| 20 | `Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS` | 15.4G | 2.5831 | 1.6989 | 25.4 | 25.0 | **9.2** | q8_0 | turbo3 | 5.2/2.4 | 9.5/4.0 |
-| 21 | `gemma-4-26B-A4B-Claude-Distill-APEX-I-Compact` | 15.5G | 9.3767 | 7.2414 | 38.1 | 58.9 | **6.5** | q8_0 | turbo3 | 6.0/0.8 | 9.5/1.2 |
-| 22 | `gemma-4-26B_q4_0-it` | 14.4G | 9.4943 | 13.0802 | 48.4 | 59.3 | **2.6** | q8_0 | turbo3 | 5.5/0.8 | 8.9/1.2 |
-| 23 | `google_gemma-4-26B-A4B-it-Q5_K_M` | 19.3G | 18.4907 | 20.1509 | 38.5 | 56.5 | **1.6** | q8_0 | turbo3 | 7.7/0.8 | 11.6/1.2 |
-| 24 | `ibm-granite_granite-4.1-8b-Q4_K_M` | 5.5G | 28.3674 | 39.1524 | 64.9 | 75.2 | **1.5** | q8_0 | turbo3 | 2.0/6.2 | 3.3/9.4 |
-| 25 | `gemma-4-26B-A4B-APEX-I-Compact` | 14.8G | 19.2454 | 25.3029 | 44.3 | 58.7 | **1.3** | q8_0 | turbo3 | 5.7/0.8 | 9.1/1.2 |
-| 26 | `google_gemma-4-26B-A4B-it-Q3_K_M` | 13.0G | 29.0656 | 32.6819 | 32.1 | 55.4 | **0.8** | q8_0 | turbo3 | 5.0/0.8 | 8.0/1.2 |
-| 27 | `allenai_Olmo-3-7B-Instruct-Q4_K_M` | 4.5G | 4.0029 | 3.7309 | 11.6 | 14.3 | **0.8** | q8_0 | turbo3 | 1.6/3.3 | 2.6/5.4 |
-| 28 | `Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved` | 19.4G | 2.7614 | 1.7554 | 2.3 | 17.2 | **0.6** | q8_0 | turbo3 | 7.9/0.9 | 11.2/1.3 |
-| 29 | `mistralai_Devstral-Small-2-24B-Instruct-2512-IQ4_XS` | 12.8G | ? | ? | 22.4 | 27.7 | - | q4_0 | turbo3 | 4.7/2.0 | 7.7/3.1 |
-| 30 | `ai21labs_AI21-Jamba2-Mini-Q3_K_M` | 23.5G | ? | ? | 23.3 | 31.1 | - | q4_0 | turbo3 | 8.8/0.3 | 14.5/0.3 |
-| 31 | `gemma-4-31B_q4_0-it` | 17.7G | ? | ? | 2.3 | 4.1 | - | q4_0 | turbo3 | 6.6/1.1 | 11.0/1.7 |
+| 16 | `EXAONE-3.5-7.8B-Instruct-Q8_0` | 8.3G | 1.4170 | 1.9538 | 55.9 | 65.5 | **21.9** | q8_0 | turbo3 | 3.0/5.1 | 4.8/7.4 |
+| 17 | `Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved` | 20.4G | 2.8126 | 1.7628 | 23.9 | 51.6 | **18.0** | q8_0 | turbo3 | 8.3/0.9 | 11.8/1.3 |
+| 18 | `Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled-APE` | 17.3G | 2.7341 | 1.7509 | 20.5 | 48.5 | **14.3** | q8_0 | turbo3 | 6.8/0.9 | 10.2/1.3 |
+| 19 | `Falcon-H1-7B-Instruct-Q4_K_M` | 4.6G | 1.7571 | 2.1837 | 44.6 | 44.7 | **11.9** | q8_0 | turbo3 | 1.7/1.8 | 2.7/2.6 |
+| 20 | `Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled-APE` | 14.3G | 2.7032 | 1.8036 | 20.9 | 38.5 | **10.8** | q8_0 | turbo3 | 5.6/0.9 | 8.5/1.3 |
+| 21 | `Qwen3.6-27B-NEO-CODE-HERE-2T-OT-IQ4_XS` | 15.4G | 2.5831 | 1.6989 | 25.4 | 25.0 | **9.2** | q8_0 | turbo3 | 5.2/2.4 | 9.5/4.0 |
+| 22 | `gemma-4-26B-A4B-Claude-Distill-APEX-I-Compact` | 15.5G | 9.3767 | 7.2414 | 38.1 | 58.9 | **6.5** | q8_0 | turbo3 | 6.0/0.8 | 9.5/1.2 |
+| 23 | `gemma-4-26B_q4_0-it` | 14.4G | 9.4943 | 13.0802 | 48.4 | 59.3 | **2.6** | q8_0 | turbo3 | 5.5/0.8 | 8.9/1.2 |
+| 24 | `google_gemma-4-26B-A4B-it-Q5_K_M` | 19.3G | 18.4907 | 20.1509 | 38.5 | 56.5 | **1.6** | q8_0 | turbo3 | 7.7/0.8 | 11.6/1.2 |
+| 25 | `ibm-granite_granite-4.1-8b-Q4_K_M` | 5.5G | 28.3674 | 39.1524 | 64.9 | 75.2 | **1.5** | q8_0 | turbo3 | 2.0/6.2 | 3.3/9.4 |
+| 26 | `gemma-4-26B-A4B-APEX-I-Compact` | 14.8G | 19.2454 | 25.3029 | 44.3 | 58.7 | **1.3** | q8_0 | turbo3 | 5.7/0.8 | 9.1/1.2 |
+| 27 | `google_gemma-4-26B-A4B-it-Q3_K_M` | 13.0G | 29.0656 | 32.6819 | 32.1 | 55.4 | **0.8** | q8_0 | turbo3 | 5.0/0.8 | 8.0/1.2 |
+| 28 | `allenai_Olmo-3-7B-Instruct-Q4_K_M` | 4.5G | 4.0029 | 3.7309 | 11.6 | 14.3 | **0.8** | q8_0 | turbo3 | 1.6/3.3 | 2.6/5.4 |
+| 29 | `Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved` | 19.4G | 2.7614 | 1.7554 | 2.3 | 17.2 | **0.6** | q8_0 | turbo3 | 7.9/0.9 | 11.2/1.3 |
+| 30 | `mistralai_Devstral-Small-2-24B-Instruct-2512-IQ4_XS` | 12.8G | ? | ? | 22.4 | 27.7 | - | q4_0 | turbo3 | 4.7/2.0 | 7.7/3.1 |
+| 31 | `ai21labs_AI21-Jamba2-Mini-Q3_K_M` | 23.5G | ? | ? | 23.3 | 31.1 | - | q4_0 | turbo3 | 8.8/0.3 | 14.5/0.3 |
+| 32 | `gemma-4-31B_q4_0-it` | 17.7G | ? | ? | 2.3 | 4.1 | - | q4_0 | turbo3 | 6.6/1.1 | 11.0/1.7 |
+| 33 | `phi-4-Q6_K` | 12.0G | ? | ? | ? | ? | - | ? | ? | ?/? | ?/? |
+| 34 | `phi-4-Q4_K` | 9.1G | 1.9193 | 1.8943 | 1.0 | 0.9 | - | q8_0 | turbo3 | ?/? | ?/? |
 
 ### Score Formula
 `(cold_tps * warm_tps) / (warm_ppl^2 / cold_ppl)` normalized to 0–100.
