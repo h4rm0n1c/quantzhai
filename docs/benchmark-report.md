@@ -1,7 +1,7 @@
-Loaded 35 existing results from /tmp/bench_all.json
+Loaded 37 existing results from /tmp/bench_all.json
 # QuantZhai Benchmark — Combined Ranking
 
-*35 models · 2026-06-08 21:01 UTC UTC*
+*37 models · 2026-06-08 22:17 UTC UTC*
 
 | # | Model | Size | PPL❄️ | PPL🔥 | ❄️TPS | 🔥TPS | **Score** | K | V | GPU0 M/KV | GPU1 M/KV |
 |---:|------|---:|---:|---:|---:|---:|---:|:---:|:---:|---:|---:|
@@ -39,7 +39,9 @@ Loaded 35 existing results from /tmp/bench_all.json
 | 32 | `google_gemma-4-26B-A4B-it-Q3_K_M` | 13.0G | 29.0656 | 32.6819 | 32.1 | 55.4 | **0.2** | q8_0 | turbo3 | 5.0/0.8 | 8.0/1.2 |
 | 33 | `allenai_Olmo-3-7B-Instruct-Q4_K_M` | 4.5G | 4.0029 | 3.7309 | 11.6 | 14.3 | **0.2** | q8_0 | turbo3 | 1.6/3.3 | 2.6/5.4 |
 | 34 | `Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved` | 19.4G | 2.7614 | 1.7554 | 2.3 | 17.2 | **0.1** | q8_0 | turbo3 | 7.9/0.9 | 11.2/1.3 |
-| 35 | `phi-4-Q4_K` | 9.1G | 1.9193 | 1.8943 | 1.0 | 0.9 | - | q8_0 | turbo3 | ?/? | ?/? |
+| 35 | `GLM-4.7-Flash-IQ4_XS` | 16.3G | 1.8523 | 3.6916 | 6.6 | 33.5 | **0.1** | q8_0 | turbo3 | 6.2/3.0 | 9.9/4.5 |
+| 36 | `phi-4-Q4_K` | 9.1G | 1.9193 | 1.8943 | 1.0 | 0.9 | - | q8_0 | turbo3 | ?/? | ?/? |
+| 37 | `gemma-3n-E4B-it-Q8_0` | 7.4G | ? | ? | ? | ? | - | ? | ? | ?/? | ?/? |
 
 ### Score Formula
 `(cold_tps * warm_tps) / (warm_ppl^2 / cold_ppl)` normalized to 0–100.
