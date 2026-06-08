@@ -173,7 +173,7 @@ def get_git_hash():
         except: pass
     return ""
 
-def get_preset_cache_k(model_stem):
+def _get_ini_val(model_stem, key):
     ini_path = os.environ.get("QZ_MODEL_DIR", "") + "/models-preset.ini"
     if not os.path.isfile(ini_path): return None
     try:
@@ -184,11 +184,13 @@ def get_preset_cache_k(model_stem):
         for sec in (model_stem, "*"):
             if cp.has_section(sec):
                 for k, v in cp.items(sec):
-                    kl = k.lower()
-                    if kl in ("cache-type-k", "-ctk"): return v
-                    if kl == "llama_arg_cache_type_k": return v
+                    if k.lower() == key.lower() or k.lower().replace("_", "-") == key.lower():
+                        return v
         return None
     except: return None
+
+def get_preset_cache_k(model_stem): return _get_ini_val(model_stem, "cache-type-k")
+def get_preset_cache_v(model_stem): return _get_ini_val(model_stem, "cache-type-v")
 
 def select_model_via_proxy(model):
     print(f"  Selecting via proxy...")
@@ -262,9 +264,8 @@ def bench_one_model(model, force=False, existing_map=None):
                 "ppl_cold": "?", "ppl_warm": "?"}
     time.sleep(5)
 
-    ini_k = get_preset_cache_k(model)
-    cache_k = ini_k if ini_k else "q8_0"
-    cache_v = "turbo3"
+    cache_k = get_preset_cache_k(model) or "q8_0"
+    cache_v = get_preset_cache_v(model) or "turbo3"
     print(f"  K cache: {cache_k}  V cache: {cache_v}")
 
     gpus = get_vram()
