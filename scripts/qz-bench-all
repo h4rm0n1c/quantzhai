@@ -325,11 +325,18 @@ def generate_report(results):
     gh = get_git_hash()
     n = len(results)
 
-    # Compute combined score (normalized dimensions):
-    #   tps_score = (cold_tps * warm_tps) / max(cold_tps * warm_tps)  — 0..1, higher = better
-    #   ppl_eff   = warm_ppl + max(0, warm_ppl - cold_ppl)            — rise-penalized PPL
-    #   ppl_score = min(ppl_eff) / ppl_eff                            — 0..1, higher = better
-    #   combined  = (tps_score + ppl_score) / 2 * 100                 — equal weight to each
+    # Compute combined score (percentile-capped dimensions):
+    #   tps_score = (cold_tps * warm_tps) / cap(tps)     — where cap = 95th percentile
+    #   ppl_eff   = warm_ppl + max(0, warm_ppl - cold_ppl)
+    #   ppl_score = cap(ppl) / ppl_eff                   — where cap = 5th percentile
+    #   combined  = (tps_score + ppl_score) / 2 * 100
+    # Using percentile caps instead of absolute extremes prevents outliers
+    # (e.g. LFM2.5-1.2B at 208 TPS) from compressing the entire scale.
+    def percentile(values, p):
+        s = sorted(values)
+        idx = max(0, min(len(s) - 1, int(len(s) * p / 100)))
+        return s[idx]
+
     tps_mags = []
     ppl_effs = []
     for r in results:
@@ -343,8 +350,8 @@ def generate_report(results):
                 rise = max(0.0, pw - pc)
                 ppl_effs.append(pw + rise)
         except: pass
-    max_tps = max(tps_mags) if tps_mags else 1
-    min_ppl = min(ppl_effs) if ppl_effs else 1
+    tps_cap = percentile(tps_mags, 90) if tps_mags else 1
+    ppl_cap = percentile(ppl_effs, 10) if ppl_effs else 1  # 10th = low (good) end
 
     def combined_score(r):
         try:
@@ -353,10 +360,10 @@ def generate_report(results):
             pc = float(r.get("ppl_cold", 0) or 0)
             pw = float(r.get("ppl_warm", 0) or 0)
             if ct > 0 and wt > 0 and pc > 0 and pw > 0:
-                tps_score = ct * wt / max_tps
+                tps_score = min(1.0, ct * wt / tps_cap)
                 rise = max(0.0, pw - pc)
                 ppl_eff = pw + rise
-                ppl_score = min_ppl / ppl_eff
+                ppl_score = min(1.0, ppl_cap / ppl_eff)
                 return round((tps_score + ppl_score) / 2 * 100, 1)
         except: pass
         return 0.0
@@ -409,11 +416,13 @@ def generate_report(results):
         print(f"| {idx} | `{mdl}` | {fsize} | {r.get('ppl_cold','?')} | {r.get('ppl_warm','?')} | {r.get('cold_gen_tps','?')} | {r.get('warm_gen_tps','?')} | {sc_str} | {r.get('cache_k','?')} | {r.get('cache_v','?')} | {g0} | {g1} |")
 
     print(f"\n### Score Formula")
-    print(f"TPS and PPL each normalized 0–1, then averaged and scaled to 0–100.")
-    print(f"TPS = `(cold_tps * warm_tps) / max_tps` — higher throughput = better.")
-    print(f"PPL_eff = `warm_ppl + max(0, warm_ppl - cold_ppl)` — PPL that rises")
-    print(f"  with context gets the gap added as a penalty. PPL_score = `min_ppl / PPL_eff`.")
-    print(f"Final = `(TPS_score + PPL_score) / 2 * 100` — equal weight to each dimension.\n")
+    print(f"TPS and PPL each scored 0–1 against a percentile cap (90th TPS, 10th PPL),")
+    print(f"then averaged and scaled to 0–100. This prevents extreme outliers from")
+    print(f"compressing the entire ranking scale.")
+    print(f"TPS = `min(1, cold_tps * warm_tps / cap_90)`")
+    print(f"PPL_eff = `warm_ppl + max(0, warm_ppl - cold_ppl)` (rise penalty)")
+    print(f"PPL_score = `min(1, cap_10 / PPL_eff)`")
+    print(f"Final = `(TPS_score + PPL_score) / 2 * 100`\n")
 
     print("### Hardware & Engine")
     print(f"| GPU 0 | GPU 1 | Total VRAM | Engine |")
