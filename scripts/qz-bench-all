@@ -320,10 +320,11 @@ def bench_one_model(model, force=False, existing_map=None):
         "vram": str(vram_str),
     }
 
-def generate_report(results):
+def generate_report(results, var_dir=None):
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     gh = get_git_hash()
     n = len(results)
+    var_dir = var_dir or os.environ.get("QZ_VAR_DIR", str(Path.home() / "turboquant/quantzhai/var"))
 
     # Compute combined score (three equal dimensions):
     #   TPS         = throughput (cold×warm product, 90th percentile capped)
@@ -384,7 +385,7 @@ def generate_report(results):
     size_map = {}
     try:
         inv_path = os.environ.get("QZ_MODEL_INVENTORY_CACHE",
-            str(Path(os.environ.get("QZ_VAR_DIR", "")) / "generated" / "model-inventory.json"))
+            str(Path(var_dir) / "generated" / "model-inventory.json"))
         inv = json.load(open(inv_path))
         for m in inv.get("models", []):
             stem = m.get("stem", "")
@@ -461,7 +462,7 @@ def main():
     print(f"Loaded {len(existing)} existing results from {SAVE_PATH}")
 
     if args.report:
-        generate_report(existing)
+        generate_report(existing, var_dir=VAR_DIR)
         return
 
     # Determine which models to benchmark
@@ -473,7 +474,7 @@ def main():
 
     if not models_to_bench:
         print("No models to benchmark. Use --force to re-run existing, or --models to specify.")
-        generate_report(existing)
+        generate_report(existing, var_dir=VAR_DIR)
         return
 
     print(f"Benchmarking {len(models_to_bench)} models\n")
@@ -495,7 +496,7 @@ def main():
         json.dump(results, open(SAVE_PATH, "w"), indent=2)
 
     print(f"\n\n")
-    generate_report(results)
+    generate_report(results, var_dir=VAR_DIR)
     json.dump(results, open(SAVE_PATH, "w"), indent=2)
     print(f"\nSaved {SAVE_PATH} ({len(results)} models)")
 
