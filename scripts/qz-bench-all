@@ -325,11 +325,13 @@ def generate_report(results):
     gh = get_git_hash()
     n = len(results)
 
-    # Compute combined score (weighted dimensions):
-    #   PPL is weighted 70%, TPS 30% — output quality matters more than speed.
-    #   tps_score = (cold_tps * warm_tps) / cap(tps)     — cap = 90th percentile
-    #   ppl_score = cap(ppl) / warm_ppl                  — cap = 10th percentile (low = good)
-    #   combined  = (0.3 * tps + 0.7 * ppl) * 100
+    # Compute combined score (three equal dimensions):
+    #   TPS         = throughput (cold×warm product, 90th percentile capped)
+    #   PPL         = warm (hot) PPL (10th percentile capped)
+    #   Convergence = cold_ppl / warm_ppl (>1 means PPL drops = model learns, 90th cap)
+    #   Final       = (TPS + PPL + Conv) / 3 * 100 — each dimension equal weight
+    # Three dimensions give "cool" models with unique strengths (fast convergence,
+    # innovative architecture, tiny size) a fair shot against absolute-PPL champs.
     def percentile(values, p):
         s = sorted(values)
         idx = max(0, min(len(s) - 1, int(len(s) * p / 100)))
@@ -337,27 +339,33 @@ def generate_report(results):
 
     tps_mags = []
     warm_ppls = []
+    conv_ratios = []
     for r in results:
         try:
             ct = float(r.get("cold_gen_tps", 0) or 0)
             wt = float(r.get("warm_gen_tps", 0) or 0)
+            pc = float(r.get("ppl_cold", 0) or 0)
             pw = float(r.get("ppl_warm", 0) or 0)
-            if ct > 0 and wt > 0 and pw > 0:
+            if ct > 0 and wt > 0 and pc > 0 and pw > 0:
                 tps_mags.append(ct * wt)
                 warm_ppls.append(pw)
+                conv_ratios.append(pc / pw)  # >1 = PPL drops = learns
         except: pass
     tps_cap = percentile(tps_mags, 90) if tps_mags else 1
     ppl_cap = percentile(warm_ppls, 10) if warm_ppls else 1
+    conv_cap = percentile(conv_ratios, 90) if conv_ratios else 1
 
     def combined_score(r):
         try:
             ct = float(r.get("cold_gen_tps", 0) or 0)
             wt = float(r.get("warm_gen_tps", 0) or 0)
+            pc = float(r.get("ppl_cold", 0) or 0)
             pw = float(r.get("ppl_warm", 0) or 0)
-            if ct > 0 and wt > 0 and pw > 0:
+            if ct > 0 and wt > 0 and pc > 0 and pw > 0:
                 tps_score = min(1.0, ct * wt / tps_cap)
                 ppl_score = min(1.0, ppl_cap / pw)
-                return round((0.3 * tps_score + 0.7 * ppl_score) * 100, 1)
+                conv_score = min(1.0, (pc / pw) / conv_cap)
+                return round((tps_score + ppl_score + conv_score) / 3 * 100, 1)
         except: pass
         return 0.0
 
@@ -409,13 +417,15 @@ def generate_report(results):
         print(f"| {idx} | `{mdl}` | {fsize} | {r.get('ppl_cold','?')} | {r.get('ppl_warm','?')} | {r.get('cold_gen_tps','?')} | {r.get('warm_gen_tps','?')} | {sc_str} | {r.get('cache_k','?')} | {r.get('cache_v','?')} | {g0} | {g1} |")
 
     print(f"\n### Score Formula")
-    print(f"PPL weighted 70%, TPS weighted 30% — output quality matters more than speed.")
-    print(f"Each scored 0–1 against a percentile cap (90th TPS, 10th warm PPL) then scaled")
-    print(f"to 0–100. Percentile caps prevent extreme outliers from compressing the scale.")
+    print(f"Three equal dimensions (TPS, PPL, Convergence) averaged to 0–100.")
+    print(f"Each scored 0–1 against a percentile cap (90th for TPS & convergence,")
+    print(f"10th for warm PPL). Three dimensions give architecture diversity a fair")
+    print(f"shot — fast learners (convergence) and innovative architectures can")
+    print(f"compete with absolute-PPL champs.")
     print(f"TPS = `min(1, cold_tps * warm_tps / cap_90)`")
-    print(f"PPL = `cap_10 / warm_ppl` — warm (hot) PPL only. A model whose PPL rises with")
-    print(f"  context is penalized by its higher absolute warm value.")
-    print(f"Final = `(0.3 * TPS + 0.7 * PPL) * 100`\n")
+    print(f"PPL = `cap_10 / warm_ppl`")
+    print(f"Conv = `min(1, (cold_ppl / warm_ppl) / cap_90)` — >1 means PPL drops")
+    print(f"Final = `(TPS + PPL + Conv) / 3 * 100`\n")
 
     print("### Hardware & Engine")
     print(f"| GPU 0 | GPU 1 | Total VRAM | Engine |")
