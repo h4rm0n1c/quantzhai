@@ -128,9 +128,10 @@ def ensure_ppl_corpus():
 def run_ppl(model_gguf, cache_k="q8_0", cache_v="turbo3", ctx_size=2048):
     ensure_ppl_corpus()
     kill_stale_docker()
+    tensor_split = os.environ.get("QZ_TENSOR_SPLIT", "10,32")
     try:
-        r = subprocess.run(
-            ["sudo", "-n", "docker", "run", "--rm", "--gpus", "all",
+        cmd = [
+            "sudo", "-n", "docker", "run", "--rm", "--gpus", "all",
              "-v", f"{MODEL_DIR}:/models",
              "-v", f"{PPL_CORPUS}:/corpus.txt",
              "--entrypoint", "", DOCKER_IMAGE,
@@ -144,8 +145,10 @@ def run_ppl(model_gguf, cache_k="q8_0", cache_v="turbo3", ctx_size=2048):
              "--flash-attn", "1",
              "-ngl", "99",
              "-b", "512",
-             "-t", "12"],
-            capture_output=True, text=True, timeout=900)
+             "-t", "12",
+             "--tensor-split", tensor_split,
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
         output = r.stdout + "\n" + (r.stderr or "")
         for line in output.split("\n"):
             line = line.strip()
@@ -431,7 +434,7 @@ def generate_report(results, var_dir=None):
     print("### Hardware & Engine")
     print(f"| GPU 0 | GPU 1 | Total VRAM | Engine |")
     print("|---|---|---|---|")
-    print(f"| RTX 3080 10GB | V100-SXM2 16GB | 26 GB | llama.cpp @ {gh} |\n")
+    print(f"| RTX 3080 10GB | V100-SXM2 32GB | 42 GB | llama.cpp @ {gh} |\n")
 
     print("### ToolboxPPL")
     print(f"Code perplexity on [`macvox68`](https://github.com/h4rm0n1c/macvox68) (32 C/H files, 125KB, Mac OS 7 TTS).")
