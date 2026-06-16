@@ -1,7 +1,7 @@
-Loaded 44 existing results from /tmp/bench_all.json
+Loaded 45 existing results from /tmp/bench_all.json
 # QuantZhai Benchmark — Combined Ranking
 
-*44 models · 2026-06-16 20:46 UTC UTC*
+*45 models · 2026-06-16 21:35 UTC UTC*
 
 | # | Model | Size | PPL❄️ | PPL🔥 | ❄️TPS | 🔥TPS | **Score** | K | V | GPU0 M/KV | GPU1 M/KV |
 |---:|------|---:|---:|---:|---:|---:|---:|:---:|:---:|---:|---:|
@@ -49,6 +49,7 @@ Loaded 44 existing results from /tmp/bench_all.json
 | 42 | `gemma-4-26B-A4B-APEX-I-Compact` | 14.8G | 19.2454 | 25.3029 | 44.3 | 58.7 | **24.8** | q8_0 | turbo3 | 5.7/0.8 | 9.1/1.2 |
 | 43 | `google_gemma-4-26B-A4B-it-Q3_K_M` | 13.0G | 29.0656 | 32.6819 | 32.1 | 55.4 | **24.5** | q8_0 | turbo3 | 5.0/0.8 | 8.0/1.2 |
 | 44 | `gemma-3n-E4B-it-Q8_0` | 7.4G | ? | ? | ? | ? | - | ? | ? | ?/? | ?/? |
+| 45 | `Qwable-27b_Q4_K_M` | 16.5G | ? | ? | 22.5 | 22.6 | - | q8_0 | turbo3 | 3.8/1.6 | 12.1/4.8 |
 
 ### Score Formula
 Three equal dimensions (TPS, PPL, Convergence) averaged to 0–100.
