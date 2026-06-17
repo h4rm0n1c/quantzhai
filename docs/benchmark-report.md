@@ -1,7 +1,6 @@
-Loaded 46 existing results from /tmp/bench_all.json
 # QuantZhai Benchmark — Combined Ranking
 
-*46 models · 2026-06-17 01:33 UTC UTC*
+*46 models · 2026-06-17 01:53 UTC UTC*
 
 | # | Model | Size | PPL❄️ | PPL🔥 | ❄️TPS | 🔥TPS | **Score** | K | V | GPU0 M/KV | GPU1 M/KV |
 |---:|------|---:|---:|---:|---:|---:|---:|:---:|:---:|---:|---:|
@@ -66,7 +65,7 @@ Final = `(TPS + PPL + Conv) / 3 * 100`
 ### Hardware & Engine
 | GPU 0 | GPU 1 | Total VRAM | Engine |
 |---|---|---|---|
-| RTX 3080 10GB | V100-SXM2 32GB | 42 GB | llama.cpp @ e2b4bfceaf03 |
+| RTX 3080 10GB | V100-SXM2 32GB | 42 GB | llama.cpp @ bee68900df08 |
 
 ### ToolboxPPL
 Code perplexity on [`macvox68`](https://github.com/h4rm0n1c/macvox68) (32 C/H files, 125KB, Mac OS 7 TTS).
