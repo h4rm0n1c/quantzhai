@@ -148,7 +148,7 @@ def run_ppl(model_gguf, cache_k="q8_0", cache_v="turbo3", ctx_size=2048):
              "-t", "12",
              "--tensor-split", tensor_split,
         ]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=1500)
         output = r.stdout + "\n" + (r.stderr or "")
         for line in output.split("\n"):
             line = line.strip()
