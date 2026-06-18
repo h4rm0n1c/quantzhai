@@ -2369,13 +2369,24 @@ class RequestRouter:
             self.handler._send_json(400, {"ok": False, "error": "request body must be an object"})
             return
 
+        catalog = self.handler._model_catalog()
         requested = body.get("model") or body.get("key") or body.get("name")
         if not isinstance(requested, str) or not requested.strip():
-            self.handler._send_json(400, {
-                "ok": False,
-                "error": "missing 'model' field in request body",
-            })
-            return
+            # No model specified — use catalog default (bootstrap path)
+            default = catalog.selected or (catalog.entries[0] if catalog.entries else None)
+            if default is None:
+                self.handler._send_json(400, {
+                    "ok": False,
+                    "error": "no model specified and catalog is empty",
+                })
+                return
+            requested = default.get("key") or default.get("backend_id") or ""
+            if not requested:
+                self.handler._send_json(400, {
+                    "ok": False,
+                    "error": "catalog default entry has no key or backend_id",
+                })
+                return
 
         source = body.get("source") or "operator"
         if source not in SELECTED_SOURCES:
@@ -2385,7 +2396,6 @@ class RequestRouter:
             })
             return
 
-        catalog = self.handler._model_catalog()
         entry = match_model(catalog.entries, requested.strip())
         if entry is None:
             self.handler._send_json(404, {
@@ -2455,10 +2465,9 @@ class RequestRouter:
             self.handler._send_json(200, payload)
             return
 
-        # select-and-restart: invoke the existing resolve+load path which handles
-        # llama-server unload/load and (when needed) BackendManager context restart.
-        # rollback_on_failure (body field, default True) controls whether
-        # selected_* rolls back to last_good_* when the candidate fails.
+        # select-and-restart with async loading: fire background thread,
+        # return 202 immediately. Load result is recorded in model-state.json
+        # by _record_load_observation when the thread completes.
         rollback_on_failure = True
         if "rollback_on_failure" in body:
             raw = body.get("rollback_on_failure")
@@ -2466,29 +2475,30 @@ class RequestRouter:
                 rollback_on_failure = raw
             elif isinstance(raw, str):
                 rollback_on_failure = raw.strip().lower() not in ("0", "false", "no", "off")
-        resolve_error: str | None = None
-        try:
-            self._invoke_selected_model_reload(requested.strip())
-        except Exception as exc:
-            resolve_error = str(exc)
 
-        failed, _err, _err_type, _rollback = self._record_load_observation(
-            resolve_succeeded=resolve_error is None,
-            resolve_error=resolve_error,
-            rollback_on_failure=rollback_on_failure,
-        )
+        _model = requested.strip()
+        _rollback = rollback_on_failure
 
-        payload = build_model_status(self.handler)
-        if failed:
-            payload["ok"] = False
-            if resolve_error:
-                payload["error"] = resolve_error
-            # 409 Conflict: the request was valid, but the selected model
-            # cannot become the active backend model.
-            self.handler._send_json(409, payload)
-            return
+        def _background_load():
+            try:
+                self._invoke_selected_model_reload(_model)
+                self._record_load_observation(
+                    resolve_succeeded=True,
+                    resolve_error=None,
+                    rollback_on_failure=_rollback,
+                )
+            except Exception as exc:
+                self._record_load_observation(
+                    resolve_succeeded=False,
+                    resolve_error=str(exc),
+                    rollback_on_failure=_rollback,
+                )
 
-        self.handler._send_json(200, payload)
+        _t = threading.Thread(target=_background_load, daemon=True,
+                               name=f"qz-model-load-{_model}")
+        _t.start()
+
+        self.handler._send_json(202, {"ok": True, "model": _model})
 
     def _handle_model_reload_endpoint(self) -> None:
         """Handle POST /qz/model/reload using the current persisted selection."""
@@ -2524,29 +2534,27 @@ class RequestRouter:
             })
             return
 
-        # POST /qz/model/reload has no body; rollback is the safe default
-        # (matches /qz/model/select-and-restart with rollback_on_failure=true).
-        resolve_error: str | None = None
-        try:
-            self._invoke_selected_model_reload(identity)
-        except Exception as exc:
-            resolve_error = str(exc)
+        # POST /qz/model/reload — fire in background, return 202 immediately.
+        def _background_reload():
+            try:
+                self._invoke_selected_model_reload(identity)
+                self._record_load_observation(
+                    resolve_succeeded=True,
+                    resolve_error=None,
+                    rollback_on_failure=True,
+                )
+            except Exception as exc:
+                self._record_load_observation(
+                    resolve_succeeded=False,
+                    resolve_error=str(exc),
+                    rollback_on_failure=True,
+                )
 
-        failed, _err, _err_type, _rollback = self._record_load_observation(
-            resolve_succeeded=resolve_error is None,
-            resolve_error=resolve_error,
-            rollback_on_failure=True,
-        )
+        _t = threading.Thread(target=_background_reload, daemon=True,
+                               name=f"qz-model-reload-{identity}")
+        _t.start()
 
-        payload = build_model_status(self.handler)
-        if failed:
-            payload["ok"] = False
-            if resolve_error:
-                payload["error"] = resolve_error
-            self.handler._send_json(409, payload)
-            return
-
-        self.handler._send_json(200, payload)
+        self.handler._send_json(202, {"ok": True, "model": identity})
 
     def _record_load_observation(
         self,
@@ -4064,7 +4072,38 @@ class RequestRouter:
                             runtime_metrics=runtime_metrics,
                             request_id=request_id,
                         )
-                        pass
+                        # Check if the connection dropped because a model switch
+                        # killed the backend child.  If so, send a clean
+                        # termination event instead of a silent disconnect.
+                        _switch_msg = None
+                        try:
+                            from .qz_model_status import build_model_status as _bms
+                            _ms = _bms(self.handler)
+                            _adm = (_ms.get("request_admission_state") or "").strip()
+                            if _adm in ("starting", "loading"):
+                                _model = (_ms.get("selected_key") or "").strip() or "unknown model"
+                                _switch_msg = f"Session terminated: loading model {_model}"
+                            elif _ms.get("selected_model_ready") is not True:
+                                _switch_msg = "Session terminated: backend model is no longer available"
+                        except Exception:
+                            pass
+                        if _switch_msg:
+                            _ts = _now_ts()
+                            error_payload = {
+                                "type": "response.failed",
+                                "response": {
+                                    "id": f"resp_failed_{request_id[:8]}_{_ts}",
+                                    "object": "response",
+                                    "created_at": _ts,
+                                    "status": "failed",
+                                    "model": client_model,
+                                    "error": {"message": _switch_msg},
+                                    "output": [],
+                                    "usage": _normalize_response_usage({}),
+                                },
+                            }
+                            self._write_sse_chunk(make_sse_block("response.failed", error_payload))
+                            self._write_sse_chunk(b"data: [DONE]\n\n")
                     except Exception as e:
                         try:
                             import traceback

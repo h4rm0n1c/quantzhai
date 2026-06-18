@@ -250,8 +250,8 @@ def main():
     engine = {
         "name": "llama.cpp (turboquant fork)",
         "git_commit": git_hash,
-        "hardware": "RTX 3080 10GB + V100-SXM2 16GB (no NVLink)",
-        "tensor_split": child_args.get("tensor-split", "10,16"),
+        "hardware": "RTX 3080 10GB + V100-SXM2 32GB (no NVLink)",
+        "tensor_split": child_args.get("tensor-split", "10,32"),
         "split_mode": child_args.get("split-mode", "layer"),
         "kv_cache_k": child_args.get("cache-type-k", "q8_0"),
         "kv_cache_v": child_args.get("cache-type-v", "turbo3"),

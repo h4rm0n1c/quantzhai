@@ -164,7 +164,7 @@ class BackendClient:
         ubatch = os.environ.get("QZ_UBATCH", "512")
         threads = os.environ.get("QZ_THREADS", "12")
         thread_batch = os.environ.get("QZ_THREAD_BATCH", "12")
-        tensor_split = os.environ.get("QZ_TENSOR_SPLIT", "9,17")
+        tensor_split = os.environ.get("QZ_TENSOR_SPLIT", "10,32")
         main_gpu = os.environ.get("QZ_MAIN_GPU", "0")
         cache_ram = os.environ.get("QZ_CACHE_RAM", "8192")
         cache_reuse = os.environ.get("QZ_CACHE_REUSE", "256")

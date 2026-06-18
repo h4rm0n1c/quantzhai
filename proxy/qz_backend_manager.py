@@ -261,7 +261,7 @@ class BackendManager:
         ubatch: int = 512,
         threads: int = 12,
         thread_batch: int = 12,
-        tensor_split: str = "9,17",
+        tensor_split: str = "10,32",
         main_gpu: int = 0,
         cache_ram: int = 8192,
         cache_reuse: int = 256,
@@ -298,7 +298,7 @@ class BackendManager:
         self._ubatch                 = int(ubatch)
         self._threads                = int(threads)
         self._thread_batch           = int(thread_batch)
-        self._tensor_split           = _safe_str(tensor_split, "9,17")
+        self._tensor_split           = _safe_str(tensor_split, "10,32")
         self._main_gpu               = int(main_gpu)
         self._cache_ram              = int(cache_ram)
         self._cache_reuse            = int(cache_reuse)

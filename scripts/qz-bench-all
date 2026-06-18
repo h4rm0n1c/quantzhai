@@ -198,12 +198,15 @@ def get_preset_cache_v(model_stem): return _get_ini_val(model_stem, "cache-type-
 def select_model_via_proxy(model):
     print(f"  Selecting via proxy...")
     r = proxy_api("POST", "/qz/model/select-and-restart", {"model": model}, timeout=300)
+    # 202 = async load kicked off; poll for completion.
+    # (Response body is {"ok": True, "model": ...} — no status fields yet.)
     if r.get("failed_candidate_key") == model or r.get("last_load_error"):
         print(f"  Failed: {r.get('last_load_error','')[:80]}")
         return False
     if r.get("selected_model_ready"):
         return True
-    for _ in range(10):
+    deadline = time.time() + 300
+    while time.time() < deadline:
         time.sleep(3)
         r = proxy_api("GET", "/qz/model/status", timeout=10)
         if r.get("selected_model_ready") and r.get("selected_key") == model:
@@ -211,7 +214,7 @@ def select_model_via_proxy(model):
         if r.get("failed_candidate_key") == model:
             print(f"  Failed (rollback): {r.get('last_load_error','')[:80]}")
             return False
-    print(f"  Timed out after 30s")
+    print(f"  Timed out after 300s")
     return False
 
 def kill_stale_docker(patterns=None):
