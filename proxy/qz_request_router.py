@@ -2747,15 +2747,28 @@ class RequestRouter:
                     # end up in VRAM simultaneously (OOM). Abort if unload fails.
                     if callable(getattr(mgr, "get_active_model_ids", None)) and callable(getattr(mgr, "unload_model_http", None)):
                         unload_targets = set()
-                        for _ in range(3):  # retry loop: router sometimes ignores first unload
-                            _active = mgr.get_active_model_ids()
+                        # Use get_models_status to find ALL models that might be
+                        # consuming VRAM — includes models still in "loading" state
+                        # that get_active_model_ids might miss during startup races.
+                        _all_statuses = mgr.get_models_status() if callable(getattr(mgr, "get_models_status", None)) else {}
+                        _all_models = {}
+                        if isinstance(_all_statuses, dict):
+                            for _entry in (_all_statuses.get("data") or []):
+                                if isinstance(_entry, dict):
+                                    _mid = _entry.get("id", "")
+                                    _st = (_entry.get("status") or {}).get("value", "") if isinstance(_entry.get("status"), dict) else ""
+                                    if _mid and _st:
+                                        _all_models[_mid] = _st
+                        for _ in range(3):
+                            _active = dict(_all_models) if _all_models else mgr.get_active_model_ids()
                             _new_targets = {
                                 mid for mid, st in _active.items()
-                                if mid != filename_stem
+                                if mid != filename_stem and mid != filename
+                                and st != "unloaded"
                             }
                             unload_targets.update(_new_targets)
                             if not _new_targets:
-                                break  # nothing to unload
+                                break
                             for mid in _new_targets:
                                 result = mgr.unload_model_http(mid)
                                 if not result.get("ok"):
