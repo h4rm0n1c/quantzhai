@@ -63,4 +63,10 @@ if [[ -n "$_preflight_model" ]]; then
   qz_codex_exec_preflight "$_preflight_model" || exit $?
 fi
 
+# Ensure codex is in PATH — ~/.local/bin may not be present in
+# non-interactive shells (SSH exec, tmux, cron, etc.).
+if ! command -v codex &>/dev/null && [[ -x "$HOME/.local/bin/codex" ]]; then
+  export PATH="$HOME/.local/bin:$PATH"
+fi
+
 exec codex "${QZ_CODEX_EXTRA_ARGS[@]}" "${QZ_CODEX_ARGS[@]}"
