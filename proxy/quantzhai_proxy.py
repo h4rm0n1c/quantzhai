@@ -1020,7 +1020,7 @@ def main():
             ubatch=_eint("QZ_UBATCH", 512),
             threads=_eint("QZ_THREADS", 12),
             thread_batch=_eint("QZ_THREAD_BATCH", 12),
-            tensor_split=os.environ.get("QZ_TENSOR_SPLIT", "0,32"),
+            tensor_split=os.environ.get("QZ_TENSOR_SPLIT", ""),
             main_gpu=_eint("QZ_MAIN_GPU", 1),
             cache_ram=_eint("QZ_CACHE_RAM", 8192),
             cache_reuse=_eint("QZ_CACHE_REUSE", 256),
