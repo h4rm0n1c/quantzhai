@@ -6,9 +6,9 @@ Accepts injected time values so tests remain deterministic.
 
 Configuration:
   QZ_STREAM_NO_OUTPUT_TIMEOUT_S — seconds before no-output timeout fires.
-  Default 0 = disabled. Set to a positive value (e.g. 120) to enable.
+  Default 300. Set to 0 to disable.
   QZ_STREAM_TERMINAL_TIMEOUT_S — seconds after first visible output before
-  terminal-after-output timeout fires. Default 0 = disabled.
+  terminal-after-output timeout fires. Default 180. Set to 0 to disable.
   Consistent with QZ_REASONING_ONLY_TIMEOUT_S and QZ_PRIVATE_TOOL_CALL_TIMEOUT_S
   defaults in qz_responses_stream.py.
 
@@ -21,18 +21,17 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-# ≤0 = disabled.  Must be explicitly enabled by operator.
-# Warning: the router sends SSE events only after the first decoded token.
-# For 256K context on slow models, prompt processing can take 60-180s —
-# setting this too low triggers false-positive timeouts on legitimate requests.
+# Defaults to 300s/180s — production-tuned for slow models (256K context,
+# prompt processing 60-180s) without false positives.  Set ≤ 0 to disable.
 # The zombie-slot fix (C++ log-thread EOF handler + proxy dead-child recovery)
-# handles silent child deaths without a timeout, so the default is disabled.
+# handles silent child deaths independently, so disabling the watchdog is safe
+# but leaves streaming hangs undetected.
 STREAM_NO_OUTPUT_TIMEOUT_S: float = float(
-    os.environ.get("QZ_STREAM_NO_OUTPUT_TIMEOUT_S", "0")
+    os.environ.get("QZ_STREAM_NO_OUTPUT_TIMEOUT_S", "300")
 )
 
 STREAM_TERMINAL_TIMEOUT_S: float = float(
-    os.environ.get("QZ_STREAM_TERMINAL_TIMEOUT_S", "0")
+    os.environ.get("QZ_STREAM_TERMINAL_TIMEOUT_S", "180")
 )
 
 

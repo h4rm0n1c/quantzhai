@@ -829,7 +829,7 @@ stream_no_output_timeout`. Terminal events are marked before watchdog checks so
 a late `response.completed` suppresses the timeout path.
 
 Slice 4 adds a separate terminal-after-output watchdog controlled by
-`QZ_STREAM_TERMINAL_TIMEOUT_S`. The default is `0`, disabled. This does not
+`QZ_STREAM_TERMINAL_TIMEOUT_S`. The default is `180`. This does not
 change `QZ_STREAM_NO_OUTPUT_TIMEOUT_S` behavior. When enabled, the runtime
 restores the no-output read timeout after the first visible output and arms a
 terminal read timeout for the remaining terminal deadline. If visible output has

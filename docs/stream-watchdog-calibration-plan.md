@@ -42,19 +42,17 @@ tells us what the real tail latencies are.
 
 | Setting | Default | Configurable |
 |---|---|---|
-| `QZ_STREAM_NO_OUTPUT_TIMEOUT_S` | `0` (disabled) | yes |
-| `QZ_STREAM_TERMINAL_TIMEOUT_S` | `0` (disabled) | yes |
+| `QZ_STREAM_NO_OUTPUT_TIMEOUT_S` | `300` | yes |
+| `QZ_STREAM_TERMINAL_TIMEOUT_S` | `180` | yes |
 
 Source: `proxy/qz_stream_watchdog.py`
 
 ```python
-STREAM_NO_OUTPUT_TIMEOUT_S = int(os.environ.get("QZ_STREAM_NO_OUTPUT_TIMEOUT_S", "0"))
-STREAM_TERMINAL_TIMEOUT_S  = int(os.environ.get("QZ_STREAM_TERMINAL_TIMEOUT_S", "0"))
+STREAM_NO_OUTPUT_TIMEOUT_S = float(os.environ.get("QZ_STREAM_NO_OUTPUT_TIMEOUT_S", "300"))
+STREAM_TERMINAL_TIMEOUT_S  = float(os.environ.get("QZ_STREAM_TERMINAL_TIMEOUT_S", "180"))
 ```
 
-The stocktake script currently shows both as **WARN disabled by default**. This
-is intentional — the watchdog is present and tested but not enforced until live
-calibration is complete.
+The watchdog is now enabled by default (300s/180s). Set either to 0 to disable.
 
 The unit tests for the watchdog mechanism exist and pass. They prove the
 mechanism fires correctly when timeouts are set. They do not calibrate safe

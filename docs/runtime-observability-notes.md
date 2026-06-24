@@ -176,20 +176,22 @@ to avoid false failures from SSE timing events crowding out `tool_sandbox_denied
   stream_terminal_timeout. Telemetry: `stream_terminal_classified` emitted for
   non-ok outcomes. Also adds protocol drift tolerance for newer
   `response.output_item.content.delta` event shape.
-- #40 slice 2 (done): the streamed Responses path has an opt-in no-visible-output
-  watchdog. `QZ_STREAM_NO_OUTPUT_TIMEOUT_S <= 0` keeps it disabled. When enabled,
-  it can recover a stream that starts (`response.created` / `response.in_progress`)
-  and then stalls before visible output by emitting a synthetic fallback and one
-  `stream_terminal_classified` event with `stream_no_output_timeout`.
+- #40 slice 2 (done): the streamed Responses path has a no-visible-output
+  watchdog (default 300s). `QZ_STREAM_NO_OUTPUT_TIMEOUT_S <= 0` keeps it
+  disabled. When enabled, it can recover a stream that starts
+  (`response.created` / `response.in_progress`) and then stalls before visible
+  output by emitting a synthetic fallback and one `stream_terminal_classified`
+  event with `stream_no_output_timeout`.
 - #40 slice 3 (done): `ResponsesStreamRuntime` now accumulates live terminal
   observations from every parsed upstream SSE event using the same
   `observation_from_event_type()` mapping as the stream-terminal fixtures. Compact
   failure events, newer protocol-drift content deltas, and response error events
   are now live observations and produce exactly one non-ok
   `stream_terminal_classified` telemetry event. Normal ok streams remain quiet.
-- #40 slice 4 (done): the streamed Responses path has a separate opt-in
-  terminal-after-output watchdog. `QZ_STREAM_TERMINAL_TIMEOUT_S <= 0` keeps it
-  disabled. When enabled, visible partial output is preserved; if the upstream
+- #40 slice 4 (done): the streamed Responses path has a separate
+  terminal-after-output watchdog (default 180s). `QZ_STREAM_TERMINAL_TIMEOUT_S
+  <= 0` keeps it disabled. When enabled, visible partial output is preserved;
+  if the upstream
   stream then stalls before `response.completed` / `[DONE]`, the proxy emits a
   synthetic terminal completion and one `stream_terminal_classified` event with
   `stream_terminal_timeout`. This is distinct from `stream_no_output_timeout`;
